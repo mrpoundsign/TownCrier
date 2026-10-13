@@ -1,0 +1,47 @@
+# --- Build artifacts ---
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.syso
+dist/
+build/
+bin/
+fyne-cross/
+*.pprof
+*.test
+coverage.out
+
+# --- Native TTS runtime (fetched by build scripts, never committed) ---
+third_party/sherpa-onnx/
+third_party/onnxruntime/
+
+# --- Downloaded voice models (fetched at runtime / by scripts) ---
+models/
+*.onnx
+voices.bin
+espeak-ng-data/
+
+# --- Local runtime data & secrets ---
+.env
+.env.*
+*.token
+config.local.*
+logs/
+*.log
+*.wav
+
+# --- Scratch / personal ---
+notes/
+scratch/
+testdata/scratch/
+
+# --- Local-only planning repo (separate git repository) ---
+planning/
+
+# --- Editors / OS ---
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
