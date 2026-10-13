@@ -1,0 +1,11 @@
+Website = "https://github.com/mrpoundsign/OctochorpeBot"
+
+[Details]
+  Icon = "assets/icon.png"
+  Name = "OctochorpeBot"
+  ID = "com.github.mrpoundsign.octochorpebot"
+  Version = "0.1.0"
+  Build = 1
+
+[Migrations]
+  fyneDo = true

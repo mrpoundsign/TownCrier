@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -55,7 +56,7 @@ func runBenchmark(modelDir string, numThreads int, voiceID int) (*sherpa.Generat
 
 	totalDuration := time.Since(genStart)
 	if audio == nil {
-		return nil, fmt.Errorf("audio generation failed")
+		return nil, errors.New("audio generation failed")
 	}
 
 	audioSeconds := float64(len(audio.Samples)) / float64(audio.SampleRate)

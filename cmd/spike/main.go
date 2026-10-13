@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -82,7 +83,7 @@ func runTTSBenchmark(modelDir string, numThreads int) (*sherpa.GeneratedAudio, e
 
 	totalDuration := time.Since(genStart)
 	if audio == nil {
-		return nil, fmt.Errorf("audio generation failed")
+		return nil, errors.New("audio generation failed")
 	}
 
 	audioSeconds := float64(len(audio.Samples)) / float64(audio.SampleRate)
