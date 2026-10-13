@@ -28,7 +28,7 @@
 - **Core Technology Stack**:
   - **Go**: 1.27
   - **GUI Toolkit**: [Fyne v2](https://fyne.io/)
-  - **TTS Engine**: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) Go bindings with quantized int8 Kokoro-82M ONNX models running on CPU
+  - **TTS Engine**: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) Go bindings with Kokoro-82M ONNX models running on DirectML GPU (`model.onnx`) or multi-threaded CPU fallback (`model.int8.onnx`)
   - **Audio Output**: [malgo](https://github.com/gen2brain/malgo) (miniaudio Go bindings) targeting WASAPI playback devices with gain control and instant atomic panic mute (<50ms)
   - **Secret Storage**: [go-keyring](https://github.com/zalando/go-keyring) (Windows Credential Manager) with memory fallback
   - **Cross-Compilation**: WSL Ubuntu compiling to Windows amd64 using `x86_64-w64-mingw32-gcc` and `-static-libgcc`
@@ -80,3 +80,14 @@ OctochorpeBot/
 4. **Queue Staleness Protection (D30)**:
    - Chat messages older than 30s in the queue are dropped during chat bursts; paid/event messages are never discarded.
    - Fast catchup mode speeds up speech to 1.3x if the queue exceeds 5 items.
+5. **DirectML GPU vs. CPU Model Selection**:
+   - `model.onnx` (FP32, ~345MB) is for DirectML GPU execution.
+   - `model.int8.onnx` (INT8, ~134MB) is for multi-threaded CPU execution.
+   - Never run `model.int8.onnx` on DirectML (DirectML dequantizes int8 in shaders or falls back to CPU, giving ~0% GPU usage). `NewSherpaEngine` automatically switches model files and falls back to CPU if DirectML is unavailable.
+6. **Launch Status Window & Async Subsystems**:
+   - ONNX model loading takes 1–2s. Always display the lightweight Launch Status Window (`internal/ui/launcher.go`) immediately while initializing subsystems in the background, transitioning to the main window only when ready.
+7. **Headless & Test Driver Constraints**:
+   - `malgo.InitContext` / audio enumeration can hang in headless Linux/WSL without ALSA/PulseAudio. Always inject mock device enumerators (`view.SetDeviceEnumerator`) in tests.
+   - Never run Windows `.exe` GUI binaries interactively in WSL bash (causes terminal hang). Let the user launch `build/bin/OctochorpeBot.exe` from Windows.
+8. **Frequency-Gated Audio Cache (Issue #21)**:
+   - Chat messages follow a long-tail distribution. Never cache one-offs. Use frequency gating (promote to disk in `%LOCALAPPDATA%\OctochorpeBot\cache\audio\` only when count ≥ 2 or for alert templates) to maintain near-zero RAM usage.
