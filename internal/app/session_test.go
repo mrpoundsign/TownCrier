@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/mrpoundsign/OctochorpeBot/internal/chat"
 	"github.com/mrpoundsign/OctochorpeBot/internal/config"
 	"github.com/mrpoundsign/OctochorpeBot/internal/secrets"
 )
@@ -84,4 +85,72 @@ func TestSessionConcurrency(t *testing.T) {
 	}
 	wg.Wait()
 	_ = session.Stop()
+}
+
+func TestSessionDispatchEvent(t *testing.T) {
+	cfg := config.DefaultConfig()
+	session := NewSession(cfg, secrets.NewMemoryStore())
+
+	// Pause queue so we can inspect enqueued items
+	session.Queue().Pause()
+
+	// 1. Known bot should be ignored
+	botEvent := &chat.Event{
+		Platform: "twitch",
+		UserName: "nightbot",
+		Text:     "I am a bot",
+	}
+	if err := session.DispatchEvent(botEvent); err != nil {
+		t.Fatalf("DispatchEvent failed: %v", err)
+	}
+	if session.Queue().Depth() != 0 {
+		t.Errorf("expected bot message to be ignored, depth is %d", session.Queue().Depth())
+	}
+
+	// 2. Normal chatter event should be sanitized and enqueued
+	chatEvent := &chat.Event{
+		ID:          "msg-1",
+		Platform:    "twitch",
+		UserName:    "alice",
+		DisplayName: "Alice",
+		Kind:        chat.EventKindMessage,
+		Text:        "hello world https://twitch.tv",
+	}
+	if err := session.DispatchEvent(chatEvent); err != nil {
+		t.Fatalf("DispatchEvent failed: %v", err)
+	}
+	if session.Queue().Depth() != 1 {
+		t.Fatalf("expected queue depth 1, got %d", session.Queue().Depth())
+	}
+
+	// 3. Paid/Event should be priority 0
+	subEvent := &chat.Event{
+		ID:          "sub-1",
+		Platform:    "twitch",
+		UserName:    "bob",
+		DisplayName: "Bob",
+		Kind:        chat.EventKindSub,
+	}
+	if err := session.DispatchEvent(subEvent); err != nil {
+		t.Fatalf("DispatchEvent failed: %v", err)
+	}
+	if session.Queue().Depth() != 2 {
+		t.Fatalf("expected queue depth 2, got %d", session.Queue().Depth())
+	}
+
+	// 4. Moderation deletion
+	session.DispatchModeration(&chat.ModerationEvent{
+		Platform:        "twitch",
+		Action:          chat.ModActionDeleteMessage,
+		TargetMessageID: "msg-1",
+	})
+	if session.Queue().Depth() != 1 {
+		t.Errorf("expected depth 1 after deleting msg-1, got %d", session.Queue().Depth())
+	}
+
+	// 5. Panic mute
+	session.Panic()
+	if session.Queue().Depth() != 0 {
+		t.Errorf("expected depth 0 after Panic, got %d", session.Queue().Depth())
+	}
 }
