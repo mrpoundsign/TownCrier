@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,10 +14,10 @@ func TestEmergencyStopMechanism(t *testing.T) {
 	tone := GenerateSineWave(2*time.Second, sampleRate)
 
 	var (
-		cursor      atomic.Uint64
-		aborted     atomic.Bool
-		abortTime   time.Time
-		silenceTime time.Time
+		cursor          atomic.Uint64
+		aborted         atomic.Bool
+		silenceTimeNano atomic.Int64
+		abortTime       time.Time
 	)
 
 	// Simulated audio callback loop at 10ms intervals (typical audio buffer size: 240 frames @ 24kHz)
@@ -28,8 +29,8 @@ func TestEmergencyStopMechanism(t *testing.T) {
 		outSamples := unsafe.Slice((*float32)(unsafe.Pointer(&pOutput[0])), numFrames)
 
 		if aborted.Load() {
-			if silenceTime.IsZero() && !abortTime.IsZero() {
-				silenceTime = time.Now()
+			if silenceTimeNano.Load() == 0 {
+				silenceTimeNano.Store(time.Now().UnixNano())
 			}
 			for i := range outSamples {
 				outSamples[i] = 0
@@ -53,7 +54,8 @@ func TestEmergencyStopMechanism(t *testing.T) {
 	defer ticker.Stop()
 
 	done := make(chan struct{})
-	go func() {
+	var wg sync.WaitGroup
+	wg.Go(func() {
 		for {
 			select {
 			case <-ticker.C:
@@ -62,7 +64,7 @@ func TestEmergencyStopMechanism(t *testing.T) {
 				return
 			}
 		}
-	}()
+	})
 
 	// Let audio play for 50ms
 	time.Sleep(50 * time.Millisecond)
@@ -74,11 +76,14 @@ func TestEmergencyStopMechanism(t *testing.T) {
 	// Wait up to 100ms for silence to take effect
 	time.Sleep(100 * time.Millisecond)
 	close(done)
+	wg.Wait()
 
-	if silenceTime.IsZero() {
+	stNano := silenceTimeNano.Load()
+	if stNano == 0 {
 		t.Fatal("silence was never triggered after abort")
 	}
 
+	silenceTime := time.Unix(0, stNano)
 	latency := silenceTime.Sub(abortTime)
 	t.Logf("Emergency stop latency: %v", latency)
 

@@ -34,6 +34,7 @@ type TTSConfig struct {
 	ModelFamily string `json:"model_family"` // "kokoro"
 	ModelPath   string `json:"model_path"`
 	NumThreads  int    `json:"num_threads"`
+	UseGPU      bool   `json:"use_gpu"`
 }
 
 type SafetyConfig struct {
@@ -119,7 +120,8 @@ func DefaultConfig() *Config {
 		TTS: TTSConfig{
 			ModelFamily: "kokoro",
 			ModelPath:   "",
-			NumThreads:  2,
+			NumThreads:  4,
+			UseGPU:      true,
 		},
 		Safety: SafetyConfig{
 			PanicHotkey:  "Ctrl+Shift+M",
