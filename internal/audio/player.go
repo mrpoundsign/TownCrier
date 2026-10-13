@@ -20,6 +20,9 @@ var (
 type Player interface {
 	Play(samples []float32, sampleRate int) error
 	Stop()
+	PanicStop()
+	ResetPanic()
+	SwitchDevice(targetDeviceIDHex string) error
 	SetVolume(vol float32)
 	Volume() float32
 	IsPlaying() bool

@@ -29,6 +29,9 @@ func (m *mockPlayer) Stop() {
 	m.playing.Store(false)
 }
 
+func (m *mockPlayer) PanicStop()  { m.Stop() }
+func (m *mockPlayer) ResetPanic() { m.playing.Store(false) }
+func (m *mockPlayer) SwitchDevice(dev string) error { return nil }
 func (m *mockPlayer) SetVolume(vol float32) {}
 func (m *mockPlayer) Volume() float32       { return 1.0 }
 func (m *mockPlayer) IsPlaying() bool       { return m.playing.Load() }

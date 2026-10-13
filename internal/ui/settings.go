@@ -22,7 +22,7 @@ import (
 type SettingsView struct {
 	window   fyne.Window
 	cfg      *config.Config
-	player   *audio.DevicePlayer
+	player   audio.Player
 	engine   tts.Engine
 	modelDir string
 
@@ -38,7 +38,7 @@ type SettingsView struct {
 }
 
 // NewSettingsView constructs a SettingsView for testing and configuring audio and speech.
-func NewSettingsView(w fyne.Window, cfg *config.Config, player *audio.DevicePlayer, engine tts.Engine) *SettingsView {
+func NewSettingsView(w fyne.Window, cfg *config.Config, player audio.Player, engine tts.Engine) *SettingsView {
 	return &SettingsView{
 		window:     w,
 		cfg:        cfg,
@@ -72,12 +72,16 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	audioCard := v.buildAudioCard()
 	ttsCard := v.buildTTSCard()
 	rulesCard := v.buildRulesCard()
+	safetyCard := v.buildSafetyCard()
+	botsCard := v.buildBotsCard()
 	bottomBar := v.buildBottomBar()
 
 	content := container.NewVBox(
 		audioCard,
 		ttsCard,
 		rulesCard,
+		safetyCard,
+		botsCard,
 		bottomBar,
 	)
 
@@ -422,6 +426,83 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 	)
 
 	return widget.NewCard("Global Chat Rules", "Default reading behavior across all connected platforms", cardContent)
+}
+
+func (v *SettingsView) buildSafetyCard() *widget.Card {
+	hotkeyLabel := widget.NewLabelWithStyle("Global Panic Mute Hotkey: Ctrl+Shift+M or Esc (<50ms halt)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+
+	wordListContainer := container.NewVBox()
+
+	refreshWords := func() {
+		wordListContainer.Objects = nil
+		if len(v.cfg.Safety.BlockedWords) == 0 {
+			wordListContainer.Add(widget.NewLabelWithStyle("No words currently blocked.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
+		} else {
+			for _, w := range v.cfg.Safety.BlockedWords {
+				word := w
+				delBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
+					var filtered []string
+					for _, item := range v.cfg.Safety.BlockedWords {
+						if item != word {
+							filtered = append(filtered, item)
+						}
+					}
+					v.cfg.Safety.BlockedWords = filtered
+					v.statusLabel.SetText(fmt.Sprintf("Removed %q from blocklist.", word))
+				})
+				delBtn.Importance = widget.LowImportance
+				row := container.NewBorder(nil, nil, widget.NewLabel("• "+word), delBtn)
+				wordListContainer.Add(row)
+			}
+		}
+		wordListContainer.Refresh()
+	}
+
+	refreshWords()
+
+	newWordEntry := widget.NewEntry()
+	newWordEntry.SetPlaceHolder("Enter word or pattern to block (e.g. slurs, bad words)")
+
+	addBtn := widget.NewButtonWithIcon("Block Word", theme.ContentAddIcon(), func() {
+		text := strings.TrimSpace(newWordEntry.Text)
+		if text == "" {
+			return
+		}
+		v.cfg.Safety.BlockedWords = append(v.cfg.Safety.BlockedWords, text)
+		newWordEntry.SetText("")
+		refreshWords()
+		v.statusLabel.SetText(fmt.Sprintf("Added %q to blocklist.", text))
+	})
+
+	addRow := container.NewBorder(nil, nil, nil, addBtn, newWordEntry)
+
+	cardContent := container.NewVBox(
+		hotkeyLabel,
+		widget.NewLabel("Blocked Words (masked with '***' before TTS):"),
+		wordListContainer,
+		addRow,
+	)
+
+	return widget.NewCard("Streamer Safety & Blocklist", "Emergency controls and profanity filters", cardContent)
+}
+
+func (v *SettingsView) buildBotsCard() *widget.Card {
+	knownBotsCheck := widget.NewCheck("Ignore Known Stream Bots (Nightbot, StreamElements, Fossabot, etc.)", func(b bool) {
+		v.cfg.Bots.IgnoreKnownBots = b
+	})
+	knownBotsCheck.SetChecked(v.cfg.Bots.IgnoreKnownBots)
+
+	broadcasterCheck := widget.NewCheck("Ignore Broadcaster / Streamer Self-Chat (uncheck for solo testing)", func(b bool) {
+		v.cfg.Bots.IgnoreBroadcaster = b
+	})
+	broadcasterCheck.SetChecked(v.cfg.Bots.IgnoreBroadcaster)
+
+	cardContent := container.NewVBox(
+		knownBotsCheck,
+		broadcasterCheck,
+	)
+
+	return widget.NewCard("Bot & Self-Chat Filters", "Filter out automated bots and own messages", cardContent)
 }
 
 func (v *SettingsView) buildBottomBar() fyne.CanvasObject {
