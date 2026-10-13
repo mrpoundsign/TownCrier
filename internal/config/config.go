@@ -49,9 +49,8 @@ type QueueConfig struct {
 }
 
 type BotConfig struct {
-	IgnoreKnownBots   bool `json:"ignore_known_bots"`
-	IgnoreBroadcaster bool `json:"ignore_broadcaster"`
-	AutoUpdate        bool `json:"auto_update"`
+	IgnoreKnownBots bool `json:"ignore_known_bots"`
+	AutoUpdate      bool `json:"auto_update"`
 }
 
 type GlobalChatRules struct {
@@ -134,9 +133,8 @@ func DefaultConfig() *Config {
 			CatchupSpeed:     1.3,
 		},
 		Bots: BotConfig{
-			IgnoreKnownBots:   true,
-			IgnoreBroadcaster: true,
-			AutoUpdate:        false,
+			IgnoreKnownBots: true,
+			AutoUpdate:      false,
 		},
 		GlobalChatRules: GlobalChatRules{
 			SpeakNames:        true,

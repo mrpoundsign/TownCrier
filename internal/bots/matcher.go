@@ -67,22 +67,12 @@ func (m *Matcher) ShouldIgnore(event *chat.Event, cfg *config.Config) bool {
 		}
 	}
 
-	// 2. Streamer Self-Chat Protection (D43)
-	// Never read broadcaster self-chat when IgnoreBroadcaster is enabled (default true)
-	if cfg.Bots.IgnoreBroadcaster {
-		if pCfg, ok := cfg.Platforms[event.Platform]; ok && pCfg.AccountName != "" {
-			if strings.EqualFold(event.UserName, pCfg.AccountName) {
-				return true
-			}
-		}
-	}
-
-	// 3. Platform Bot Signal
+	// 2. Platform Bot Signal
 	if event.IsBotSignal {
 		return true
 	}
 
-	// 4. Known Bots List
+	// 3. Known Bots List
 	if cfg.Bots.IgnoreKnownBots {
 		m.mu.RLock()
 		_, isBot := m.knownBots[userNameLower]

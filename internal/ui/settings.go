@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/mrpoundsign/OctochorpeBot/internal/app"
 	"github.com/mrpoundsign/OctochorpeBot/internal/audio"
 	"github.com/mrpoundsign/OctochorpeBot/internal/config"
 	"github.com/mrpoundsign/OctochorpeBot/internal/tts"
@@ -24,6 +25,7 @@ type SettingsView struct {
 	cfg      *config.Config
 	player   audio.Player
 	engine   tts.Engine
+	session  *app.Session
 	modelDir string
 
 	mu           sync.Mutex
@@ -53,6 +55,11 @@ func NewSettingsView(w fyne.Window, cfg *config.Config, player audio.Player, eng
 // SetDeviceEnumerator overrides the audio device enumeration function (useful for tests or mocking).
 func (v *SettingsView) SetDeviceEnumerator(fn func() ([]audio.DeviceInfo, error)) {
 	v.deviceEnum = fn
+}
+
+// SetSession attaches the application session to coordinate engine reloads.
+func (v *SettingsView) SetSession(s *app.Session) {
+	v.session = s
 }
 
 // Build generates the Fyne CanvasObject containing the full Settings & Test interface.
@@ -258,6 +265,9 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	v.speakBtn.Importance = widget.HighImportance
 
 	gpuCheck := widget.NewCheck("Use GPU Acceleration (DirectML)", func(checked bool) {
+		if v.cfg.TTS.UseGPU == checked {
+			return
+		}
 		v.cfg.TTS.UseGPU = checked
 		if tts.IsModelInstalled(v.modelDir) {
 			go func() {
@@ -276,6 +286,9 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 						}
 						v.engine = eng
 						v.mu.Unlock()
+						if v.session != nil {
+							v.session.SetEngine(eng)
+						}
 						v.statusLabel.SetText("TTS engine reloaded: Provider is " + eng.Provider())
 					}
 				})
@@ -492,17 +505,11 @@ func (v *SettingsView) buildBotsCard() *widget.Card {
 	})
 	knownBotsCheck.SetChecked(v.cfg.Bots.IgnoreKnownBots)
 
-	broadcasterCheck := widget.NewCheck("Ignore Broadcaster / Streamer Self-Chat (uncheck for solo testing)", func(b bool) {
-		v.cfg.Bots.IgnoreBroadcaster = b
-	})
-	broadcasterCheck.SetChecked(v.cfg.Bots.IgnoreBroadcaster)
-
 	cardContent := container.NewVBox(
 		knownBotsCheck,
-		broadcasterCheck,
 	)
 
-	return widget.NewCard("Bot & Self-Chat Filters", "Filter out automated bots and own messages", cardContent)
+	return widget.NewCard("Bot Filters", "Filter out automated stream bots", cardContent)
 }
 
 func (v *SettingsView) buildBottomBar() fyne.CanvasObject {

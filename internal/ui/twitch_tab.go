@@ -33,6 +33,7 @@ type TwitchTabView struct {
 	modCmdsCheck   *widget.Check
 	overrideCheck  *widget.Check
 	saveNotice     *widget.Label
+	initializing   bool
 }
 
 // NewTwitchTabView creates a new Twitch tab view bound to the application session.
@@ -46,6 +47,9 @@ func NewTwitchTabView(w fyne.Window, session *app.Session) *TwitchTabView {
 
 // Build generates the Fyne CanvasObject for the Twitch tab.
 func (v *TwitchTabView) Build() fyne.CanvasObject {
+	v.initializing = true
+	defer func() { v.initializing = false }()
+
 	cfg := v.session.Config()
 	pCfg, hasTwitch := cfg.Platforms["twitch"]
 	if !hasTwitch {
@@ -103,6 +107,26 @@ func (v *TwitchTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.
 
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
 
+	v.session.SetOnTwitchStatus(func(status string, detail string) {
+		fyne.Do(func() {
+			if v.statusBadge == nil {
+				return
+			}
+			switch status {
+			case "connected":
+				v.statusBadge.SetText("🟢 Connected (" + detail + ")")
+			case "connecting":
+				v.statusBadge.SetText("🟡 Connecting (" + detail + ")...")
+			default:
+				if v.enableCheck != nil && v.enableCheck.Checked && v.channelEntry != nil && v.channelEntry.Text != "" {
+					v.statusBadge.SetText("🟢 Ready (" + v.channelEntry.Text + ")")
+				} else {
+					v.statusBadge.SetText("⚪ Disconnected")
+				}
+			}
+		})
+	})
+
 	v.connectBtn = widget.NewButtonWithIcon("Connect with Twitch (OAuth)", theme.LoginIcon(), func() {
 		if strings.TrimSpace(v.channelEntry.Text) == "" {
 			dialog.ShowInformation("Channel Required", "Please enter your Twitch channel name first.", v.window)
@@ -134,15 +158,6 @@ func (v *TwitchTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 	})
 	v.allChatCheck.SetChecked(rr.AllChat)
 
-	v.prefixCheck = widget.NewCheck("Prefix / Command Only", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["twitch"]
-			p.ReadRules.PrefixOnly = b
-			c.Platforms["twitch"] = p
-		})
-	})
-	v.prefixCheck.SetChecked(rr.PrefixOnly)
-
 	v.prefixEntry = widget.NewEntry()
 	v.prefixEntry.SetPlaceHolder("!tts")
 	pref := rr.Prefix
@@ -150,6 +165,9 @@ func (v *TwitchTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 		pref = "!tts"
 	}
 	v.prefixEntry.SetText(pref)
+	if !rr.PrefixOnly {
+		v.prefixEntry.Disable()
+	}
 	v.prefixEntry.OnChanged = func(val string) {
 		v.updateConfig(func(c *config.Config) {
 			p := c.Platforms["twitch"]
@@ -157,6 +175,20 @@ func (v *TwitchTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 			c.Platforms["twitch"] = p
 		})
 	}
+
+	v.prefixCheck = widget.NewCheck("Prefix / Command Only", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["twitch"]
+			p.ReadRules.PrefixOnly = b
+			c.Platforms["twitch"] = p
+		})
+		if b {
+			v.prefixEntry.Enable()
+		} else {
+			v.prefixEntry.Disable()
+		}
+	})
+	v.prefixCheck.SetChecked(rr.PrefixOnly)
 	prefixRow := container.NewBorder(nil, nil, v.prefixCheck, nil, v.prefixEntry)
 
 	v.roleGatedCheck = widget.NewCheck("Role Gated (Only read messages from checked roles):", func(b bool) {
@@ -165,6 +197,13 @@ func (v *TwitchTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 			p.ReadRules.RoleGated = b
 			c.Platforms["twitch"] = p
 		})
+		for _, chk := range v.roleChecks {
+			if b {
+				chk.Enable()
+			} else {
+				chk.Disable()
+			}
+		}
 	})
 	v.roleGatedCheck.SetChecked(rr.RoleGated)
 
@@ -180,6 +219,9 @@ func (v *TwitchTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 		chk := widget.NewCheck(capitalizeRole(rName), nil)
 		v.roleChecks[rName] = chk
 		chk.SetChecked(activeRoles[rName])
+		if !rr.RoleGated {
+			chk.Disable()
+		}
 		chk.OnChanged = func(b bool) {
 			v.saveRoles()
 		}
@@ -388,6 +430,9 @@ func capitalizeRole(r string) string {
 }
 
 func (v *TwitchTabView) updateConfig(fn func(c *config.Config)) {
+	if v.initializing {
+		return
+	}
 	cfg := v.session.Config()
 	fn(cfg)
 	_ = v.session.ReloadConfig(cfg)

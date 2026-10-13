@@ -32,31 +32,21 @@ func TestMatcherKnownBots(t *testing.T) {
 	}
 }
 
-func TestMatcherBroadcasterSelfChat(t *testing.T) {
+func TestMatcherBotSignal(t *testing.T) {
 	m, err := NewMatcher()
 	if err != nil {
 		t.Fatalf("failed to create matcher: %v", err)
 	}
 
 	cfg := config.DefaultConfig()
-	p := cfg.Platforms["twitch"]
-	p.AccountName = "StreamerGuy"
-	cfg.Platforms["twitch"] = p
-
 	event := &chat.Event{
-		Platform: "twitch",
-		UserName: "streamerguy",
+		Platform:    "twitch",
+		UserName:    "streamer",
+		IsBotSignal: true,
 	}
 
-	// Default IgnoreBroadcaster is true -> should ignore
 	if !m.ShouldIgnore(event, cfg) {
-		t.Errorf("expected broadcaster self-chat to be ignored by default")
-	}
-
-	// D43: IgnoreBroadcaster disabled for solo testing -> should NOT ignore
-	cfg.Bots.IgnoreBroadcaster = false
-	if m.ShouldIgnore(event, cfg) {
-		t.Errorf("expected broadcaster self-chat to NOT be ignored when IgnoreBroadcaster is false")
+		t.Errorf("expected event with IsBotSignal to be ignored")
 	}
 }
 

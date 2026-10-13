@@ -68,6 +68,7 @@ type ModerationAction string
 const (
 	ModActionDeleteMessage ModerationAction = "delete_message"
 	ModActionBanUser       ModerationAction = "ban_user"
+	ModActionClearChat     ModerationAction = "clear_chat"
 )
 
 // ModerationEvent represents a moderation sync action from Twitch, YouTube, etc.

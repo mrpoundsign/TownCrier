@@ -2,6 +2,7 @@ package queue
 
 import (
 	"errors"
+	"log"
 	"sync"
 	"time"
 
@@ -419,11 +420,14 @@ func (q *Queue) processItem(item *Item, depth int) {
 
 	// Synthesize speech via TTS engine
 	if engine == nil {
+		log.Printf("[Queue] Synthesis skipped: TTS engine is nil")
 		return
 	}
 
+	log.Printf("[Queue] Synthesizing speech for %q (voice=%s, speed=%.2f)...", item.Text, item.VoiceID, speed)
 	samples, sampleRate, err := engine.Synthesize(item.Text, item.VoiceID, speed)
 	if err != nil || len(samples) == 0 {
+		log.Printf("[Queue] Synthesis failed or returned empty samples: err=%v, sampleCount=%d", err, len(samples))
 		return
 	}
 
@@ -431,16 +435,20 @@ func (q *Queue) processItem(item *Item, depth int) {
 	q.mu.Lock()
 	if q.currentAborted || q.closed {
 		q.mu.Unlock()
+		log.Printf("[Queue] Playback aborted: item was cancelled during synthesis")
 		return
 	}
 	q.mu.Unlock()
 
 	// Play via audio player
 	if player == nil {
+		log.Printf("[Queue] Playback skipped: audio player is nil")
 		return
 	}
 
+	log.Printf("[Queue] Playing audio (%d samples at %d Hz)...", len(samples), sampleRate)
 	if err := player.Play(samples, sampleRate); err != nil {
+		log.Printf("[Queue] Player.Play failed: %v", err)
 		return
 	}
 

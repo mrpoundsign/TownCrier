@@ -29,9 +29,6 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.Bots.IgnoreKnownBots {
 		t.Error("expected IgnoreKnownBots to be true by default")
 	}
-	if !cfg.Bots.IgnoreBroadcaster {
-		t.Error("expected IgnoreBroadcaster to be true by default")
-	}
 }
 
 func TestSaveAndLoadAtomic(t *testing.T) {

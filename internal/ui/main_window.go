@@ -83,6 +83,7 @@ func (mw *MainWindow) initViews() {
 	mw.voicesTab = NewVoicesTabView(mw.Window, mw.Session)
 	mw.viewersTab = NewViewersTabView(mw.Window, mw.Session)
 	mw.settingsTab = NewSettingsView(mw.Window, cfg, player, engine)
+	mw.settingsTab.SetSession(mw.Session)
 
 	mw.tabsContainer = container.NewAppTabs(
 		container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), mw.dashboardTab.Build()),
@@ -100,10 +101,23 @@ func (mw *MainWindow) initHeader() {
 	mw.twitchStatusDot = widget.NewLabelWithStyle("Twitch: ⚪", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	pCfg := cfg.Platforms["twitch"]
 	if pCfg.Enabled && pCfg.AccountName != "" {
-		mw.twitchStatusDot.SetText("Twitch: 🟢 " + pCfg.AccountName)
+		mw.twitchStatusDot.SetText("Twitch: 🟡 Connecting...")
 	} else if pCfg.Enabled {
 		mw.twitchStatusDot.SetText("Twitch: 🟡 (No Channel)")
 	}
+
+	mw.Session.SetOnTwitchStatus(func(status string, detail string) {
+		fyne.Do(func() {
+			switch status {
+			case "connected":
+				mw.twitchStatusDot.SetText("Twitch: 🟢 " + detail)
+			case "connecting":
+				mw.twitchStatusDot.SetText("Twitch: 🟡 Connecting...")
+			default:
+				mw.twitchStatusDot.SetText("Twitch: ⚪ Disconnected")
+			}
+		})
+	})
 
 	// Master volume slider
 	vol := cfg.Audio.Volume

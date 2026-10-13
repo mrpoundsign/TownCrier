@@ -123,7 +123,24 @@ func TestSessionDispatchEvent(t *testing.T) {
 		t.Fatalf("expected queue depth 1, got %d", session.Queue().Depth())
 	}
 
-	// 3. Paid/Event should be priority 0
+	// 3. Broadcaster self-chat should be enqueued and spoken (broadcaster is not a bot)
+	broadcasterEvent := &chat.Event{
+		ID:          "msg-broadcaster",
+		Platform:    "twitch",
+		UserName:    "mrpoundsign",
+		DisplayName: "MrPoundSign",
+		Roles:       []string{"broadcaster"},
+		Kind:        chat.EventKindMessage,
+		Text:        "I am the streamer testing my own voice",
+	}
+	if err := session.DispatchEvent(broadcasterEvent); err != nil {
+		t.Fatalf("DispatchEvent failed for broadcaster: %v", err)
+	}
+	if session.Queue().Depth() != 2 {
+		t.Fatalf("expected queue depth 2 after broadcaster event, got %d", session.Queue().Depth())
+	}
+
+	// 4. Paid/Event should be priority 0
 	subEvent := &chat.Event{
 		ID:          "sub-1",
 		Platform:    "twitch",
@@ -134,8 +151,8 @@ func TestSessionDispatchEvent(t *testing.T) {
 	if err := session.DispatchEvent(subEvent); err != nil {
 		t.Fatalf("DispatchEvent failed: %v", err)
 	}
-	if session.Queue().Depth() != 2 {
-		t.Fatalf("expected queue depth 2, got %d", session.Queue().Depth())
+	if session.Queue().Depth() != 3 {
+		t.Fatalf("expected queue depth 3, got %d", session.Queue().Depth())
 	}
 
 	// 4. Moderation deletion
@@ -144,8 +161,8 @@ func TestSessionDispatchEvent(t *testing.T) {
 		Action:          chat.ModActionDeleteMessage,
 		TargetMessageID: "msg-1",
 	})
-	if session.Queue().Depth() != 1 {
-		t.Errorf("expected depth 1 after deleting msg-1, got %d", session.Queue().Depth())
+	if session.Queue().Depth() != 2 {
+		t.Errorf("expected depth 2 after deleting msg-1, got %d", session.Queue().Depth())
 	}
 
 	// 5. Panic mute
@@ -154,3 +171,25 @@ func TestSessionDispatchEvent(t *testing.T) {
 		t.Errorf("expected depth 0 after Panic, got %d", session.Queue().Depth())
 	}
 }
+
+func TestSessionTwitchConnector(t *testing.T) {
+	cfg := config.DefaultConfig()
+	p := cfg.Platforms["twitch"]
+	p.Enabled = true
+	p.AccountName = "mrpoundsign"
+	cfg.Platforms["twitch"] = p
+
+	session := NewSession(cfg, secrets.NewMemoryStore())
+	conn := session.TwitchConnector()
+	if conn == nil {
+		t.Fatal("expected non-nil TwitchConnector")
+	}
+
+	_ = session.Start()
+	if conn.Channel() != "mrpoundsign" {
+		t.Errorf("expected connector channel 'mrpoundsign', got %q", conn.Channel())
+	}
+
+	_ = session.Stop()
+}
+

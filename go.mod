@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	fyne.io/fyne/v2 v2.8.2
+	github.com/gempir/go-twitch-irc/v4 v4.4.1
 	github.com/gen2brain/malgo v0.11.26
 	github.com/k2-fsa/sherpa-onnx-go v1.13.8
 	github.com/zalando/go-keyring v0.2.8

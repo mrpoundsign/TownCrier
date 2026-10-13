@@ -2,12 +2,14 @@ package app
 
 import (
 	"errors"
+	"log"
 	"sync"
 
 	"github.com/mrpoundsign/OctochorpeBot/internal/audio"
 	"github.com/mrpoundsign/OctochorpeBot/internal/bots"
 	"github.com/mrpoundsign/OctochorpeBot/internal/chat"
 	"github.com/mrpoundsign/OctochorpeBot/internal/config"
+	"github.com/mrpoundsign/OctochorpeBot/internal/platform/twitch"
 	"github.com/mrpoundsign/OctochorpeBot/internal/queue"
 	"github.com/mrpoundsign/OctochorpeBot/internal/secrets"
 	"github.com/mrpoundsign/OctochorpeBot/internal/tts"
@@ -32,6 +34,9 @@ type Session struct {
 	router    *chat.Router
 	sanitizer *chat.Sanitizer
 	bots      *bots.Matcher
+
+	twitchConnector *twitch.Connector
+	onTwitchStatus  func(status string, detail string)
 }
 
 // NewSession creates an application session initialized with configuration and secret store.
@@ -55,6 +60,23 @@ func NewSession(cfg *config.Config, store secrets.Store) *Session {
 		bots:      matcher,
 	}
 
+	s.twitchConnector = twitch.NewConnector(
+		func(event *chat.Event) {
+			_ = s.DispatchEvent(event)
+		},
+		func(modEvent *chat.ModerationEvent) {
+			s.DispatchModeration(modEvent)
+		},
+		func(status twitch.ConnectionStatus, detail string) {
+			s.mu.RLock()
+			fn := s.onTwitchStatus
+			s.mu.RUnlock()
+			if fn != nil {
+				fn(string(status), detail)
+			}
+		},
+	)
+
 	s.queue = queue.NewQueue(nil, nil, s.Config)
 	return s
 }
@@ -70,6 +92,7 @@ func (s *Session) Start() error {
 
 	s.running = true
 	s.queue.Resume()
+	s.syncConnectorsLocked()
 	return nil
 }
 
@@ -84,6 +107,9 @@ func (s *Session) Stop() error {
 
 	s.running = false
 	s.queue.Pause()
+	if s.twitchConnector != nil {
+		_ = s.twitchConnector.Stop()
+	}
 	return nil
 }
 
@@ -118,7 +144,42 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 	defer s.mu.Unlock()
 
 	s.cfg = newCfg.Clone()
+	if s.running {
+		s.syncConnectorsLocked()
+	}
 	return nil
+}
+
+func (s *Session) syncConnectorsLocked() {
+	if s.twitchConnector == nil {
+		return
+	}
+
+	p, ok := s.cfg.Platforms["twitch"]
+	if ok && p.Enabled && p.AccountName != "" {
+		_ = s.twitchConnector.Start(p.AccountName)
+	} else {
+		_ = s.twitchConnector.Stop()
+	}
+}
+
+// TwitchConnector returns the underlying Twitch connector.
+func (s *Session) TwitchConnector() *twitch.Connector {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.twitchConnector
+}
+
+// SetOnTwitchStatus registers a callback for Twitch connection status changes.
+func (s *Session) SetOnTwitchStatus(fn func(status string, detail string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onTwitchStatus = fn
+	if s.twitchConnector != nil && fn != nil {
+		curStatus := s.twitchConnector.Status()
+		curChannel := s.twitchConnector.Channel()
+		go fn(string(curStatus), curChannel)
+	}
 }
 
 // SetPlayer attaches or updates the audio playback device.
@@ -189,28 +250,43 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	}
 
 	cfg := s.Config()
+	log.Printf("[Session] DispatchEvent: user=%q platform=%s text=%q roles=%v", event.UserName, event.Platform, event.Text, event.Roles)
 
-	// 1. Bot & Broadcaster Matcher
+	// 1. Bot Matcher (known bots, platform bot signals, viewer blocklist/allowlist)
 	if s.bots != nil && s.bots.ShouldIgnore(event, cfg) {
+		log.Printf("[Session] Event dropped by bot matcher: user=%q", event.UserName)
 		return nil
 	}
 
-	// 2. Resolve Voice, Speed, and Template
+	// 2. Platform Read Rules & Role Gating (PRD D18)
+	if pCfg, ok := cfg.Platforms[event.Platform]; ok {
+		shouldSpeak, strippedText := chat.EvaluateReadRules(event, pCfg.ReadRules)
+		if !shouldSpeak {
+			log.Printf("[Session] Event dropped by ReadRules: user=%q roles=%v rules=%+v", event.UserName, event.Roles, pCfg.ReadRules)
+			return nil
+		}
+		if strippedText != "" {
+			event.Text = strippedText
+		}
+	}
+
+	// 3. Resolve Voice, Speed, and Template
 	resolved := s.router.Resolve(event, cfg)
 
-	// 3. Text & Emote Sanitizer
+	// 4. Text & Emote Sanitizer
 	sanitizedText := s.sanitizer.Sanitize(resolved.Text, event.EmoteSpans, resolved.SpeakEmotes, cfg.Safety.BlockedWords)
 	if sanitizedText == "" {
+		log.Printf("[Session] Event sanitized to empty text: user=%q original=%q", event.UserName, resolved.Text)
 		return nil
 	}
 
-	// 4. Priority tier assignment
+	// 5. Priority tier assignment
 	priority := 1
 	if event.IsPaidOrEvent() {
 		priority = 0
 	}
 
-	// 5. Enqueue for speech synthesis
+	// 6. Enqueue for speech synthesis
 	item := &queue.Item{
 		ID:       event.ID,
 		Event:    event,
@@ -220,6 +296,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		Priority: priority,
 	}
 
+	log.Printf("[Session] Enqueued speech item: %q (voice=%s, speed=%.2f, priority=%d)", sanitizedText, item.VoiceID, item.Speed, priority)
 	return s.queue.Enqueue(item)
 }
 
