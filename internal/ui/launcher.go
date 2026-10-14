@@ -18,12 +18,12 @@ type LaunchStateTracker struct {
 
 // NewLaunchWindow creates a centered launch status window.
 func NewLaunchWindow(a fyne.App) (*LaunchStateTracker, fyne.Window) {
-	w := a.NewWindow("OctochorpeBot — Launching")
+	w := a.NewWindow("TownCrier — Launching")
 	w.Resize(fyne.NewSize(450, 260))
 	w.SetFixedSize(true)
 	w.CenterOnScreen()
 
-	title := widget.NewLabelWithStyle("OctochorpeBot", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	title := widget.NewLabelWithStyle("TownCrier", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	sub := widget.NewLabelWithStyle("Local Neural TTS Stream Chat Reader", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 
 	tracker := &LaunchStateTracker{

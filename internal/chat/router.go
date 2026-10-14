@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
 // ResolvedSpeech contains the fully resolved voice, speed, and formatted text ready for TTS.

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/gempir/go-twitch-irc/v4"
-	"github.com/mrpoundsign/OctochorpeBot/internal/chat"
+	"github.com/mrpoundsign/TownCrier/internal/chat"
 )
 
 // ConnectionStatus represents the live Twitch connection state.

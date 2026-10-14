@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2/test"
-	"github.com/mrpoundsign/OctochorpeBot/internal/audio"
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/audio"
+	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
 func TestSettingsViewBuild(t *testing.T) {

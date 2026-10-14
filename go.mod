@@ -1,4 +1,4 @@
-module github.com/mrpoundsign/OctochorpeBot
+module github.com/mrpoundsign/TownCrier
 
 go 1.27.1
 

@@ -3,7 +3,7 @@ package chat
 import (
 	"strings"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
 // EvaluateReadRules determines whether an event passes platform ReadRules (PRD D18).

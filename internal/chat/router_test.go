@@ -3,7 +3,7 @@ package chat
 import (
 	"testing"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
 func TestRouterVoiceResolutionHierarchy(t *testing.T) {

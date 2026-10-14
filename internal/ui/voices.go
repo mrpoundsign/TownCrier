@@ -11,9 +11,9 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/app"
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
-	"github.com/mrpoundsign/OctochorpeBot/internal/tts"
+	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
 // VoicesTabView provides model management, voice testing, and global voice/speed configuration.

@@ -204,7 +204,7 @@ func ConfigPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("user config dir: %w", err)
 	}
-	return filepath.Join(configDir, "OctochorpeBot", "config.json"), nil
+	return filepath.Join(configDir, "com.github.mrpoundsign.towncrier", "config.json"), nil
 }
 
 // EffectiveChatRules returns effective chat rules for a platform, taking platform overrides into account.
@@ -262,6 +262,25 @@ func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			// Migration fallback: check if legacy config exists
+			if configDir, errDir := os.UserConfigDir(); errDir == nil {
+				candidates := []string{
+					filepath.Join(configDir, "TownCrier", "config.json"),
+					filepath.Join(configDir, "com.github.mrpoundsign.octochorpebot", "config.json"),
+					filepath.Join(configDir, "OctochorpeBot", "config.json"),
+				}
+				for _, legacyPath := range candidates {
+					if legacyData, errLegacy := os.ReadFile(legacyPath); errLegacy == nil {
+						cfg := DefaultConfig()
+						if errParse := json.Unmarshal(legacyData, cfg); errParse == nil {
+							_ = migrate(cfg)
+							// Migrate immediately to the new location
+							_ = saveLocked(path, cfg)
+							return cfg, nil
+						}
+					}
+				}
+			}
 			return DefaultConfig(), nil
 		}
 		return nil, fmt.Errorf("read config file: %w", err)
@@ -284,7 +303,10 @@ func Load(path string) (*Config, error) {
 func Save(path string, cfg *Config) error {
 	fileLock.Lock()
 	defer fileLock.Unlock()
+	return saveLocked(path, cfg)
+}
 
+func saveLocked(path string, cfg *Config) error {
 	if path == "" {
 		var err error
 		path, err = ConfigPath()

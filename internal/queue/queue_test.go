@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/chat"
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/chat"
+	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
 type mockPlayer struct {

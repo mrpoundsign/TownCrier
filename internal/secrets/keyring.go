@@ -8,7 +8,10 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
-const ServiceName = "OctochorpeBot"
+const (
+	ServiceName       = "TownCrier"
+	LegacyServiceName = "OctochorpeBot"
+)
 
 // ErrNotFound is returned when a requested secret does not exist.
 var ErrNotFound = errors.New("secret not found")
@@ -90,6 +93,15 @@ func (k *KeyringStore) Get(key string) (string, error) {
 	val, err := keyring.Get(k.service, key)
 	if err == nil {
 		return val, nil
+	}
+
+	// If using the default service name and not found, check legacy service name for seamless migration
+	if k.service == ServiceName && errors.Is(err, keyring.ErrNotFound) {
+		if legacyVal, legErr := keyring.Get(LegacyServiceName, key); legErr == nil {
+			// Migrate secret to new service name
+			_ = keyring.Set(k.service, key, legacyVal)
+			return legacyVal, nil
+		}
 	}
 
 	// Try fallback

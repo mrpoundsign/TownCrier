@@ -59,7 +59,20 @@ func DefaultModelDir() string {
 	// Host OS data directory
 	configDir, err := os.UserConfigDir()
 	if err == nil {
-		return filepath.Join(configDir, "OctochorpeBot", "models", "kokoro-en")
+		newPath := filepath.Join(configDir, "com.github.mrpoundsign.towncrier", "models", "kokoro-en")
+		if IsModelInstalled(newPath) {
+			return newPath
+		}
+		for _, legacy := range []string{
+			filepath.Join(configDir, "TownCrier", "models", "kokoro-en"),
+			filepath.Join(configDir, "com.github.mrpoundsign.octochorpebot", "models", "kokoro-en"),
+			filepath.Join(configDir, "OctochorpeBot", "models", "kokoro-en"),
+		} {
+			if IsModelInstalled(legacy) {
+				return legacy
+			}
+		}
+		return newPath
 	}
 
 	return "models/kokoro-en"

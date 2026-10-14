@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/chat"
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/chat"
+	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
 //go:embed known_bots.json

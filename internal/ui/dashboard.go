@@ -13,11 +13,11 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/app"
-	"github.com/mrpoundsign/OctochorpeBot/internal/chat"
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
-	"github.com/mrpoundsign/OctochorpeBot/internal/queue"
-	"github.com/mrpoundsign/OctochorpeBot/internal/tts"
+	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/chat"
+	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/queue"
+	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
 type ActivityEntry struct {
@@ -72,6 +72,29 @@ func NewDashboardView(w fyne.Window, session *app.Session) *DashboardView {
 			})
 		})
 	}
+
+	// Register live stream event listener
+	session.SetOnEventDispatched(func(ev *chat.Event, voice string) {
+		if ev == nil {
+			return
+		}
+		ts := ev.Timestamp
+		if ts.IsZero() {
+			ts = time.Now()
+		}
+		name := ev.DisplayName
+		if name == "" {
+			name = ev.UserName
+		}
+		v.AddActivity(ActivityEntry{
+			Timestamp: ts,
+			Platform:  ev.Platform,
+			UserName:  name,
+			Text:      ev.Text,
+			Voice:     voice,
+			Kind:      string(ev.Kind),
+		})
+	})
 
 	return v
 }

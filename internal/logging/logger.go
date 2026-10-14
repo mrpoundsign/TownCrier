@@ -30,7 +30,7 @@ func (s *safeWriter) Write(p []byte) (int, error) {
 }
 
 // Init initializes application logging to a persistent log file and stderr.
-// If customPath is empty, it also mirrors to a local octochorpebot.log if writable.
+// If customPath is empty, it also mirrors to a local towncrier.log if writable.
 func Init(customPath string) (string, error) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -47,7 +47,7 @@ func Init(customPath string) (string, error) {
 		if err != nil {
 			configDir = "."
 		}
-		target = filepath.Join(configDir, "OctochorpeBot", "logs", "octochorpebot.log")
+		target = filepath.Join(configDir, "com.github.mrpoundsign.towncrier", "logs", "towncrier.log")
 	}
 
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -61,10 +61,10 @@ func Init(customPath string) (string, error) {
 
 	var localF *os.File
 	if isDefault {
-		localPath, _ := filepath.Abs("octochorpebot.log")
+		localPath, _ := filepath.Abs("towncrier.log")
 		absTarget, _ := filepath.Abs(target)
 		if localPath != absTarget {
-			localF, _ = os.OpenFile("octochorpebot.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+			localF, _ = os.OpenFile("towncrier.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		}
 	}
 

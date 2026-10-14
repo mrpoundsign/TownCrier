@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/secrets"
+	"github.com/mrpoundsign/TownCrier/internal/secrets"
 )
 
 const (
@@ -67,7 +67,7 @@ type OAuthManager struct {
 func NewOAuthManager(clientID string, store secrets.Store) *OAuthManager {
 	if clientID == "" {
 		// Default public client ID placeholder; can be overridden via config
-		clientID = "octochorpebot_client_id"
+		clientID = "towncrier_client_id"
 	}
 	return &OAuthManager{
 		clientID:       clientID,

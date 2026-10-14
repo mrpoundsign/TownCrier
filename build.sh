@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# OctochorpeBot Build Script (WSL Cross-Compilation to Windows)
+# TownCrier Build Script (WSL Cross-Compilation to Windows)
 # Usage:
 #   ./build.sh          # Run lint, test, build Windows binary, and package into dist/
 #   ./build.sh win      # Build Windows GUI executable into build/bin/
@@ -78,18 +78,39 @@ run_test() {
 
 build_win() {
     fetch_dlls
-    echo "==> Building OctochorpeBot Desktop GUI for Windows (amd64 via MinGW)..."
+    echo "==> Building towncrier-core.exe (CGO + MinGW)..."
     CC=x86_64-w64-mingw32-gcc CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
         go build -trimpath -ldflags="-H windowsgui -s -w -extldflags '-static-libgcc'" \
-        -o "$BIN_DIR/OctochorpeBot.exe" ./cmd/octochorpebot
-    echo "✓ Successfully built $BIN_DIR/OctochorpeBot.exe"
+        -o "$BIN_DIR/towncrier-core.exe" ./cmd/towncrier
+    echo "✓ Built $BIN_DIR/towncrier-core.exe"
+
+    echo "==> Staging payload for single-file launcher..."
+    local payload_dir="$ROOT_DIR/cmd/launcher/payload"
+    mkdir -p "$payload_dir"
+    rm -f "$payload_dir/towncrier-core.exe" "$payload_dir/"*.dll
+    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core.exe" "$ROOT_DIR/cmd/launcher/payload/"*.dll' RETURN
+    cp -f "$BIN_DIR/towncrier-core.exe" "$payload_dir/"
+    cp -f "$BIN_DIR/onnxruntime.dll" "$payload_dir/"
+    cp -f "$BIN_DIR/sherpa-onnx-c-api.dll" "$payload_dir/"
+    cp -f "$BIN_DIR/sherpa-onnx-cxx-api.dll" "$payload_dir/"
+
+    echo "==> Building standalone TownCrier.exe..."
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+        go build -trimpath -ldflags="-H windowsgui -s -w" \
+        -o "$BIN_DIR/TownCrier.exe" ./cmd/launcher
+
+    # Clean staged payload from source tree
+    rm -f "$payload_dir/towncrier-core.exe" "$payload_dir/"*.dll
+    trap - RETURN
+
+    echo "✓ Successfully built standalone single-file $BIN_DIR/TownCrier.exe"
 }
 
 package_dist() {
-    if [ ! -f "$BIN_DIR/OctochorpeBot.exe" ]; then
+    if [ ! -f "$BIN_DIR/TownCrier.exe" ]; then
         build_win
     fi
-    local zip_file="$DIST_DIR/OctochorpeBot-v${VERSION}-windows-amd64.zip"
+    local zip_file="$DIST_DIR/TownCrier-v${VERSION}-windows-amd64.zip"
     echo "==> Packaging distribution into $zip_file..."
     rm -f "$zip_file"
 
@@ -97,15 +118,9 @@ package_dist() {
     rm -rf "$staging"
     mkdir -p "$staging"
 
-    cp "$BIN_DIR/OctochorpeBot.exe" "$staging/"
-    if [ -f "$BIN_DIR/onnxruntime.dll" ]; then
-        cp "$BIN_DIR/onnxruntime.dll" "$staging/"
-    fi
-    if [ -f "$BIN_DIR/sherpa-onnx-c-api.dll" ]; then
-        cp "$BIN_DIR/sherpa-onnx-c-api.dll" "$staging/"
-    fi
-    if [ -f "$BIN_DIR/sherpa-onnx-cxx-api.dll" ]; then
-        cp "$BIN_DIR/sherpa-onnx-cxx-api.dll" "$staging/"
+    cp "$BIN_DIR/TownCrier.exe" "$staging/"
+    if [ -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" ]; then
+        cp "$ROOT_DIR/THIRDPARTY_NOTICES.md" "$staging/"
     fi
     if [ -f "$ROOT_DIR/LICENSE" ]; then
         cp "$ROOT_DIR/LICENSE" "$staging/"

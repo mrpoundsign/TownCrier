@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/gempir/go-twitch-irc/v4"
-	"github.com/mrpoundsign/OctochorpeBot/internal/chat"
+	"github.com/mrpoundsign/TownCrier/internal/chat"
 )
 
 func TestCleanChannelName(t *testing.T) {

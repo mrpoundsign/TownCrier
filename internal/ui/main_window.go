@@ -9,8 +9,8 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/app"
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
 // MainWindow coordinates the primary Fyne desktop window, tabs, header bar, and global panic hotkeys.
@@ -37,7 +37,7 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	// Apply Obsidian Slate theme
 	fyneApp.Settings().SetTheme(NewObsidianTheme())
 
-	w := fyneApp.NewWindow("OctochorpeBot — Streamer Neural TTS")
+	w := fyneApp.NewWindow("TownCrier — Streamer Neural TTS")
 
 	mw := &MainWindow{
 		Window:  w,
@@ -147,10 +147,14 @@ func (mw *MainWindow) initHeader() {
 	})
 	mw.panicBtn.Importance = widget.DangerImportance
 
-	brandTitle := widget.NewLabelWithStyle("⚡ OctochorpeBot", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	brandTitle := widget.NewLabelWithStyle("⚡ TownCrier", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+
+	aboutBtn := widget.NewButtonWithIcon("About", theme.InfoIcon(), func() {
+		ShowAboutDialog(mw.Window)
+	})
 
 	leftSide := container.NewHBox(brandTitle, widget.NewSeparator(), mw.twitchStatusDot)
-	rightSide := container.NewHBox(volContainer, mw.panicBtn)
+	rightSide := container.NewHBox(volContainer, aboutBtn, mw.panicBtn)
 
 	mw.headerBar = container.NewVBox(
 		container.NewBorder(nil, nil, leftSide, rightSide),

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/secrets"
+	"github.com/mrpoundsign/TownCrier/internal/secrets"
 )
 
 func TestRequestDeviceCode(t *testing.T) {

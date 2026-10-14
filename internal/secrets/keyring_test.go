@@ -41,7 +41,7 @@ func TestMemoryStore(t *testing.T) {
 
 func TestKeyringStoreWithFallback(t *testing.T) {
 	// Testing with a custom test service name
-	k := NewKeyringStore("OctochorpeBotTest")
+	k := NewKeyringStore("TownCrierTest")
 
 	if err := k.Set("oauth_token", "test_value_abc"); err != nil {
 		t.Fatalf("Set failed: %v", err)

@@ -316,7 +316,7 @@ func runAudioTests(audio *sherpa.GeneratedAudio) {
 
 func main() {
 	fmt.Println("================================================================")
-	fmt.Println(" OctochorpeBot Phase 0 Spike: Technical Validation & Benchmark ")
+	fmt.Println(" TownCrier Phase 0 Spike: Technical Validation & Benchmark ")
 	fmt.Println("================================================================")
 
 	modelDir := locateModelDir()

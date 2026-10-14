@@ -13,10 +13,10 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/app"
-	"github.com/mrpoundsign/OctochorpeBot/internal/audio"
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
-	"github.com/mrpoundsign/OctochorpeBot/internal/tts"
+	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/audio"
+	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
 // SettingsView provides the UI controls for audio, TTS, and global rules QA & configuration.
@@ -253,7 +253,7 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	speedRow := container.NewBorder(nil, nil, speedLabel, nil, speedSlider)
 
 	testEntry := widget.NewEntry()
-	testEntry.SetText("Hello! OctochorpeBot audio output and Kokoro TTS are working properly.")
+	testEntry.SetText("Hello! TownCrier audio output and Kokoro TTS are working properly.")
 
 	v.speakBtn = widget.NewButtonWithIcon("Test Speak", theme.MediaPlayIcon(), func() {
 		text := strings.TrimSpace(testEntry.Text)

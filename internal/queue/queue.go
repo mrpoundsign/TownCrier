@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/audio"
-	"github.com/mrpoundsign/OctochorpeBot/internal/chat"
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
-	"github.com/mrpoundsign/OctochorpeBot/internal/tts"
+	"github.com/mrpoundsign/TownCrier/internal/audio"
+	"github.com/mrpoundsign/TownCrier/internal/chat"
+	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
 var (

@@ -11,7 +11,7 @@ var (
 	ErrModelNotFound   = errors.New("tts model files not found")
 )
 
-// DefaultVoiceID is the default voice used across OctochorpeBot.
+// DefaultVoiceID is the default voice used across TownCrier.
 const DefaultVoiceID = "af_bella"
 
 // KnownKokoroVoices maps voice ID names to speaker IDs.

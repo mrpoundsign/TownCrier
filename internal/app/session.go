@@ -5,14 +5,14 @@ import (
 	"log"
 	"sync"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/audio"
-	"github.com/mrpoundsign/OctochorpeBot/internal/bots"
-	"github.com/mrpoundsign/OctochorpeBot/internal/chat"
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
-	"github.com/mrpoundsign/OctochorpeBot/internal/platform/twitch"
-	"github.com/mrpoundsign/OctochorpeBot/internal/queue"
-	"github.com/mrpoundsign/OctochorpeBot/internal/secrets"
-	"github.com/mrpoundsign/OctochorpeBot/internal/tts"
+	"github.com/mrpoundsign/TownCrier/internal/audio"
+	"github.com/mrpoundsign/TownCrier/internal/bots"
+	"github.com/mrpoundsign/TownCrier/internal/chat"
+	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/platform/twitch"
+	"github.com/mrpoundsign/TownCrier/internal/queue"
+	"github.com/mrpoundsign/TownCrier/internal/secrets"
+	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
 var (
@@ -35,8 +35,9 @@ type Session struct {
 	sanitizer *chat.Sanitizer
 	bots      *bots.Matcher
 
-	twitchConnector *twitch.Connector
-	onTwitchStatus  func(status string, detail string)
+	twitchConnector   *twitch.Connector
+	onTwitchStatus    func(status string, detail string)
+	onEventDispatched func(event *chat.Event, voiceID string)
 }
 
 // NewSession creates an application session initialized with configuration and secret store.
@@ -182,6 +183,13 @@ func (s *Session) SetOnTwitchStatus(fn func(status string, detail string)) {
 	}
 }
 
+// SetOnEventDispatched registers a callback fired whenever a stream event is enqueued for speech.
+func (s *Session) SetOnEventDispatched(fn func(event *chat.Event, voiceID string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onEventDispatched = fn
+}
+
 // SetPlayer attaches or updates the audio playback device.
 func (s *Session) SetPlayer(p audio.Player) {
 	s.mu.Lock()
@@ -297,7 +305,18 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	}
 
 	log.Printf("[Session] Enqueued speech item: %q (voice=%s, speed=%.2f, priority=%d)", sanitizedText, item.VoiceID, item.Speed, priority)
-	return s.queue.Enqueue(item)
+	if err := s.queue.Enqueue(item); err != nil {
+		return err
+	}
+
+	s.mu.RLock()
+	onDispatched := s.onEventDispatched
+	s.mu.RUnlock()
+	if onDispatched != nil {
+		go onDispatched(event, resolved.VoiceID)
+	}
+
+	return nil
 }
 
 // DispatchModeration processes Twitch or YouTube moderation sync events (D29).

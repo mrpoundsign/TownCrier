@@ -7,7 +7,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 )
 
-// ObsidianTheme implements the custom visual identity for OctochorpeBot.
+// ObsidianTheme implements the custom visual identity for TownCrier.
 // Palette: Obsidian Slate (#0F172A), Chrome White (#F8FAFC), Electric Sky Blue (#38BDF8).
 type ObsidianTheme struct{}
 

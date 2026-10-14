@@ -10,13 +10,13 @@ import (
 	"fyne.io/fyne/v2"
 	fyneapp "fyne.io/fyne/v2/app"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/app"
-	"github.com/mrpoundsign/OctochorpeBot/internal/audio"
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
-	"github.com/mrpoundsign/OctochorpeBot/internal/logging"
-	"github.com/mrpoundsign/OctochorpeBot/internal/secrets"
-	"github.com/mrpoundsign/OctochorpeBot/internal/tts"
-	"github.com/mrpoundsign/OctochorpeBot/internal/ui"
+	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/audio"
+	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/logging"
+	"github.com/mrpoundsign/TownCrier/internal/secrets"
+	"github.com/mrpoundsign/TownCrier/internal/tts"
+	"github.com/mrpoundsign/TownCrier/internal/ui"
 )
 
 func parseLogFlagEarly() string {
@@ -37,7 +37,7 @@ func main() {
 	if err != nil {
 		log.Printf("Warning: failed to initialize persistent log file: %v", err)
 	} else {
-		log.Printf("=== OctochorpeBot Started (Log: %s) ===", logPath)
+		log.Printf("=== TownCrier Started (Log: %s) ===", logPath)
 	}
 	defer logging.Close()
 	defer logging.RecoverAndExit("main")
@@ -50,7 +50,7 @@ func main() {
 	flag.Parse()
 	_ = logFlag
 
-	myApp := fyneapp.NewWithID("com.github.mrpoundsign.octochorpebot")
+	myApp := fyneapp.NewWithID("com.github.mrpoundsign.towncrier")
 
 	// 1. Pop up initial launch status window immediately
 	tracker, launchWin := ui.NewLaunchWindow(myApp)

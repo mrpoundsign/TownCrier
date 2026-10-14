@@ -128,3 +128,40 @@ func TestClone(t *testing.T) {
 		t.Errorf("modifying clone mutated original config: %s", cfg.Audio.DeviceName)
 	}
 }
+
+func TestLegacyMigration(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	legacyDir := filepath.Join(tmpDir, "OctochorpeBot")
+	if err := os.MkdirAll(legacyDir, 0700); err != nil {
+		t.Fatalf("failed to create legacy dir: %v", err)
+	}
+
+	legacyCfg := DefaultConfig()
+	legacyCfg.GlobalChatRules.DefaultVoice = "af_nicole"
+	legacyCfg.Audio.DeviceName = "Migrated Device"
+
+	legacyPath := filepath.Join(legacyDir, "config.json")
+	if err := Save(legacyPath, legacyCfg); err != nil {
+		t.Fatalf("failed to save legacy config: %v", err)
+	}
+
+	// Calling Load with "" should detect legacy config and migrate to TownCrier
+	migrated, err := Load("")
+	if err != nil {
+		t.Fatalf("Load with legacy migration failed: %v", err)
+	}
+
+	if migrated.GlobalChatRules.DefaultVoice != "af_nicole" {
+		t.Errorf("expected migrated voice 'af_nicole', got %q", migrated.GlobalChatRules.DefaultVoice)
+	}
+	if migrated.Audio.DeviceName != "Migrated Device" {
+		t.Errorf("expected migrated device 'Migrated Device', got %q", migrated.Audio.DeviceName)
+	}
+
+	newPath := filepath.Join(tmpDir, "com.github.mrpoundsign.towncrier", "config.json")
+	if _, err := os.Stat(newPath); err != nil {
+		t.Errorf("expected migrated config at %s, got error: %v", newPath, err)
+	}
+}

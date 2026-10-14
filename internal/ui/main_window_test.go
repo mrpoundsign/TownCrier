@@ -5,9 +5,9 @@ import (
 
 	"fyne.io/fyne/v2/test"
 
-	"github.com/mrpoundsign/OctochorpeBot/internal/app"
-	"github.com/mrpoundsign/OctochorpeBot/internal/config"
-	"github.com/mrpoundsign/OctochorpeBot/internal/secrets"
+	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/secrets"
 )
 
 func TestMainWindowCreation(t *testing.T) {
