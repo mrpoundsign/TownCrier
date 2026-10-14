@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"log"
+	"sync"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -60,14 +62,28 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	w.Resize(fyne.NewSize(950, 720))
 	w.CenterOnScreen()
 
+	var closeOnce sync.Once
+	cleanup := func() {
+		closeOnce.Do(func() {
+			log.Println("[MainWindow] Close requested, shutting down subsystems...")
+			_ = session.Close()
+			if p := session.Player(); p != nil {
+				_ = p.Close()
+			}
+			if e := session.Engine(); e != nil {
+				_ = e.Close()
+			}
+		})
+	}
+
+	w.SetCloseIntercept(func() {
+		cleanup()
+		w.Close()
+		fyneApp.Quit()
+	})
+
 	w.SetOnClosed(func() {
-		_ = session.Stop()
-		if p := session.Player(); p != nil {
-			_ = p.Close()
-		}
-		if e := session.Engine(); e != nil {
-			_ = e.Close()
-		}
+		cleanup()
 	})
 
 	return mw

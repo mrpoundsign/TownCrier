@@ -281,6 +281,7 @@ func (p *DevicePlayer) Close() error {
 	p.Stop()
 
 	if p.device != nil {
+		_ = p.device.Stop()
 		p.device.Uninit()
 		p.device = nil
 	}

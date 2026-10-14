@@ -36,3 +36,22 @@ func TestMainWindowCreation(t *testing.T) {
 		}
 	}
 }
+
+func TestMainWindowCloseIntercept(t *testing.T) {
+	appObj := test.NewApp()
+	cfg := config.DefaultConfig()
+	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	_ = session.Start()
+
+	mw := NewMainWindow(appObj, session)
+	if mw == nil || mw.Window == nil {
+		t.Fatal("expected non-nil MainWindow")
+	}
+
+	// Trigger window close (invokes SetCloseIntercept)
+	mw.Window.Close()
+
+	if session.IsRunning() {
+		t.Error("expected session to be stopped after window close intercept")
+	}
+}

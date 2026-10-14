@@ -46,6 +46,14 @@ func TestSessionLifecycle(t *testing.T) {
 	if session.IsRunning() {
 		t.Error("expected session not to be running after stop")
 	}
+
+	// Close permanently shuts down queue
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	if session.IsRunning() {
+		t.Error("expected session not to be running after close")
+	}
 }
 
 func TestSessionReloadConfig(t *testing.T) {

@@ -33,6 +33,13 @@ func parseLogFlagEarly() string {
 }
 
 func main() {
+	if err := run(); err != nil {
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+func run() error {
 	logPath, err := logging.Init(parseLogFlagEarly())
 	if err != nil {
 		log.Printf("Warning: failed to initialize persistent log file: %v", err)
@@ -52,8 +59,17 @@ func main() {
 
 	myApp := fyneapp.NewWithID("com.github.mrpoundsign.towncrier")
 
+	var activeSession *app.Session
+	var activePlayer audio.Player
+	var activeEngine tts.Engine
+
 	// 1. Pop up initial launch status window immediately
 	tracker, launchWin := ui.NewLaunchWindow(myApp)
+	launchWin.SetCloseIntercept(func() {
+		log.Println("Launch window closed by user, aborting startup...")
+		launchWin.Close()
+		myApp.Quit()
+	})
 	launchWin.Show()
 
 	// 2. Perform initialization in background goroutine so window renders instantly
@@ -91,6 +107,7 @@ func main() {
 			log.Printf("Warning: failed to open target audio device: %v", err)
 			tracker.SetAudioStatus(false, "Using fallback")
 		} else {
+			activePlayer = player
 			if cfg.Audio.Volume > 0 {
 				player.SetVolume(cfg.Audio.Volume)
 			}
@@ -114,6 +131,7 @@ func main() {
 				tracker.SetTTSStatus(false, "Init error: "+engErr.Error())
 			} else {
 				engine = eng
+				activeEngine = eng
 				log.Printf("Kokoro engine ready (provider=%s)", eng.Provider())
 				tracker.SetTTSStatus(true, "Kokoro-82M int8 ("+eng.Provider()+")")
 			}
@@ -129,6 +147,7 @@ func main() {
 		// Step 4: Initialize application session and open full MainWindow
 		log.Println("Starting application session...")
 		session := app.NewSession(cfg, secrets.NewKeyringStore(""))
+		activeSession = session
 		if player != nil {
 			session.SetPlayer(player)
 		}
@@ -153,6 +172,17 @@ func main() {
 
 	log.Println("Entering Fyne event loop...")
 	myApp.Run()
-	log.Println("Fyne event loop terminated.")
+	log.Println("Fyne event loop terminated. Shutting down subsystems...")
+
+	if activeSession != nil {
+		_ = activeSession.Close()
+	}
+	if activePlayer != nil {
+		_ = activePlayer.Close()
+	}
+	if activeEngine != nil {
+		_ = activeEngine.Close()
+	}
+	return nil
 }
 

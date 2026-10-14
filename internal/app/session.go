@@ -114,6 +114,21 @@ func (s *Session) Stop() error {
 	return nil
 }
 
+// Close permanently shuts down the session, queue dispatcher, and platform connectors.
+func (s *Session) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.running = false
+	if s.twitchConnector != nil {
+		_ = s.twitchConnector.Stop()
+	}
+	if s.queue != nil {
+		s.queue.Close()
+	}
+	return nil
+}
+
 // IsRunning reports whether the session is currently active.
 func (s *Session) IsRunning() bool {
 	s.mu.RLock()
