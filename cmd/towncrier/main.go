@@ -4,7 +4,9 @@ import (
 	"flag"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -62,6 +64,29 @@ func run() error {
 	var activeSession *app.Session
 	var activePlayer audio.Player
 	var activeEngine tts.Engine
+
+	// Register OS signal handler for graceful shutdown on SIGINT/SIGTERM (e.g. ^C)
+	sigChan := make(chan os.Signal, 2)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+
+	go func() {
+		sig, ok := <-sigChan
+		if !ok {
+			return
+		}
+		log.Printf("Received termination signal (%v), shutting down gracefully...", sig)
+		fyne.Do(func() {
+			myApp.Quit()
+		})
+
+		// If a second signal arrives before graceful shutdown completes, force immediate exit
+		sig2, ok := <-sigChan
+		if ok {
+			log.Printf("Received second termination signal (%v), forcing exit...", sig2)
+			os.Exit(1)
+		}
+	}()
 
 	// 1. Pop up initial launch status window immediately
 	tracker, launchWin := ui.NewLaunchWindow(myApp)
@@ -176,13 +201,21 @@ func run() error {
 
 	if activeSession != nil {
 		_ = activeSession.Close()
+		if p := activeSession.Player(); p != nil {
+			_ = p.Close()
+		}
+		if e := activeSession.Engine(); e != nil {
+			_ = e.Close()
+		}
+	} else {
+		if activePlayer != nil {
+			_ = activePlayer.Close()
+		}
+		if activeEngine != nil {
+			_ = activeEngine.Close()
+		}
 	}
-	if activePlayer != nil {
-		_ = activePlayer.Close()
-	}
-	if activeEngine != nil {
-		_ = activeEngine.Close()
-	}
+	log.Println("Subsystems shutdown complete. Process exiting.")
 	return nil
 }
 

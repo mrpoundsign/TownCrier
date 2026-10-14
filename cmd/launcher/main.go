@@ -8,8 +8,10 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 //go:embed payload/*
@@ -21,25 +23,28 @@ const (
 )
 
 func main() {
-	if err := run(); err != nil {
+	exitCode, err := run()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "TownCrier launcher error: %v\n", err)
-		os.Exit(1)
+	}
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 }
 
-func run() error {
+func run() (int, error) {
 	runtimeDir, err := getRuntimeDir()
 	if err != nil {
-		return fmt.Errorf("resolve runtime dir: %w", err)
+		return 1, fmt.Errorf("resolve runtime dir: %w", err)
 	}
 
 	if err := extractPayloadIfNeeded(runtimeDir); err != nil {
-		return fmt.Errorf("extract runtime payload: %w", err)
+		return 1, fmt.Errorf("extract runtime payload: %w", err)
 	}
 
 	coreExePath := filepath.Join(runtimeDir, CoreExe)
 	if _, err := os.Stat(coreExePath); err != nil {
-		return fmt.Errorf("core executable not found at %s: %w", coreExePath, err)
+		return 1, fmt.Errorf("core executable not found at %s: %w", coreExePath, err)
 	}
 
 	cmd := exec.Command(coreExePath, os.Args[1:]...)
@@ -53,17 +58,33 @@ func run() error {
 	setSysProcAttr(cmd)
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start %s: %w", CoreExe, err)
+		return 1, fmt.Errorf("start %s: %w", CoreExe, err)
 	}
 
-	if err := cmd.Wait(); err != nil {
-		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
-			os.Exit(exitErr.ExitCode())
+	// Trap SIGINT / SIGTERM so terminal detachment (Ctrl+C) exits the launcher cleanly
+	// while allowing the GUI application to continue running independently on the desktop.
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case <-sigChan:
+		// Terminal interrupted: detach cleanly and let GUI app continue running
+		return 0, nil
+	case waitErr := <-done:
+		if waitErr != nil {
+			if exitErr, ok := errors.AsType[*exec.ExitError](waitErr); ok {
+				return exitErr.ExitCode(), nil
+			}
+			return 1, waitErr
 		}
-		return err
+		return 0, nil
 	}
-
-	return nil
 }
 
 func getRuntimeDir() (string, error) {
