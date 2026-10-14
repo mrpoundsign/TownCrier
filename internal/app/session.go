@@ -278,11 +278,27 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		}
 	}
 
-	// 3. Resolve Voice, Speed, and Template
-	resolved := s.router.Resolve(event, cfg)
+	// 3. Text & Emote Sanitizer on raw message text
+	// Emote offsets are relative to event.Text before chatter name prefixing.
+	_, speakEmotes, _, _, _ := cfg.EffectiveChatRules(event.Platform)
+	if event.Text != "" {
+		event.Text = s.sanitizer.Sanitize(event.Text, event.EmoteSpans, speakEmotes, cfg.Safety.BlockedWords)
+		event.EmoteSpans = nil // already applied to event.Text
+		if event.Text == "" && event.Kind == chat.EventKindMessage {
+			log.Printf("[Session] Chat message sanitized to empty text: user=%q", event.UserName)
+			return nil
+		}
+	}
 
-	// 4. Text & Emote Sanitizer
-	sanitizedText := s.sanitizer.Sanitize(resolved.Text, event.EmoteSpans, resolved.SpeakEmotes, cfg.Safety.BlockedWords)
+	// 4. Resolve Voice, Speed, and Template
+	resolved := s.router.Resolve(event, cfg)
+	if resolved.Text == "" {
+		log.Printf("[Session] Event resolved to empty text: user=%q", event.UserName)
+		return nil
+	}
+
+	// 5. Final sanitation pass on formatted text (length clamping, blocked words in templates/names)
+	sanitizedText := s.sanitizer.Sanitize(resolved.Text, nil, true, cfg.Safety.BlockedWords)
 	if sanitizedText == "" {
 		log.Printf("[Session] Event sanitized to empty text: user=%q original=%q", event.UserName, resolved.Text)
 		return nil

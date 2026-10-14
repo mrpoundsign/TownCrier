@@ -27,6 +27,19 @@ func TestSanitizeEmotes(t *testing.T) {
 	}
 }
 
+func TestSanitizePureEmotes(t *testing.T) {
+	s := NewSanitizer(300)
+	text := "Kappa Kappa"
+	spans := []EmoteSpan{
+		{Start: 0, End: 5, ID: "25", Name: "Kappa"},
+		{Start: 6, End: 11, ID: "25", Name: "Kappa"},
+	}
+	cleaned := s.Sanitize(text, spans, false, nil)
+	if cleaned != "" {
+		t.Errorf("expected empty string for pure emotes, got %q", cleaned)
+	}
+}
+
 func TestSanitizeEmotesWithUnicode(t *testing.T) {
 	s := NewSanitizer(300)
 
