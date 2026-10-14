@@ -78,6 +78,32 @@ func TestSessionReloadConfig(t *testing.T) {
 	}
 }
 
+func TestSessionUpdateConfig(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.GlobalChatRules.DefaultVoice = "af_bella"
+	session := NewSession(cfg, secrets.NewMemoryStore())
+
+	err := session.UpdateConfig(func(c *config.Config) {
+		c.GlobalChatRules.DefaultVoice = "am_michael"
+		c.GlobalChatRules.SpeakEmotes = false
+	})
+	if err != nil {
+		t.Fatalf("UpdateConfig failed: %v", err)
+	}
+
+	loaded := session.Config()
+	if loaded.GlobalChatRules.DefaultVoice != "am_michael" {
+		t.Errorf("expected am_michael, got %s", loaded.GlobalChatRules.DefaultVoice)
+	}
+	if loaded.GlobalChatRules.SpeakEmotes {
+		t.Errorf("expected SpeakEmotes to be false")
+	}
+
+	if err := session.UpdateConfig(nil); err == nil {
+		t.Error("expected error with nil mutator")
+	}
+}
+
 func TestSessionConcurrency(t *testing.T) {
 	session := NewSession(config.DefaultConfig(), secrets.NewMemoryStore())
 	_ = session.Start()

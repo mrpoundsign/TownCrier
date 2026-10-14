@@ -34,7 +34,7 @@ type TwitchTabView struct {
 	rewardEntry       *widget.Entry
 	modCmdsCheck      *widget.Check
 	overrideCheck     *widget.Check
-	saveNotice        *widget.Label
+	onStatus          func(msg string)
 	initializing      bool
 }
 
@@ -58,8 +58,6 @@ func (v *TwitchTabView) Build() fyne.CanvasObject {
 		pCfg = config.DefaultConfig().Platforms["twitch"]
 	}
 
-	v.saveNotice = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
-
 	connCard := v.buildConnectionCard(pCfg)
 	rulesCard := v.buildReadRulesCard(pCfg)
 	settingsCard := v.buildTwitchSettingsCard(pCfg)
@@ -72,7 +70,6 @@ func (v *TwitchTabView) Build() fyne.CanvasObject {
 		settingsCard,
 		notifsCard,
 		overridesCard,
-		v.saveNotice,
 	)
 
 	return container.NewVScroll(content)
@@ -381,15 +378,6 @@ func (v *TwitchTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Card {
 	ov := pCfg.Overrides
 
-	v.overrideCheck = widget.NewCheck("Override Global Chat Rules for Twitch", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["twitch"]
-			p.Overrides.OverrideRules = b
-			c.Platforms["twitch"] = p
-		})
-	})
-	v.overrideCheck.SetChecked(ov.OverrideRules)
-
 	namesCheck := widget.NewCheck("Speak Names for Twitch Chat", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
 			p := c.Platforms["twitch"]
@@ -426,6 +414,29 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 	})
 	voiceSelect.SetSelected(selectedVoice)
 	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("Twitch Default Voice:"), nil, voiceSelect)
+
+	toggleOverrides := func(enabled bool) {
+		if enabled {
+			namesCheck.Enable()
+			emotesCheck.Enable()
+			voiceSelect.Enable()
+		} else {
+			namesCheck.Disable()
+			emotesCheck.Disable()
+			voiceSelect.Disable()
+		}
+	}
+	toggleOverrides(ov.OverrideRules)
+
+	v.overrideCheck = widget.NewCheck("Override Global Chat Rules for Twitch", func(b bool) {
+		toggleOverrides(b)
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["twitch"]
+			p.Overrides.OverrideRules = b
+			c.Platforms["twitch"] = p
+		})
+	})
+	v.overrideCheck.SetChecked(ov.OverrideRules)
 
 	cardContent := container.NewVBox(
 		v.overrideCheck,
@@ -472,13 +483,19 @@ func capitalizeRole(r string) string {
 	return strings.ToUpper(r[:1]) + r[1:]
 }
 
+// SetStatusHandler registers a callback invoked when configuration is updated.
+func (v *TwitchTabView) SetStatusHandler(fn func(msg string)) {
+	v.onStatus = fn
+}
+
 func (v *TwitchTabView) updateConfig(fn func(c *config.Config)) {
 	if v.initializing {
 		return
 	}
-	cfg := v.session.Config()
-	fn(cfg)
-	_ = v.session.ReloadConfig(cfg)
-	_ = config.Save("", cfg)
-	v.saveNotice.SetText("✓ Settings saved.")
+	if v.session != nil {
+		_ = v.session.UpdateConfig(fn)
+	}
+	if v.onStatus != nil {
+		v.onStatus("✓ Settings saved.")
+	}
 }

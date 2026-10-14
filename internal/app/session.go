@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 
@@ -162,6 +163,22 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 	s.cfg = newCfg.Clone()
 	if s.running {
 		s.syncConnectorsLocked()
+	}
+	return nil
+}
+
+// UpdateConfig safely mutates the session configuration, reloads subsystems, and persists to disk.
+func (s *Session) UpdateConfig(fn func(c *config.Config)) error {
+	if fn == nil {
+		return errors.New("mutator function cannot be nil")
+	}
+	cfg := s.Config()
+	fn(cfg)
+	if err := s.ReloadConfig(cfg); err != nil {
+		return fmt.Errorf("reload config: %w", err)
+	}
+	if err := config.Save("", cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
 	}
 	return nil
 }

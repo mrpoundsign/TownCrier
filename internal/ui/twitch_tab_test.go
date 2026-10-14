@@ -65,3 +65,26 @@ func TestTwitchTabViewBuildPreEnabled(t *testing.T) {
 		t.Errorf("expected ready badge, got %v", tab.statusBadge)
 	}
 }
+
+func TestTwitchTabStatusHandler(t *testing.T) {
+	appObj := test.NewApp()
+	win := appObj.NewWindow("TestStatus")
+	cfg := config.DefaultConfig()
+	session := app.NewSession(cfg, secrets.NewMemoryStore())
+
+	tab := NewTwitchTabView(win, session)
+	var lastStatus string
+	tab.SetStatusHandler(func(msg string) {
+		lastStatus = msg
+	})
+
+	_ = tab.Build()
+
+	tab.overrideCheck.SetChecked(true)
+	if lastStatus != "✓ Settings saved." {
+		t.Errorf("expected '✓ Settings saved.', got %q", lastStatus)
+	}
+	if !session.Config().Platforms["twitch"].Overrides.OverrideRules {
+		t.Error("expected OverrideRules to be true")
+	}
+}

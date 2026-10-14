@@ -31,6 +31,7 @@ type SettingsView struct {
 	mu           sync.Mutex
 	deviceEnum   func() ([]audio.DeviceInfo, error)
 	statusLabel  *widget.Label
+	onStatus     func(msg string)
 	modelStatus  *widget.Label
 	deviceSelect *widget.Select
 	deviceMap    map[string]string // device name -> hex ID
@@ -62,6 +63,33 @@ func (v *SettingsView) SetSession(s *app.Session) {
 	v.session = s
 }
 
+// SetStatusHandler registers a callback invoked when configuration or audio status updates.
+func (v *SettingsView) SetStatusHandler(fn func(msg string)) {
+	v.onStatus = fn
+}
+
+func (v *SettingsView) setStatus(msg string) {
+	fyne.Do(func() {
+		if v.statusLabel != nil {
+			v.statusLabel.SetText(msg)
+		}
+		if v.onStatus != nil {
+			v.onStatus(msg)
+		}
+	})
+}
+
+func (v *SettingsView) updateConfig(fn func(c *config.Config)) {
+	if v.session != nil {
+		_ = v.session.UpdateConfig(fn)
+		v.cfg = v.session.Config()
+	} else {
+		fn(v.cfg)
+		_ = config.Save("", v.cfg)
+	}
+	v.setStatus("✓ Settings saved.")
+}
+
 // Build generates the Fyne CanvasObject containing the full Settings & Test interface.
 func (v *SettingsView) Build() fyne.CanvasObject {
 	v.statusLabel = widget.NewLabelWithStyle("Ready.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
@@ -81,7 +109,6 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	rulesCard := v.buildRulesCard()
 	safetyCard := v.buildSafetyCard()
 	botsCard := v.buildBotsCard()
-	bottomBar := v.buildBottomBar()
 
 	content := container.NewVBox(
 		audioCard,
@@ -89,7 +116,6 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		rulesCard,
 		safetyCard,
 		botsCard,
-		bottomBar,
 	)
 
 	return container.NewVScroll(content)
@@ -99,20 +125,21 @@ func (v *SettingsView) buildAudioCard() *widget.Card {
 	v.deviceSelect = widget.NewSelect([]string{"Default Audio Device"}, func(selected string) {
 		v.mu.Lock()
 		devHex := v.deviceMap[selected]
-		v.cfg.Audio.DeviceName = selected
-		v.cfg.Audio.DeviceID = devHex
 		v.mu.Unlock()
+
+		v.updateConfig(func(c *config.Config) {
+			c.Audio.DeviceName = selected
+			c.Audio.DeviceID = devHex
+		})
 
 		if v.player != nil {
 			go func() {
 				err := v.player.SwitchDevice(devHex)
-				fyne.Do(func() {
-					if err != nil {
-						v.statusLabel.SetText(fmt.Sprintf("Failed to switch audio device: %v", err))
-					} else {
-						v.statusLabel.SetText("Active audio device: " + selected)
-					}
-				})
+				if err != nil {
+					v.setStatus(fmt.Sprintf("Failed to switch audio device: %v", err))
+				} else {
+					v.setStatus("Active audio device: " + selected)
+				}
 			}()
 		}
 	})
@@ -121,7 +148,7 @@ func (v *SettingsView) buildAudioCard() *widget.Card {
 
 	refreshBtn := widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() {
 		v.refreshDeviceList()
-		v.statusLabel.SetText("Audio device list refreshed.")
+		v.setStatus("Audio device list refreshed.")
 	})
 
 	deviceRow := container.NewBorder(nil, nil, widget.NewLabel("Output Device:"), refreshBtn, v.deviceSelect)
@@ -135,11 +162,13 @@ func (v *SettingsView) buildAudioCard() *widget.Card {
 	volSlider.SetValue(float64(vol * 100))
 	volSlider.OnChanged = func(val float64) {
 		gain := float32(val / 100.0)
-		v.cfg.Audio.Volume = gain
 		volLabel.SetText(fmt.Sprintf("Volume: %d%%", int(val)))
 		if v.player != nil {
 			v.player.SetVolume(gain)
 		}
+		v.updateConfig(func(c *config.Config) {
+			c.Audio.Volume = gain
+		})
 	}
 	volumeRow := container.NewBorder(nil, nil, volLabel, nil, volSlider)
 
@@ -147,7 +176,7 @@ func (v *SettingsView) buildAudioCard() *widget.Card {
 		if v.player != nil {
 			v.player.PanicStop()
 		}
-		v.statusLabel.SetText("🚨 Emergency panic stop triggered! Audio queue silenced.")
+		v.setStatus("🚨 Emergency panic stop triggered! Audio queue silenced.")
 	})
 	panicBtn.Importance = widget.DangerImportance
 
@@ -233,7 +262,9 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		selectedVoice = tts.DefaultVoiceID
 	}
 	voiceSelect := widget.NewSelect(tts.KokoroVoiceNames, func(s string) {
-		v.cfg.GlobalChatRules.DefaultVoice = s
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.DefaultVoice = s
+		})
 	})
 	voiceSelect.SetSelected(selectedVoice)
 	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("Default Voice:"), nil, voiceSelect)
@@ -247,8 +278,10 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	speedSlider.Step = 0.05
 	speedSlider.SetValue(float64(speed))
 	speedSlider.OnChanged = func(val float64) {
-		v.cfg.GlobalChatRules.DefaultSpeed = float32(val)
 		speedLabel.SetText(fmt.Sprintf("Speed: %.2fx", val))
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.DefaultSpeed = float32(val)
+		})
 	}
 	speedRow := container.NewBorder(nil, nil, speedLabel, nil, speedSlider)
 
@@ -268,7 +301,9 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		if v.cfg.TTS.UseGPU == checked {
 			return
 		}
-		v.cfg.TTS.UseGPU = checked
+		v.updateConfig(func(c *config.Config) {
+			c.TTS.UseGPU = checked
+		})
 		if tts.IsModelInstalled(v.modelDir) {
 			go func() {
 				threads := v.cfg.TTS.NumThreads
@@ -278,7 +313,7 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 				eng, err := tts.NewSherpaEngine(v.modelDir, threads, checked)
 				fyne.Do(func() {
 					if err != nil {
-						v.statusLabel.SetText(fmt.Sprintf("Failed to switch GPU acceleration: %v", err))
+						v.setStatus(fmt.Sprintf("Failed to switch GPU acceleration: %v", err))
 					} else {
 						v.mu.Lock()
 						if v.engine != nil {
@@ -289,7 +324,7 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 						if v.session != nil {
 							v.session.SetEngine(eng)
 						}
-						v.statusLabel.SetText("TTS engine reloaded: Provider is " + eng.Provider())
+						v.setStatus("TTS engine reloaded: Provider is " + eng.Provider())
 					}
 				})
 			}()
@@ -316,7 +351,7 @@ func (v *SettingsView) startModelDownload() {
 	v.downloadBtn.Disable()
 	v.downloadProg.Show()
 	v.downloadProg.SetValue(0)
-	v.statusLabel.SetText("Downloading Kokoro-82M neural model files...")
+	v.setStatus("Downloading Kokoro-82M neural model files...")
 
 	go func() {
 		err := tts.DownloadKokoroModel(v.modelDir, func(current, total int64) {
@@ -331,14 +366,14 @@ func (v *SettingsView) startModelDownload() {
 			v.downloadProg.Hide()
 			if err != nil {
 				v.downloadBtn.Enable()
-				v.statusLabel.SetText(fmt.Sprintf("Download failed: %v", err))
+				v.setStatus(fmt.Sprintf("Download failed: %v", err))
 				dialog.ShowError(err, v.window)
 				return
 			}
 
 			v.modelStatus.SetText(fmt.Sprintf("Kokoro Model: Installed (%s)", filepath.Base(v.modelDir)))
 			v.downloadBtn.Hide()
-			v.statusLabel.SetText("Kokoro model downloaded and verified! Initializing engine...")
+			v.setStatus("Kokoro model downloaded and verified! Initializing engine...")
 
 			// Initialize engine
 			threads := v.cfg.TTS.NumThreads
@@ -347,13 +382,13 @@ func (v *SettingsView) startModelDownload() {
 			}
 			eng, engErr := tts.NewSherpaEngine(v.modelDir, threads, v.cfg.TTS.UseGPU)
 			if engErr != nil {
-				v.statusLabel.SetText(fmt.Sprintf("Failed to initialize TTS engine: %v", engErr))
+				v.setStatus(fmt.Sprintf("Failed to initialize TTS engine: %v", engErr))
 				return
 			}
 			v.mu.Lock()
 			v.engine = eng
 			v.mu.Unlock()
-			v.statusLabel.SetText("Kokoro TTS engine ready.")
+			v.setStatus("Kokoro TTS engine ready.")
 		})
 	}()
 }
@@ -373,20 +408,20 @@ func (v *SettingsView) testSpeak(text, voice string, speed float32) {
 			}
 			eng, err = tts.NewSherpaEngine(v.modelDir, threads, v.cfg.TTS.UseGPU)
 			if err != nil {
-				v.statusLabel.SetText(fmt.Sprintf("Failed to load TTS engine: %v", err))
+				v.setStatus(fmt.Sprintf("Failed to load TTS engine: %v", err))
 				return
 			}
 			v.mu.Lock()
 			v.engine = eng
 			v.mu.Unlock()
 		} else {
-			v.statusLabel.SetText("TTS engine not loaded: model is not installed.")
+			v.setStatus("TTS engine not loaded: model is not installed.")
 			return
 		}
 	}
 
 	v.speakBtn.Disable()
-	v.statusLabel.SetText(fmt.Sprintf("Synthesizing '%s' with voice '%s'...", text, voice))
+	v.setStatus(fmt.Sprintf("Synthesizing '%s' with voice '%s'...", text, voice))
 
 	go func() {
 		t0 := time.Now()
@@ -396,7 +431,7 @@ func (v *SettingsView) testSpeak(text, voice string, speed float32) {
 		fyne.Do(func() {
 			v.speakBtn.Enable()
 			if err != nil {
-				v.statusLabel.SetText(fmt.Sprintf("Synthesis failed: %v", err))
+				v.setStatus(fmt.Sprintf("Synthesis failed: %v", err))
 				return
 			}
 
@@ -404,12 +439,12 @@ func (v *SettingsView) testSpeak(text, voice string, speed float32) {
 			rtf := dur.Seconds() / audioDur
 			status := fmt.Sprintf("Synthesized in %v (audio: %.1fs, RTF: %.2fx). Playing...",
 				dur.Round(time.Millisecond), audioDur, rtf)
-			v.statusLabel.SetText(status)
+			v.setStatus(status)
 
 			if v.player != nil {
 				v.player.ResetPanic()
 				if playErr := v.player.Play(samples, sampleRate); playErr != nil {
-					v.statusLabel.SetText(fmt.Sprintf("Playback error: %v", playErr))
+					v.setStatus(fmt.Sprintf("Playback error: %v", playErr))
 				}
 			}
 		})
@@ -418,17 +453,23 @@ func (v *SettingsView) testSpeak(text, voice string, speed float32) {
 
 func (v *SettingsView) buildRulesCard() *widget.Card {
 	checkNames := widget.NewCheck("Speak Chatter Names (e.g. 'User says...')", func(b bool) {
-		v.cfg.GlobalChatRules.SpeakNames = b
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.SpeakNames = b
+		})
 	})
 	checkNames.SetChecked(v.cfg.GlobalChatRules.SpeakNames)
 
 	checkEmotes := widget.NewCheck("Speak Platform Emotes (unchecked = strip emotes)", func(b bool) {
-		v.cfg.GlobalChatRules.SpeakEmotes = b
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.SpeakEmotes = b
+		})
 	})
 	checkEmotes.SetChecked(v.cfg.GlobalChatRules.SpeakEmotes)
 
 	checkPlatform := widget.NewCheck("Speak Platform Name Prefix (e.g. '[Twitch]')", func(b bool) {
-		v.cfg.GlobalChatRules.SpeakPlatformName = b
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.SpeakPlatformName = b
+		})
 	})
 	checkPlatform.SetChecked(v.cfg.GlobalChatRules.SpeakPlatformName)
 
@@ -446,7 +487,8 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 
 	wordListContainer := container.NewVBox()
 
-	refreshWords := func() {
+	var refreshWords func()
+	refreshWords = func() {
 		wordListContainer.Objects = nil
 		if len(v.cfg.Safety.BlockedWords) == 0 {
 			wordListContainer.Add(widget.NewLabelWithStyle("No words currently blocked.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
@@ -454,14 +496,17 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 			for _, w := range v.cfg.Safety.BlockedWords {
 				word := w
 				delBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
-					var filtered []string
-					for _, item := range v.cfg.Safety.BlockedWords {
-						if item != word {
-							filtered = append(filtered, item)
+					v.updateConfig(func(c *config.Config) {
+						var filtered []string
+						for _, item := range c.Safety.BlockedWords {
+							if item != word {
+								filtered = append(filtered, item)
+							}
 						}
-					}
-					v.cfg.Safety.BlockedWords = filtered
-					v.statusLabel.SetText(fmt.Sprintf("Removed %q from blocklist.", word))
+						c.Safety.BlockedWords = filtered
+					})
+					refreshWords()
+					v.setStatus(fmt.Sprintf("Removed %q from blocklist.", word))
 				})
 				delBtn.Importance = widget.LowImportance
 				row := container.NewBorder(nil, nil, widget.NewLabel("• "+word), delBtn)
@@ -481,10 +526,12 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 		if text == "" {
 			return
 		}
-		v.cfg.Safety.BlockedWords = append(v.cfg.Safety.BlockedWords, text)
+		v.updateConfig(func(c *config.Config) {
+			c.Safety.BlockedWords = append(c.Safety.BlockedWords, text)
+		})
 		newWordEntry.SetText("")
 		refreshWords()
-		v.statusLabel.SetText(fmt.Sprintf("Added %q to blocklist.", text))
+		v.setStatus(fmt.Sprintf("Added %q to blocklist.", text))
 	})
 
 	addRow := container.NewBorder(nil, nil, nil, addBtn, newWordEntry)
@@ -501,7 +548,9 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 
 func (v *SettingsView) buildBotsCard() *widget.Card {
 	knownBotsCheck := widget.NewCheck("Ignore Known Stream Bots (Nightbot, StreamElements, Fossabot, etc.)", func(b bool) {
-		v.cfg.Bots.IgnoreKnownBots = b
+		v.updateConfig(func(c *config.Config) {
+			c.Bots.IgnoreKnownBots = b
+		})
 	})
 	knownBotsCheck.SetChecked(v.cfg.Bots.IgnoreKnownBots)
 
@@ -510,22 +559,4 @@ func (v *SettingsView) buildBotsCard() *widget.Card {
 	)
 
 	return widget.NewCard("Bot Filters", "Filter out automated stream bots", cardContent)
-}
-
-func (v *SettingsView) buildBottomBar() fyne.CanvasObject {
-	saveBtn := widget.NewButtonWithIcon("Save Settings", theme.DocumentSaveIcon(), func() {
-		if err := config.Save("", v.cfg); err != nil {
-			v.statusLabel.SetText(fmt.Sprintf("Failed to save settings: %v", err))
-			dialog.ShowError(err, v.window)
-		} else {
-			v.statusLabel.SetText("Settings saved successfully to config.json.")
-			dialog.ShowInformation("Saved", "Configuration saved successfully!", v.window)
-		}
-	})
-	saveBtn.Importance = widget.HighImportance
-
-	return container.NewVBox(
-		widget.NewSeparator(),
-		container.NewBorder(nil, nil, saveBtn, nil, v.statusLabel),
-	)
 }

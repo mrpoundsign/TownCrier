@@ -22,6 +22,8 @@ type MainWindow struct {
 
 	headerBar     *fyne.Container
 	tabsContainer *container.AppTabs
+	statusBar     *fyne.Container
+	statusLabel   *widget.Label
 
 	dashboardTab *DashboardView
 	twitchTab    *TwitchTabView
@@ -46,13 +48,14 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 		Session: session,
 	}
 
+	mw.initStatusBar()
 	mw.initViews()
 	mw.initHeader()
 	mw.initShortcuts()
 
 	mainContent := container.NewBorder(
 		mw.headerBar,
-		nil,
+		mw.statusBar,
 		nil,
 		nil,
 		mw.tabsContainer,
@@ -89,6 +92,23 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	return mw
 }
 
+func (mw *MainWindow) initStatusBar() {
+	mw.statusLabel = widget.NewLabelWithStyle("Ready.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
+	mw.statusBar = container.NewVBox(
+		widget.NewSeparator(),
+		container.NewPadded(mw.statusLabel),
+	)
+}
+
+// SetStatus updates the persistent bottom status bar across all tabs.
+func (mw *MainWindow) SetStatus(msg string) {
+	fyne.Do(func() {
+		if mw.statusLabel != nil {
+			mw.statusLabel.SetText(msg)
+		}
+	})
+}
+
 func (mw *MainWindow) initViews() {
 	cfg := mw.Session.Config()
 	player := mw.Session.Player()
@@ -96,10 +116,12 @@ func (mw *MainWindow) initViews() {
 
 	mw.dashboardTab = NewDashboardView(mw.Window, mw.Session)
 	mw.twitchTab = NewTwitchTabView(mw.Window, mw.Session)
+	mw.twitchTab.SetStatusHandler(mw.SetStatus)
 	mw.voicesTab = NewVoicesTabView(mw.Window, mw.Session)
 	mw.viewersTab = NewViewersTabView(mw.Window, mw.Session)
 	mw.settingsTab = NewSettingsView(mw.Window, cfg, player, engine)
 	mw.settingsTab.SetSession(mw.Session)
+	mw.settingsTab.SetStatusHandler(mw.SetStatus)
 
 	mw.tabsContainer = container.NewAppTabs(
 		container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), mw.dashboardTab.Build()),
