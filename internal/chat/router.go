@@ -54,18 +54,13 @@ func (r *Router) Resolve(event *Event, cfg *config.Config) ResolvedSpeech {
 		platformDefaultSpeed = pCfg.Overrides.DefaultSpeed
 	}
 
-	// 2. Lookup Viewer Overrides
+	// 2. Lookup Viewer Overrides (case-insensitive)
 	var viewerVoice string
 	var viewerSpeed float32
 	var viewerNickname string
 
 	if len(cfg.Viewers) > 0 {
-		keyWithID := event.Platform + ":" + event.UserID
-		if v, ok := cfg.Viewers[keyWithID]; ok {
-			viewerVoice = v.Voice
-			viewerSpeed = v.Speed
-			viewerNickname = v.Nickname
-		} else if v, ok := cfg.Viewers[strings.ToLower(event.UserName)]; ok {
+		if v, ok := config.LookupViewer(cfg.Viewers, event.Platform, event.UserID, event.UserName); ok {
 			viewerVoice = v.Voice
 			viewerSpeed = v.Speed
 			viewerNickname = v.Nickname

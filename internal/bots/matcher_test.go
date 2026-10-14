@@ -91,6 +91,31 @@ func TestMatcherViewerOverrides(t *testing.T) {
 	if m.ShouldIgnore(eventBot, cfg) {
 		t.Errorf("expected bot with Allowed=true NOT to be ignored")
 	}
+
+	// Case-insensitive matching tests
+	cfg.Viewers["twitch:badactor"] = config.ViewerConfig{
+		Platform: "twitch",
+		UserID:   "BadActor",
+		Ignored:  true,
+	}
+
+	eventCase := &chat.Event{
+		Platform: "twitch",
+		UserID:   "",
+		UserName: "badactor",
+	}
+	if !m.ShouldIgnore(eventCase, cfg) {
+		t.Errorf("expected lowercase username matching BadActor to be ignored")
+	}
+
+	eventCaseUpper := &chat.Event{
+		Platform: "TWITCH",
+		UserID:   "BADACTOR",
+		UserName: "BADACTOR",
+	}
+	if !m.ShouldIgnore(eventCaseUpper, cfg) {
+		t.Errorf("expected uppercase username matching BadActor to be ignored")
+	}
 }
 
 func TestMatcherAddRemoveBot(t *testing.T) {

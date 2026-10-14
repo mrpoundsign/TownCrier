@@ -165,3 +165,56 @@ func TestLegacyMigration(t *testing.T) {
 		t.Errorf("expected migrated config at %s, got error: %v", newPath, err)
 	}
 }
+
+func TestLookupViewerCaseInsensitive(t *testing.T) {
+	viewers := map[string]ViewerConfig{
+		"twitch:mrpoundsign": {
+			Platform: "twitch",
+			UserID:   "MrPoundSign",
+			Voice:    "am_adam",
+			Speed:    1.2,
+		},
+		"twitch:mixedcaseuser": {
+			Platform: "twitch",
+			UserID:   "MixedCaseUser",
+			Voice:    "af_bella",
+			Allowed:  true,
+		},
+		"Twitch:OldLegacyUser": {
+			Platform: "Twitch",
+			UserID:   "OldLegacyUser",
+			Voice:    "am_michael",
+			Ignored:  true,
+		},
+	}
+
+	// 1. Lowercase lookup matching mixed-case UserID
+	vc, ok := LookupViewer(viewers, "twitch", "mrpoundsign", "mrpoundsign")
+	if !ok || vc.Voice != "am_adam" {
+		t.Errorf("expected to find twitch:mrpoundsign with voice am_adam, got %v (ok=%v)", vc, ok)
+	}
+
+	// 2. Uppercase platform and username lookup
+	vc, ok = LookupViewer(viewers, "TWITCH", "12345", "MRPOUNDSIGN")
+	if !ok || vc.Voice != "am_adam" {
+		t.Errorf("expected to find MRPOUNDSIGN by username, got %v (ok=%v)", vc, ok)
+	}
+
+	// 3. MixedCaseUser lookup with lowercase
+	vc, ok = LookupViewer(viewers, "twitch", "", "mixedcaseuser")
+	if !ok || !vc.Allowed {
+		t.Errorf("expected to find mixedcaseuser, got %v (ok=%v)", vc, ok)
+	}
+
+	// 4. Legacy unnormalized key
+	vc, ok = LookupViewer(viewers, "twitch", "oldlegacyuser", "oldlegacyuser")
+	if !ok || !vc.Ignored {
+		t.Errorf("expected to find OldLegacyUser, got %v (ok=%v)", vc, ok)
+	}
+
+	// 5. Non-existent viewer
+	_, ok = LookupViewer(viewers, "twitch", "unknown", "unknown")
+	if ok {
+		t.Error("expected non-existent viewer to return false")
+	}
+}

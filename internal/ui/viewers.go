@@ -74,8 +74,10 @@ func (v *ViewersTabView) refreshTable() {
 
 	var keys []string
 	for k := range cfg.Viewers {
+		vc := cfg.Viewers[k]
 		if query == "" || strings.Contains(strings.ToLower(k), query) ||
-			strings.Contains(strings.ToLower(cfg.Viewers[k].Nickname), query) {
+			strings.Contains(strings.ToLower(vc.Nickname), query) ||
+			strings.Contains(strings.ToLower(vc.UserID), query) {
 			keys = append(keys, k)
 		}
 	}
@@ -208,7 +210,7 @@ func (v *ViewersTabView) showEditDialog(existing *config.ViewerConfig) {
 		}
 
 		plat := platformSelect.Selected
-		key := fmt.Sprintf("%s:%s", plat, userID)
+		key := config.ViewerKey(plat, userID)
 
 		vc := config.ViewerConfig{
 			Platform: plat,
@@ -220,13 +222,12 @@ func (v *ViewersTabView) showEditDialog(existing *config.ViewerConfig) {
 			Allowed:  allowedCheck.Checked,
 		}
 
-		cfg := v.session.Config()
-		if cfg.Viewers == nil {
-			cfg.Viewers = make(map[string]config.ViewerConfig)
-		}
-		cfg.Viewers[key] = vc
-		_ = v.session.ReloadConfig(cfg)
-		_ = config.Save("", cfg)
+		_ = v.session.UpdateConfig(func(cfg *config.Config) {
+			if cfg.Viewers == nil {
+				cfg.Viewers = make(map[string]config.ViewerConfig)
+			}
+			cfg.Viewers[key] = vc
+		})
 
 		v.refreshTable()
 		v.statusLabel.SetText("Saved override for " + userID)
@@ -234,10 +235,10 @@ func (v *ViewersTabView) showEditDialog(existing *config.ViewerConfig) {
 }
 
 func (v *ViewersTabView) deleteViewer(key string) {
-	cfg := v.session.Config()
-	delete(cfg.Viewers, key)
-	_ = v.session.ReloadConfig(cfg)
-	_ = config.Save("", cfg)
+	_ = v.session.UpdateConfig(func(cfg *config.Config) {
+		delete(cfg.Viewers, key)
+		delete(cfg.Viewers, strings.ToLower(key))
+	})
 	v.refreshTable()
 	v.statusLabel.SetText("Override removed.")
 }

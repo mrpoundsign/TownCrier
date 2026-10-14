@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -108,6 +109,69 @@ type ViewerConfig struct {
 	Nickname string  `json:"nickname"`
 	Ignored  bool    `json:"ignored"`
 	Allowed  bool    `json:"allowed"`
+}
+
+// ViewerKey returns the canonical lowercased lookup key for a platform and user ID or username.
+func ViewerKey(platform, idOrName string) string {
+	return strings.ToLower(strings.TrimSpace(platform)) + ":" + strings.ToLower(strings.TrimSpace(idOrName))
+}
+
+// LookupViewer finds a ViewerConfig in viewers using case-insensitive matching across platform, userID, and username.
+func LookupViewer(viewers map[string]ViewerConfig, platform, userID, userName string) (ViewerConfig, bool) {
+	if len(viewers) == 0 {
+		return ViewerConfig{}, false
+	}
+
+	p := strings.ToLower(strings.TrimSpace(platform))
+	uID := strings.TrimSpace(userID)
+	uName := strings.TrimSpace(userName)
+
+	// 1. Direct match with canonical ViewerKey using UserID
+	if uID != "" {
+		if v, ok := viewers[ViewerKey(p, uID)]; ok {
+			return v, true
+		}
+	}
+
+	// 2. Direct match with canonical ViewerKey using UserName
+	if uName != "" {
+		if v, ok := viewers[ViewerKey(p, uName)]; ok {
+			return v, true
+		}
+	}
+
+	// 3. Fallback: case-insensitive scan of map keys (for unnormalized or legacy keys)
+	targetIDKey := ""
+	if uID != "" {
+		targetIDKey = ViewerKey(p, uID)
+	}
+	targetNameKey := ""
+	if uName != "" {
+		targetNameKey = ViewerKey(p, uName)
+	}
+
+	for k, v := range viewers {
+		kLower := strings.ToLower(k)
+		if targetIDKey != "" && kLower == targetIDKey {
+			return v, true
+		}
+		if targetNameKey != "" && kLower == targetNameKey {
+			return v, true
+		}
+		// Also match if key or v.UserID equals username/userID case-insensitively
+		if uName != "" && (strings.EqualFold(k, uName) || strings.EqualFold(v.UserID, uName)) {
+			if strings.EqualFold(v.Platform, p) || v.Platform == "" {
+				return v, true
+			}
+		}
+		if uID != "" && (strings.EqualFold(k, uID) || strings.EqualFold(v.UserID, uID)) {
+			if strings.EqualFold(v.Platform, p) || v.Platform == "" {
+				return v, true
+			}
+		}
+	}
+
+	return ViewerConfig{}, false
 }
 
 // DefaultConfig returns a new Config initialized with production defaults.
@@ -347,5 +411,19 @@ func migrate(cfg *Config) error {
 	if cfg.Version < 1 {
 		cfg.Version = 1
 	}
+
+	// Normalize viewer keys to canonical lowercase (platform:userid)
+	if len(cfg.Viewers) > 0 {
+		normalized := make(map[string]ViewerConfig, len(cfg.Viewers))
+		for k, v := range cfg.Viewers {
+			key := ViewerKey(v.Platform, v.UserID)
+			if key == ":" || v.UserID == "" {
+				key = strings.ToLower(k)
+			}
+			normalized[key] = v
+		}
+		cfg.Viewers = normalized
+	}
+
 	return nil
 }

@@ -324,17 +324,19 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 		if !confirmed {
 			return
 		}
-		cfg := v.session.Config()
-		key := fmt.Sprintf("%s:%s", platform, username)
-		cfg.Viewers[key] = config.ViewerConfig{
-			Platform: platform,
-			UserID:   username,
-			Voice:    voiceSelect.Selected,
-			Speed:    float32(speedSlider.Value),
-			Ignored:  ignoreCheck.Checked,
-		}
-		_ = v.session.ReloadConfig(cfg)
-		_ = config.Save("", cfg)
+		_ = v.session.UpdateConfig(func(cfg *config.Config) {
+			if cfg.Viewers == nil {
+				cfg.Viewers = make(map[string]config.ViewerConfig)
+			}
+			key := config.ViewerKey(platform, username)
+			cfg.Viewers[key] = config.ViewerConfig{
+				Platform: platform,
+				UserID:   username,
+				Voice:    voiceSelect.Selected,
+				Speed:    float32(speedSlider.Value),
+				Ignored:  ignoreCheck.Checked,
+			}
+		})
 	}, v.window)
 }
 

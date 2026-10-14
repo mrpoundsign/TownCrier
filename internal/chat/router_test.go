@@ -50,6 +50,42 @@ func TestRouterVoiceResolutionHierarchy(t *testing.T) {
 	}
 }
 
+func TestRouterVoiceResolutionCaseInsensitive(t *testing.T) {
+	router := NewRouter()
+	cfg := config.DefaultConfig()
+
+	cfg.Viewers["twitch:mrpoundsign"] = config.ViewerConfig{
+		Platform: "twitch",
+		UserID:   "MrPoundSign",
+		Voice:    "am_adam",
+	}
+
+	event := &Event{
+		Platform: "twitch",
+		UserID:   "mrpoundsign",
+		UserName: "MrPoundSign",
+		Kind:     EventKindMessage,
+		Text:     "test voice",
+	}
+
+	res := router.Resolve(event, cfg)
+	if res.VoiceID != "am_adam" {
+		t.Errorf("expected voice 'am_adam', got %q", res.VoiceID)
+	}
+
+	eventUpper := &Event{
+		Platform: "twitch",
+		UserID:   "MRPOUNDSIGN",
+		UserName: "mrpoundsign",
+		Kind:     EventKindMessage,
+		Text:     "test voice",
+	}
+	resUpper := router.Resolve(eventUpper, cfg)
+	if resUpper.VoiceID != "am_adam" {
+		t.Errorf("expected voice 'am_adam' for uppercase lookup, got %q", resUpper.VoiceID)
+	}
+}
+
 func TestRouterSpeedResolution(t *testing.T) {
 	router := NewRouter()
 	cfg := config.DefaultConfig()

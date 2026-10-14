@@ -46,18 +46,9 @@ func (m *Matcher) ShouldIgnore(event *chat.Event, cfg *config.Config) bool {
 	userNameLower := strings.ToLower(strings.TrimSpace(event.UserName))
 
 	// 1. Viewer Table Overrides (Allowed vs Ignored)
-	// Keyed by platform:user_id, with fallback to username
+	// Case-insensitive lookup by platform, userID, and username
 	if len(cfg.Viewers) > 0 {
-		keyWithID := event.Platform + ":" + event.UserID
-		if v, ok := cfg.Viewers[keyWithID]; ok {
-			if v.Allowed {
-				return false
-			}
-			if v.Ignored {
-				return true
-			}
-		}
-		if v, ok := cfg.Viewers[userNameLower]; ok {
+		if v, ok := config.LookupViewer(cfg.Viewers, event.Platform, event.UserID, event.UserName); ok {
 			if v.Allowed {
 				return false
 			}
