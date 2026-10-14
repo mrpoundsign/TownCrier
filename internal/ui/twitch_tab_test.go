@@ -31,6 +31,16 @@ func TestTwitchTabViewBuild(t *testing.T) {
 	if !session.Config().Platforms["twitch"].Enabled {
 		t.Error("expected twitch enabled to be true")
 	}
+
+	tab.ignorePrefixCheck.SetChecked(true)
+	tab.ignorePrefixEntry.SetText("!, ?, $")
+	ignRules := session.Config().Platforms["twitch"].ReadRules
+	if !ignRules.IgnorePrefixes {
+		t.Error("expected IgnorePrefixes to be true")
+	}
+	if len(ignRules.IgnoredPrefixes) != 3 || ignRules.IgnoredPrefixes[1] != "?" {
+		t.Errorf("expected 3 prefixes with ?, got %v", ignRules.IgnoredPrefixes)
+	}
 }
 
 func TestTwitchTabViewBuildPreEnabled(t *testing.T) {

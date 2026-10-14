@@ -19,21 +19,23 @@ type TwitchTabView struct {
 	window  fyne.Window
 	session *app.Session
 
-	channelEntry   *widget.Entry
-	statusBadge    *widget.Label
-	connectBtn     *widget.Button
-	enableCheck    *widget.Check
-	allChatCheck   *widget.Check
-	prefixCheck    *widget.Check
-	prefixEntry    *widget.Entry
-	roleGatedCheck *widget.Check
-	roleChecks     map[string]*widget.Check
-	paidOnlyCheck  *widget.Check
-	rewardEntry    *widget.Entry
-	modCmdsCheck   *widget.Check
-	overrideCheck  *widget.Check
-	saveNotice     *widget.Label
-	initializing   bool
+	channelEntry      *widget.Entry
+	statusBadge       *widget.Label
+	connectBtn        *widget.Button
+	enableCheck       *widget.Check
+	allChatCheck      *widget.Check
+	ignorePrefixCheck *widget.Check
+	ignorePrefixEntry *widget.Entry
+	prefixCheck       *widget.Check
+	prefixEntry       *widget.Entry
+	roleGatedCheck    *widget.Check
+	roleChecks        map[string]*widget.Check
+	paidOnlyCheck     *widget.Check
+	rewardEntry       *widget.Entry
+	modCmdsCheck      *widget.Check
+	overrideCheck     *widget.Check
+	saveNotice        *widget.Label
+	initializing      bool
 }
 
 // NewTwitchTabView creates a new Twitch tab view bound to the application session.
@@ -237,8 +239,49 @@ func (v *TwitchTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 	})
 	v.paidOnlyCheck.SetChecked(rr.PaidOnly)
 
+	v.ignorePrefixEntry = widget.NewEntry()
+	v.ignorePrefixEntry.SetPlaceHolder("!, ?")
+	ignPrefStr := strings.Join(rr.IgnoredPrefixes, ", ")
+	if ignPrefStr == "" && rr.IgnorePrefixes {
+		ignPrefStr = "!"
+	}
+	v.ignorePrefixEntry.SetText(ignPrefStr)
+	if !rr.IgnorePrefixes {
+		v.ignorePrefixEntry.Disable()
+	}
+	v.ignorePrefixEntry.OnChanged = func(val string) {
+		var prefixes []string
+		for part := range strings.SplitSeq(val, ",") {
+			p := strings.TrimSpace(part)
+			if p != "" {
+				prefixes = append(prefixes, p)
+			}
+		}
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["twitch"]
+			p.ReadRules.IgnoredPrefixes = prefixes
+			c.Platforms["twitch"] = p
+		})
+	}
+
+	v.ignorePrefixCheck = widget.NewCheck("Ignore Bot Commands / Prefixes:", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["twitch"]
+			p.ReadRules.IgnorePrefixes = b
+			c.Platforms["twitch"] = p
+		})
+		if b {
+			v.ignorePrefixEntry.Enable()
+		} else {
+			v.ignorePrefixEntry.Disable()
+		}
+	})
+	v.ignorePrefixCheck.SetChecked(rr.IgnorePrefixes)
+	ignorePrefixRow := container.NewBorder(nil, nil, v.ignorePrefixCheck, nil, v.ignorePrefixEntry)
+
 	cardContent := container.NewVBox(
 		v.allChatCheck,
+		ignorePrefixRow,
 		prefixRow,
 		v.roleGatedCheck,
 		container.NewPadded(roleBoxes),

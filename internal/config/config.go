@@ -71,12 +71,14 @@ type PlatformOverrides struct {
 }
 
 type ReadRules struct {
-	AllChat    bool     `json:"all_chat"`
-	Prefix     string   `json:"prefix"`
-	PrefixOnly bool     `json:"prefix_only"`
-	RoleGated  bool     `json:"role_gated"`
-	Roles      []string `json:"roles"`
-	PaidOnly   bool     `json:"paid_only"`
+	AllChat         bool     `json:"all_chat"`
+	Prefix          string   `json:"prefix"`
+	PrefixOnly      bool     `json:"prefix_only"`
+	IgnorePrefixes  bool     `json:"ignore_prefixes"`
+	IgnoredPrefixes []string `json:"ignored_prefixes"`
+	RoleGated       bool     `json:"role_gated"`
+	Roles           []string `json:"roles"`
+	PaidOnly        bool     `json:"paid_only"`
 }
 
 type NotificationEventConfig struct {
@@ -150,12 +152,14 @@ func DefaultConfig() *Config {
 				EverEnabled: true, // Twitch is MVP, visible by default
 				AccountName: "",
 				ReadRules: ReadRules{
-					AllChat:    true,
-					Prefix:     "!tts",
-					PrefixOnly: false,
-					RoleGated:  false,
-					Roles:      []string{"broadcaster", "mod", "vip", "subscriber"},
-					PaidOnly:   false,
+					AllChat:         true,
+					Prefix:          "!tts",
+					PrefixOnly:      false,
+					IgnorePrefixes:  true,
+					IgnoredPrefixes: []string{"!"},
+					RoleGated:       false,
+					Roles:           []string{"broadcaster", "mod", "vip", "subscriber"},
+					PaidOnly:        false,
 				},
 				CustomRewardID:     "",
 				ModCommandsEnabled: false,

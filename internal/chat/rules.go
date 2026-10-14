@@ -65,6 +65,20 @@ func EvaluateReadRules(event *Event, rules config.ReadRules) (bool, string) {
 
 	// Mode: AllChat
 	if rules.AllChat {
+		if rules.IgnorePrefixes {
+			prefixes := rules.IgnoredPrefixes
+			if len(prefixes) == 0 {
+				prefixes = []string{"!"}
+			}
+			trimmedText := strings.TrimSpace(event.Text)
+			lowerText := strings.ToLower(trimmedText)
+			for _, p := range prefixes {
+				p = strings.TrimSpace(strings.ToLower(p))
+				if p != "" && strings.HasPrefix(lowerText, p) {
+					return false, ""
+				}
+			}
+		}
 		return true, ""
 	}
 

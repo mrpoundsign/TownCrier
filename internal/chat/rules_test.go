@@ -114,3 +114,67 @@ func TestEvaluateReadRules_PaidOnly(t *testing.T) {
 		t.Error("expected cheer event to be spoken in paid-only mode")
 	}
 }
+
+func TestEvaluateReadRules_IgnoredPrefixes(t *testing.T) {
+	rules := config.ReadRules{
+		AllChat:         true,
+		IgnorePrefixes:  true,
+		IgnoredPrefixes: []string{"!", "?", "$"},
+	}
+
+	// 1. Bot commands starting with ! should be ignored
+	botCmdEv := &Event{Kind: EventKindMessage, Text: "!discord"}
+	speak, _ := EvaluateReadRules(botCmdEv, rules)
+	if speak {
+		t.Error("expected !discord to be ignored by IgnoredPrefixes")
+	}
+
+	// 2. Bot command starting with ? should be ignored
+	qCmdEv := &Event{Kind: EventKindMessage, Text: "?points"}
+	speak, _ = EvaluateReadRules(qCmdEv, rules)
+	if speak {
+		t.Error("expected ?points to be ignored by IgnoredPrefixes")
+	}
+
+	// 3. Normal chat message should be spoken
+	chatEv := &Event{Kind: EventKindMessage, Text: "hello world"}
+	speak, _ = EvaluateReadRules(chatEv, rules)
+	if !speak {
+		t.Error("expected normal chat message to be spoken")
+	}
+
+	// 4. Message with exclamation mark not at start should be spoken
+	midExclEv := &Event{Kind: EventKindMessage, Text: "great stream!"}
+	speak, _ = EvaluateReadRules(midExclEv, rules)
+	if !speak {
+		t.Error("expected message with exclamation at end to be spoken")
+	}
+
+	// 5. When IgnorePrefixes is disabled, !discord should be spoken
+	rulesDisabled := rules
+	rulesDisabled.IgnorePrefixes = false
+	speak, _ = EvaluateReadRules(botCmdEv, rulesDisabled)
+	if !speak {
+		t.Error("expected !discord to be spoken when IgnorePrefixes is false")
+	}
+
+	// 6. When PrefixOnly is enabled for !tts, !tts message passes while !song is dropped
+	rulesPrefixOnly := config.ReadRules{
+		AllChat:         true,
+		PrefixOnly:      true,
+		Prefix:          "!tts",
+		IgnorePrefixes:  true,
+		IgnoredPrefixes: []string{"!"},
+	}
+	ttsEv := &Event{Kind: EventKindMessage, Text: "!tts speak this aloud"}
+	speak, stripped := EvaluateReadRules(ttsEv, rulesPrefixOnly)
+	if !speak || stripped != "speak this aloud" {
+		t.Errorf("expected !tts command to pass, got speak=%v text=%q", speak, stripped)
+	}
+
+	songEv := &Event{Kind: EventKindMessage, Text: "!song"}
+	speak, _ = EvaluateReadRules(songEv, rulesPrefixOnly)
+	if speak {
+		t.Error("expected !song to be dropped when IgnorePrefixes is active")
+	}
+}
