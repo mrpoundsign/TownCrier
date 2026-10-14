@@ -12,14 +12,38 @@ import (
 )
 
 func TestResolveSpeakerID(t *testing.T) {
-	if id := ResolveSpeakerID("af_bella"); id != 0 {
-		t.Errorf("expected 0 for af_bella, got %d", id)
+	if id := ResolveSpeakerID("af"); id != 0 {
+		t.Errorf("expected 0 for af, got %d", id)
 	}
-	if id := ResolveSpeakerID("am_adam"); id != 2 {
-		t.Errorf("expected 2 for am_adam, got %d", id)
+	if id := ResolveSpeakerID("af_bella"); id != 1 {
+		t.Errorf("expected 1 for af_bella, got %d", id)
 	}
-	if id := ResolveSpeakerID("  AF_SARAH  "); id != 1 {
-		t.Errorf("expected 1 for uppercase spaced AF_SARAH, got %d", id)
+	if id := ResolveSpeakerID("af_nicole"); id != 2 {
+		t.Errorf("expected 2 for af_nicole, got %d", id)
+	}
+	if id := ResolveSpeakerID("  AF_SARAH  "); id != 3 {
+		t.Errorf("expected 3 for uppercase spaced AF_SARAH, got %d", id)
+	}
+	if id := ResolveSpeakerID("af_sky"); id != 4 {
+		t.Errorf("expected 4 for af_sky, got %d", id)
+	}
+	if id := ResolveSpeakerID("am_adam"); id != 5 {
+		t.Errorf("expected 5 for am_adam, got %d", id)
+	}
+	if id := ResolveSpeakerID("am_michael"); id != 6 {
+		t.Errorf("expected 6 for am_michael, got %d", id)
+	}
+	if id := ResolveSpeakerID("bf_emma"); id != 7 {
+		t.Errorf("expected 7 for bf_emma, got %d", id)
+	}
+	if id := ResolveSpeakerID("bf_isabella"); id != 8 {
+		t.Errorf("expected 8 for bf_isabella, got %d", id)
+	}
+	if id := ResolveSpeakerID("bm_george"); id != 9 {
+		t.Errorf("expected 9 for bm_george, got %d", id)
+	}
+	if id := ResolveSpeakerID("bm_lewis"); id != 10 {
+		t.Errorf("expected 10 for bm_lewis, got %d", id)
 	}
 	if id := ResolveSpeakerID("non_existent_voice"); id != 0 {
 		t.Errorf("expected fallback 0 for unknown voice, got %d", id)

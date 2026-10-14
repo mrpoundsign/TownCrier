@@ -16,17 +16,17 @@ const DefaultVoiceID = "af_bella"
 
 // KnownKokoroVoices maps voice ID names to speaker IDs.
 var KnownKokoroVoices = map[string]int{
-	"af_bella":    0,
-	"af_sarah":    1,
-	"am_adam":     2,
-	"am_michael":  3,
-	"bf_emma":     4,
-	"bf_isabella": 5,
-	"bm_george":   6,
-	"bm_lewis":    7,
-	"af_nicole":   8,
-	"af_sky":      9,
-	"am_eric":     10,
+	"af":          0,
+	"af_bella":    1,
+	"af_nicole":   2,
+	"af_sarah":    3,
+	"af_sky":      4,
+	"am_adam":     5,
+	"am_michael":  6,
+	"bf_emma":     7,
+	"bf_isabella": 8,
+	"bm_george":   9,
+	"bm_lewis":    10,
 }
 
 // KokoroVoiceNames returns the sorted list of predefined voice names.
@@ -36,7 +36,6 @@ var KokoroVoiceNames = []string{
 	"af_sarah",
 	"af_sky",
 	"am_adam",
-	"am_eric",
 	"am_michael",
 	"bf_emma",
 	"bf_isabella",
