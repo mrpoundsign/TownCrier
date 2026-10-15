@@ -166,6 +166,21 @@ func TestRouterTextFormatting(t *testing.T) {
 	if res.Text != "twitch, hello world" {
 		t.Errorf("expected 'twitch, hello world', got %q", res.Text)
 	}
+
+	// Leading '@' in YouTube/TikTok/Kick display names should never be spoken as "at"
+	cfg.GlobalChatRules.SpeakNames = true
+	cfg.GlobalChatRules.SpeakPlatformName = false
+	ytEvent := &Event{
+		Platform:    "youtube",
+		UserName:    "@mrpoundsign",
+		DisplayName: "@mrpoundsign",
+		Kind:        EventKindMessage,
+		Text:        "testing youtube handle",
+	}
+	resYT := router.Resolve(ytEvent, cfg)
+	if resYT.Text != "mrpoundsign says: testing youtube handle" {
+		t.Errorf("expected 'mrpoundsign says: testing youtube handle', got %q", resYT.Text)
+	}
 }
 
 func TestRouterNotificationEvents(t *testing.T) {

@@ -94,7 +94,7 @@ func (r *Router) Resolve(event *Event, cfg *config.Config) ResolvedSpeech {
 		speed = 1.0
 	}
 
-	// 5. Determine Spoken Display Name
+	// 5. Determine Spoken Display Name (strip leading '@' so TTS never speaks "at")
 	spokenName := viewerNickname
 	if spokenName == "" {
 		spokenName = event.DisplayName
@@ -102,6 +102,7 @@ func (r *Router) Resolve(event *Event, cfg *config.Config) ResolvedSpeech {
 	if spokenName == "" {
 		spokenName = event.UserName
 	}
+	spokenName = strings.TrimLeft(strings.TrimSpace(spokenName), "@")
 
 	// 6. Format Spoken Text
 	var text string

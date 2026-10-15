@@ -21,8 +21,8 @@ var (
 	reGiftsCount    = regexp.MustCompile(`([0-9]+)`)
 )
 
-// NormalizeTarget converts a YouTube channel handle (@name), channel ID (UC...),
-// or full URL into a canonical live page URL and a display label.
+// NormalizeTarget converts a YouTube channel name/handle, channel ID (UC...),
+// or full URL into a canonical live page URL and a clean display label.
 func NormalizeTarget(input string) (liveURL string, display string) {
 	s := strings.TrimSpace(input)
 	if s == "" {
@@ -46,31 +46,15 @@ func NormalizeTarget(input string) (liveURL string, display string) {
 		return NormalizeTarget("https://" + s)
 	}
 
-	// Video ID (11 chars alphanumeric/-/_) if user pasted a raw video ID, vs @handle or UC channel ID
-	if strings.HasPrefix(s, "@") {
-		return "https://www.youtube.com/" + s + "/live", s
-	}
 	if strings.HasPrefix(s, "UC") && len(s) >= 20 && !strings.Contains(s, " ") {
 		return "https://www.youtube.com/channel/" + s + "/live", s
 	}
-	if len(s) == 11 && isLikelyVideoID(s) {
-		return "https://www.youtube.com/watch?v=" + s, s
-	}
 
-	handle := "@" + strings.TrimPrefix(s, "@")
-	return "https://www.youtube.com/" + handle + "/live", handle
-}
-
-func isLikelyVideoID(s string) bool {
-	hasDigitOrUnderscoreOrDash := false
-	for _, r := range s {
-		if (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			hasDigitOrUnderscoreOrDash = true
-		} else if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
-			return false
-		}
+	clean := strings.TrimLeft(s, "@")
+	if clean == "" {
+		return "", ""
 	}
-	return hasDigitOrUnderscoreOrDash
+	return "https://www.youtube.com/@" + clean + "/live", clean
 }
 
 // ExtractBootstrapTokens extracts the INNERTUBE_API_KEY and initial liveChat continuation token from a YouTube HTML page.
@@ -327,7 +311,7 @@ func ParseLiveChatResponse(data []byte) (events []*chat.Event, modEvents []*chat
 }
 
 func parseTextMessage(r *textMessageRenderer) *chat.Event {
-	author := flattenText(r.AuthorName)
+	author := strings.TrimLeft(flattenText(r.AuthorName), "@")
 	text, emotes := extractTextAndEmotes(r.Message)
 	if text == "" {
 		return nil
@@ -347,7 +331,7 @@ func parseTextMessage(r *textMessageRenderer) *chat.Event {
 }
 
 func parsePaidMessage(r *paidMessageRenderer) *chat.Event {
-	author := flattenText(r.AuthorName)
+	author := strings.TrimLeft(flattenText(r.AuthorName), "@")
 	text, emotes := extractTextAndEmotes(r.Message)
 	amountStr := flattenText(r.PurchaseAmountText)
 	amount, currency := parsePurchaseAmount(amountStr)
@@ -369,7 +353,7 @@ func parsePaidMessage(r *paidMessageRenderer) *chat.Event {
 }
 
 func parsePaidSticker(r *paidStickerRenderer) *chat.Event {
-	author := flattenText(r.AuthorName)
+	author := strings.TrimLeft(flattenText(r.AuthorName), "@")
 	amountStr := flattenText(r.PurchaseAmountText)
 	amount, currency := parsePurchaseAmount(amountStr)
 
@@ -388,7 +372,7 @@ func parsePaidSticker(r *paidStickerRenderer) *chat.Event {
 }
 
 func parseMembershipItem(r *membershipItemRenderer) *chat.Event {
-	author := flattenText(r.AuthorName)
+	author := strings.TrimLeft(flattenText(r.AuthorName), "@")
 	primaryHeader := flattenText(r.HeaderPrimaryText)
 	subHeader := flattenText(r.HeaderSubtext)
 	msgText, emotes := extractTextAndEmotes(r.Message)
@@ -426,7 +410,7 @@ func parseGiftPurchase(r *giftPurchaseRenderer) *chat.Event {
 		return nil
 	}
 	hdr := r.Header.LiveChatSponsorshipsHeaderRenderer
-	author := flattenText(hdr.AuthorName)
+	author := strings.TrimLeft(flattenText(hdr.AuthorName), "@")
 	primary := flattenText(hdr.PrimaryText)
 
 	count := 1

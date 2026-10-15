@@ -418,6 +418,62 @@ func DefaultConfig() *Config {
 					DefaultSpeed:      1.0,
 				},
 			},
+			"kick": {
+				Enabled:     false,
+				EverEnabled: true,
+				AccountName: "",
+				ReadRules: ReadRules{
+					AllChat:         true,
+					Prefix:          "!tts",
+					PrefixOnly:      false,
+					IgnorePrefixes:  true,
+					IgnoredPrefixes: []string{"!"},
+					RoleGated:       false,
+					Roles:           []string{"broadcaster", "mod", "vip", "og", "subscriber"},
+					PaidOnly:        false,
+				},
+				ModCommandsEnabled: false,
+				Notifications: map[string]NotificationEventConfig{
+					"sub": {
+						Enabled:   true,
+						Template:  "{user} just subscribed on Kick!",
+						Voice:     "",
+						Threshold: 0,
+					},
+					"resub": {
+						Enabled:   true,
+						Template:  "{user} resubscribed for {months} months!",
+						Voice:     "",
+						Threshold: 0,
+					},
+					"gift_sub": {
+						Enabled:   true,
+						Template:  "{user} gifted {count} subscriptions!",
+						Voice:     "",
+						Threshold: 0,
+					},
+					"raid": {
+						Enabled:   true,
+						Template:  "{user} hosted with {viewers} viewers!",
+						Voice:     "",
+						Threshold: 1,
+					},
+					"follow": {
+						Enabled:   false,
+						Template:  "{user} followed on Kick!",
+						Voice:     "",
+						Threshold: 0,
+					},
+				},
+				Overrides: PlatformOverrides{
+					OverrideRules:     false,
+					SpeakNames:        true,
+					SpeakEmotes:       false,
+					SpeakPlatformName: false,
+					DefaultVoice:      "",
+					DefaultSpeed:      1.0,
+				},
+			},
 		},
 	}
 }

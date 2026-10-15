@@ -36,6 +36,7 @@ type SettingsView struct {
 	twitchCheck       *widget.Check
 	youtubeCheck      *widget.Check
 	tiktokCheck       *widget.Check
+	kickCheck         *widget.Check
 	modelStatus       *widget.Label
 	deviceSelect      *widget.Select
 	deviceMap         map[string]string // device name -> hex ID
@@ -101,6 +102,10 @@ func (v *SettingsView) SyncFromConfig() {
 	if v.tiktokCheck != nil {
 		p, ok := v.cfg.Platforms["tiktok"]
 		v.tiktokCheck.SetChecked(!ok || p.EverEnabled || p.Enabled)
+	}
+	if v.kickCheck != nil {
+		p, ok := v.cfg.Platforms["kick"]
+		v.kickCheck.SetChecked(!ok || p.EverEnabled || p.Enabled)
 	}
 }
 
@@ -241,10 +246,36 @@ func (v *SettingsView) buildServicesCard() *widget.Card {
 	})
 	v.tiktokCheck.SetChecked(ttVisible)
 
+	kickCfg, hasKick := v.cfg.Platforms["kick"]
+	kickVisible := !hasKick || kickCfg.EverEnabled || kickCfg.Enabled
+
+	v.kickCheck = widget.NewCheck("Kick (shows Kick tab & loads connector)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			if c.Platforms == nil {
+				c.Platforms = make(map[string]config.PlatformConfig)
+			}
+			p, ok := c.Platforms["kick"]
+			if !ok {
+				p = config.DefaultConfig().Platforms["kick"]
+			}
+			p.EverEnabled = checked
+			p.Enabled = checked
+			c.Platforms["kick"] = p
+		})
+		if v.onServicesChanged != nil {
+			v.onServicesChanged()
+		}
+	})
+	v.kickCheck.SetChecked(kickVisible)
+
 	cardContent := container.NewVBox(
 		v.twitchCheck,
 		v.youtubeCheck,
 		v.tiktokCheck,
+		v.kickCheck,
 	)
 
 	return widget.NewCard("Streaming Services", "Enable or disable streaming platforms to show/hide their tabs and load/unload their connectors", cardContent)

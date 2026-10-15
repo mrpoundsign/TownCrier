@@ -30,6 +30,7 @@ type MainWindow struct {
 	twitchTab    *TwitchTabView
 	youtubeTab   *YouTubeTabView
 	tiktokTab    *TikTokTabView
+	kickTab      *KickTabView
 	voicesTab    *VoicesTabView
 	viewersTab   *ViewersTabView
 	settingsTab  *SettingsView
@@ -38,6 +39,7 @@ type MainWindow struct {
 	twitchTabItem    *container.TabItem
 	youtubeTabItem   *container.TabItem
 	tiktokTabItem    *container.TabItem
+	kickTabItem      *container.TabItem
 	voicesTabItem    *container.TabItem
 	viewersTabItem   *container.TabItem
 	settingsTabItem  *container.TabItem
@@ -45,6 +47,7 @@ type MainWindow struct {
 	twitchStatusDot  *widget.Label
 	youtubeStatusDot *widget.Label
 	tiktokStatusDot  *widget.Label
+	kickStatusDot    *widget.Label
 	volumeSlider     *widget.Slider
 	panicBtn         *widget.Button
 	hotkeyMgr        *GlobalHotkeyManager
@@ -153,6 +156,8 @@ func (mw *MainWindow) initViews() {
 	mw.youtubeTab.SetStatusHandler(mw.SetStatus)
 	mw.tiktokTab = NewTikTokTabView(mw.Window, mw.Session)
 	mw.tiktokTab.SetStatusHandler(mw.SetStatus)
+	mw.kickTab = NewKickTabView(mw.Window, mw.Session)
+	mw.kickTab.SetStatusHandler(mw.SetStatus)
 	mw.voicesTab = NewVoicesTabView(mw.Window, mw.Session)
 	mw.voicesTab.SetStatusHandler(mw.SetStatus)
 	mw.viewersTab = NewViewersTabView(mw.Window, mw.Session)
@@ -174,6 +179,7 @@ func (mw *MainWindow) initViews() {
 	mw.twitchTabItem = container.NewTabItemWithIcon("Twitch", theme.MediaPlayIcon(), mw.twitchTab.Build())
 	mw.youtubeTabItem = container.NewTabItemWithIcon("YouTube", theme.MediaVideoIcon(), mw.youtubeTab.Build())
 	mw.tiktokTabItem = container.NewTabItemWithIcon("TikTok", theme.MediaRecordIcon(), mw.tiktokTab.Build())
+	mw.kickTabItem = container.NewTabItemWithIcon("Kick", theme.MediaFastForwardIcon(), mw.kickTab.Build())
 	mw.voicesTabItem = container.NewTabItemWithIcon("Voices", theme.VolumeUpIcon(), mw.voicesTab.Build())
 	mw.viewersTabItem = container.NewTabItemWithIcon("Viewers", theme.AccountIcon(), mw.viewersTab.Build())
 	mw.settingsTabItem = container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), mw.settingsTab.Build())
@@ -183,6 +189,7 @@ func (mw *MainWindow) initViews() {
 		mw.twitchTabItem,
 		mw.youtubeTabItem,
 		mw.tiktokTabItem,
+		mw.kickTabItem,
 		mw.voicesTabItem,
 		mw.viewersTabItem,
 		mw.settingsTabItem,
@@ -201,6 +208,9 @@ func (mw *MainWindow) syncServiceVisibility() {
 	ttCfg, hasTT := cfg.Platforms["tiktok"]
 	ttVisible := !hasTT || ttCfg.EverEnabled || ttCfg.Enabled
 
+	kickCfg, hasKick := cfg.Platforms["kick"]
+	kickVisible := !hasKick || kickCfg.EverEnabled || kickCfg.Enabled
+
 	if mw.tabsContainer != nil {
 		selected := mw.tabsContainer.Selected()
 		items := []*container.TabItem{mw.dashboardTabItem}
@@ -212,6 +222,9 @@ func (mw *MainWindow) syncServiceVisibility() {
 		}
 		if ttVisible {
 			items = append(items, mw.tiktokTabItem)
+		}
+		if kickVisible {
+			items = append(items, mw.kickTabItem)
 		}
 		items = append(items, mw.voicesTabItem, mw.viewersTabItem, mw.settingsTabItem)
 		mw.tabsContainer.SetItems(items)
@@ -241,6 +254,13 @@ func (mw *MainWindow) syncServiceVisibility() {
 			mw.tiktokStatusDot.Hide()
 		}
 	}
+	if mw.kickStatusDot != nil {
+		if kickVisible {
+			mw.kickStatusDot.Show()
+		} else {
+			mw.kickStatusDot.Hide()
+		}
+	}
 	if mw.headerBar != nil {
 		mw.headerBar.Refresh()
 	}
@@ -253,6 +273,9 @@ func (mw *MainWindow) syncServiceVisibility() {
 	}
 	if mw.tiktokTab != nil {
 		mw.tiktokTab.SyncFromConfig()
+	}
+	if mw.kickTab != nil {
+		mw.kickTab.SyncFromConfig()
 	}
 }
 
@@ -328,6 +351,28 @@ func (mw *MainWindow) initHeader() {
 		})
 	})
 
+	mw.kickStatusDot = widget.NewLabelWithStyle("Kick: ⚪", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	kickCfg := cfg.Platforms["kick"]
+	if kickCfg.Enabled && kickCfg.AccountName != "" {
+		mw.kickStatusDot.SetText("Kick: 🟡 Connecting...")
+	}
+
+	mw.Session.SetOnKickStatus(func(status string, detail string) {
+		if mw.kickTab != nil {
+			mw.kickTab.UpdateStatus(status, detail)
+		}
+		fyne.Do(func() {
+			switch status {
+			case "connected":
+				mw.kickStatusDot.SetText("Kick: 🟢 " + detail)
+			case "connecting":
+				mw.kickStatusDot.SetText("Kick: 🟡 Connecting...")
+			default:
+				mw.kickStatusDot.SetText("Kick: ⚪")
+			}
+		})
+	})
+
 	// Master volume slider
 	vol := cfg.Audio.Volume
 	if vol <= 0 {
@@ -371,7 +416,7 @@ func (mw *MainWindow) initHeader() {
 		ShowAboutDialog(mw.Window)
 	})
 
-	leftSide := container.NewHBox(brandTitle, widget.NewSeparator(), mw.twitchStatusDot, mw.youtubeStatusDot, mw.tiktokStatusDot)
+	leftSide := container.NewHBox(brandTitle, widget.NewSeparator(), mw.twitchStatusDot, mw.youtubeStatusDot, mw.tiktokStatusDot, mw.kickStatusDot)
 	rightSide := container.NewHBox(volContainer, aboutBtn, mw.panicBtn)
 
 	mw.headerBar = container.NewVBox(

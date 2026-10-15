@@ -1,0 +1,5 @@
+{
+  "event": "App\\Events\\MessageDeletedEvent",
+  "data": "{\"id\":\"del-evt-1\",\"message\":{\"id\":\"8c2e1f9a-4b3d-4e1a-9c8b-7a6f5e4d3c2b\"},\"aiModerated\":false}",
+  "channel": "chatrooms.27670567.v2"
+}

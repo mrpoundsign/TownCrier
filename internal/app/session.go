@@ -10,6 +10,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/bots"
 	"github.com/mrpoundsign/TownCrier/internal/chat"
 	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/platform/kick"
 	"github.com/mrpoundsign/TownCrier/internal/platform/tiktok"
 	"github.com/mrpoundsign/TownCrier/internal/platform/twitch"
 	"github.com/mrpoundsign/TownCrier/internal/platform/youtube"
@@ -45,6 +46,8 @@ type Session struct {
 	onYouTubeStatus   func(status string, detail string)
 	tiktokConnector   *tiktok.Connector
 	onTikTokStatus    func(status string, detail string)
+	kickConnector     *kick.Connector
+	onKickStatus      func(status string, detail string)
 	onEventDispatched func(event *chat.Event, voiceID string)
 }
 
@@ -118,6 +121,23 @@ func NewSession(cfg *config.Config, store secrets.Store) *Session {
 		},
 	)
 
+	s.kickConnector = kick.NewConnector(
+		func(event *chat.Event) {
+			_ = s.DispatchEvent(event)
+		},
+		func(modEvent *chat.ModerationEvent) {
+			s.DispatchModeration(modEvent)
+		},
+		func(status kick.ConnectionStatus, detail string) {
+			s.mu.RLock()
+			fn := s.onKickStatus
+			s.mu.RUnlock()
+			if fn != nil {
+				fn(string(status), detail)
+			}
+		},
+	)
+
 	s.queue = queue.NewQueue(nil, nil, s.Config)
 	return s
 }
@@ -157,6 +177,9 @@ func (s *Session) Stop() error {
 	if s.tiktokConnector != nil {
 		_ = s.tiktokConnector.Stop()
 	}
+	if s.kickConnector != nil {
+		_ = s.kickConnector.Stop()
+	}
 	return nil
 }
 
@@ -174,6 +197,9 @@ func (s *Session) Close() error {
 	}
 	if s.tiktokConnector != nil {
 		_ = s.tiktokConnector.Stop()
+	}
+	if s.kickConnector != nil {
+		_ = s.kickConnector.Stop()
 	}
 	if s.queue != nil {
 		s.queue.Close()
@@ -261,6 +287,15 @@ func (s *Session) syncConnectorsLocked() {
 			_ = s.tiktokConnector.Stop()
 		}
 	}
+
+	if s.kickConnector != nil {
+		kc, ok := s.cfg.Platforms["kick"]
+		if ok && kc.Enabled && kc.AccountName != "" {
+			_ = s.kickConnector.Start(kc.AccountName)
+		} else {
+			_ = s.kickConnector.Stop()
+		}
+	}
 }
 
 // TwitchConnector returns the underlying Twitch connector.
@@ -282,6 +317,13 @@ func (s *Session) TikTokConnector() *tiktok.Connector {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.tiktokConnector
+}
+
+// KickConnector returns the underlying Kick connector.
+func (s *Session) KickConnector() *kick.Connector {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.kickConnector
 }
 
 // TwitchOAuth returns the Twitch OAuth manager.
@@ -324,6 +366,18 @@ func (s *Session) SetOnTikTokStatus(fn func(status string, detail string)) {
 		curStatus := s.tiktokConnector.Status()
 		curUser := s.tiktokConnector.Username()
 		go fn(string(curStatus), curUser)
+	}
+}
+
+// SetOnKickStatus registers a callback for Kick connection status changes.
+func (s *Session) SetOnKickStatus(fn func(status string, detail string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onKickStatus = fn
+	if s.kickConnector != nil && fn != nil {
+		curStatus := s.kickConnector.Status()
+		curChan := s.kickConnector.Channel()
+		go fn(string(curStatus), curChan)
 	}
 }
 

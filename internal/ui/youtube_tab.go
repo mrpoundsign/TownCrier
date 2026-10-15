@@ -111,7 +111,7 @@ func (v *YouTubeTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget
 	v.statusBadge = widget.NewLabelWithStyle("⚪ Disconnected", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
 	v.channelEntry = widget.NewEntry()
-	v.channelEntry.SetPlaceHolder("e.g. @mrpoundsign or https://www.youtube.com/watch?v=...")
+	v.channelEntry.SetPlaceHolder("e.g. mrpoundsign or https://www.youtube.com/watch?v=...")
 	v.channelEntry.SetText(pCfg.AccountName)
 
 	v.enableCheck = widget.NewCheck("Enable YouTube Live Integration", nil)
@@ -155,7 +155,7 @@ func (v *YouTubeTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget
 	})
 
 	hintLabel := widget.NewLabelWithStyle(
-		"✓ Zero-Config Mode: Enter your YouTube @handle, channel URL, or live video URL. Public chat, Super Chats, Super Stickers, and Memberships work automatically with no OAuth or API key needed.",
+		"✓ Zero-Config Mode: Enter your YouTube channel name, channel URL, or live video URL (no @ required). Public chat, Super Chats, Super Stickers, and Memberships work automatically with no OAuth or API key needed.",
 		fyne.TextAlignLeading,
 		fyne.TextStyle{Italic: true},
 	)
@@ -163,7 +163,7 @@ func (v *YouTubeTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget
 
 	cardContent := container.NewVBox(
 		v.enableCheck,
-		container.NewBorder(nil, nil, widget.NewLabel("Channel @Handle or Video URL:"), nil, v.channelEntry),
+		container.NewBorder(nil, nil, widget.NewLabel("Channel Name or Video URL:"), nil, v.channelEntry),
 		v.statusBadge,
 		hintLabel,
 	)
@@ -499,7 +499,7 @@ func (v *YouTubeTabView) updateConnectionStatus(enabled bool, channel string) {
 	case !enabled:
 		v.statusBadge.SetText("⚪ Disabled")
 	case channel == "":
-		v.statusBadge.SetText("🟡 Needs @Handle or Video URL")
+		v.statusBadge.SetText("🟡 Needs Channel Name or Video URL")
 	default:
 		v.statusBadge.SetText("🟡 Waiting for Stream (" + channel + ")...")
 	}

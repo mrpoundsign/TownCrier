@@ -371,8 +371,8 @@ func extractUserFields(u *gotiktoklive.User) (userID, userName, displayName stri
 	if u.ID != 0 {
 		userID = strconv.FormatInt(u.ID, 10)
 	}
-	userName = strings.TrimSpace(u.Username)
-	displayName = strings.TrimSpace(u.Nickname)
+	userName = strings.TrimLeft(strings.TrimSpace(u.Username), "@")
+	displayName = strings.TrimLeft(strings.TrimSpace(u.Nickname), "@")
 	if displayName == "" {
 		displayName = userName
 	}

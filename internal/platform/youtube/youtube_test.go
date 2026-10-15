@@ -22,12 +22,17 @@ func TestNormalizeTarget(t *testing.T) {
 		{
 			input:       "@mrpoundsign",
 			wantLiveURL: "https://www.youtube.com/@mrpoundsign/live",
-			wantDisplay: "@mrpoundsign",
+			wantDisplay: "mrpoundsign",
 		},
 		{
 			input:       "mrpoundsign",
 			wantLiveURL: "https://www.youtube.com/@mrpoundsign/live",
-			wantDisplay: "@mrpoundsign",
+			wantDisplay: "mrpoundsign",
+		},
+		{
+			input:       "streamer_01",
+			wantLiveURL: "https://www.youtube.com/@streamer_01/live",
+			wantDisplay: "streamer_01",
 		},
 		{
 			input:       "UC1234567890abcdefghijkl",
@@ -86,7 +91,7 @@ func TestParseLiveChatResponse(t *testing.T) {
 								"liveChatTextMessageRenderer": {
 									"id": "msg-1",
 									"timestampUsec": "%s",
-									"authorName": {"simpleText": "Alice"},
+									"authorName": {"simpleText": "@Alice"},
 									"authorExternalChannelId": "UC_alice",
 									"authorBadges": [
 										{"liveChatAuthorBadgeRenderer": {"icon": {"iconType": "MODERATOR"}, "tooltip": "Moderator"}},

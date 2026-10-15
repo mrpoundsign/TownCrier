@@ -112,7 +112,7 @@ func (v *TikTokTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.
 	v.statusBadge = widget.NewLabelWithStyle("⚪ Disconnected", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
 	v.usernameEntry = widget.NewEntry()
-	v.usernameEntry.SetPlaceHolder("e.g. @username or https://www.tiktok.com/@username/live")
+	v.usernameEntry.SetPlaceHolder("e.g. username or https://www.tiktok.com/@username/live")
 	v.usernameEntry.SetText(pCfg.AccountName)
 
 	v.enableCheck = widget.NewCheck("Enable TikTok Live Integration", nil)
@@ -156,7 +156,7 @@ func (v *TikTokTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.
 	})
 
 	hintLabel := widget.NewLabelWithStyle(
-		"✓ Zero-Config Mode: Enter a TikTok @username or live URL. Public WebCast chat, gifts (with 2-second combo streak debouncing), and follows work automatically with no OAuth or API key needed.",
+		"✓ Zero-Config Mode: Enter a TikTok username or live URL (no @ required). Public WebCast chat, gifts (with 2-second combo streak debouncing), and follows work automatically with no OAuth or API key needed.",
 		fyne.TextAlignLeading,
 		fyne.TextStyle{Italic: true},
 	)
@@ -164,7 +164,7 @@ func (v *TikTokTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.
 
 	cardContent := container.NewVBox(
 		v.enableCheck,
-		container.NewBorder(nil, nil, widget.NewLabel("TikTok @Username or Live URL:"), nil, v.usernameEntry),
+		container.NewBorder(nil, nil, widget.NewLabel("TikTok Username or Live URL:"), nil, v.usernameEntry),
 		v.statusBadge,
 		hintLabel,
 	)
@@ -546,7 +546,7 @@ func (v *TikTokTabView) updateConnectionStatus(enabled bool, username string) {
 	case !enabled:
 		v.statusBadge.SetText("⚪ Disabled")
 	case username == "":
-		v.statusBadge.SetText("🟡 Needs @Username or Live URL")
+		v.statusBadge.SetText("🟡 Needs Username or Live URL")
 	default:
 		v.statusBadge.SetText("🟡 Waiting for Stream (" + username + ")...")
 	}

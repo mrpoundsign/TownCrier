@@ -228,10 +228,10 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 	}
 
 	userEntry := widget.NewEntry()
-	userEntry.SetPlaceHolder("Username, @handle, or User ID")
+	userEntry.SetPlaceHolder("Username or User ID (no @ needed)")
 
 	addAccount := func() bool {
-		uid := strings.TrimSpace(userEntry.Text)
+		uid := strings.TrimLeft(strings.TrimSpace(userEntry.Text), "@")
 		if uid == "" {
 			return false
 		}
@@ -240,7 +240,7 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 			plat = "twitch"
 		}
 		for _, a := range accounts {
-			if strings.EqualFold(a.Platform, plat) && strings.EqualFold(strings.TrimPrefix(a.UserID, "@"), strings.TrimPrefix(uid, "@")) {
+			if strings.EqualFold(a.Platform, plat) && strings.EqualFold(strings.TrimPrefix(a.UserID, "@"), uid) {
 				userEntry.SetText("")
 				return true
 			}
@@ -316,7 +316,7 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 		title = "Edit Chatter Override"
 	}
 
-	dialog.ShowCustomConfirm(title, "Save", "Cancel", form, func(confirmed bool) {
+	dlg := dialog.NewCustomConfirm(title, "Save", "Cancel", container.NewVScroll(form), func(confirmed bool) {
 		if !confirmed {
 			return
 		}
@@ -356,6 +356,8 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 		v.refreshTable()
 		v.setStatus("✓ Saved override for " + formatViewerAccountsTitle(vc))
 	}, v.window)
+	dlg.Resize(fyne.NewSize(580, 480))
+	dlg.Show()
 }
 
 func (v *ViewersTabView) deleteViewer(key string) {
