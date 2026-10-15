@@ -42,12 +42,14 @@ type Queue struct {
 	currentAborted bool
 	stopPlaybackCh chan struct{}
 
-	paused bool
-	closed bool
+	paused   bool
+	panicked bool
+	closed   bool
 
 	onItemStarted  func(item *Item)
 	onItemFinished func(item *Item)
 	onDepthChanged func(depth int)
+	onStateChanged func(paused, panicked bool)
 }
 
 // NewQueue creates a new Priority Speech Queue and starts the background dispatcher.
@@ -81,6 +83,11 @@ func (q *Queue) Enqueue(item *Item) error {
 
 	if q.closed {
 		return ErrQueueClosed
+	}
+
+	// While Panic Mode is latched active, silently drop incoming speech items
+	if q.panicked {
+		return nil
 	}
 
 	if item.EnqueuedAt.IsZero() {
@@ -120,16 +127,32 @@ func (q *Queue) CurrentItem() *Item {
 // Pause pauses the queue; the current item finishes speaking, but subsequent items wait.
 func (q *Queue) Pause() {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	q.paused = true
+	fn := q.onStateChanged
+	panicked := q.panicked
+	q.mu.Unlock()
+
+	if fn != nil {
+		go fn(true, panicked)
+	}
 }
 
-// Resume unpauses the queue and wakes up the dispatcher.
+// Resume unpauses the queue (and clears Panic Mode if active) and wakes up the dispatcher.
 func (q *Queue) Resume() {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	q.paused = false
+	wasPanicked := q.panicked
+	q.panicked = false
+	if wasPanicked && q.player != nil {
+		q.player.ResetPanic()
+	}
+	fn := q.onStateChanged
 	q.cond.Signal()
+	q.mu.Unlock()
+
+	if fn != nil {
+		go fn(false, false)
+	}
 }
 
 // IsPaused returns true if the queue is paused.
@@ -137,6 +160,13 @@ func (q *Queue) IsPaused() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.paused
+}
+
+// IsPanicked returns true if Emergency Panic Mute mode is currently latched active.
+func (q *Queue) IsPanicked() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.panicked
 }
 
 // Skip aborts the currently speaking audio and moves to the next queued item.
@@ -161,20 +191,41 @@ func (q *Queue) Clear() {
 	}
 }
 
-// Panic executes Emergency Panic Mute (<50ms, D28): flushes all queues and halts audio instantly.
+// Panic executes Emergency Panic Mute (<50ms, D28): latches Panic Mode, flushes all queues, and halts audio instantly.
 func (q *Queue) Panic() {
 	q.mu.Lock()
-	defer q.mu.Unlock()
-
+	q.panicked = true
+	q.paused = true
 	q.eventsQueue = q.eventsQueue[:0]
 	q.chatQueue = q.chatQueue[:0]
 
-	if q.onDepthChanged != nil {
-		fn := q.onDepthChanged
-		go fn(0)
-	}
+	depthFn := q.onDepthChanged
+	stateFn := q.onStateChanged
 
 	q.abortCurrentLocked()
+	q.mu.Unlock()
+
+	if depthFn != nil {
+		go depthFn(0)
+	}
+	if stateFn != nil {
+		go stateFn(true, true)
+	}
+}
+
+// ClearPanic unlatches Panic Mode and resumes normal queue processing.
+func (q *Queue) ClearPanic() {
+	q.Resume()
+}
+
+// TogglePanic toggles Emergency Panic Mute mode on or off, returning the new panicked state.
+func (q *Queue) TogglePanic() bool {
+	if q.IsPanicked() {
+		q.ClearPanic()
+		return false
+	}
+	q.Panic()
+	return true
 }
 
 // CancelMessage implements Moderation Sync (D29): drops matching message from queue
@@ -260,6 +311,13 @@ func (q *Queue) SetOnQueueDepthChanged(fn func(depth int)) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.onDepthChanged = fn
+}
+
+// SetOnStateChanged registers a callback invoked whenever paused or panicked state changes.
+func (q *Queue) SetOnStateChanged(fn func(paused, panicked bool)) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.onStateChanged = fn
 }
 
 // Close halts the dispatcher and releases resources.

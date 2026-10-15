@@ -285,11 +285,34 @@ func (s *Session) Bots() *bots.Matcher {
 	return s.bots
 }
 
-// Panic immediately halts audio playback (<50ms) and purges the speech queue (D28).
+// Panic immediately halts audio playback (<50ms), purges the speech queue, and latches Panic Mode (D28).
 func (s *Session) Panic() {
 	if s.queue != nil {
 		s.queue.Panic()
 	}
+}
+
+// ClearPanic unlatches Panic Mode and resumes speech processing.
+func (s *Session) ClearPanic() {
+	if s.queue != nil {
+		s.queue.ClearPanic()
+	}
+}
+
+// TogglePanic toggles Emergency Panic Mute mode on or off, returning the new panicked state.
+func (s *Session) TogglePanic() bool {
+	if s.queue != nil {
+		return s.queue.TogglePanic()
+	}
+	return false
+}
+
+// IsPanicked returns true if Emergency Panic Mute mode is currently latched active.
+func (s *Session) IsPanicked() bool {
+	if s.queue != nil {
+		return s.queue.IsPanicked()
+	}
+	return false
 }
 
 // DispatchEvent routes an inbound stream event through bot matching, routing, sanitization, and queueing.

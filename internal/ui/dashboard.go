@@ -159,15 +159,12 @@ func (v *DashboardView) buildControlsCard() *widget.Card {
 		if q == nil {
 			return
 		}
-		if q.IsPaused() {
+		if q.IsPaused() || q.IsPanicked() {
 			q.Resume()
-			v.pauseResumeBtn.SetText("Pause Queue")
-			v.pauseResumeBtn.SetIcon(theme.MediaPauseIcon())
 		} else {
 			q.Pause()
-			v.pauseResumeBtn.SetText("Resume Queue")
-			v.pauseResumeBtn.SetIcon(theme.MediaPlayIcon())
 		}
+		v.SyncQueueState(q.IsPaused(), q.IsPanicked())
 	})
 
 	skipBtn := widget.NewButtonWithIcon("Skip Current", theme.MediaFastForwardIcon(), func() {
@@ -292,8 +289,39 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 	}, v.window)
 }
 
+// SyncQueueState updates the Dashboard's speaking label and pause/resume button to reflect queue/panic state.
+func (v *DashboardView) SyncQueueState(paused, panicked bool) {
+	if v.pauseResumeBtn != nil {
+		switch {
+		case panicked:
+			v.pauseResumeBtn.SetText("Unmute & Resume Queue")
+			v.pauseResumeBtn.SetIcon(theme.MediaPlayIcon())
+		case paused:
+			v.pauseResumeBtn.SetText("Resume Queue")
+			v.pauseResumeBtn.SetIcon(theme.MediaPlayIcon())
+		default:
+			v.pauseResumeBtn.SetText("Pause Queue")
+			v.pauseResumeBtn.SetIcon(theme.MediaPauseIcon())
+		}
+	}
+	if v.nowPlayingLabel != nil {
+		idle := v.session.Queue() == nil || v.session.Queue().CurrentItem() == nil
+		switch {
+		case panicked:
+			v.nowPlayingLabel.SetText("🚨 PANIC MUTE ACTIVE — All TTS Silenced (Click Unmute or press Esc to resume)")
+		case paused && idle:
+			v.nowPlayingLabel.SetText("⏸️ Queue Paused")
+		case idle:
+			v.nowPlayingLabel.SetText("Idle (No speech active)")
+		}
+	}
+}
+
 func (v *DashboardView) updateCurrentlySpeaking(item *queue.Item) {
 	if v.nowPlayingLabel == nil || item == nil {
+		return
+	}
+	if v.session != nil && v.session.IsPanicked() {
 		return
 	}
 	speaker := "Unknown"
@@ -306,6 +334,14 @@ func (v *DashboardView) updateCurrentlySpeaking(item *queue.Item) {
 
 func (v *DashboardView) updateFinishedSpeaking(item *queue.Item) {
 	if v.nowPlayingLabel == nil {
+		return
+	}
+	if v.session != nil && v.session.IsPanicked() {
+		v.nowPlayingLabel.SetText("🚨 PANIC MUTE ACTIVE — All TTS Silenced (Click Unmute or press Esc to resume)")
+		return
+	}
+	if v.session != nil && v.session.Queue() != nil && v.session.Queue().IsPaused() {
+		v.nowPlayingLabel.SetText("⏸️ Queue Paused")
 		return
 	}
 	v.nowPlayingLabel.SetText("Idle (No speech active)")

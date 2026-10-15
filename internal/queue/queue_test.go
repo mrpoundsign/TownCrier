@@ -262,11 +262,28 @@ func TestQueuePanicMute(t *testing.T) {
 
 	q.Panic()
 
+	if !q.IsPanicked() {
+		t.Error("expected queue to be in panicked state after Panic()")
+	}
 	if q.Depth() != 0 {
 		t.Errorf("expected depth 0 after Panic, got %d", q.Depth())
 	}
 	if player.stopCount.Load() == 0 {
 		t.Errorf("expected player.Stop() to be called on Panic")
+	}
+
+	// Items enqueued while panicked should be ignored
+	_ = q.Enqueue(&Item{ID: "ignored", Text: "should drop", Priority: 1})
+	if q.Depth() != 0 {
+		t.Errorf("expected item enqueued during panic to be dropped, got depth %d", q.Depth())
+	}
+
+	// TogglePanic should clear panic state
+	if q.TogglePanic() {
+		t.Error("expected TogglePanic to return false when clearing panic")
+	}
+	if q.IsPanicked() || q.IsPaused() {
+		t.Error("expected queue to be unpanicked and unpaused after TogglePanic")
 	}
 }
 

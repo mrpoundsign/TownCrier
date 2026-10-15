@@ -187,9 +187,17 @@ func (mw *MainWindow) initHeader() {
 
 	// Panic Button
 	mw.panicBtn = widget.NewButtonWithIcon("PANIC MUTE (Esc / Ctrl+Shift+M)", theme.MediaStopIcon(), func() {
-		mw.Session.Panic()
+		mw.triggerTogglePanic()
 	})
 	mw.panicBtn.Importance = widget.DangerImportance
+
+	if q := mw.Session.Queue(); q != nil {
+		q.SetOnStateChanged(func(paused, panicked bool) {
+			fyne.Do(func() {
+				mw.syncPanicUI(paused, panicked)
+			})
+		})
+	}
 
 	brandTitle := widget.NewLabelWithStyle("⚡ TownCrier", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
@@ -206,11 +214,44 @@ func (mw *MainWindow) initHeader() {
 	)
 }
 
+func (mw *MainWindow) triggerTogglePanic() {
+	panicked := mw.Session.TogglePanic()
+	q := mw.Session.Queue()
+	paused := false
+	if q != nil {
+		paused = q.IsPaused()
+	}
+	mw.syncPanicUI(paused, panicked)
+	if panicked {
+		mw.SetStatus("🚨 PANIC MUTE ACTIVE — Speech halted and queue cleared. Click Unmute or press Esc / Ctrl+Shift+M to resume.")
+	} else {
+		mw.SetStatus("✓ Panic Mute cleared. Speech queue resumed.")
+	}
+}
+
+func (mw *MainWindow) syncPanicUI(paused, panicked bool) {
+	if mw.panicBtn != nil {
+		if panicked {
+			mw.panicBtn.SetText("🚨 PANIC MUTED — Click or Esc to Unmute")
+			mw.panicBtn.SetIcon(theme.VolumeMuteIcon())
+			mw.panicBtn.Importance = widget.WarningImportance
+		} else {
+			mw.panicBtn.SetText("PANIC MUTE (Esc / Ctrl+Shift+M)")
+			mw.panicBtn.SetIcon(theme.MediaStopIcon())
+			mw.panicBtn.Importance = widget.DangerImportance
+		}
+		mw.panicBtn.Refresh()
+	}
+	if mw.dashboardTab != nil {
+		mw.dashboardTab.SyncQueueState(paused, panicked)
+	}
+}
+
 func (mw *MainWindow) initShortcuts() {
-	// 1. Escape key panic listener
+	// 1. Escape key panic toggle listener
 	mw.Window.Canvas().SetOnTypedKey(func(ke *fyne.KeyEvent) {
 		if ke.Name == fyne.KeyEscape {
-			mw.Session.Panic()
+			mw.triggerTogglePanic()
 		}
 	})
 
@@ -220,6 +261,7 @@ func (mw *MainWindow) initShortcuts() {
 		Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift,
 	}
 	mw.Window.Canvas().AddShortcut(shortcut, func(sc fyne.Shortcut) {
-		mw.Session.Panic()
+		mw.triggerTogglePanic()
 	})
 }
+

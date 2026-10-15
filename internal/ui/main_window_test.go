@@ -55,3 +55,35 @@ func TestMainWindowCloseIntercept(t *testing.T) {
 		t.Error("expected session to be stopped after window close intercept")
 	}
 }
+
+func TestMainWindowPanicToggle(t *testing.T) {
+	appObj := test.NewApp()
+	cfg := config.DefaultConfig()
+	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	_ = session.Start()
+
+	mw := NewMainWindow(appObj, session)
+
+	if session.IsPanicked() {
+		t.Fatal("expected session to not be panicked initially")
+	}
+
+	// Activate Panic Mode
+	mw.triggerTogglePanic()
+	if !session.IsPanicked() {
+		t.Error("expected session to be panicked after first toggle")
+	}
+	if mw.panicBtn.Text != "🚨 PANIC MUTED — Click or Esc to Unmute" {
+		t.Errorf("unexpected panicBtn text when panicked: %q", mw.panicBtn.Text)
+	}
+
+	// Deactivate Panic Mode
+	mw.triggerTogglePanic()
+	if session.IsPanicked() {
+		t.Error("expected session to not be panicked after second toggle")
+	}
+	if mw.panicBtn.Text != "PANIC MUTE (Esc / Ctrl+Shift+M)" {
+		t.Errorf("unexpected panicBtn text when unmuted: %q", mw.panicBtn.Text)
+	}
+}
+
