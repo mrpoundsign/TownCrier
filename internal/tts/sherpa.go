@@ -114,7 +114,7 @@ func (e *SherpaEngine) Synthesize(text string, voiceID string, speed float32) ([
 		speed = 3.0
 	}
 
-	sid := ResolveSpeakerID(voiceID)
+	sid := ResolveSpeakerIDForModel(voiceID, e.numSpk)
 
 	e.mu.Lock()
 	defer e.mu.Unlock()

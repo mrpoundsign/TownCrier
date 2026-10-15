@@ -291,6 +291,7 @@ func TestQueueFastCatchup(t *testing.T) {
 	player := &mockPlayer{}
 	engine := &mockEngine{}
 	cfg := config.DefaultConfig()
+	cfg.GlobalChatRules.DefaultSpeed = 1.2
 	cfg.Queue.CatchupThreshold = 5
 	cfg.Queue.CatchupSpeed = 1.3
 
@@ -299,22 +300,31 @@ func TestQueueFastCatchup(t *testing.T) {
 
 	q.Pause()
 
-	// Enqueue 6 items (exceeds threshold 5)
+	// Enqueue 6 items (exceeds threshold 5 when first item is popped, leaving 5 pending)
+	// Leave Speed: 0 so it inherits DefaultSpeed (1.2) and multiplies by CatchupSpeed (1.3) -> 1.56
 	for i := range 6 {
 		_ = q.Enqueue(&Item{
 			ID:       string(rune('1' + i)),
 			Text:     "message",
-			Speed:    1.0,
+			Speed:    0,
 			Priority: 1,
 		})
 	}
 
+	var startedSpeed float32
 	done := make(chan struct{})
 	var once sync.Once
-	q.SetOnItemFinished(func(item *Item) {
+	q.SetOnItemStarted(func(item *Item) {
 		once.Do(func() {
-			close(done)
+			startedSpeed = item.Speed
 		})
+	})
+	q.SetOnItemFinished(func(item *Item) {
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
 	})
 
 	q.Resume()
@@ -332,9 +342,12 @@ func TestQueueFastCatchup(t *testing.T) {
 	}
 	engine.mu.Unlock()
 
-	// Should have 1.0 * 1.3 = 1.3 speed
-	if firstSpeed < 1.29 || firstSpeed > 1.31 {
-		t.Errorf("expected fast catchup speed ~1.3, got %f", firstSpeed)
+	// Should have 1.2 * 1.3 = 1.56 speed
+	if firstSpeed < 1.55 || firstSpeed > 1.57 {
+		t.Errorf("expected fast catchup speed ~1.56 (1.2 * 1.3), got %f", firstSpeed)
+	}
+	if startedSpeed < 1.55 || startedSpeed > 1.57 {
+		t.Errorf("expected onItemStarted item.Speed ~1.56, got %f", startedSpeed)
 	}
 }
 

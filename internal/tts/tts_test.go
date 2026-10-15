@@ -45,6 +45,21 @@ func TestResolveSpeakerID(t *testing.T) {
 	if id := ResolveSpeakerID("bm_lewis"); id != 10 {
 		t.Errorf("expected 10 for bm_lewis, got %d", id)
 	}
+	if id := ResolveSpeakerID("Bella — US Female (af_bella)"); id != 1 {
+		t.Errorf("expected 1 for display label Bella, got %d", id)
+	}
+	if id := ResolveSpeakerIDForModel("af_bella", 53); id != 2 {
+		t.Errorf("expected 2 for af_bella in 53-speaker v1.0 model, got %d", id)
+	}
+	if id := ResolveSpeakerIDForModel("Adam — US Male (am_adam)", 53); id != 11 {
+		t.Errorf("expected 11 for am_adam in 53-speaker v1.0 model, got %d", id)
+	}
+	if got := VoiceIDFromLabel("Emma — UK Female (bf_emma)"); got != "bf_emma" {
+		t.Errorf("expected bf_emma from label, got %q", got)
+	}
+	if got := VoiceDisplayName("am_michael"); got != "Michael — US Male (am_michael)" {
+		t.Errorf("unexpected display name: %q", got)
+	}
 	if id := ResolveSpeakerID("non_existent_voice"); id != 0 {
 		t.Errorf("expected fallback 0 for unknown voice, got %d", id)
 	}

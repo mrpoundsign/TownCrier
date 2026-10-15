@@ -63,15 +63,16 @@ func (v *VoicesTabView) Build() fyne.CanvasObject {
 }
 
 func (v *VoicesTabView) buildPreviewCard() *widget.Card {
-	voices := tts.KokoroVoiceNames
-	voiceSelect := widget.NewSelect(voices, nil)
-	voiceSelect.SetSelected("af_bella")
+	voiceLabels := tts.VoiceDisplayLabels()
+	voiceSelect := widget.NewSelect(voiceLabels, nil)
+	voiceSelect.SetSelected(tts.VoiceDisplayName("af_bella"))
 
-	speedLabel := widget.NewLabel("1.0x")
+	speedLabel := widget.NewLabel("1.00x")
 	speedSlider := widget.NewSlider(0.5, 2.0)
+	speedSlider.Step = 0.05
 	speedSlider.SetValue(1.0)
 	speedSlider.OnChanged = func(val float64) {
-		speedLabel.SetText(fmt.Sprintf("%.1fx", val))
+		speedLabel.SetText(fmt.Sprintf("%.2fx", val))
 	}
 
 	v.sampleEntry = widget.NewEntry()
@@ -79,7 +80,7 @@ func (v *VoicesTabView) buildPreviewCard() *widget.Card {
 
 	v.previewBtn = widget.NewButtonWithIcon("Preview Voice", theme.MediaPlayIcon(), func() {
 		text := v.sampleEntry.Text
-		voice := voiceSelect.Selected
+		voice := tts.VoiceIDFromLabel(voiceSelect.Selected)
 		speed := float32(speedSlider.Value)
 		v.previewVoice(text, voice, speed)
 	})
@@ -98,19 +99,20 @@ func (v *VoicesTabView) buildPreviewCard() *widget.Card {
 
 func (v *VoicesTabView) buildGlobalDefaultsCard() *widget.Card {
 	cfg := v.session.Config()
-	voices := tts.KokoroVoiceNames
+	voiceLabels := tts.VoiceDisplayLabels()
 
 	selectedVoice := cfg.GlobalChatRules.DefaultVoice
 	if selectedVoice == "" {
 		selectedVoice = "af_bella"
 	}
 
-	globalVoiceSelect := widget.NewSelect(voices, func(s string) {
+	globalVoiceSelect := widget.NewSelect(voiceLabels, nil)
+	globalVoiceSelect.SetSelected(tts.VoiceDisplayName(selectedVoice))
+	globalVoiceSelect.OnChanged = func(s string) {
 		v.updateConfig(func(c *config.Config) {
-			c.GlobalChatRules.DefaultVoice = s
+			c.GlobalChatRules.DefaultVoice = tts.VoiceIDFromLabel(s)
 		})
-	})
-	globalVoiceSelect.SetSelected(selectedVoice)
+	}
 
 	sp := cfg.GlobalChatRules.DefaultSpeed
 	if sp <= 0 {

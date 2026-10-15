@@ -436,10 +436,6 @@ func (q *Queue) processItem(item *Item, depth int) {
 	cfg := q.cfgFn()
 	q.mu.Unlock()
 
-	if onStarted != nil {
-		onStarted(item)
-	}
-
 	defer func() {
 		q.mu.Lock()
 		q.currentItem = nil
@@ -451,16 +447,17 @@ func (q *Queue) processItem(item *Item, depth int) {
 		}
 	}()
 
-	if item.Text == "" {
-		return
-	}
-
-	// Calculate speed, applying Fast Catchup if queue depth exceeds threshold
+	// Calculate base speed, falling back to GlobalChatRules.DefaultSpeed (or 1.0)
 	speed := item.Speed
 	if speed <= 0 {
-		speed = 1.0
+		if cfg != nil && cfg.GlobalChatRules.DefaultSpeed > 0 {
+			speed = cfg.GlobalChatRules.DefaultSpeed
+		} else {
+			speed = 1.0
+		}
 	}
 
+	// Apply Fast Catchup multiplier (default 1.3x of base/default speed) if pending queue depth meets threshold
 	catchupThreshold := 5
 	var catchupSpeed float32 = 1.3
 	if cfg != nil {
@@ -474,6 +471,15 @@ func (q *Queue) processItem(item *Item, depth int) {
 
 	if depth >= catchupThreshold {
 		speed *= catchupSpeed
+	}
+	item.Speed = speed
+
+	if onStarted != nil {
+		onStarted(item)
+	}
+
+	if item.Text == "" {
+		return
 	}
 
 	// Synthesize speech via TTS engine

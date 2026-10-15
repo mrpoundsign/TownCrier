@@ -133,7 +133,7 @@ func (v *ViewersTabView) buildViewerRow(key string, vc config.ViewerConfig) fyne
 		statusText = "⭐ Allowed"
 	}
 
-	subtitle := fmt.Sprintf("Voice: %s | Speed: %.1fx %s", vc.Voice, vc.Speed, statusText)
+	subtitle := fmt.Sprintf("Voice: %s | Speed: %.2fx %s", tts.VoiceDisplayName(vc.Voice), vc.Speed, statusText)
 
 	label := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	sub := widget.NewLabel(subtitle)
@@ -173,16 +173,14 @@ func (v *ViewersTabView) showEditDialog(existing *config.ViewerConfig) {
 	nickEntry := widget.NewEntry()
 	nickEntry.SetPlaceHolder("Spoken nickname (leave blank for actual name)")
 
-	voices := tts.KokoroVoiceNames
-	voiceSelect := widget.NewSelect(voices, nil)
-	voiceSelect.SetSelected("af_bella")
+	voiceLabels := tts.VoiceDisplayLabels()
+	voiceSelect := widget.NewSelect(voiceLabels, nil)
+	voiceSelect.SetSelected(tts.VoiceDisplayName("af_bella"))
 
-	speedLabel := widget.NewLabel("1.0x")
+	speedLabel := widget.NewLabel("1.00x")
 	speedSlider := widget.NewSlider(0.5, 2.0)
+	speedSlider.Step = 0.05
 	speedSlider.SetValue(1.0)
-	speedSlider.OnChanged = func(val float64) {
-		speedLabel.SetText(fmt.Sprintf("%.1fx", val))
-	}
 
 	ignoredCheck := widget.NewCheck("Ignore Chatter (silence completely)", nil)
 	allowedCheck := widget.NewCheck("Always Allow (bypass bot filter)", nil)
@@ -192,13 +190,17 @@ func (v *ViewersTabView) showEditDialog(existing *config.ViewerConfig) {
 		userEntry.SetText(existing.UserID)
 		userEntry.Disable()
 		nickEntry.SetText(existing.Nickname)
-		voiceSelect.SetSelected(existing.Voice)
+		voiceSelect.SetSelected(tts.VoiceDisplayName(existing.Voice))
 		if existing.Speed > 0 {
 			speedSlider.SetValue(float64(existing.Speed))
-			speedLabel.SetText(fmt.Sprintf("%.1fx", existing.Speed))
+			speedLabel.SetText(fmt.Sprintf("%.2fx", existing.Speed))
 		}
 		ignoredCheck.SetChecked(existing.Ignored)
 		allowedCheck.SetChecked(existing.Allowed)
+	}
+
+	speedSlider.OnChanged = func(val float64) {
+		speedLabel.SetText(fmt.Sprintf("%.2fx", val))
 	}
 
 	form := container.NewVBox(
@@ -236,7 +238,7 @@ func (v *ViewersTabView) showEditDialog(existing *config.ViewerConfig) {
 		vc := config.ViewerConfig{
 			Platform: plat,
 			UserID:   userID,
-			Voice:    voiceSelect.Selected,
+			Voice:    tts.VoiceIDFromLabel(voiceSelect.Selected),
 			Speed:    float32(speedSlider.Value),
 			Nickname: strings.TrimSpace(nickEntry.Text),
 			Ignored:  ignoredCheck.Checked,

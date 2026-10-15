@@ -615,34 +615,51 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 	})
 	emotesCheck.SetChecked(ov.SpeakEmotes)
 
-	voices := tts.KokoroVoiceNames
-	if len(voices) == 0 {
-		voices = []string{"af_bella", "am_adam"}
-	}
-
+	voiceLabels := tts.VoiceDisplayLabels()
 	selectedVoice := ov.DefaultVoice
 	if selectedVoice == "" {
-		selectedVoice = voices[0]
+		selectedVoice = "af_bella"
 	}
-	voiceSelect := widget.NewSelect(voices, func(s string) {
+	voiceSelect := widget.NewSelect(voiceLabels, nil)
+	voiceSelect.SetSelected(tts.VoiceDisplayName(selectedVoice))
+	voiceSelect.OnChanged = func(s string) {
 		v.updateConfig(func(c *config.Config) {
 			p := c.Platforms["twitch"]
-			p.Overrides.DefaultVoice = s
+			p.Overrides.DefaultVoice = tts.VoiceIDFromLabel(s)
 			c.Platforms["twitch"] = p
 		})
-	})
-	voiceSelect.SetSelected(selectedVoice)
+	}
 	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("Twitch Default Voice:"), nil, voiceSelect)
+
+	sp := ov.DefaultSpeed
+	if sp <= 0 {
+		sp = 1.0
+	}
+	speedLabel := widget.NewLabel(fmt.Sprintf("%.2fx", sp))
+	speedSlider := widget.NewSlider(0.5, 2.0)
+	speedSlider.Step = 0.05
+	speedSlider.SetValue(float64(sp))
+	speedSlider.OnChanged = func(val float64) {
+		speedLabel.SetText(fmt.Sprintf("%.2fx", val))
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["twitch"]
+			p.Overrides.DefaultSpeed = float32(val)
+			c.Platforms["twitch"] = p
+		})
+	}
+	speedRow := container.NewBorder(nil, nil, widget.NewLabel("Twitch Default Speed:"), speedLabel, speedSlider)
 
 	toggleOverrides := func(enabled bool) {
 		if enabled {
 			namesCheck.Enable()
 			emotesCheck.Enable()
 			voiceSelect.Enable()
+			speedSlider.Enable()
 		} else {
 			namesCheck.Disable()
 			emotesCheck.Disable()
 			voiceSelect.Disable()
+			speedSlider.Disable()
 		}
 	}
 	toggleOverrides(ov.OverrideRules)
@@ -662,6 +679,7 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 		namesCheck,
 		emotesCheck,
 		voiceRow,
+		speedRow,
 	)
 
 	return widget.NewCard("Platform Overrides", "Custom rules applied only to Twitch", cardContent)

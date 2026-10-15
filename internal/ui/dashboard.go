@@ -242,18 +242,38 @@ func (v *DashboardView) buildActivityRow(entry ActivityEntry) fyne.CanvasObject 
 }
 
 func (v *DashboardView) showQuickAssignDialog(platform, username string) {
-	voices := tts.KokoroVoiceNames
-	voiceSelect := widget.NewSelect(voices, nil)
-	voiceSelect.SetSelected("af_bella")
+	voiceLabels := tts.VoiceDisplayLabels()
+	voiceSelect := widget.NewSelect(voiceLabels, nil)
+	voiceSelect.SetSelected(tts.VoiceDisplayName("af_bella"))
 
 	speedSlider := widget.NewSlider(0.5, 2.0)
+	speedSlider.Step = 0.05
 	speedSlider.SetValue(1.0)
-	speedLabel := widget.NewLabel("1.0x")
-	speedSlider.OnChanged = func(val float64) {
-		speedLabel.SetText(fmt.Sprintf("%.1fx", val))
-	}
+	speedLabel := widget.NewLabel("1.00x")
 
 	ignoreCheck := widget.NewCheck("Ignore this chatter (silent)", nil)
+
+	var existingNickname string
+	var existingAllowed bool
+	if v.session != nil {
+		cfg := v.session.Config()
+		if vc, ok := config.LookupViewer(cfg.Viewers, platform, username, username); ok {
+			if vc.Voice != "" {
+				voiceSelect.SetSelected(tts.VoiceDisplayName(vc.Voice))
+			}
+			if vc.Speed > 0 {
+				speedSlider.SetValue(float64(vc.Speed))
+				speedLabel.SetText(fmt.Sprintf("%.2fx", vc.Speed))
+			}
+			ignoreCheck.SetChecked(vc.Ignored)
+			existingNickname = vc.Nickname
+			existingAllowed = vc.Allowed
+		}
+	}
+
+	speedSlider.OnChanged = func(val float64) {
+		speedLabel.SetText(fmt.Sprintf("%.2fx", val))
+	}
 
 	formContent := container.NewVBox(
 		widget.NewLabel(fmt.Sprintf("Assign voice for: %s (%s)", username, platform)),
@@ -275,9 +295,11 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 			cfg.Viewers[key] = config.ViewerConfig{
 				Platform: platform,
 				UserID:   username,
-				Voice:    voiceSelect.Selected,
+				Voice:    tts.VoiceIDFromLabel(voiceSelect.Selected),
 				Speed:    float32(speedSlider.Value),
+				Nickname: existingNickname,
 				Ignored:  ignoreCheck.Checked,
+				Allowed:  existingAllowed,
 			}
 		})
 		if v.onAssignVoice != nil {
@@ -328,8 +350,8 @@ func (v *DashboardView) updateCurrentlySpeaking(item *queue.Item) {
 	if item.Event != nil && item.Event.UserName != "" {
 		speaker = item.Event.UserName
 	}
-	v.nowPlayingLabel.SetText(fmt.Sprintf("🗣️ Speaking [%s]: %s (Voice: %s, Speed: %.1fx)",
-		speaker, item.Text, item.VoiceID, item.Speed))
+	v.nowPlayingLabel.SetText(fmt.Sprintf("🗣️ Speaking [%s]: %s (Voice: %s, Speed: %.2fx)",
+		speaker, item.Text, tts.VoiceDisplayName(item.VoiceID), item.Speed))
 }
 
 func (v *DashboardView) updateFinishedSpeaking(item *queue.Item) {
