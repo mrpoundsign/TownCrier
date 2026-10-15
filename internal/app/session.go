@@ -37,6 +37,7 @@ type Session struct {
 	bots      *bots.Matcher
 
 	twitchConnector   *twitch.Connector
+	twitchOAuth       *twitch.OAuthManager
 	onTwitchStatus    func(status string, detail string)
 	onEventDispatched func(event *chat.Event, voiceID string)
 }
@@ -55,11 +56,12 @@ func NewSession(cfg *config.Config, store secrets.Store) *Session {
 	router := chat.NewRouter()
 
 	s := &Session{
-		cfg:       cfg.Clone(),
-		secrets:   store,
-		router:    router,
-		sanitizer: sanitizer,
-		bots:      matcher,
+		cfg:         cfg.Clone(),
+		secrets:     store,
+		router:      router,
+		sanitizer:   sanitizer,
+		bots:        matcher,
+		twitchOAuth: twitch.NewOAuthManager("", store),
 	}
 
 	s.twitchConnector = twitch.NewConnector(
@@ -201,6 +203,13 @@ func (s *Session) TwitchConnector() *twitch.Connector {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.twitchConnector
+}
+
+// TwitchOAuth returns the Twitch OAuth manager.
+func (s *Session) TwitchOAuth() *twitch.OAuthManager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.twitchOAuth
 }
 
 // SetOnTwitchStatus registers a callback for Twitch connection status changes.

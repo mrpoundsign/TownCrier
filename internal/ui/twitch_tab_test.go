@@ -88,3 +88,46 @@ func TestTwitchTabStatusHandler(t *testing.T) {
 		t.Error("expected OverrideRules to be true")
 	}
 }
+
+func TestTwitchTabOAuthGating(t *testing.T) {
+	appObj := test.NewApp()
+	win := appObj.NewWindow("TestOAuthGating")
+	cfg := config.DefaultConfig()
+	store := secrets.NewMemoryStore()
+	session := app.NewSession(cfg, store)
+
+	tab := NewTwitchTabView(win, session)
+	_ = tab.Build()
+
+	// Initially unauthenticated: OAuth-required controls should be disabled
+	if !tab.rewardEntry.Disabled() {
+		t.Error("expected rewardEntry to be disabled when OAuth is not connected")
+	}
+	if !tab.followCheck.Disabled() {
+		t.Error("expected followCheck to be disabled when OAuth is not connected")
+	}
+	if !tab.followTmplEntry.Disabled() {
+		t.Error("expected followTmplEntry to be disabled when OAuth is not connected")
+	}
+	if !tab.rewardOAuthHint.Visible() {
+		t.Error("expected rewardOAuthHint to be visible when OAuth is not connected")
+	}
+
+	// Simulate OAuth token stored
+	_ = store.Set("twitch_access_token", "valid_token_123")
+	tab.syncOAuthState()
+
+	if tab.rewardEntry.Disabled() {
+		t.Error("expected rewardEntry to be enabled when OAuth is connected")
+	}
+	if tab.followCheck.Disabled() {
+		t.Error("expected followCheck to be enabled when OAuth is connected")
+	}
+	if tab.followTmplEntry.Disabled() {
+		t.Error("expected followTmplEntry to be enabled when OAuth is connected")
+	}
+	if tab.rewardOAuthHint.Visible() {
+		t.Error("expected rewardOAuthHint to be hidden when OAuth is connected")
+	}
+}
+

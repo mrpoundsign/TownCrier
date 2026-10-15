@@ -16,6 +16,7 @@ import (
 )
 
 const (
+	DefaultTwitchClientID       = "7i52sdpwfxk26fdt672bsoxcoaenno"
 	DefaultTwitchDeviceEndpoint = "https://id.twitch.tv/oauth2/device"
 	DefaultTwitchTokenEndpoint  = "https://id.twitch.tv/oauth2/token"
 
@@ -24,13 +25,14 @@ const (
 	SecretTwitchTokenExpiry  = "twitch_token_expiry"
 )
 
-// DefaultTwitchScopes contains the required permissions for stream chat reading and moderation.
+// DefaultTwitchScopes contains the required permissions for stream chat reading, alerts, and moderation.
 var DefaultTwitchScopes = []string{
 	"user:read:chat",
 	"bits:read",
 	"channel:read:subscriptions",
 	"channel:read:redemptions",
 	"moderator:read:chat_messages",
+	"moderator:read:followers",
 }
 
 // DeviceCodeResponse holds the response from Twitch's device authorization endpoint.
@@ -66,8 +68,7 @@ type OAuthManager struct {
 // NewOAuthManager creates a new Twitch OAuthManager.
 func NewOAuthManager(clientID string, store secrets.Store) *OAuthManager {
 	if clientID == "" {
-		// Default public client ID placeholder; can be overridden via config
-		clientID = "towncrier_client_id"
+		clientID = DefaultTwitchClientID
 	}
 	return &OAuthManager{
 		clientID:       clientID,
