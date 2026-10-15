@@ -20,6 +20,10 @@ VERSION="${VERSION:-0.0.1}"
 mkdir -p "$BUILD_DIR" "$BIN_DIR" "$DIST_DIR" "$ROOT_DIR/cmd/launcher/payload"
 touch "$ROOT_DIR/cmd/launcher/payload/placeholder.txt"
 
+if command -v git &>/dev/null && [ -d "$ROOT_DIR/.git" ] && [ -d "$ROOT_DIR/.githooks" ]; then
+    git -C "$ROOT_DIR" config core.hooksPath .githooks 2>/dev/null || true
+fi
+
 if ! command -v go &>/dev/null; then
     if [ -x "/usr/local/go/bin/go" ]; then
         export PATH="/usr/local/go/bin:$PATH"
@@ -34,6 +38,7 @@ fetch_dlls() {
     echo "==> Verifying runtime DLLs in $BIN_DIR..."
     if [ ! -f "$BIN_DIR/onnxruntime.dll" ] || [ ! -f "$BIN_DIR/sherpa-onnx-c-api.dll" ]; then
         echo "--> Fetching sherpa-onnx Windows x64 DLLs from Go module cache..."
+        go mod download github.com/k2-fsa/sherpa-onnx-go-windows 2>/dev/null || true
         local win_mod_dir
         win_mod_dir=$(go list -m -f '{{.Dir}}' github.com/k2-fsa/sherpa-onnx-go-windows 2>/dev/null || true)
         if [ -n "$win_mod_dir" ] && [ -d "$win_mod_dir/lib/x86_64-pc-windows-gnu" ]; then
@@ -50,7 +55,14 @@ fetch_dlls() {
 run_lint() {
     echo "==> Verifying code modernizations (go fix --diff)..."
     local diff_output
-    diff_output=$(go fix --diff ./... 2>&1 || true)
+    local err_file="$BUILD_DIR/gofix.err"
+    if ! diff_output=$(go fix --diff ./... 2>"$err_file"); then
+        echo "Error: 'go fix --diff ./...' failed:"
+        cat "$err_file"
+        rm -f "$err_file"
+        exit 1
+    fi
+    rm -f "$err_file"
     if [ -n "$diff_output" ]; then
         echo "Error: Unfixed code modernization diffs found:"
         echo "$diff_output"

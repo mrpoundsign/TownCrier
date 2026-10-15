@@ -26,7 +26,20 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.27'
-          cache: true
+          cache: false
+
+      - name: Cache Go Modules, Build Artifacts & golangci-lint
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+            ~/go/bin/golangci-lint
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+          save-always: true
 
       - name: Install Cross-Compilation & Test Dependencies
         run: |
@@ -34,7 +47,19 @@ jobs:
           sudo apt-get install -y -qq \
             gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 zip \
             libgl1-mesa-dev xorg-dev libxcursor-dev libxrandr-dev \
-            libxinerama-dev libxi-dev libxxf86vm-dev libasound2-dev
+            libxinerama-dev libxi-dev libxxf86vm-dev libasound2-dev \
+            libwayland-dev libxkbcommon-dev
+
+      - name: Download Go Modules
+        run: |
+          go mod download
+          go mod download github.com/k2-fsa/sherpa-onnx-go-windows
+
+      - name: Install golangci-lint v2 (Cached)
+        run: |
+          if [ ! -x "$HOME/go/bin/golangci-lint" ]; then
+            curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$HOME/go/bin" v2.14.0
+          fi
 
       - name: Determine Release Version
         id: meta
@@ -49,10 +74,6 @@ jobs:
           fi
           echo "version=${RAW_VER}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
-
-      - name: Install golangci-lint
-        run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 
       - name: Build & Package Windows Release
         env:

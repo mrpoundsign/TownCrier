@@ -42,31 +42,43 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.27'
-          cache: true
+          cache: false
+
+      - name: Cache Go Modules, Build Artifacts & golangci-lint
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+            ~/go/bin/golangci-lint
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+          save-always: true
 
       - name: Install Linux Build Dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             libgl1-mesa-dev xorg-dev libxcursor-dev libxrandr-dev \
-            libxinerama-dev libxi-dev libxxf86vm-dev libasound2-dev
+            libxinerama-dev libxi-dev libxxf86vm-dev libasound2-dev \
+            libwayland-dev libxkbcommon-dev
 
-      - name: Verify Code Modernization (go fix --diff)
+      - name: Download Go Modules
+        run: go mod download
+
+      - name: Install golangci-lint v2 (Cached)
         run: |
-          DIFF=$(go fix --diff ./... 2>&1 || true)
-          if [ -n "$DIFF" ]; then
-            echo "Unfixed modernization diffs found:"
-            echo "$DIFF"
-            exit 1
+          if [ ! -x "$HOME/go/bin/golangci-lint" ]; then
+            curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$HOME/go/bin" v2.14.0
           fi
 
-      - name: Install and Run golangci-lint-v2
+      - name: Run Quality Gate (go fix --diff, golangci-lint, go test)
         run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
-          golangci-lint run ./...
-
-      - name: Run Test Suite
-        run: go test -count=1 -v ./...
+          chmod +x ./build.sh
+          ./build.sh lint
+          ./build.sh test
 
   windows-build:
     name: Windows Native Build & Test
@@ -79,7 +91,28 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.27'
-          cache: true
+          cache: false
+
+      - name: Cache Windows Go Modules & Build Artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~\AppData\Local\go-build
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+          save-always: true
+
+      - name: Download Go Modules & Add Sherpa DLLs to PATH
+        shell: bash
+        run: |
+          go mod download
+          go mod download github.com/k2-fsa/sherpa-onnx-go-windows
+          WIN_MOD_DIR=$(go list -m -f '{{.Dir}}' github.com/k2-fsa/sherpa-onnx-go-windows)
+          if [ -n "$WIN_MOD_DIR" ] && [ -d "$WIN_MOD_DIR/lib/x86_64-pc-windows-gnu" ]; then
+            echo "$WIN_MOD_DIR/lib/x86_64-pc-windows-gnu" >> "$GITHUB_PATH"
+          fi
 
       - name: Run Unit Tests
         run: go test -count=1 -v ./...
