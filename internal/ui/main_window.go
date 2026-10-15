@@ -34,6 +34,8 @@ type MainWindow struct {
 	twitchStatusDot *widget.Label
 	volumeSlider    *widget.Slider
 	panicBtn        *widget.Button
+	hotkeyMgr       *GlobalHotkeyManager
+	activeShortcut  *desktop.CustomShortcut
 }
 
 // NewMainWindow creates and initializes the complete desktop application window.
@@ -49,9 +51,13 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	}
 
 	mw.initStatusBar()
+	log.Println("[MainWindow] Initializing views...")
 	mw.initViews()
+	log.Println("[MainWindow] Initializing header...")
 	mw.initHeader()
+	log.Println("[MainWindow] Initializing shortcuts...")
 	mw.initShortcuts()
+	log.Println("[MainWindow] Setting window content...")
 
 	mainContent := container.NewBorder(
 		mw.headerBar,
@@ -69,6 +75,9 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	cleanup := func() {
 		closeOnce.Do(func() {
 			log.Println("[MainWindow] Close requested, shutting down subsystems...")
+			if mw.hotkeyMgr != nil {
+				mw.hotkeyMgr.Close()
+			}
 			_ = session.Close()
 			if p := session.Player(); p != nil {
 				_ = p.Close()
@@ -109,6 +118,14 @@ func (mw *MainWindow) SetStatus(msg string) {
 	})
 }
 
+func (mw *MainWindow) currentHotkeyLabel() string {
+	hk := mw.Session.Config().Safety.PanicHotkey
+	if hk == "" {
+		return "Ctrl+Shift+M"
+	}
+	return hk
+}
+
 func (mw *MainWindow) initViews() {
 	cfg := mw.Session.Config()
 	player := mw.Session.Player()
@@ -128,6 +145,9 @@ func (mw *MainWindow) initViews() {
 	mw.settingsTab = NewSettingsView(mw.Window, cfg, player, engine)
 	mw.settingsTab.SetSession(mw.Session)
 	mw.settingsTab.SetStatusHandler(mw.SetStatus)
+	mw.settingsTab.SetHotkeyChangedHandler(func(hotkey string) error {
+		return mw.ApplyPanicHotkey(hotkey)
+	})
 
 	mw.tabsContainer = container.NewAppTabs(
 		container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), mw.dashboardTab.Build()),
@@ -186,7 +206,8 @@ func (mw *MainWindow) initHeader() {
 	volContainer := container.NewBorder(nil, nil, volLabel, nil, mw.volumeSlider)
 
 	// Panic Button
-	mw.panicBtn = widget.NewButtonWithIcon("PANIC MUTE (Esc / Ctrl+Shift+M)", theme.MediaStopIcon(), func() {
+	hk := mw.currentHotkeyLabel()
+	mw.panicBtn = widget.NewButtonWithIcon(fmt.Sprintf("PANIC MUTE (Esc / %s)", hk), theme.MediaStopIcon(), func() {
 		mw.triggerTogglePanic()
 	})
 	mw.panicBtn.Importance = widget.DangerImportance
@@ -222,21 +243,23 @@ func (mw *MainWindow) triggerTogglePanic() {
 		paused = q.IsPaused()
 	}
 	mw.syncPanicUI(paused, panicked)
+	hk := mw.currentHotkeyLabel()
 	if panicked {
-		mw.SetStatus("🚨 PANIC MUTE ACTIVE — Speech halted and queue cleared. Click Unmute or press Esc / Ctrl+Shift+M to resume.")
+		mw.SetStatus(fmt.Sprintf("🚨 PANIC MUTE ACTIVE — Speech halted and queue cleared. Click Unmute or press Esc / %s to resume.", hk))
 	} else {
 		mw.SetStatus("✓ Panic Mute cleared. Speech queue resumed.")
 	}
 }
 
 func (mw *MainWindow) syncPanicUI(paused, panicked bool) {
+	hk := mw.currentHotkeyLabel()
 	if mw.panicBtn != nil {
 		if panicked {
-			mw.panicBtn.SetText("🚨 PANIC MUTED — Click or Esc to Unmute")
+			mw.panicBtn.SetText(fmt.Sprintf("🚨 PANIC MUTED — Click or %s to Unmute", hk))
 			mw.panicBtn.SetIcon(theme.VolumeMuteIcon())
 			mw.panicBtn.Importance = widget.WarningImportance
 		} else {
-			mw.panicBtn.SetText("PANIC MUTE (Esc / Ctrl+Shift+M)")
+			mw.panicBtn.SetText(fmt.Sprintf("PANIC MUTE (Esc / %s)", hk))
 			mw.panicBtn.SetIcon(theme.MediaStopIcon())
 			mw.panicBtn.Importance = widget.DangerImportance
 		}
@@ -248,20 +271,61 @@ func (mw *MainWindow) syncPanicUI(paused, panicked bool) {
 }
 
 func (mw *MainWindow) initShortcuts() {
-	// 1. Escape key panic toggle listener
+	// 1. Escape key panic toggle listener (when TownCrier window is focused)
 	mw.Window.Canvas().SetOnTypedKey(func(ke *fyne.KeyEvent) {
 		if ke.Name == fyne.KeyEscape {
 			mw.triggerTogglePanic()
 		}
 	})
 
-	// 2. Ctrl+Shift+M shortcut
-	shortcut := &desktop.CustomShortcut{
-		KeyName:  fyne.KeyM,
-		Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift,
-	}
-	mw.Window.Canvas().AddShortcut(shortcut, func(sc fyne.Shortcut) {
-		mw.triggerTogglePanic()
+	// 2. System-wide global hotkey + in-window shortcut
+	mw.hotkeyMgr = NewGlobalHotkeyManager(func() {
+		fyne.Do(func() {
+			mw.triggerTogglePanic()
+		})
 	})
+
+	if err := mw.ApplyPanicHotkey(mw.currentHotkeyLabel()); err != nil {
+		log.Printf("[MainWindow] Warning: failed to register global hotkey: %v", err)
+	}
 }
+
+// ApplyPanicHotkey dynamically updates both the in-window shortcut and OS-wide global hotkey.
+func (mw *MainWindow) ApplyPanicHotkey(hotkeyStr string) error {
+	spec, err := ParseHotkey(hotkeyStr)
+	if err != nil {
+		return err
+	}
+
+	if mw.activeShortcut != nil {
+		mw.Window.Canvas().RemoveShortcut(mw.activeShortcut)
+		mw.activeShortcut = nil
+	}
+
+	if spec.FyneModifier() != 0 {
+		sc := &desktop.CustomShortcut{
+			KeyName:  spec.FyneKeyName(),
+			Modifier: spec.FyneModifier(),
+		}
+		mw.Window.Canvas().AddShortcut(sc, func(fyne.Shortcut) {
+			mw.triggerTogglePanic()
+		})
+		mw.activeShortcut = sc
+	}
+
+	var regErr error
+	if mw.hotkeyMgr != nil {
+		regErr = mw.hotkeyMgr.Register(spec.String())
+	}
+
+	q := mw.Session.Queue()
+	paused := false
+	if q != nil {
+		paused = q.IsPaused()
+	}
+	mw.syncPanicUI(paused, mw.Session.IsPanicked())
+
+	return regErr
+}
+
 

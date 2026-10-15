@@ -27,16 +27,17 @@ type SettingsView struct {
 	session  *app.Session
 	modelDir string
 
-	mu           sync.Mutex
-	deviceEnum   func() ([]audio.DeviceInfo, error)
-	statusLabel  *widget.Label
-	onStatus     func(msg string)
-	modelStatus  *widget.Label
-	deviceSelect *widget.Select
-	deviceMap    map[string]string // device name -> hex ID
-	downloadBtn  *widget.Button
-	downloadProg *widget.ProgressBar
-	initializing bool
+	mu              sync.Mutex
+	deviceEnum      func() ([]audio.DeviceInfo, error)
+	statusLabel     *widget.Label
+	onStatus        func(msg string)
+	onHotkeyChanged func(hotkey string) error
+	modelStatus     *widget.Label
+	deviceSelect    *widget.Select
+	deviceMap       map[string]string // device name -> hex ID
+	downloadBtn     *widget.Button
+	downloadProg    *widget.ProgressBar
+	initializing    bool
 }
 
 // NewSettingsView constructs a SettingsView for configuring audio, TTS hardware, and global rules.
@@ -65,6 +66,11 @@ func (v *SettingsView) SetSession(s *app.Session) {
 // SetStatusHandler registers a callback invoked when configuration or audio status updates.
 func (v *SettingsView) SetStatusHandler(fn func(msg string)) {
 	v.onStatus = fn
+}
+
+// SetHotkeyChangedHandler registers a callback invoked when the user changes the global Panic Mute hotkey.
+func (v *SettingsView) SetHotkeyChangedHandler(fn func(hotkey string) error) {
+	v.onHotkeyChanged = fn
 }
 
 func (v *SettingsView) setStatus(msg string) {
@@ -350,7 +356,98 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 }
 
 func (v *SettingsView) buildSafetyCard() *widget.Card {
-	hotkeyLabel := widget.NewLabelWithStyle("Global Panic Mute Hotkey: Ctrl+Shift+M or Esc (<50ms halt)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	curHotkey := v.cfg.Safety.PanicHotkey
+	if curHotkey == "" {
+		curHotkey = "Ctrl+Shift+M"
+	}
+	parsedSpec, parseErr := ParseHotkey(curHotkey)
+	if parseErr != nil {
+		parsedSpec, _ = ParseHotkey("Ctrl+Shift+M")
+	}
+
+	hotkeyDisplay := widget.NewLabelWithStyle(
+		fmt.Sprintf("System-Wide Panic Hotkey: %s (plus Esc when TownCrier window is focused)", parsedSpec.String()),
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Bold: true},
+	)
+
+	var syncingHotkeyUI bool
+
+	ctrlCheck := widget.NewCheck("Ctrl", nil)
+	shiftCheck := widget.NewCheck("Shift", nil)
+	altCheck := widget.NewCheck("Alt", nil)
+	keySelect := widget.NewSelect(SupportedHotkeyKeys, nil)
+
+	syncWidgetsFromSpec := func(spec HotkeySpec) {
+		syncingHotkeyUI = true
+		ctrlCheck.SetChecked(spec.Ctrl)
+		shiftCheck.SetChecked(spec.Shift)
+		altCheck.SetChecked(spec.Alt)
+		keySelect.SetSelected(spec.Key)
+		hotkeyDisplay.SetText(fmt.Sprintf("System-Wide Panic Hotkey: %s (plus Esc when TownCrier window is focused)", spec.String()))
+		syncingHotkeyUI = false
+	}
+
+	applyNewHotkey := func(candidate string) {
+		spec, err := ParseHotkey(candidate)
+		if err != nil {
+			v.setStatus("⚠️ Invalid hotkey: " + err.Error())
+			return
+		}
+		canonical := spec.String()
+		v.updateConfig(func(c *config.Config) {
+			c.Safety.PanicHotkey = canonical
+		})
+		syncWidgetsFromSpec(spec)
+		if v.onHotkeyChanged != nil {
+			if regErr := v.onHotkeyChanged(canonical); regErr != nil {
+				v.setStatus(fmt.Sprintf("⚠️ Hotkey saved (%s), but OS registration failed: %v", canonical, regErr))
+				return
+			}
+		}
+		v.setStatus("✓ Global Panic Mute hotkey set to " + canonical)
+	}
+
+	onComboChanged := func() {
+		if v.initializing || syncingHotkeyUI {
+			return
+		}
+		tempSpec := HotkeySpec{
+			Ctrl:  ctrlCheck.Checked,
+			Shift: shiftCheck.Checked,
+			Alt:   altCheck.Checked,
+			Key:   keySelect.Selected,
+		}
+		applyNewHotkey(tempSpec.String())
+	}
+
+	syncWidgetsFromSpec(parsedSpec)
+
+	ctrlCheck.OnChanged = func(bool) { onComboChanged() }
+	shiftCheck.OnChanged = func(bool) { onComboChanged() }
+	altCheck.OnChanged = func(bool) { onComboChanged() }
+	keySelect.OnChanged = func(string) { onComboChanged() }
+
+	recordBtn := widget.NewButtonWithIcon("Record Keypress...", theme.MediaRecordIcon(), func() {
+		v.showRecordHotkeyDialog(parsedSpec, func(recorded string) {
+			applyNewHotkey(recorded)
+		})
+	})
+
+	resetHotkeyBtn := widget.NewButtonWithIcon("Reset Default", theme.ViewRefreshIcon(), func() {
+		applyNewHotkey("Ctrl+Shift+M")
+	})
+
+	hotkeyControlsRow := container.NewHBox(
+		widget.NewLabel("Modifiers:"),
+		ctrlCheck,
+		shiftCheck,
+		altCheck,
+		widget.NewLabel("Key:"),
+		keySelect,
+		recordBtn,
+		resetHotkeyBtn,
+	)
 
 	wordListContainer := container.NewVBox()
 
@@ -404,13 +501,68 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 	addRow := container.NewBorder(nil, nil, nil, addBtn, newWordEntry)
 
 	cardContent := container.NewVBox(
-		hotkeyLabel,
+		hotkeyDisplay,
+		hotkeyControlsRow,
+		widget.NewSeparator(),
 		widget.NewLabel("Blocked Words (masked with '***' before TTS):"),
 		wordListContainer,
 		addRow,
 	)
 
-	return widget.NewCard("Streamer Safety & Blocklist", "Emergency controls and profanity filters", cardContent)
+	return widget.NewCard("Streamer Safety & Blocklist", "System-wide emergency hotkey and profanity filters", cardContent)
+}
+
+func (v *SettingsView) showRecordHotkeyDialog(initial HotkeySpec, onSave func(hotkey string)) {
+	recCtrl := widget.NewCheck("Ctrl", nil)
+	recCtrl.SetChecked(initial.Ctrl)
+	recShift := widget.NewCheck("Shift", nil)
+	recShift.SetChecked(initial.Shift)
+	recAlt := widget.NewCheck("Alt", nil)
+	recAlt.SetChecked(initial.Alt)
+
+	capturedKey := initial.Key
+	promptLabel := widget.NewLabelWithStyle(
+		fmt.Sprintf("Press any key (A-Z, 0-9, F1-F12, Space...) — Current key: [%s]", capturedKey),
+		fyne.TextAlignCenter,
+		fyne.TextStyle{Bold: true},
+	)
+
+	prevTypedKey := v.window.Canvas().OnTypedKey()
+	restoreHook := func() {
+		v.window.Canvas().SetOnTypedKey(prevTypedKey)
+	}
+
+	v.window.Canvas().SetOnTypedKey(func(ke *fyne.KeyEvent) {
+		if canonical, ok := CanonicalKeyFromFyne(ke.Name); ok {
+			capturedKey = canonical
+			// If a single character key was pressed with no modifiers checked, default to Ctrl+Shift
+			if len(capturedKey) == 1 && !recCtrl.Checked && !recShift.Checked && !recAlt.Checked {
+				recCtrl.SetChecked(true)
+				recShift.SetChecked(true)
+			}
+			promptLabel.SetText(fmt.Sprintf("Captured Key: [%s]", capturedKey))
+		}
+	})
+
+	modRow := container.NewHBox(widget.NewLabel("Modifiers:"), recCtrl, recShift, recAlt)
+	content := container.NewVBox(
+		modRow,
+		promptLabel,
+	)
+
+	dialog.ShowCustomConfirm("Record Panic Hotkey", "Save Hotkey", "Cancel", content, func(confirmed bool) {
+		restoreHook()
+		if !confirmed {
+			return
+		}
+		spec := HotkeySpec{
+			Ctrl:  recCtrl.Checked,
+			Shift: recShift.Checked,
+			Alt:   recAlt.Checked,
+			Key:   capturedKey,
+		}
+		onSave(spec.String())
+	}, v.window)
 }
 
 func (v *SettingsView) buildBotsCard() *widget.Card {

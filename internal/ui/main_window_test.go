@@ -63,6 +63,11 @@ func TestMainWindowPanicToggle(t *testing.T) {
 	_ = session.Start()
 
 	mw := NewMainWindow(appObj, session)
+	defer func() {
+		if mw.hotkeyMgr != nil {
+			mw.hotkeyMgr.Close()
+		}
+	}()
 
 	if session.IsPanicked() {
 		t.Fatal("expected session to not be panicked initially")
@@ -73,7 +78,7 @@ func TestMainWindowPanicToggle(t *testing.T) {
 	if !session.IsPanicked() {
 		t.Error("expected session to be panicked after first toggle")
 	}
-	if mw.panicBtn.Text != "🚨 PANIC MUTED — Click or Esc to Unmute" {
+	if mw.panicBtn.Text != "🚨 PANIC MUTED — Click or Ctrl+Shift+M to Unmute" {
 		t.Errorf("unexpected panicBtn text when panicked: %q", mw.panicBtn.Text)
 	}
 
@@ -85,5 +90,17 @@ func TestMainWindowPanicToggle(t *testing.T) {
 	if mw.panicBtn.Text != "PANIC MUTE (Esc / Ctrl+Shift+M)" {
 		t.Errorf("unexpected panicBtn text when unmuted: %q", mw.panicBtn.Text)
 	}
+
+	// Test custom hotkey application
+	_ = session.UpdateConfig(func(c *config.Config) {
+		c.Safety.PanicHotkey = "Alt+F9"
+	})
+	if err := mw.ApplyPanicHotkey("Alt+F9"); err != nil {
+		t.Errorf("ApplyPanicHotkey failed: %v", err)
+	}
+	if mw.panicBtn.Text != "PANIC MUTE (Esc / Alt+F9)" {
+		t.Errorf("unexpected panicBtn text after hotkey change: %q", mw.panicBtn.Text)
+	}
 }
+
 
