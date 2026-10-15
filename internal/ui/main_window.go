@@ -27,15 +27,17 @@ type MainWindow struct {
 
 	dashboardTab *DashboardView
 	twitchTab    *TwitchTabView
+	youtubeTab   *YouTubeTabView
 	voicesTab    *VoicesTabView
 	viewersTab   *ViewersTabView
 	settingsTab  *SettingsView
 
-	twitchStatusDot *widget.Label
-	volumeSlider    *widget.Slider
-	panicBtn        *widget.Button
-	hotkeyMgr       *GlobalHotkeyManager
-	activeShortcut  *desktop.CustomShortcut
+	twitchStatusDot  *widget.Label
+	youtubeStatusDot *widget.Label
+	volumeSlider     *widget.Slider
+	panicBtn         *widget.Button
+	hotkeyMgr        *GlobalHotkeyManager
+	activeShortcut   *desktop.CustomShortcut
 }
 
 // NewMainWindow creates and initializes the complete desktop application window.
@@ -135,6 +137,8 @@ func (mw *MainWindow) initViews() {
 	mw.dashboardTab.SetStatusHandler(mw.SetStatus)
 	mw.twitchTab = NewTwitchTabView(mw.Window, mw.Session)
 	mw.twitchTab.SetStatusHandler(mw.SetStatus)
+	mw.youtubeTab = NewYouTubeTabView(mw.Window, mw.Session)
+	mw.youtubeTab.SetStatusHandler(mw.SetStatus)
 	mw.voicesTab = NewVoicesTabView(mw.Window, mw.Session)
 	mw.voicesTab.SetStatusHandler(mw.SetStatus)
 	mw.viewersTab = NewViewersTabView(mw.Window, mw.Session)
@@ -152,6 +156,7 @@ func (mw *MainWindow) initViews() {
 	mw.tabsContainer = container.NewAppTabs(
 		container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), mw.dashboardTab.Build()),
 		container.NewTabItemWithIcon("Twitch", theme.MediaPlayIcon(), mw.twitchTab.Build()),
+		container.NewTabItemWithIcon("YouTube", theme.MediaVideoIcon(), mw.youtubeTab.Build()),
 		container.NewTabItemWithIcon("Voices", theme.VolumeUpIcon(), mw.voicesTab.Build()),
 		container.NewTabItemWithIcon("Viewers", theme.AccountIcon(), mw.viewersTab.Build()),
 		container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), mw.settingsTab.Build()),
@@ -161,7 +166,7 @@ func (mw *MainWindow) initViews() {
 func (mw *MainWindow) initHeader() {
 	cfg := mw.Session.Config()
 
-	// Platform indicator
+	// Platform indicators
 	mw.twitchStatusDot = widget.NewLabelWithStyle("Twitch: ⚪", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	pCfg := cfg.Platforms["twitch"]
 	if pCfg.Enabled && pCfg.AccountName != "" {
@@ -178,7 +183,26 @@ func (mw *MainWindow) initHeader() {
 			case "connecting":
 				mw.twitchStatusDot.SetText("Twitch: 🟡 Connecting...")
 			default:
-				mw.twitchStatusDot.SetText("Twitch: ⚪ Disconnected")
+				mw.twitchStatusDot.SetText("Twitch: ⚪")
+			}
+		})
+	})
+
+	mw.youtubeStatusDot = widget.NewLabelWithStyle("YT: ⚪", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	ytCfg := cfg.Platforms["youtube"]
+	if ytCfg.Enabled && ytCfg.AccountName != "" {
+		mw.youtubeStatusDot.SetText("YT: 🟡 Waiting...")
+	}
+
+	mw.Session.SetOnYouTubeStatus(func(status string, detail string) {
+		fyne.Do(func() {
+			switch status {
+			case "connected":
+				mw.youtubeStatusDot.SetText("YT: 🟢 " + detail)
+			case "waiting":
+				mw.youtubeStatusDot.SetText("YT: 🟡 Waiting...")
+			default:
+				mw.youtubeStatusDot.SetText("YT: ⚪")
 			}
 		})
 	})
@@ -226,7 +250,7 @@ func (mw *MainWindow) initHeader() {
 		ShowAboutDialog(mw.Window)
 	})
 
-	leftSide := container.NewHBox(brandTitle, widget.NewSeparator(), mw.twitchStatusDot)
+	leftSide := container.NewHBox(brandTitle, widget.NewSeparator(), mw.twitchStatusDot, mw.youtubeStatusDot)
 	rightSide := container.NewHBox(volContainer, aboutBtn, mw.panicBtn)
 
 	mw.headerBar = container.NewVBox(

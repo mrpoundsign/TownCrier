@@ -24,12 +24,12 @@ func TestMainWindowCreation(t *testing.T) {
 		t.Fatal("expected non-nil tabsContainer")
 	}
 
-	// Should have 5 tabs: Dashboard, Twitch, Voices, Viewers, Settings
-	if len(mw.tabsContainer.Items) != 5 {
-		t.Errorf("expected 5 tabs, got %d", len(mw.tabsContainer.Items))
+	// Should have 6 tabs: Dashboard, Twitch, YouTube, Voices, Viewers, Settings
+	if len(mw.tabsContainer.Items) != 6 {
+		t.Errorf("expected 6 tabs, got %d", len(mw.tabsContainer.Items))
 	}
 
-	expectedTabs := []string{"Dashboard", "Twitch", "Voices", "Viewers", "Settings"}
+	expectedTabs := []string{"Dashboard", "Twitch", "YouTube", "Voices", "Viewers", "Settings"}
 	for i, name := range expectedTabs {
 		if mw.tabsContainer.Items[i].Text != name {
 			t.Errorf("tab %d: expected %q, got %q", i, name, mw.tabsContainer.Items[i].Text)

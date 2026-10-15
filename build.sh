@@ -24,15 +24,11 @@ if command -v git &>/dev/null && [ -d "$ROOT_DIR/.git" ] && [ -d "$ROOT_DIR/.git
     git -C "$ROOT_DIR" config core.hooksPath .githooks 2>/dev/null || true
 fi
 
-if ! command -v go &>/dev/null; then
-    if [ -x "/usr/local/go/bin/go" ]; then
-        export PATH="/usr/local/go/bin:$PATH"
-    elif [ -x "$HOME/go/bin/go" ]; then
-        export PATH="$HOME/go/bin:$PATH"
-    elif [ -d "$HOME/.asdf/shims" ]; then
-        export PATH="$HOME/.asdf/shims:$PATH"
+for dir in "$HOME/go/bin" "/usr/local/go/bin" "$HOME/.asdf/shims" "$HOME/.asdf/bin" "/home/linuxbrew/.linuxbrew/bin" "/home/linuxbrew/.linuxbrew/sbin"; do
+    if [ -d "$dir" ] && [[ ":$PATH:" != *":$dir:"* ]]; then
+        export PATH="$dir:$PATH"
     fi
-fi
+done
 
 fetch_dlls() {
     echo "==> Verifying runtime DLLs in $BIN_DIR..."
@@ -72,14 +68,11 @@ run_lint() {
     echo "✓ Code modernizations verified (0 diff)!"
 
     echo "==> Running golangci-lint-v2..."
-    if command -v golangci-lint-v2 &>/dev/null; then
-        golangci-lint-v2 run ./...
-    elif command -v golangci-lint &>/dev/null; then
-        golangci-lint run ./...
-    else
-        echo "Error: golangci-lint-v2 / golangci-lint not found in PATH"
+    if ! command -v golangci-lint-v2 &>/dev/null; then
+        echo "Error: golangci-lint-v2 not found in PATH"
         exit 1
     fi
+    golangci-lint-v2 run ./...
     echo "✓ Lint passed (0 issues)!"
 }
 

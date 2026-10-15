@@ -11,6 +11,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/chat"
 	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/platform/twitch"
+	"github.com/mrpoundsign/TownCrier/internal/platform/youtube"
 	"github.com/mrpoundsign/TownCrier/internal/queue"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
 	"github.com/mrpoundsign/TownCrier/internal/tts"
@@ -39,6 +40,8 @@ type Session struct {
 	twitchConnector   *twitch.Connector
 	twitchOAuth       *twitch.OAuthManager
 	onTwitchStatus    func(status string, detail string)
+	youtubeConnector  *youtube.Connector
+	onYouTubeStatus   func(status string, detail string)
 	onEventDispatched func(event *chat.Event, voiceID string)
 }
 
@@ -81,6 +84,23 @@ func NewSession(cfg *config.Config, store secrets.Store) *Session {
 		},
 	)
 
+	s.youtubeConnector = youtube.NewConnector(
+		func(event *chat.Event) {
+			_ = s.DispatchEvent(event)
+		},
+		func(modEvent *chat.ModerationEvent) {
+			s.DispatchModeration(modEvent)
+		},
+		func(status youtube.ConnectionStatus, detail string) {
+			s.mu.RLock()
+			fn := s.onYouTubeStatus
+			s.mu.RUnlock()
+			if fn != nil {
+				fn(string(status), detail)
+			}
+		},
+	)
+
 	s.queue = queue.NewQueue(nil, nil, s.Config)
 	return s
 }
@@ -114,6 +134,9 @@ func (s *Session) Stop() error {
 	if s.twitchConnector != nil {
 		_ = s.twitchConnector.Stop()
 	}
+	if s.youtubeConnector != nil {
+		_ = s.youtubeConnector.Stop()
+	}
 	return nil
 }
 
@@ -125,6 +148,9 @@ func (s *Session) Close() error {
 	s.running = false
 	if s.twitchConnector != nil {
 		_ = s.twitchConnector.Stop()
+	}
+	if s.youtubeConnector != nil {
+		_ = s.youtubeConnector.Stop()
 	}
 	if s.queue != nil {
 		s.queue.Close()
@@ -186,15 +212,22 @@ func (s *Session) UpdateConfig(fn func(c *config.Config)) error {
 }
 
 func (s *Session) syncConnectorsLocked() {
-	if s.twitchConnector == nil {
-		return
+	if s.twitchConnector != nil {
+		p, ok := s.cfg.Platforms["twitch"]
+		if ok && p.Enabled && p.AccountName != "" {
+			_ = s.twitchConnector.Start(p.AccountName)
+		} else {
+			_ = s.twitchConnector.Stop()
+		}
 	}
 
-	p, ok := s.cfg.Platforms["twitch"]
-	if ok && p.Enabled && p.AccountName != "" {
-		_ = s.twitchConnector.Start(p.AccountName)
-	} else {
-		_ = s.twitchConnector.Stop()
+	if s.youtubeConnector != nil {
+		yt, ok := s.cfg.Platforms["youtube"]
+		if ok && yt.Enabled && yt.AccountName != "" {
+			_ = s.youtubeConnector.Start(yt.AccountName)
+		} else {
+			_ = s.youtubeConnector.Stop()
+		}
 	}
 }
 
@@ -203,6 +236,13 @@ func (s *Session) TwitchConnector() *twitch.Connector {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.twitchConnector
+}
+
+// YouTubeConnector returns the underlying YouTube connector.
+func (s *Session) YouTubeConnector() *youtube.Connector {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.youtubeConnector
 }
 
 // TwitchOAuth returns the Twitch OAuth manager.
@@ -221,6 +261,18 @@ func (s *Session) SetOnTwitchStatus(fn func(status string, detail string)) {
 		curStatus := s.twitchConnector.Status()
 		curChannel := s.twitchConnector.Channel()
 		go fn(string(curStatus), curChannel)
+	}
+}
+
+// SetOnYouTubeStatus registers a callback for YouTube connection status changes.
+func (s *Session) SetOnYouTubeStatus(fn func(status string, detail string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onYouTubeStatus = fn
+	if s.youtubeConnector != nil && fn != nil {
+		curStatus := s.youtubeConnector.Status()
+		curTarget := s.youtubeConnector.Target()
+		go fn(string(curStatus), curTarget)
 	}
 }
 
