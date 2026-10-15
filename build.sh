@@ -15,7 +15,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
 BIN_DIR="$BUILD_DIR/bin"
 DIST_DIR="$ROOT_DIR/dist"
-VERSION="0.1.0"
+VERSION="${VERSION:-0.0.1}"
 
 mkdir -p "$BUILD_DIR" "$BIN_DIR" "$DIST_DIR"
 
@@ -78,9 +78,21 @@ run_test() {
 
 build_win() {
     fetch_dlls
-    echo "==> Building towncrier-core.exe (CGO + MinGW)..."
+
+    local core_syso="$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso"
+    local launcher_syso="$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso"
+    if command -v x86_64-w64-mingw32-windres &>/dev/null && [ -f "$ROOT_DIR/assets/icon.ico" ]; then
+        echo "==> Compiling Windows icon resources (.syso)..."
+        local rc_file="$BUILD_DIR/icon.rc"
+        echo 'IDI_ICON1 ICON "../assets/icon.ico"' > "$rc_file"
+        (cd "$BUILD_DIR" && x86_64-w64-mingw32-windres icon.rc -O coff -o "$core_syso")
+        cp -f "$core_syso" "$launcher_syso"
+        rm -f "$rc_file"
+    fi
+
+    echo "==> Building towncrier-core.exe v${VERSION} (CGO + MinGW)..."
     CC=x86_64-w64-mingw32-gcc CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
-        go build -trimpath -ldflags="-H windowsgui -s -w -extldflags '-static-libgcc'" \
+        go build -trimpath -ldflags="-H windowsgui -s -w -X github.com/mrpoundsign/TownCrier/internal/ui.AppVersion=v${VERSION} -extldflags '-static-libgcc'" \
         -o "$BIN_DIR/towncrier-core.exe" ./cmd/towncrier
     echo "✓ Built $BIN_DIR/towncrier-core.exe"
 
@@ -88,19 +100,19 @@ build_win() {
     local payload_dir="$ROOT_DIR/cmd/launcher/payload"
     mkdir -p "$payload_dir"
     rm -f "$payload_dir/towncrier-core.exe" "$payload_dir/"*.dll
-    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core.exe" "$ROOT_DIR/cmd/launcher/payload/"*.dll' RETURN
+    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core.exe" "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso"' RETURN
     cp -f "$BIN_DIR/towncrier-core.exe" "$payload_dir/"
     cp -f "$BIN_DIR/onnxruntime.dll" "$payload_dir/"
     cp -f "$BIN_DIR/sherpa-onnx-c-api.dll" "$payload_dir/"
     cp -f "$BIN_DIR/sherpa-onnx-cxx-api.dll" "$payload_dir/"
 
-    echo "==> Building standalone TownCrier.exe..."
+    echo "==> Building standalone TownCrier.exe v${VERSION}..."
     CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-        go build -trimpath -ldflags="-H windowsgui -s -w" \
+        go build -trimpath -ldflags="-H windowsgui -s -w -X main.AppVersion=${VERSION}" \
         -o "$BIN_DIR/TownCrier.exe" ./cmd/launcher
 
-    # Clean staged payload from source tree
-    rm -f "$payload_dir/towncrier-core.exe" "$payload_dir/"*.dll
+    # Clean staged payload and temporary .syso from source tree
+    rm -f "$payload_dir/towncrier-core.exe" "$payload_dir/"*.dll "$core_syso" "$launcher_syso"
     trap - RETURN
 
     echo "✓ Successfully built standalone single-file $BIN_DIR/TownCrier.exe"

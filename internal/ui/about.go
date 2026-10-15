@@ -13,8 +13,11 @@ import (
 //go:embed notices.txt
 var thirdPartyNotices string
 
+var (
+	AppVersion = "v0.0.1"
+)
+
 const (
-	AppVersion    = "v0.1.0"
 	AppRepository = "https://github.com/mrpoundsign/TownCrier"
 	AppLicense    = "GNU Affero General Public License v3.0 (AGPL-3.0)"
 )

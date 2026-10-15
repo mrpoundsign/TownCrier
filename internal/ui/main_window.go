@@ -43,7 +43,7 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	// Apply Obsidian Slate theme
 	fyneApp.Settings().SetTheme(NewObsidianTheme())
 
-	w := fyneApp.NewWindow("TownCrier — Streamer Neural TTS")
+	w := fyneApp.NewWindow("TownCrier " + AppVersion + " — Streamer Neural TTS")
 
 	mw := &MainWindow{
 		Window:  w,
@@ -220,7 +220,7 @@ func (mw *MainWindow) initHeader() {
 		})
 	}
 
-	brandTitle := widget.NewLabelWithStyle("⚡ TownCrier", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	brandTitle := widget.NewLabelWithStyle("⚡ TownCrier "+AppVersion, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
 	aboutBtn := widget.NewButtonWithIcon("About", theme.InfoIcon(), func() {
 		ShowAboutDialog(mw.Window)

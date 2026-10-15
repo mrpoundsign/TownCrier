@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2"
 	fyneapp "fyne.io/fyne/v2/app"
 
+	"github.com/mrpoundsign/TownCrier/assets"
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/internal/audio"
 	"github.com/mrpoundsign/TownCrier/internal/config"
@@ -60,6 +61,7 @@ func run() error {
 	_ = logFlag
 
 	myApp := fyneapp.NewWithID("com.github.mrpoundsign.towncrier")
+	myApp.SetIcon(assets.AppIcon)
 
 	var activeSession *app.Session
 	var activePlayer audio.Player

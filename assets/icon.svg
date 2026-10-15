@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#1E293B"/>
+    </linearGradient>
+    <linearGradient id="paperGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F8FAFC"/>
+      <stop offset="100%" stop-color="#E2E8F0"/>
+    </linearGradient>
+    <linearGradient id="foldGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#CBD5E1"/>
+      <stop offset="100%" stop-color="#94A3B8"/>
+    </linearGradient>
+    <linearGradient id="skyGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded App Icon Background (Obsidian Slate) -->
+  <rect x="16" y="16" width="480" height="480" rx="104" fill="url(#bgGrad)" stroke="#38BDF8" stroke-width="10"/>
+
+  <!-- Outer Sound Waves (Town Crier Broadcast) -->
+  <path d="M 418 118 A 95 95 0 0 1 446 196" fill="none" stroke="#38BDF8" stroke-width="10" stroke-linecap="round" opacity="0.85"/>
+  <path d="M 438 92 A 130 130 0 0 1 476 198" fill="none" stroke="#38BDF8" stroke-width="8" stroke-linecap="round" opacity="0.5"/>
+
+  <!-- Drop Shadow Layer -->
+  <g transform="translate(8, 14) rotate(-3, 256, 260)" opacity="0.55">
+    <path d="M 92 148 L 136 148 L 136 404 C 136 420 124 432 108 432 C 92 432 80 420 80 404 L 80 160 C 80 153 85 148 92 148 Z" fill="#020617"/>
+    <path d="M 124 96 L 404 96 C 417 96 428 107 428 120 L 428 400 C 428 418 414 432 396 432 L 108 432 C 124 432 136 418 136 400 L 136 108 C 136 101 131 96 124 96 Z" fill="#020617"/>
+  </g>
+
+  <!-- Newspaper Group -->
+  <g transform="rotate(-3, 256, 260)">
+    <!-- Back Fold / Side Roll of the Newspaper -->
+    <path d="M 92 148 L 136 148 L 136 404 C 136 420 124 432 108 432 C 92 432 80 420 80 404 L 80 160 C 80 153 85 148 92 148 Z" fill="url(#foldGrad)"/>
+
+    <!-- Main Newspaper Sheet -->
+    <path d="M 124 96 L 404 96 C 417 96 428 107 428 120 L 428 400 C 428 418 414 432 396 432 L 108 432 C 124 432 136 418 136 400 L 136 108 C 136 101 131 96 124 96 Z" fill="url(#paperGrad)"/>
+
+    <!-- Top Masthead Rule -->
+    <rect x="156" y="116" width="248" height="6" rx="3" fill="#0F172A"/>
+
+    <!-- Headline Banner Box ("TTS") -->
+    <rect x="156" y="132" width="248" height="92" rx="12" fill="#0F172A"/>
+    <rect x="160" y="136" width="240" height="84" rx="9" fill="none" stroke="#38BDF8" stroke-width="3" opacity="0.7"/>
+
+    <!-- Bold Geometric "TTS" Letterforms -->
+    <g fill="#38BDF8">
+      <!-- First 'T' -->
+      <path d="M 184 152 H 238 V 166 H 219 V 208 H 203 V 166 H 184 Z"/>
+      <!-- Second 'T' -->
+      <path d="M 248 152 H 302 V 166 H 283 V 208 H 267 V 166 H 248 Z"/>
+      <!-- 'S' -->
+      <path d="M 328 152 H 374 V 165 H 330 V 173 H 362 C 370 173 376 179 376 187 V 195 C 376 203 370 208 362 208 H 314 V 195 H 360 V 186 H 328 C 320 186 314 180 314 172 V 165 C 314 157 320 152 328 152 Z"/>
+    </g>
+
+    <!-- Bottom Masthead Rule -->
+    <rect x="156" y="234" width="248" height="5" rx="2.5" fill="#0F172A"/>
+
+    <!-- Left Column: Audio Waveform Graphic Box -->
+    <rect x="156" y="254" width="114" height="106" rx="10" fill="url(#skyGrad)"/>
+    <!-- Waveform Bars inside Graphic Box -->
+    <g fill="#0F172A">
+      <rect x="172" y="294" width="10" height="26" rx="5"/>
+      <rect x="190" y="276" width="10" height="62" rx="5"/>
+      <rect x="208" y="266" width="10" height="82" rx="5"/>
+      <rect x="226" y="282" width="10" height="50" rx="5"/>
+      <rect x="244" y="292" width="10" height="30" rx="5"/>
+    </g>
+
+    <!-- Right Column: Newspaper Article Lines -->
+    <rect x="286" y="256" width="118" height="14" rx="7" fill="#0F172A"/>
+    <rect x="286" y="282" width="118" height="12" rx="6" fill="#475569"/>
+    <rect x="286" y="304" width="104" height="12" rx="6" fill="#475569"/>
+    <rect x="286" y="326" width="118" height="12" rx="6" fill="#475569"/>
+    <rect x="286" y="348" width="88" height="12" rx="6" fill="#475569"/>
+
+    <!-- Bottom Full-Width Newspaper Columns -->
+    <rect x="156" y="376" width="248" height="12" rx="6" fill="#475569"/>
+    <rect x="156" y="398" width="210" height="12" rx="6" fill="#64748B"/>
+
+    <!-- Left Spine Fold Crease Line -->
+    <line x1="106" y1="168" x2="106" y2="404" stroke="#64748B" stroke-width="4" stroke-linecap="round" opacity="0.5"/>
+  </g>
+</svg>

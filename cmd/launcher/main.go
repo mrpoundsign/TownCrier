@@ -5,11 +5,14 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"syscall"
 )
@@ -17,9 +20,12 @@ import (
 //go:embed payload/*
 var payloadFS embed.FS
 
+var (
+	AppVersion = "0.0.1"
+)
+
 const (
-	AppVersion = "0.1.0"
-	CoreExe    = "towncrier-core.exe"
+	CoreExe = "towncrier-core.exe"
 )
 
 func main() {
@@ -41,6 +47,10 @@ func run() (int, error) {
 	if err := extractPayloadIfNeeded(runtimeDir); err != nil {
 		return 1, fmt.Errorf("extract runtime payload: %w", err)
 	}
+
+	// Release any extraction buffers back to the OS before waiting on the child GUI process
+	runtime.GC()
+	debug.FreeOSMemory()
 
 	coreExePath := filepath.Join(runtimeDir, CoreExe)
 	if _, err := os.Stat(coreExePath); err != nil {
@@ -120,34 +130,98 @@ func extractPayloadIfNeeded(targetDir string) error {
 		}
 
 		targetPath := filepath.Join(targetDir, name)
+		embeddedPath := "payload/" + name
 
-		data, err := payloadFS.ReadFile("payload/" + name)
-		if err != nil {
-			return fmt.Errorf("read embedded file %s: %w", name, err)
-		}
-
-		// Check if file already exists with same size and hash
-		if matchesExisting(targetPath, data) {
+		// Check if file already exists with same size and SHA-256 hash using streaming I/O
+		if matchesExistingStream(targetPath, embeddedPath) {
 			continue
 		}
 
-		// Write to temp file then rename atomically
-		tmpPath := targetPath + ".tmp"
-		if err := os.WriteFile(tmpPath, data, 0755); err != nil {
-			return fmt.Errorf("write %s: %w", tmpPath, err)
-		}
-
-		_ = os.Remove(targetPath)
-		if err := os.Rename(tmpPath, targetPath); err != nil {
-			// If rename fails (e.g. file in use or cross-device), try direct write
-			_ = os.Remove(tmpPath)
-			if err := os.WriteFile(targetPath, data, 0755); err != nil {
-				return fmt.Errorf("replace %s: %w", targetPath, err)
-			}
+		if err := extractSingleFile(embeddedPath, targetPath); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+func extractSingleFile(embeddedPath, targetPath string) error {
+	src, err := payloadFS.Open(embeddedPath)
+	if err != nil {
+		return fmt.Errorf("open embedded file %s: %w", embeddedPath, err)
+	}
+	defer func() { _ = src.Close() }()
+
+	tmpPath := targetPath + ".tmp"
+	dst, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", tmpPath, err)
+	}
+
+	if _, copyErr := io.Copy(dst, src); copyErr != nil {
+		_ = dst.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write %s: %w", tmpPath, copyErr)
+	}
+	if closeErr := dst.Close(); closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close %s: %w", tmpPath, closeErr)
+	}
+
+	_ = os.Remove(targetPath)
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		_ = os.Remove(tmpPath)
+		// Fallback direct copy if rename fails
+		if _, seekErr := src.(io.ReadSeeker).Seek(0, io.SeekStart); seekErr != nil {
+			return fmt.Errorf("rename %s: %w", targetPath, err)
+		}
+		directDst, openErr := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+		if openErr != nil {
+			return fmt.Errorf("replace %s: %w", targetPath, openErr)
+		}
+		_, copyErr := io.Copy(directDst, src)
+		_ = directDst.Close()
+		if copyErr != nil {
+			return fmt.Errorf("replace %s: %w", targetPath, copyErr)
+		}
+	}
+	return nil
+}
+
+func matchesExistingStream(targetPath, embeddedPath string) bool {
+	targetInfo, err := os.Stat(targetPath)
+	if err != nil {
+		return false
+	}
+
+	embFile, err := payloadFS.Open(embeddedPath)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = embFile.Close() }()
+
+	embInfo, err := embFile.Stat()
+	if err != nil || targetInfo.Size() != embInfo.Size() {
+		return false
+	}
+
+	existingFile, err := os.Open(targetPath)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = existingFile.Close() }()
+
+	h1 := sha256.New()
+	if _, err := io.Copy(h1, embFile); err != nil {
+		return false
+	}
+
+	h2 := sha256.New()
+	if _, err := io.Copy(h2, existingFile); err != nil {
+		return false
+	}
+
+	return string(h1.Sum(nil)) == string(h2.Sum(nil))
 }
 
 func matchesExisting(path string, expectedData []byte) bool {
@@ -156,12 +230,19 @@ func matchesExisting(path string, expectedData []byte) bool {
 		return false
 	}
 
-	existing, err := os.ReadFile(path)
+	existingFile, err := os.Open(path)
 	if err != nil {
 		return false
 	}
+	defer func() { _ = existingFile.Close() }()
 
 	h1 := sha256.Sum256(expectedData)
-	h2 := sha256.Sum256(existing)
-	return h1 == h2
+	h2 := sha256.New()
+	if _, err := io.Copy(h2, existingFile); err != nil {
+		return false
+	}
+	var sum2 [sha256.Size]byte
+	copy(sum2[:], h2.Sum(nil))
+	return h1 == sum2
 }
+
