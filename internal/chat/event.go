@@ -18,6 +18,7 @@ const (
 	EventKindRedemption   EventKind = "redemption"
 	EventKindSuperChat    EventKind = "super_chat"
 	EventKindSuperSticker EventKind = "super_sticker"
+	EventKindGift         EventKind = "gift"
 )
 
 // EmoteSpan defines the location and metadata of an emote in a message text.

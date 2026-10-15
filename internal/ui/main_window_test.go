@@ -24,12 +24,12 @@ func TestMainWindowCreation(t *testing.T) {
 		t.Fatal("expected non-nil tabsContainer")
 	}
 
-	// Should have 6 tabs: Dashboard, Twitch, YouTube, Voices, Viewers, Settings
-	if len(mw.tabsContainer.Items) != 6 {
-		t.Errorf("expected 6 tabs, got %d", len(mw.tabsContainer.Items))
+	// Should have 7 tabs: Dashboard, Twitch, YouTube, TikTok, Voices, Viewers, Settings
+	if len(mw.tabsContainer.Items) != 7 {
+		t.Errorf("expected 7 tabs, got %d", len(mw.tabsContainer.Items))
 	}
 
-	expectedTabs := []string{"Dashboard", "Twitch", "YouTube", "Voices", "Viewers", "Settings"}
+	expectedTabs := []string{"Dashboard", "Twitch", "YouTube", "TikTok", "Voices", "Viewers", "Settings"}
 	for i, name := range expectedTabs {
 		if mw.tabsContainer.Items[i].Text != name {
 			t.Errorf("tab %d: expected %q, got %q", i, name, mw.tabsContainer.Items[i].Text)
@@ -116,15 +116,15 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 		}
 	}()
 
-	// Initially 6 tabs (Dashboard, Twitch, YouTube, Voices, Viewers, Settings)
-	if len(mw.tabsContainer.Items) != 6 {
-		t.Fatalf("expected 6 tabs initially, got %d", len(mw.tabsContainer.Items))
+	// Initially 7 tabs (Dashboard, Twitch, YouTube, TikTok, Voices, Viewers, Settings)
+	if len(mw.tabsContainer.Items) != 7 {
+		t.Fatalf("expected 7 tabs initially, got %d", len(mw.tabsContainer.Items))
 	}
 
 	// Disable YouTube in Settings
 	mw.settingsTab.youtubeCheck.SetChecked(false)
-	if len(mw.tabsContainer.Items) != 5 {
-		t.Fatalf("expected 5 tabs after disabling YouTube, got %d", len(mw.tabsContainer.Items))
+	if len(mw.tabsContainer.Items) != 6 {
+		t.Fatalf("expected 6 tabs after disabling YouTube, got %d", len(mw.tabsContainer.Items))
 	}
 	if mw.youtubeStatusDot.Visible() {
 		t.Error("expected youtubeStatusDot to be hidden when YouTube service is disabled")
@@ -135,14 +135,23 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 
 	// Re-enable YouTube in Settings
 	mw.settingsTab.youtubeCheck.SetChecked(true)
-	if len(mw.tabsContainer.Items) != 6 {
-		t.Fatalf("expected 6 tabs after re-enabling YouTube, got %d", len(mw.tabsContainer.Items))
+	if len(mw.tabsContainer.Items) != 7 {
+		t.Fatalf("expected 7 tabs after re-enabling YouTube, got %d", len(mw.tabsContainer.Items))
 	}
 	if !mw.youtubeStatusDot.Visible() {
 		t.Error("expected youtubeStatusDot to be visible when YouTube service is enabled")
 	}
 	if !session.Config().Platforms["youtube"].Enabled {
 		t.Error("expected youtube Enabled to be true when checked in Settings")
+	}
+
+	// Disable TikTok in Settings
+	mw.settingsTab.tiktokCheck.SetChecked(false)
+	if len(mw.tabsContainer.Items) != 6 {
+		t.Fatalf("expected 6 tabs after disabling TikTok, got %d", len(mw.tabsContainer.Items))
+	}
+	if mw.tiktokStatusDot.Visible() {
+		t.Error("expected tiktokStatusDot to be hidden when TikTok service is disabled")
 	}
 }
 

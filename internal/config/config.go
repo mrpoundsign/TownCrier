@@ -380,6 +380,44 @@ func DefaultConfig() *Config {
 					DefaultSpeed:      1.0,
 				},
 			},
+			"tiktok": {
+				Enabled:     false,
+				EverEnabled: true,
+				AccountName: "",
+				ReadRules: ReadRules{
+					AllChat:         true,
+					Prefix:          "!tts",
+					PrefixOnly:      false,
+					IgnorePrefixes:  true,
+					IgnoredPrefixes: []string{"!"},
+					RoleGated:       false,
+					Roles:           []string{"broadcaster", "mod", "vip", "subscriber"},
+					PaidOnly:        false,
+				},
+				ModCommandsEnabled: false,
+				Notifications: map[string]NotificationEventConfig{
+					"gift": {
+						Enabled:   true,
+						Template:  "{user} sent {count} {gift}!",
+						Voice:     "",
+						Threshold: 0,
+					},
+					"follow": {
+						Enabled:   false,
+						Template:  "{user} followed on TikTok!",
+						Voice:     "",
+						Threshold: 0,
+					},
+				},
+				Overrides: PlatformOverrides{
+					OverrideRules:     false,
+					SpeakNames:        true,
+					SpeakEmotes:       false,
+					SpeakPlatformName: false,
+					DefaultVoice:      "",
+					DefaultSpeed:      1.0,
+				},
+			},
 		},
 	}
 }

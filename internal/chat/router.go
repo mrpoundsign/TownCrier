@@ -169,6 +169,8 @@ func (r *Router) formatEventText(event *Event, spokenName string, pCfg config.Pl
 			}
 		case EventKindSuperSticker:
 			template = "{user} sent a super sticker!"
+		case EventKindGift:
+			template = "{user} sent {count} {gift}!"
 		default:
 			if event.Text != "" {
 				template = "{user}: {message}"
@@ -178,14 +180,21 @@ func (r *Router) formatEventText(event *Event, spokenName string, pCfg config.Pl
 		}
 	}
 
+	countVal := event.Count
+	if countVal <= 0 {
+		countVal = 1
+	}
+
 	replacer := strings.NewReplacer(
 		"{user}", spokenName,
 		"{amount}", formatAmount(event.Amount),
 		"{bits}", formatAmount(event.Amount),
+		"{diamonds}", formatAmount(event.Amount),
 		"{currency}", event.Currency,
 		"{months}", strconv.Itoa(event.Months),
-		"{count}", strconv.Itoa(event.Count),
-		"{viewers}", strconv.Itoa(event.Count),
+		"{count}", strconv.Itoa(countVal),
+		"{viewers}", strconv.Itoa(countVal),
+		"{gift}", event.Text,
 		"{message}", event.Text,
 	)
 

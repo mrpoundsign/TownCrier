@@ -10,6 +10,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/bots"
 	"github.com/mrpoundsign/TownCrier/internal/chat"
 	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/platform/tiktok"
 	"github.com/mrpoundsign/TownCrier/internal/platform/twitch"
 	"github.com/mrpoundsign/TownCrier/internal/platform/youtube"
 	"github.com/mrpoundsign/TownCrier/internal/queue"
@@ -42,6 +43,8 @@ type Session struct {
 	onTwitchStatus    func(status string, detail string)
 	youtubeConnector  *youtube.Connector
 	onYouTubeStatus   func(status string, detail string)
+	tiktokConnector   *tiktok.Connector
+	onTikTokStatus    func(status string, detail string)
 	onEventDispatched func(event *chat.Event, voiceID string)
 }
 
@@ -101,6 +104,20 @@ func NewSession(cfg *config.Config, store secrets.Store) *Session {
 		},
 	)
 
+	s.tiktokConnector = tiktok.NewConnector(
+		func(event *chat.Event) {
+			_ = s.DispatchEvent(event)
+		},
+		func(status tiktok.ConnectionStatus, detail string) {
+			s.mu.RLock()
+			fn := s.onTikTokStatus
+			s.mu.RUnlock()
+			if fn != nil {
+				fn(string(status), detail)
+			}
+		},
+	)
+
 	s.queue = queue.NewQueue(nil, nil, s.Config)
 	return s
 }
@@ -137,6 +154,9 @@ func (s *Session) Stop() error {
 	if s.youtubeConnector != nil {
 		_ = s.youtubeConnector.Stop()
 	}
+	if s.tiktokConnector != nil {
+		_ = s.tiktokConnector.Stop()
+	}
 	return nil
 }
 
@@ -151,6 +171,9 @@ func (s *Session) Close() error {
 	}
 	if s.youtubeConnector != nil {
 		_ = s.youtubeConnector.Stop()
+	}
+	if s.tiktokConnector != nil {
+		_ = s.tiktokConnector.Stop()
 	}
 	if s.queue != nil {
 		s.queue.Close()
@@ -229,6 +252,15 @@ func (s *Session) syncConnectorsLocked() {
 			_ = s.youtubeConnector.Stop()
 		}
 	}
+
+	if s.tiktokConnector != nil {
+		tt, ok := s.cfg.Platforms["tiktok"]
+		if ok && tt.Enabled && tt.AccountName != "" {
+			_ = s.tiktokConnector.Start(tt.AccountName)
+		} else {
+			_ = s.tiktokConnector.Stop()
+		}
+	}
 }
 
 // TwitchConnector returns the underlying Twitch connector.
@@ -243,6 +275,13 @@ func (s *Session) YouTubeConnector() *youtube.Connector {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.youtubeConnector
+}
+
+// TikTokConnector returns the underlying TikTok connector.
+func (s *Session) TikTokConnector() *tiktok.Connector {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.tiktokConnector
 }
 
 // TwitchOAuth returns the Twitch OAuth manager.
@@ -273,6 +312,18 @@ func (s *Session) SetOnYouTubeStatus(fn func(status string, detail string)) {
 		curStatus := s.youtubeConnector.Status()
 		curTarget := s.youtubeConnector.Target()
 		go fn(string(curStatus), curTarget)
+	}
+}
+
+// SetOnTikTokStatus registers a callback for TikTok connection status changes.
+func (s *Session) SetOnTikTokStatus(fn func(status string, detail string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onTikTokStatus = fn
+	if s.tiktokConnector != nil && fn != nil {
+		curStatus := s.tiktokConnector.Status()
+		curUser := s.tiktokConnector.Username()
+		go fn(string(curStatus), curUser)
 	}
 }
 
@@ -384,6 +435,28 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 
 	// 2. Platform Read Rules & Role Gating (PRD D18)
 	if pCfg, ok := cfg.Platforms[event.Platform]; ok {
+		if event.Kind != chat.EventKindMessage && pCfg.Notifications != nil {
+			if notif, hasNotif := pCfg.Notifications[string(event.Kind)]; hasNotif {
+				if !notif.Enabled {
+					log.Printf("[Session] Notification event dropped (disabled): kind=%s user=%q", event.Kind, event.UserName)
+					return nil
+				}
+				if notif.Threshold > 0 {
+					val := event.Amount
+					if event.Kind == chat.EventKindRaid {
+						val = float64(event.Count)
+					}
+					if val < notif.Threshold {
+						log.Printf("[Session] Notification event below threshold (%.2f < %.2f): kind=%s user=%q", val, notif.Threshold, event.Kind, event.UserName)
+						return nil
+					}
+				}
+				if notif.Voice != "" && event.VoiceOverride == "" {
+					event.VoiceOverride = notif.Voice
+				}
+			}
+		}
+
 		shouldSpeak, strippedText := chat.EvaluateReadRules(event, pCfg.ReadRules)
 		if !shouldSpeak {
 			log.Printf("[Session] Event dropped by ReadRules: user=%q roles=%v rules=%+v", event.UserName, event.Roles, pCfg.ReadRules)
