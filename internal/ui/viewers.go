@@ -24,7 +24,7 @@ type ViewersTabView struct {
 
 	searchEntry *widget.Entry
 	tableList   *fyne.Container
-	statusLabel *widget.Label
+	onStatus    func(msg string)
 }
 
 // NewViewersTabView constructs a ViewersTabView.
@@ -36,10 +36,21 @@ func NewViewersTabView(w fyne.Window, session *app.Session) *ViewersTabView {
 	}
 }
 
+// SetStatusHandler registers a callback invoked when viewer overrides are added, edited, or deleted.
+func (v *ViewersTabView) SetStatusHandler(fn func(msg string)) {
+	v.onStatus = fn
+}
+
+func (v *ViewersTabView) setStatus(msg string) {
+	fyne.Do(func() {
+		if v.onStatus != nil {
+			v.onStatus(msg)
+		}
+	})
+}
+
 // Build creates the Fyne CanvasObject for the Viewers tab.
 func (v *ViewersTabView) Build() fyne.CanvasObject {
-	v.statusLabel = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
-
 	v.searchEntry = widget.NewEntry()
 	v.searchEntry.SetPlaceHolder("Search chatter overrides by name or ID...")
 	v.searchEntry.OnChanged = func(s string) {
@@ -57,7 +68,7 @@ func (v *ViewersTabView) Build() fyne.CanvasObject {
 
 	content := container.NewBorder(
 		topBar,
-		v.statusLabel,
+		nil,
 		nil,
 		nil,
 		container.NewVScroll(v.tableList),
@@ -66,11 +77,21 @@ func (v *ViewersTabView) Build() fyne.CanvasObject {
 	return content
 }
 
+// Refresh reloads the viewer overrides table from active session configuration.
+func (v *ViewersTabView) Refresh() {
+	fyne.Do(func() {
+		v.refreshTable()
+	})
+}
+
 func (v *ViewersTabView) refreshTable() {
 	v.tableList.Objects = nil
 
 	cfg := v.session.Config()
-	query := strings.ToLower(strings.TrimSpace(v.searchEntry.Text))
+	query := ""
+	if v.searchEntry != nil {
+		query = strings.ToLower(strings.TrimSpace(v.searchEntry.Text))
+	}
 
 	var keys []string
 	for k := range cfg.Viewers {
@@ -230,7 +251,7 @@ func (v *ViewersTabView) showEditDialog(existing *config.ViewerConfig) {
 		})
 
 		v.refreshTable()
-		v.statusLabel.SetText("Saved override for " + userID)
+		v.setStatus("✓ Saved override for " + userID)
 	}, v.window)
 }
 
@@ -240,5 +261,5 @@ func (v *ViewersTabView) deleteViewer(key string) {
 		delete(cfg.Viewers, strings.ToLower(key))
 	})
 	v.refreshTable()
-	v.statusLabel.SetText("Override removed.")
+	v.setStatus("✓ Override removed.")
 }

@@ -115,10 +115,16 @@ func (mw *MainWindow) initViews() {
 	engine := mw.Session.Engine()
 
 	mw.dashboardTab = NewDashboardView(mw.Window, mw.Session)
+	mw.dashboardTab.SetStatusHandler(mw.SetStatus)
 	mw.twitchTab = NewTwitchTabView(mw.Window, mw.Session)
 	mw.twitchTab.SetStatusHandler(mw.SetStatus)
 	mw.voicesTab = NewVoicesTabView(mw.Window, mw.Session)
+	mw.voicesTab.SetStatusHandler(mw.SetStatus)
 	mw.viewersTab = NewViewersTabView(mw.Window, mw.Session)
+	mw.viewersTab.SetStatusHandler(mw.SetStatus)
+	mw.dashboardTab.SetOnAssignVoice(func(platform, username string) {
+		mw.viewersTab.Refresh()
+	})
 	mw.settingsTab = NewSettingsView(mw.Window, cfg, player, engine)
 	mw.settingsTab.SetSession(mw.Session)
 	mw.settingsTab.SetStatusHandler(mw.SetStatus)

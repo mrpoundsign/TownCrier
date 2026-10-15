@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -41,9 +40,8 @@ type DashboardView struct {
 	queueDepthLabel *widget.Label
 	pauseResumeBtn  *widget.Button
 	feedContainer   *fyne.Container
-	testUserEntry   *widget.Entry
-	testMsgEntry    *widget.Entry
 	onAssignVoice   func(platform, username string)
+	onStatus        func(msg string)
 }
 
 // NewDashboardView constructs a DashboardView linked to the active session.
@@ -99,26 +97,34 @@ func NewDashboardView(w fyne.Window, session *app.Session) *DashboardView {
 	return v
 }
 
-// SetOnAssignVoice sets a callback for when "Assign Voice" is clicked on a recent chatter.
+// SetOnAssignVoice sets a callback for when a voice is assigned to a chatter from the Dashboard.
 func (v *DashboardView) SetOnAssignVoice(fn func(platform, username string)) {
 	v.onAssignVoice = fn
+}
+
+// SetStatusHandler registers a callback invoked when dashboard actions update status.
+func (v *DashboardView) SetStatusHandler(fn func(msg string)) {
+	v.onStatus = fn
 }
 
 // Build creates the Fyne CanvasObject for the Dashboard tab.
 func (v *DashboardView) Build() fyne.CanvasObject {
 	speakingCard := v.buildSpeakingCard()
 	controlsCard := v.buildControlsCard()
-	testCard := v.buildTestCard()
 	activityCard := v.buildActivityCard()
 
-	content := container.NewVBox(
+	topSection := container.NewVBox(
 		speakingCard,
 		controlsCard,
-		testCard,
-		activityCard,
 	)
 
-	return container.NewVScroll(content)
+	return container.NewBorder(
+		topSection,
+		nil,
+		nil,
+		nil,
+		activityCard,
+	)
 }
 
 func (v *DashboardView) buildSpeakingCard() *widget.Card {
@@ -176,74 +182,14 @@ func (v *DashboardView) buildControlsCard() *widget.Card {
 		}
 	})
 
-	panicBtn := widget.NewButtonWithIcon("PANIC MUTE (Instant Halt)", theme.MediaStopIcon(), func() {
-		v.session.Panic()
-		if v.nowPlayingLabel != nil {
-			v.nowPlayingLabel.SetText("🚨 Panic Mute Activated: Speech halted and queue cleared.")
-		}
-	})
-	panicBtn.Importance = widget.DangerImportance
-
-	buttonsRow := container.NewGridWithColumns(4, v.pauseResumeBtn, skipBtn, clearBtn, panicBtn)
+	buttonsRow := container.NewGridWithColumns(3, v.pauseResumeBtn, skipBtn, clearBtn)
 
 	cardContent := container.NewVBox(
 		container.NewBorder(nil, nil, v.queueDepthLabel, nil),
 		buttonsRow,
 	)
 
-	return widget.NewCard("Queue & Playback Controls", "Manage live TTS queue and emergency mute", cardContent)
-}
-
-func (v *DashboardView) buildTestCard() *widget.Card {
-	v.testUserEntry = widget.NewEntry()
-	v.testUserEntry.SetPlaceHolder("Chatter name (e.g. alice)")
-	v.testUserEntry.SetText("alice")
-
-	v.testMsgEntry = widget.NewEntry()
-	v.testMsgEntry.SetPlaceHolder("Message text (e.g. Hello world! https://twitch.tv ???? loooool)")
-	v.testMsgEntry.SetText("Hello world! Check out https://twitch.tv for details! ??? wwwww")
-
-	sendBtn := widget.NewButtonWithIcon("Send Test Chat Event", theme.MailSendIcon(), func() {
-		user := strings.TrimSpace(v.testUserEntry.Text)
-		msg := strings.TrimSpace(v.testMsgEntry.Text)
-		if msg == "" {
-			return
-		}
-		if user == "" {
-			user = "test_viewer"
-		}
-
-		event := &chat.Event{
-			ID:          fmt.Sprintf("test-%d", time.Now().UnixNano()),
-			Platform:    "twitch",
-			Kind:        chat.EventKindMessage,
-			Timestamp:   time.Now(),
-			UserID:      "test_" + user,
-			UserName:    user,
-			DisplayName: user,
-			Text:        msg,
-		}
-
-		_ = v.session.DispatchEvent(event)
-		v.AddActivity(ActivityEntry{
-			Timestamp: time.Now(),
-			Platform:  "twitch",
-			UserName:  user,
-			Text:      msg,
-			Kind:      "Chat",
-		})
-	})
-	sendBtn.Importance = widget.HighImportance
-
-	inputRow := container.NewBorder(nil, nil, widget.NewLabel("Sender:"), nil, v.testUserEntry)
-	msgRow := container.NewBorder(nil, nil, widget.NewLabel("Text:"), sendBtn, v.testMsgEntry)
-
-	cardContent := container.NewVBox(
-		inputRow,
-		msgRow,
-	)
-
-	return widget.NewCard("Test Message Dispatcher", "Simulate inbound live chat to test routing and sanitization", cardContent)
+	return widget.NewCard("Queue & Playback Controls", "Manage live TTS queue", cardContent)
 }
 
 func (v *DashboardView) buildActivityCard() *widget.Card {
@@ -255,7 +201,7 @@ func (v *DashboardView) buildActivityCard() *widget.Card {
 		v.refreshFeedLocked()
 	}
 
-	return widget.NewCard("Live Activity Feed", "Recent chatter messages and stream alerts", v.feedContainer)
+	return widget.NewCard("Live Activity Feed", "Recent chatter messages and stream alerts", container.NewVScroll(v.feedContainer))
 }
 
 // AddActivity appends a new event to the live activity feed (thread-safe).
@@ -337,6 +283,12 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 				Ignored:  ignoreCheck.Checked,
 			}
 		})
+		if v.onAssignVoice != nil {
+			v.onAssignVoice(platform, username)
+		}
+		if v.onStatus != nil {
+			v.onStatus("✓ Assigned voice for " + username)
+		}
 	}, v.window)
 }
 

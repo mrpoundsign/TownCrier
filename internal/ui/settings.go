@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -19,7 +18,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
-// SettingsView provides the UI controls for audio, TTS, and global rules QA & configuration.
+// SettingsView provides the UI controls for audio, TTS, and global rules configuration.
 type SettingsView struct {
 	window   fyne.Window
 	cfg      *config.Config
@@ -37,10 +36,10 @@ type SettingsView struct {
 	deviceMap    map[string]string // device name -> hex ID
 	downloadBtn  *widget.Button
 	downloadProg *widget.ProgressBar
-	speakBtn     *widget.Button
+	initializing bool
 }
 
-// NewSettingsView constructs a SettingsView for testing and configuring audio and speech.
+// NewSettingsView constructs a SettingsView for configuring audio, TTS hardware, and global rules.
 func NewSettingsView(w fyne.Window, cfg *config.Config, player audio.Player, engine tts.Engine) *SettingsView {
 	return &SettingsView{
 		window:     w,
@@ -80,6 +79,9 @@ func (v *SettingsView) setStatus(msg string) {
 }
 
 func (v *SettingsView) updateConfig(fn func(c *config.Config)) {
+	if v.initializing {
+		return
+	}
 	if v.session != nil {
 		_ = v.session.UpdateConfig(fn)
 		v.cfg = v.session.Config()
@@ -90,15 +92,18 @@ func (v *SettingsView) updateConfig(fn func(c *config.Config)) {
 	v.setStatus("✓ Settings saved.")
 }
 
-// Build generates the Fyne CanvasObject containing the full Settings & Test interface.
+// Build generates the Fyne CanvasObject containing the Settings interface.
 func (v *SettingsView) Build() fyne.CanvasObject {
+	v.initializing = true
+	defer func() { v.initializing = false }()
+
 	v.statusLabel = widget.NewLabelWithStyle("Ready.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 
 	// Register device fallback listener if player is present
 	if v.player != nil {
 		v.player.SetFallbackListener(func(reason string) {
 			fyne.Do(func() {
-				v.statusLabel.SetText("⚠️ Audio Alert: " + reason)
+				v.setStatus("⚠️ Audio Alert: " + reason)
 				dialog.ShowInformation("Audio Device Fallback", reason, v.window)
 			})
 		})
@@ -123,6 +128,9 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 
 func (v *SettingsView) buildAudioCard() *widget.Card {
 	v.deviceSelect = widget.NewSelect([]string{"Default Audio Device"}, func(selected string) {
+		if v.initializing {
+			return
+		}
 		v.mu.Lock()
 		devHex := v.deviceMap[selected]
 		v.mu.Unlock()
@@ -153,49 +161,11 @@ func (v *SettingsView) buildAudioCard() *widget.Card {
 
 	deviceRow := container.NewBorder(nil, nil, widget.NewLabel("Output Device:"), refreshBtn, v.deviceSelect)
 
-	vol := v.cfg.Audio.Volume
-	if vol <= 0 {
-		vol = 1.0
-	}
-	volLabel := widget.NewLabel(fmt.Sprintf("Volume: %d%%", int(vol*100)))
-	volSlider := widget.NewSlider(0, 100)
-	volSlider.SetValue(float64(vol * 100))
-	volSlider.OnChanged = func(val float64) {
-		gain := float32(val / 100.0)
-		volLabel.SetText(fmt.Sprintf("Volume: %d%%", int(val)))
-		if v.player != nil {
-			v.player.SetVolume(gain)
-		}
-		v.updateConfig(func(c *config.Config) {
-			c.Audio.Volume = gain
-		})
-	}
-	volumeRow := container.NewBorder(nil, nil, volLabel, nil, volSlider)
-
-	panicBtn := widget.NewButtonWithIcon("EMERGENCY PANIC STOP (Instant Silence)", theme.MediaStopIcon(), func() {
-		if v.player != nil {
-			v.player.PanicStop()
-		}
-		v.setStatus("🚨 Emergency panic stop triggered! Audio queue silenced.")
-	})
-	panicBtn.Importance = widget.DangerImportance
-
-	resetPanicBtn := widget.NewButton("Reset Panic State", func() {
-		if v.player != nil {
-			v.player.ResetPanic()
-		}
-		v.statusLabel.SetText("Panic state cleared. Audio playback re-enabled.")
-	})
-
-	panicRow := container.NewGridWithColumns(2, panicBtn, resetPanicBtn)
-
 	cardContent := container.NewVBox(
 		deviceRow,
-		volumeRow,
-		panicRow,
 	)
 
-	return widget.NewCard("Audio Output & Playback", "WASAPI device selection and master volume", cardContent)
+	return widget.NewCard("Audio Output Device", "Select WASAPI playback device for OBS routing", cardContent)
 }
 
 func (v *SettingsView) refreshDeviceList() {
@@ -257,48 +227,8 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		v.downloadBtn.Hide()
 	}
 
-	selectedVoice := v.cfg.GlobalChatRules.DefaultVoice
-	if selectedVoice == "" {
-		selectedVoice = tts.DefaultVoiceID
-	}
-	voiceSelect := widget.NewSelect(tts.KokoroVoiceNames, func(s string) {
-		v.updateConfig(func(c *config.Config) {
-			c.GlobalChatRules.DefaultVoice = s
-		})
-	})
-	voiceSelect.SetSelected(selectedVoice)
-	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("Default Voice:"), nil, voiceSelect)
-
-	speed := v.cfg.GlobalChatRules.DefaultSpeed
-	if speed <= 0 {
-		speed = 1.0
-	}
-	speedLabel := widget.NewLabel(fmt.Sprintf("Speed: %.2fx", speed))
-	speedSlider := widget.NewSlider(0.5, 2.0)
-	speedSlider.Step = 0.05
-	speedSlider.SetValue(float64(speed))
-	speedSlider.OnChanged = func(val float64) {
-		speedLabel.SetText(fmt.Sprintf("Speed: %.2fx", val))
-		v.updateConfig(func(c *config.Config) {
-			c.GlobalChatRules.DefaultSpeed = float32(val)
-		})
-	}
-	speedRow := container.NewBorder(nil, nil, speedLabel, nil, speedSlider)
-
-	testEntry := widget.NewEntry()
-	testEntry.SetText("Hello! TownCrier audio output and Kokoro TTS are working properly.")
-
-	v.speakBtn = widget.NewButtonWithIcon("Test Speak", theme.MediaPlayIcon(), func() {
-		text := strings.TrimSpace(testEntry.Text)
-		if text == "" {
-			return
-		}
-		v.testSpeak(text, voiceSelect.Selected, float32(speedSlider.Value))
-	})
-	v.speakBtn.Importance = widget.HighImportance
-
 	gpuCheck := widget.NewCheck("Use GPU Acceleration (DirectML)", func(checked bool) {
-		if v.cfg.TTS.UseGPU == checked {
+		if v.initializing || v.cfg.TTS.UseGPU == checked {
 			return
 		}
 		v.updateConfig(func(c *config.Config) {
@@ -337,14 +267,9 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		v.downloadProg,
 		v.downloadBtn,
 		gpuCheck,
-		voiceRow,
-		speedRow,
-		widget.NewLabel("Test Speech Text:"),
-		testEntry,
-		v.speakBtn,
 	)
 
-	return widget.NewCard("Kokoro TTS & Voice Preview", "Synthesize neural speech and preview voices", cardContent)
+	return widget.NewCard("TTS Engine & Hardware", "Kokoro neural TTS model and DirectML GPU acceleration", cardContent)
 }
 
 func (v *SettingsView) startModelDownload() {
@@ -389,64 +314,6 @@ func (v *SettingsView) startModelDownload() {
 			v.engine = eng
 			v.mu.Unlock()
 			v.setStatus("Kokoro TTS engine ready.")
-		})
-	}()
-}
-
-func (v *SettingsView) testSpeak(text, voice string, speed float32) {
-	v.mu.Lock()
-	eng := v.engine
-	v.mu.Unlock()
-
-	if eng == nil {
-		// Attempt lazy load if installed
-		if tts.IsModelInstalled(v.modelDir) {
-			var err error
-			threads := v.cfg.TTS.NumThreads
-			if threads <= 0 {
-				threads = 4
-			}
-			eng, err = tts.NewSherpaEngine(v.modelDir, threads, v.cfg.TTS.UseGPU)
-			if err != nil {
-				v.setStatus(fmt.Sprintf("Failed to load TTS engine: %v", err))
-				return
-			}
-			v.mu.Lock()
-			v.engine = eng
-			v.mu.Unlock()
-		} else {
-			v.setStatus("TTS engine not loaded: model is not installed.")
-			return
-		}
-	}
-
-	v.speakBtn.Disable()
-	v.setStatus(fmt.Sprintf("Synthesizing '%s' with voice '%s'...", text, voice))
-
-	go func() {
-		t0 := time.Now()
-		samples, sampleRate, err := eng.Synthesize(text, voice, speed)
-		dur := time.Since(t0)
-
-		fyne.Do(func() {
-			v.speakBtn.Enable()
-			if err != nil {
-				v.setStatus(fmt.Sprintf("Synthesis failed: %v", err))
-				return
-			}
-
-			audioDur := float64(len(samples)) / float64(sampleRate)
-			rtf := dur.Seconds() / audioDur
-			status := fmt.Sprintf("Synthesized in %v (audio: %.1fs, RTF: %.2fx). Playing...",
-				dur.Round(time.Millisecond), audioDur, rtf)
-			v.setStatus(status)
-
-			if v.player != nil {
-				v.player.ResetPanic()
-				if playErr := v.player.Play(samples, sampleRate); playErr != nil {
-					v.setStatus(fmt.Sprintf("Playback error: %v", playErr))
-				}
-			}
 		})
 	}()
 }

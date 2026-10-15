@@ -2,12 +2,10 @@ package ui
 
 import (
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -16,80 +14,52 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
-// VoicesTabView provides model management, voice testing, and global voice/speed configuration.
+// VoicesTabView provides voice testing and global voice/speed configuration.
 type VoicesTabView struct {
-	window   fyne.Window
-	session  *app.Session
-	modelDir string
+	window  fyne.Window
+	session *app.Session
 
-	statusLabel  *widget.Label
-	modelStatus  *widget.Label
-	downloadBtn  *widget.Button
-	downloadProg *widget.ProgressBar
+	onStatus     func(msg string)
 	previewBtn   *widget.Button
 	sampleEntry  *widget.Entry
+	initializing bool
 }
 
 // NewVoicesTabView constructs a VoicesTabView.
 func NewVoicesTabView(w fyne.Window, session *app.Session) *VoicesTabView {
 	return &VoicesTabView{
-		window:   w,
-		session:  session,
-		modelDir: tts.DefaultModelDir(),
+		window:  w,
+		session: session,
 	}
+}
+
+// SetStatusHandler registers a callback invoked when voice preview or settings status updates.
+func (v *VoicesTabView) SetStatusHandler(fn func(msg string)) {
+	v.onStatus = fn
+}
+
+func (v *VoicesTabView) setStatus(msg string) {
+	fyne.Do(func() {
+		if v.onStatus != nil {
+			v.onStatus(msg)
+		}
+	})
 }
 
 // Build creates the Fyne CanvasObject for the Voices tab.
 func (v *VoicesTabView) Build() fyne.CanvasObject {
-	v.statusLabel = widget.NewLabelWithStyle("Ready.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
+	v.initializing = true
+	defer func() { v.initializing = false }()
 
-	modelCard := v.buildModelManagerCard()
-	previewCard := v.buildPreviewCard()
 	defaultsCard := v.buildGlobalDefaultsCard()
+	previewCard := v.buildPreviewCard()
 
 	content := container.NewVBox(
-		modelCard,
-		previewCard,
 		defaultsCard,
-		v.statusLabel,
+		previewCard,
 	)
 
 	return container.NewVScroll(content)
-}
-
-func (v *VoicesTabView) buildModelManagerCard() *widget.Card {
-	v.modelStatus = widget.NewLabel("")
-	v.downloadProg = widget.NewProgressBar()
-	v.downloadProg.Hide()
-
-	cfg := v.session.Config()
-
-	if tts.IsModelInstalled(v.modelDir) {
-		v.modelStatus.SetText(fmt.Sprintf("Kokoro-82M: Installed (%s)", filepath.Base(v.modelDir)))
-	} else {
-		v.modelStatus.SetText("Kokoro-82M: Not installed. Download required for neural TTS.")
-	}
-
-	v.downloadBtn = widget.NewButtonWithIcon("Download Kokoro-82M Model (~134MB INT8 / ~345MB FP32)", theme.DownloadIcon(), func() {
-		v.startModelDownload()
-	})
-
-	gpuCheck := widget.NewCheck("Use DirectML GPU Acceleration (model.onnx FP32)", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			c.TTS.UseGPU = b
-		})
-		v.statusLabel.SetText("GPU preference updated (takes effect on reload).")
-	})
-	gpuCheck.SetChecked(cfg.TTS.UseGPU)
-
-	cardContent := container.NewVBox(
-		v.modelStatus,
-		v.downloadProg,
-		v.downloadBtn,
-		gpuCheck,
-	)
-
-	return widget.NewCard("Neural Model Manager", "Offline Kokoro TTS engine weights", cardContent)
 }
 
 func (v *VoicesTabView) buildPreviewCard() *widget.Card {
@@ -146,11 +116,12 @@ func (v *VoicesTabView) buildGlobalDefaultsCard() *widget.Card {
 	if sp <= 0 {
 		sp = 1.0
 	}
-	globalSpeedLabel := widget.NewLabel(fmt.Sprintf("%.1fx", sp))
+	globalSpeedLabel := widget.NewLabel(fmt.Sprintf("%.2fx", sp))
 	globalSpeedSlider := widget.NewSlider(0.5, 2.0)
+	globalSpeedSlider.Step = 0.05
 	globalSpeedSlider.SetValue(float64(sp))
 	globalSpeedSlider.OnChanged = func(val float64) {
-		globalSpeedLabel.SetText(fmt.Sprintf("%.1fx", val))
+		globalSpeedLabel.SetText(fmt.Sprintf("%.2fx", val))
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.DefaultSpeed = float32(val)
 		})
@@ -164,60 +135,16 @@ func (v *VoicesTabView) buildGlobalDefaultsCard() *widget.Card {
 	return widget.NewCard("Global Fallback Voice", "Default voice and speed for chat and alerts", cardContent)
 }
 
-func (v *VoicesTabView) startModelDownload() {
-	v.downloadBtn.Disable()
-	v.downloadProg.Show()
-	v.downloadProg.SetValue(0)
-	v.statusLabel.SetText("Downloading Kokoro-82M neural model files...")
-
-	go func() {
-		err := tts.DownloadKokoroModel(v.modelDir, func(current, total int64) {
-			if total > 0 {
-				fyne.Do(func() {
-					v.downloadProg.SetValue(float64(current) / float64(total))
-				})
-			}
-		})
-
-		fyne.Do(func() {
-			v.downloadProg.Hide()
-			if err != nil {
-				v.downloadBtn.Enable()
-				v.statusLabel.SetText(fmt.Sprintf("Download failed: %v", err))
-				dialog.ShowError(err, v.window)
-				return
-			}
-
-			v.modelStatus.SetText(fmt.Sprintf("Kokoro Model: Installed (%s)", filepath.Base(v.modelDir)))
-			v.downloadBtn.Hide()
-			v.statusLabel.SetText("Kokoro model downloaded and verified! Initializing engine...")
-
-			cfg := v.session.Config()
-			threads := cfg.TTS.NumThreads
-			if threads <= 0 {
-				threads = 4
-			}
-			eng, engErr := tts.NewSherpaEngine(v.modelDir, threads, cfg.TTS.UseGPU)
-			if engErr != nil {
-				v.statusLabel.SetText(fmt.Sprintf("Failed to initialize TTS engine: %v", engErr))
-				return
-			}
-			v.session.SetEngine(eng)
-			v.statusLabel.SetText("Kokoro TTS engine ready.")
-		})
-	}()
-}
-
 func (v *VoicesTabView) previewVoice(text, voice string, speed float32) {
 	eng := v.session.Engine()
 	if eng == nil {
-		v.statusLabel.SetText("TTS engine not loaded. Download model first.")
+		v.setStatus("TTS engine not loaded.")
 		return
 	}
 
 	player := v.session.Player()
 	v.previewBtn.Disable()
-	v.statusLabel.SetText(fmt.Sprintf("Synthesizing preview with '%s'...", voice))
+	v.setStatus(fmt.Sprintf("Synthesizing preview with '%s'...", voice))
 
 	go func() {
 		t0 := time.Now()
@@ -227,12 +154,13 @@ func (v *VoicesTabView) previewVoice(text, voice string, speed float32) {
 		fyne.Do(func() {
 			v.previewBtn.Enable()
 			if err != nil {
-				v.statusLabel.SetText(fmt.Sprintf("Synthesis failed: %v", err))
+				v.setStatus(fmt.Sprintf("Synthesis failed: %v", err))
 				return
 			}
 
-			v.statusLabel.SetText(fmt.Sprintf("Synthesized in %v. Playing preview...", dur.Round(time.Millisecond)))
+			v.setStatus(fmt.Sprintf("Synthesized in %v. Playing preview...", dur.Round(time.Millisecond)))
 			if player != nil {
+				player.ResetPanic()
 				_ = player.Play(samples, sampleRate)
 			}
 		})
@@ -240,8 +168,12 @@ func (v *VoicesTabView) previewVoice(text, voice string, speed float32) {
 }
 
 func (v *VoicesTabView) updateConfig(fn func(c *config.Config)) {
-	cfg := v.session.Config()
-	fn(cfg)
-	_ = v.session.ReloadConfig(cfg)
-	_ = config.Save("", cfg)
+	if v.initializing {
+		return
+	}
+	if v.session != nil {
+		_ = v.session.UpdateConfig(fn)
+	}
+	v.setStatus("✓ Settings saved.")
 }
+
