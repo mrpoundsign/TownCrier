@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"log"
+	"slices"
 	"sync"
 
 	"fyne.io/fyne/v2"
@@ -32,6 +33,13 @@ type MainWindow struct {
 	viewersTab   *ViewersTabView
 	settingsTab  *SettingsView
 
+	dashboardTabItem *container.TabItem
+	twitchTabItem    *container.TabItem
+	youtubeTabItem   *container.TabItem
+	voicesTabItem    *container.TabItem
+	viewersTabItem   *container.TabItem
+	settingsTabItem  *container.TabItem
+
 	twitchStatusDot  *widget.Label
 	youtubeStatusDot *widget.Label
 	volumeSlider     *widget.Slider
@@ -57,6 +65,7 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	mw.initViews()
 	log.Println("[MainWindow] Initializing header...")
 	mw.initHeader()
+	mw.syncServiceVisibility()
 	log.Println("[MainWindow] Initializing shortcuts...")
 	mw.initShortcuts()
 	log.Println("[MainWindow] Setting window content...")
@@ -152,15 +161,76 @@ func (mw *MainWindow) initViews() {
 	mw.settingsTab.SetHotkeyChangedHandler(func(hotkey string) error {
 		return mw.ApplyPanicHotkey(hotkey)
 	})
+	mw.settingsTab.SetServicesChangedHandler(func() {
+		mw.syncServiceVisibility()
+	})
+
+	mw.dashboardTabItem = container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), mw.dashboardTab.Build())
+	mw.twitchTabItem = container.NewTabItemWithIcon("Twitch", theme.MediaPlayIcon(), mw.twitchTab.Build())
+	mw.youtubeTabItem = container.NewTabItemWithIcon("YouTube", theme.MediaVideoIcon(), mw.youtubeTab.Build())
+	mw.voicesTabItem = container.NewTabItemWithIcon("Voices", theme.VolumeUpIcon(), mw.voicesTab.Build())
+	mw.viewersTabItem = container.NewTabItemWithIcon("Viewers", theme.AccountIcon(), mw.viewersTab.Build())
+	mw.settingsTabItem = container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), mw.settingsTab.Build())
 
 	mw.tabsContainer = container.NewAppTabs(
-		container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), mw.dashboardTab.Build()),
-		container.NewTabItemWithIcon("Twitch", theme.MediaPlayIcon(), mw.twitchTab.Build()),
-		container.NewTabItemWithIcon("YouTube", theme.MediaVideoIcon(), mw.youtubeTab.Build()),
-		container.NewTabItemWithIcon("Voices", theme.VolumeUpIcon(), mw.voicesTab.Build()),
-		container.NewTabItemWithIcon("Viewers", theme.AccountIcon(), mw.viewersTab.Build()),
-		container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), mw.settingsTab.Build()),
+		mw.dashboardTabItem,
+		mw.twitchTabItem,
+		mw.youtubeTabItem,
+		mw.voicesTabItem,
+		mw.viewersTabItem,
+		mw.settingsTabItem,
 	)
+}
+
+func (mw *MainWindow) syncServiceVisibility() {
+	cfg := mw.Session.Config()
+
+	twitchCfg, hasTwitch := cfg.Platforms["twitch"]
+	twitchVisible := !hasTwitch || twitchCfg.EverEnabled || twitchCfg.Enabled
+
+	ytCfg, hasYT := cfg.Platforms["youtube"]
+	ytVisible := !hasYT || ytCfg.EverEnabled || ytCfg.Enabled
+
+	if mw.tabsContainer != nil {
+		selected := mw.tabsContainer.Selected()
+		items := []*container.TabItem{mw.dashboardTabItem}
+		if twitchVisible {
+			items = append(items, mw.twitchTabItem)
+		}
+		if ytVisible {
+			items = append(items, mw.youtubeTabItem)
+		}
+		items = append(items, mw.voicesTabItem, mw.viewersTabItem, mw.settingsTabItem)
+		mw.tabsContainer.SetItems(items)
+		if slices.Contains(items, selected) {
+			mw.tabsContainer.Select(selected)
+		}
+	}
+
+	if mw.twitchStatusDot != nil {
+		if twitchVisible {
+			mw.twitchStatusDot.Show()
+		} else {
+			mw.twitchStatusDot.Hide()
+		}
+	}
+	if mw.youtubeStatusDot != nil {
+		if ytVisible {
+			mw.youtubeStatusDot.Show()
+		} else {
+			mw.youtubeStatusDot.Hide()
+		}
+	}
+	if mw.headerBar != nil {
+		mw.headerBar.Refresh()
+	}
+
+	if mw.twitchTab != nil {
+		mw.twitchTab.SyncFromConfig()
+	}
+	if mw.youtubeTab != nil {
+		mw.youtubeTab.SyncFromConfig()
+	}
 }
 
 func (mw *MainWindow) initHeader() {
@@ -176,6 +246,9 @@ func (mw *MainWindow) initHeader() {
 	}
 
 	mw.Session.SetOnTwitchStatus(func(status string, detail string) {
+		if mw.twitchTab != nil {
+			mw.twitchTab.UpdateStatus(status, detail)
+		}
 		fyne.Do(func() {
 			switch status {
 			case "connected":
@@ -195,6 +268,9 @@ func (mw *MainWindow) initHeader() {
 	}
 
 	mw.Session.SetOnYouTubeStatus(func(status string, detail string) {
+		if mw.youtubeTab != nil {
+			mw.youtubeTab.UpdateStatus(status, detail)
+		}
 		fyne.Do(func() {
 			switch status {
 			case "connected":

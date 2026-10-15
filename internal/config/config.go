@@ -101,14 +101,55 @@ type PlatformConfig struct {
 	Overrides          PlatformOverrides                  `json:"overrides"`
 }
 
+type ViewerAccount struct {
+	Platform string `json:"platform"`
+	UserID   string `json:"user_id"`
+}
+
 type ViewerConfig struct {
-	Platform string  `json:"platform"`
-	UserID   string  `json:"user_id"`
-	Voice    string  `json:"voice"`
-	Speed    float32 `json:"speed"`
-	Nickname string  `json:"nickname"`
-	Ignored  bool    `json:"ignored"`
-	Allowed  bool    `json:"allowed"`
+	Platform string          `json:"platform"`
+	UserID   string          `json:"user_id"`
+	Accounts []ViewerAccount `json:"accounts,omitempty"`
+	Voice    string          `json:"voice"`
+	Speed    float32         `json:"speed"`
+	Nickname string          `json:"nickname"`
+	Ignored  bool            `json:"ignored"`
+	Allowed  bool            `json:"allowed"`
+}
+
+// EffectiveAccounts returns all unique platform+userID pairs linked to this viewer profile.
+func (v ViewerConfig) EffectiveAccounts() []ViewerAccount {
+	var out []ViewerAccount
+	seen := make(map[string]struct{})
+
+	add := func(plat, uid string) {
+		p := strings.ToLower(strings.TrimSpace(plat))
+		u := strings.TrimSpace(uid)
+		if u == "" {
+			return
+		}
+		k := p + ":" + strings.ToLower(strings.TrimPrefix(u, "@"))
+		if _, ok := seen[k]; ok {
+			return
+		}
+		seen[k] = struct{}{}
+		out = append(out, ViewerAccount{
+			Platform: p,
+			UserID:   u,
+		})
+	}
+
+	for _, acc := range v.Accounts {
+		add(acc.Platform, acc.UserID)
+	}
+	if v.UserID != "" {
+		add(v.Platform, v.UserID)
+	}
+	return out
+}
+
+func normalizeHandle(s string) string {
+	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(s), "@"))
 }
 
 // ViewerKey returns the canonical lowercased lookup key for a platform and user ID or username.
@@ -116,31 +157,36 @@ func ViewerKey(platform, idOrName string) string {
 	return strings.ToLower(strings.TrimSpace(platform)) + ":" + strings.ToLower(strings.TrimSpace(idOrName))
 }
 
-// LookupViewer finds a ViewerConfig in viewers using case-insensitive matching across platform, userID, and username.
-func LookupViewer(viewers map[string]ViewerConfig, platform, userID, userName string) (ViewerConfig, bool) {
+// LookupViewerWithKey finds a ViewerConfig and its map key in viewers using case-insensitive matching
+// across primary and all linked multi-platform accounts.
+func LookupViewerWithKey(viewers map[string]ViewerConfig, platform, userID, userName string) (string, ViewerConfig, bool) {
 	if len(viewers) == 0 {
-		return ViewerConfig{}, false
+		return "", ViewerConfig{}, false
 	}
 
 	p := strings.ToLower(strings.TrimSpace(platform))
 	uID := strings.TrimSpace(userID)
 	uName := strings.TrimSpace(userName)
+	uIDNorm := normalizeHandle(uID)
+	uNameNorm := normalizeHandle(uName)
 
 	// 1. Direct match with canonical ViewerKey using UserID
 	if uID != "" {
-		if v, ok := viewers[ViewerKey(p, uID)]; ok {
-			return v, true
+		k := ViewerKey(p, uID)
+		if v, ok := viewers[k]; ok {
+			return k, v, true
 		}
 	}
 
 	// 2. Direct match with canonical ViewerKey using UserName
 	if uName != "" {
-		if v, ok := viewers[ViewerKey(p, uName)]; ok {
-			return v, true
+		k := ViewerKey(p, uName)
+		if v, ok := viewers[k]; ok {
+			return k, v, true
 		}
 	}
 
-	// 3. Fallback: case-insensitive scan of map keys (for unnormalized or legacy keys)
+	// 3. Scan all viewer profiles and their linked accounts
 	targetIDKey := ""
 	if uID != "" {
 		targetIDKey = ViewerKey(p, uID)
@@ -153,25 +199,41 @@ func LookupViewer(viewers map[string]ViewerConfig, platform, userID, userName st
 	for k, v := range viewers {
 		kLower := strings.ToLower(k)
 		if targetIDKey != "" && kLower == targetIDKey {
-			return v, true
+			return k, v, true
 		}
 		if targetNameKey != "" && kLower == targetNameKey {
-			return v, true
+			return k, v, true
 		}
-		// Also match if key or v.UserID equals username/userID case-insensitively
-		if uName != "" && (strings.EqualFold(k, uName) || strings.EqualFold(v.UserID, uName)) {
-			if strings.EqualFold(v.Platform, p) || v.Platform == "" {
-				return v, true
+
+		for _, acc := range v.EffectiveAccounts() {
+			if acc.Platform != "" && !strings.EqualFold(acc.Platform, p) {
+				continue
+			}
+			accNorm := normalizeHandle(acc.UserID)
+			if accNorm == "" {
+				continue
+			}
+			if (uIDNorm != "" && accNorm == uIDNorm) || (uNameNorm != "" && accNorm == uNameNorm) {
+				return k, v, true
 			}
 		}
-		if uID != "" && (strings.EqualFold(k, uID) || strings.EqualFold(v.UserID, uID)) {
-			if strings.EqualFold(v.Platform, p) || v.Platform == "" {
-				return v, true
-			}
+
+		// Legacy fallback: key matches username/userID directly
+		if uName != "" && strings.EqualFold(k, uName) && (strings.EqualFold(v.Platform, p) || v.Platform == "") {
+			return k, v, true
+		}
+		if uID != "" && strings.EqualFold(k, uID) && (strings.EqualFold(v.Platform, p) || v.Platform == "") {
+			return k, v, true
 		}
 	}
 
-	return ViewerConfig{}, false
+	return "", ViewerConfig{}, false
+}
+
+// LookupViewer finds a ViewerConfig in viewers using case-insensitive matching across platform, userID, and username.
+func LookupViewer(viewers map[string]ViewerConfig, platform, userID, userName string) (ViewerConfig, bool) {
+	_, v, ok := LookupViewerWithKey(viewers, platform, userID, userName)
+	return v, ok
 }
 
 // DefaultConfig returns a new Config initialized with production defaults.
@@ -468,10 +530,16 @@ func migrate(cfg *Config) error {
 		cfg.Version = 1
 	}
 
-	// Normalize viewer keys to canonical lowercase (platform:userid)
+	// Normalize viewer keys and populate multi-platform Accounts slice
 	if len(cfg.Viewers) > 0 {
 		normalized := make(map[string]ViewerConfig, len(cfg.Viewers))
 		for k, v := range cfg.Viewers {
+			accs := v.EffectiveAccounts()
+			v.Accounts = accs
+			if len(accs) > 0 && v.UserID == "" {
+				v.Platform = accs[0].Platform
+				v.UserID = accs[0].UserID
+			}
 			key := ViewerKey(v.Platform, v.UserID)
 			if key == ":" || v.UserID == "" {
 				key = strings.ToLower(k)

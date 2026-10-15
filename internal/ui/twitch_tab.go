@@ -87,6 +87,44 @@ func (v *TwitchTabView) Build() fyne.CanvasObject {
 	return container.NewVScroll(content)
 }
 
+// SyncFromConfig updates the Twitch tab controls to match the active session configuration.
+func (v *TwitchTabView) SyncFromConfig() {
+	if v.session == nil {
+		return
+	}
+	pCfg, ok := v.session.Config().Platforms["twitch"]
+	if !ok {
+		return
+	}
+	v.initializing = true
+	if v.enableCheck != nil {
+		v.enableCheck.SetChecked(pCfg.Enabled)
+	}
+	v.initializing = false
+	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
+}
+
+// UpdateStatus updates the connection status badge on the Twitch tab.
+func (v *TwitchTabView) UpdateStatus(status string, detail string) {
+	fyne.Do(func() {
+		if v.statusBadge == nil {
+			return
+		}
+		switch status {
+		case "connected":
+			v.statusBadge.SetText("🟢 Connected (" + detail + ")")
+		case "connecting":
+			v.statusBadge.SetText("🟡 Connecting (" + detail + ")...")
+		default:
+			if v.enableCheck != nil && v.enableCheck.Checked && v.channelEntry != nil && v.channelEntry.Text != "" {
+				v.statusBadge.SetText("🟢 Ready (" + v.channelEntry.Text + ")")
+			} else {
+				v.statusBadge.SetText("⚪ Disconnected")
+			}
+		}
+	})
+}
+
 func (v *TwitchTabView) hasOAuth() bool {
 	if v.session == nil || v.session.TwitchOAuth() == nil {
 		return false
@@ -191,23 +229,7 @@ func (v *TwitchTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
 
 	v.session.SetOnTwitchStatus(func(status string, detail string) {
-		fyne.Do(func() {
-			if v.statusBadge == nil {
-				return
-			}
-			switch status {
-			case "connected":
-				v.statusBadge.SetText("🟢 Connected (" + detail + ")")
-			case "connecting":
-				v.statusBadge.SetText("🟡 Connecting (" + detail + ")...")
-			default:
-				if v.enableCheck != nil && v.enableCheck.Checked && v.channelEntry != nil && v.channelEntry.Text != "" {
-					v.statusBadge.SetText("🟢 Ready (" + v.channelEntry.Text + ")")
-				} else {
-					v.statusBadge.SetText("⚪ Disconnected")
-				}
-			}
-		})
+		v.UpdateStatus(status, detail)
 	})
 
 	v.connectBtn = widget.NewButtonWithIcon("Connect with Twitch (OAuth)", theme.LoginIcon(), func() {

@@ -40,3 +40,30 @@ func TestViewersTabViewBuild(t *testing.T) {
 		t.Errorf("expected 0 viewers after delete, got %d", len(session.Config().Viewers))
 	}
 }
+
+func TestViewersMultiPlatformFormattingAndSearch(t *testing.T) {
+	vc := config.ViewerConfig{
+		Platform: "twitch",
+		UserID:   "mrpoundsign",
+		Accounts: []config.ViewerAccount{
+			{Platform: "twitch", UserID: "mrpoundsign"},
+			{Platform: "youtube", UserID: "@MrPoundSignYT"},
+		},
+		Voice:    "am_adam",
+		Speed:    1.1,
+		Nickname: "Pound",
+	}
+
+	title := formatViewerAccountsTitle(vc)
+	expected := `[TWITCH] mrpoundsign  •  [YOUTUBE] @MrPoundSignYT (Spoken as: "Pound")`
+	if title != expected {
+		t.Errorf("formatViewerAccountsTitle = %q, want %q", title, expected)
+	}
+
+	if !viewerMatchesQuery("twitch:mrpoundsign", vc, "mrpoundsignyt") {
+		t.Error("expected viewerMatchesQuery to match linked YouTube handle")
+	}
+	if !viewerMatchesQuery("twitch:mrpoundsign", vc, "youtube") {
+		t.Error("expected viewerMatchesQuery to match linked YouTube platform")
+	}
+}

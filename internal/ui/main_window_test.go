@@ -103,4 +103,47 @@ func TestMainWindowPanicToggle(t *testing.T) {
 	}
 }
 
+func TestMainWindowServiceVisibilityToggle(t *testing.T) {
+	appObj := test.NewApp()
+	cfg := config.DefaultConfig()
+	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	defer func() { _ = session.Close() }()
+
+	mw := NewMainWindow(appObj, session)
+	defer func() {
+		if mw.hotkeyMgr != nil {
+			mw.hotkeyMgr.Close()
+		}
+	}()
+
+	// Initially 6 tabs (Dashboard, Twitch, YouTube, Voices, Viewers, Settings)
+	if len(mw.tabsContainer.Items) != 6 {
+		t.Fatalf("expected 6 tabs initially, got %d", len(mw.tabsContainer.Items))
+	}
+
+	// Disable YouTube in Settings
+	mw.settingsTab.youtubeCheck.SetChecked(false)
+	if len(mw.tabsContainer.Items) != 5 {
+		t.Fatalf("expected 5 tabs after disabling YouTube, got %d", len(mw.tabsContainer.Items))
+	}
+	if mw.youtubeStatusDot.Visible() {
+		t.Error("expected youtubeStatusDot to be hidden when YouTube service is disabled")
+	}
+	if session.Config().Platforms["youtube"].Enabled {
+		t.Error("expected youtube Enabled to be false when unchecked in Settings")
+	}
+
+	// Re-enable YouTube in Settings
+	mw.settingsTab.youtubeCheck.SetChecked(true)
+	if len(mw.tabsContainer.Items) != 6 {
+		t.Fatalf("expected 6 tabs after re-enabling YouTube, got %d", len(mw.tabsContainer.Items))
+	}
+	if !mw.youtubeStatusDot.Visible() {
+		t.Error("expected youtubeStatusDot to be visible when YouTube service is enabled")
+	}
+	if !session.Config().Platforms["youtube"].Enabled {
+		t.Error("expected youtube Enabled to be true when checked in Settings")
+	}
+}
+
 

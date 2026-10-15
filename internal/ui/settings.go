@@ -27,17 +27,20 @@ type SettingsView struct {
 	session  *app.Session
 	modelDir string
 
-	mu              sync.Mutex
-	deviceEnum      func() ([]audio.DeviceInfo, error)
-	statusLabel     *widget.Label
-	onStatus        func(msg string)
-	onHotkeyChanged func(hotkey string) error
-	modelStatus     *widget.Label
-	deviceSelect    *widget.Select
-	deviceMap       map[string]string // device name -> hex ID
-	downloadBtn     *widget.Button
-	downloadProg    *widget.ProgressBar
-	initializing    bool
+	mu                sync.Mutex
+	deviceEnum        func() ([]audio.DeviceInfo, error)
+	statusLabel       *widget.Label
+	onStatus          func(msg string)
+	onHotkeyChanged   func(hotkey string) error
+	onServicesChanged func()
+	twitchCheck       *widget.Check
+	youtubeCheck      *widget.Check
+	modelStatus       *widget.Label
+	deviceSelect      *widget.Select
+	deviceMap         map[string]string // device name -> hex ID
+	downloadBtn       *widget.Button
+	downloadProg      *widget.ProgressBar
+	initializing      bool
 }
 
 // NewSettingsView constructs a SettingsView for configuring audio, TTS hardware, and global rules.
@@ -71,6 +74,29 @@ func (v *SettingsView) SetStatusHandler(fn func(msg string)) {
 // SetHotkeyChangedHandler registers a callback invoked when the user changes the global Panic Mute hotkey.
 func (v *SettingsView) SetHotkeyChangedHandler(fn func(hotkey string) error) {
 	v.onHotkeyChanged = fn
+}
+
+// SetServicesChangedHandler registers a callback invoked when streaming services are enabled or disabled.
+func (v *SettingsView) SetServicesChangedHandler(fn func()) {
+	v.onServicesChanged = fn
+}
+
+// SyncFromConfig updates the service checkboxes in Settings when modified from a platform tab.
+func (v *SettingsView) SyncFromConfig() {
+	if v.session != nil {
+		v.cfg = v.session.Config()
+	}
+	v.initializing = true
+	defer func() { v.initializing = false }()
+
+	if v.twitchCheck != nil {
+		p, ok := v.cfg.Platforms["twitch"]
+		v.twitchCheck.SetChecked(!ok || p.EverEnabled || p.Enabled)
+	}
+	if v.youtubeCheck != nil {
+		p, ok := v.cfg.Platforms["youtube"]
+		v.youtubeCheck.SetChecked(!ok || p.EverEnabled || p.Enabled)
+	}
 }
 
 func (v *SettingsView) setStatus(msg string) {
@@ -115,6 +141,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		})
 	}
 
+	servicesCard := v.buildServicesCard()
 	audioCard := v.buildAudioCard()
 	ttsCard := v.buildTTSCard()
 	rulesCard := v.buildRulesCard()
@@ -122,6 +149,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	botsCard := v.buildBotsCard()
 
 	content := container.NewVBox(
+		servicesCard,
 		audioCard,
 		ttsCard,
 		rulesCard,
@@ -130,6 +158,65 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	)
 
 	return container.NewVScroll(content)
+}
+
+func (v *SettingsView) buildServicesCard() *widget.Card {
+	twitchCfg, hasTwitch := v.cfg.Platforms["twitch"]
+	twitchVisible := !hasTwitch || twitchCfg.EverEnabled || twitchCfg.Enabled
+
+	v.twitchCheck = widget.NewCheck("Twitch (shows Twitch tab & loads connector)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			if c.Platforms == nil {
+				c.Platforms = make(map[string]config.PlatformConfig)
+			}
+			p, ok := c.Platforms["twitch"]
+			if !ok {
+				p = config.DefaultConfig().Platforms["twitch"]
+			}
+			p.EverEnabled = checked
+			p.Enabled = checked
+			c.Platforms["twitch"] = p
+		})
+		if v.onServicesChanged != nil {
+			v.onServicesChanged()
+		}
+	})
+	v.twitchCheck.SetChecked(twitchVisible)
+
+	ytCfg, hasYT := v.cfg.Platforms["youtube"]
+	ytVisible := !hasYT || ytCfg.EverEnabled || ytCfg.Enabled
+
+	v.youtubeCheck = widget.NewCheck("YouTube Live (shows YouTube tab & loads connector)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			if c.Platforms == nil {
+				c.Platforms = make(map[string]config.PlatformConfig)
+			}
+			p, ok := c.Platforms["youtube"]
+			if !ok {
+				p = config.DefaultConfig().Platforms["youtube"]
+			}
+			p.EverEnabled = checked
+			p.Enabled = checked
+			c.Platforms["youtube"] = p
+		})
+		if v.onServicesChanged != nil {
+			v.onServicesChanged()
+		}
+	})
+	v.youtubeCheck.SetChecked(ytVisible)
+
+	cardContent := container.NewVBox(
+		v.twitchCheck,
+		v.youtubeCheck,
+	)
+
+	return widget.NewCard("Streaming Services", "Enable or disable streaming platforms to show/hide their tabs and load/unload their connectors", cardContent)
 }
 
 func (v *SettingsView) buildAudioCard() *widget.Card {

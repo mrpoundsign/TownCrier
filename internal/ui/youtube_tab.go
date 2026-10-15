@@ -69,6 +69,44 @@ func (v *YouTubeTabView) Build() fyne.CanvasObject {
 	return container.NewVScroll(content)
 }
 
+// SyncFromConfig updates the YouTube tab controls to match the active session configuration.
+func (v *YouTubeTabView) SyncFromConfig() {
+	if v.session == nil {
+		return
+	}
+	pCfg, ok := v.session.Config().Platforms["youtube"]
+	if !ok {
+		return
+	}
+	v.initializing = true
+	if v.enableCheck != nil {
+		v.enableCheck.SetChecked(pCfg.Enabled)
+	}
+	v.initializing = false
+	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
+}
+
+// UpdateStatus updates the connection status badge on the YouTube tab.
+func (v *YouTubeTabView) UpdateStatus(status string, detail string) {
+	fyne.Do(func() {
+		if v.statusBadge == nil {
+			return
+		}
+		switch status {
+		case "connected":
+			v.statusBadge.SetText("🟢 Connected (" + detail + ")")
+		case "waiting":
+			v.statusBadge.SetText("🟡 Waiting for Stream to Go Live (" + detail + ")...")
+		default:
+			if v.enableCheck != nil && v.enableCheck.Checked && v.channelEntry != nil && v.channelEntry.Text != "" {
+				v.statusBadge.SetText("🟡 Waiting for Stream (" + v.channelEntry.Text + ")...")
+			} else {
+				v.statusBadge.SetText("⚪ Disconnected")
+			}
+		}
+	})
+}
+
 func (v *YouTubeTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.Card {
 	v.statusBadge = widget.NewLabelWithStyle("⚪ Disconnected", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
@@ -113,23 +151,7 @@ func (v *YouTubeTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
 
 	v.session.SetOnYouTubeStatus(func(status string, detail string) {
-		fyne.Do(func() {
-			if v.statusBadge == nil {
-				return
-			}
-			switch status {
-			case "connected":
-				v.statusBadge.SetText("🟢 Connected (" + detail + ")")
-			case "waiting":
-				v.statusBadge.SetText("🟡 Waiting for Stream to Go Live (" + detail + ")...")
-			default:
-				if v.enableCheck != nil && v.enableCheck.Checked && v.channelEntry != nil && v.channelEntry.Text != "" {
-					v.statusBadge.SetText("🟡 Waiting for Stream (" + v.channelEntry.Text + ")...")
-				} else {
-					v.statusBadge.SetText("⚪ Disconnected")
-				}
-			}
-		})
+		v.UpdateStatus(status, detail)
 	})
 
 	hintLabel := widget.NewLabelWithStyle(

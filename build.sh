@@ -53,7 +53,10 @@ run_lint() {
     local diff_output
     local err_file="$BUILD_DIR/gofix.err"
     if ! diff_output=$(go fix --diff ./... 2>"$err_file"); then
-        echo "Error: 'go fix --diff ./...' failed:"
+        echo "Error: 'go fix --diff ./...' failed or found unfixed modernizations:"
+        if [ -n "$diff_output" ]; then
+            echo "$diff_output"
+        fi
         cat "$err_file"
         rm -f "$err_file"
         exit 1

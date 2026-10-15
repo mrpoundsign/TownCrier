@@ -58,7 +58,7 @@ func (v *ViewersTabView) Build() fyne.CanvasObject {
 	}
 
 	addBtn := widget.NewButtonWithIcon("Add Chatter Override", theme.ContentAddIcon(), func() {
-		v.showEditDialog(nil)
+		v.showEditDialog("", nil)
 	})
 	addBtn.Importance = widget.HighImportance
 
@@ -84,6 +84,24 @@ func (v *ViewersTabView) Refresh() {
 	})
 }
 
+func viewerMatchesQuery(key string, vc config.ViewerConfig, query string) bool {
+	if query == "" {
+		return true
+	}
+	if strings.Contains(strings.ToLower(key), query) ||
+		strings.Contains(strings.ToLower(vc.Nickname), query) ||
+		strings.Contains(strings.ToLower(vc.UserID), query) {
+		return true
+	}
+	for _, acc := range vc.EffectiveAccounts() {
+		if strings.Contains(strings.ToLower(acc.Platform), query) ||
+			strings.Contains(strings.ToLower(acc.UserID), query) {
+			return true
+		}
+	}
+	return false
+}
+
 func (v *ViewersTabView) refreshTable() {
 	v.tableList.Objects = nil
 
@@ -96,9 +114,7 @@ func (v *ViewersTabView) refreshTable() {
 	var keys []string
 	for k := range cfg.Viewers {
 		vc := cfg.Viewers[k]
-		if query == "" || strings.Contains(strings.ToLower(k), query) ||
-			strings.Contains(strings.ToLower(vc.Nickname), query) ||
-			strings.Contains(strings.ToLower(vc.UserID), query) {
+		if viewerMatchesQuery(k, vc, query) {
 			keys = append(keys, k)
 		}
 	}
@@ -120,11 +136,24 @@ func (v *ViewersTabView) refreshTable() {
 	v.tableList.Refresh()
 }
 
-func (v *ViewersTabView) buildViewerRow(key string, vc config.ViewerConfig) fyne.CanvasObject {
-	title := fmt.Sprintf("[%s] %s", strings.ToUpper(vc.Platform), vc.UserID)
+func formatViewerAccountsTitle(vc config.ViewerConfig) string {
+	accs := vc.EffectiveAccounts()
+	parts := make([]string, 0, len(accs))
+	for _, acc := range accs {
+		parts = append(parts, fmt.Sprintf("[%s] %s", strings.ToUpper(acc.Platform), acc.UserID))
+	}
+	title := strings.Join(parts, "  •  ")
+	if title == "" {
+		title = fmt.Sprintf("[%s] %s", strings.ToUpper(vc.Platform), vc.UserID)
+	}
 	if vc.Nickname != "" {
 		title += fmt.Sprintf(" (Spoken as: %q)", vc.Nickname)
 	}
+	return title
+}
+
+func (v *ViewersTabView) buildViewerRow(key string, vc config.ViewerConfig) fyne.CanvasObject {
+	title := formatViewerAccountsTitle(vc)
 
 	statusText := ""
 	if vc.Ignored {
@@ -140,11 +169,11 @@ func (v *ViewersTabView) buildViewerRow(key string, vc config.ViewerConfig) fyne
 
 	editBtn := widget.NewButtonWithIcon("Edit", theme.DocumentCreateIcon(), func() {
 		copyVC := vc
-		v.showEditDialog(&copyVC)
+		v.showEditDialog(key, &copyVC)
 	})
 
 	deleteBtn := widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), func() {
-		dialog.ShowConfirm("Delete Override", "Remove voice override for "+vc.UserID+"?", func(ok bool) {
+		dialog.ShowConfirm("Delete Override", "Remove voice override for "+title+"?", func(ok bool) {
 			if !ok {
 				return
 			}
@@ -161,14 +190,81 @@ func (v *ViewersTabView) buildViewerRow(key string, vc config.ViewerConfig) fyne
 	)
 }
 
-func (v *ViewersTabView) showEditDialog(existing *config.ViewerConfig) {
+func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.ViewerConfig) {
 	isEdit := existing != nil
+
+	var accounts []config.ViewerAccount
+	if isEdit {
+		accounts = append(accounts, existing.EffectiveAccounts()...)
+	}
+
+	accountsList := container.NewVBox()
+	var refreshAccountsUI func()
+	refreshAccountsUI = func() {
+		accountsList.Objects = nil
+		if len(accounts) == 0 {
+			accountsList.Add(widget.NewLabelWithStyle("No linked platform accounts yet — enter one below.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
+		} else {
+			for i, acc := range accounts {
+				idx := i
+				accText := fmt.Sprintf("• [%s] %s", strings.ToUpper(acc.Platform), acc.UserID)
+				rmBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
+					accounts = append(accounts[:idx], accounts[idx+1:]...)
+					refreshAccountsUI()
+				})
+				rmBtn.Importance = widget.LowImportance
+				row := container.NewBorder(nil, nil, widget.NewLabelWithStyle(accText, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), rmBtn)
+				accountsList.Add(row)
+			}
+		}
+		accountsList.Refresh()
+	}
+	refreshAccountsUI()
 
 	platformSelect := widget.NewSelect([]string{"twitch", "youtube", "kick", "tiktok"}, nil)
 	platformSelect.SetSelected("twitch")
+	if isEdit && len(accounts) == 1 && accounts[0].Platform == "twitch" {
+		platformSelect.SetSelected("youtube")
+	}
 
 	userEntry := widget.NewEntry()
-	userEntry.SetPlaceHolder("Chatter username or stable user ID")
+	userEntry.SetPlaceHolder("Username, @handle, or User ID")
+
+	addAccount := func() bool {
+		uid := strings.TrimSpace(userEntry.Text)
+		if uid == "" {
+			return false
+		}
+		plat := strings.ToLower(strings.TrimSpace(platformSelect.Selected))
+		if plat == "" {
+			plat = "twitch"
+		}
+		for _, a := range accounts {
+			if strings.EqualFold(a.Platform, plat) && strings.EqualFold(strings.TrimPrefix(a.UserID, "@"), strings.TrimPrefix(uid, "@")) {
+				userEntry.SetText("")
+				return true
+			}
+		}
+		accounts = append(accounts, config.ViewerAccount{
+			Platform: plat,
+			UserID:   uid,
+		})
+		userEntry.SetText("")
+		refreshAccountsUI()
+		return true
+	}
+
+	addAccBtn := widget.NewButtonWithIcon("Add Platform", theme.ContentAddIcon(), func() {
+		_ = addAccount()
+	})
+
+	addAccountRow := container.NewBorder(
+		nil,
+		nil,
+		platformSelect,
+		addAccBtn,
+		userEntry,
+	)
 
 	nickEntry := widget.NewEntry()
 	nickEntry.SetPlaceHolder("Spoken nickname (leave blank for actual name)")
@@ -186,9 +282,6 @@ func (v *ViewersTabView) showEditDialog(existing *config.ViewerConfig) {
 	allowedCheck := widget.NewCheck("Always Allow (bypass bot filter)", nil)
 
 	if isEdit {
-		platformSelect.SetSelected(existing.Platform)
-		userEntry.SetText(existing.UserID)
-		userEntry.Disable()
 		nickEntry.SetText(existing.Nickname)
 		voiceSelect.SetSelected(tts.VoiceDisplayName(existing.Voice))
 		if existing.Speed > 0 {
@@ -204,10 +297,11 @@ func (v *ViewersTabView) showEditDialog(existing *config.ViewerConfig) {
 	}
 
 	form := container.NewVBox(
-		widget.NewLabel("Platform:"),
-		platformSelect,
-		widget.NewLabel("Chatter Username / User ID:"),
-		userEntry,
+		widget.NewLabelWithStyle("Linked Platform Accounts:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		accountsList,
+		widget.NewLabel("Add Platform Username / Handle:"),
+		addAccountRow,
+		widget.NewSeparator(),
 		widget.NewLabel("Spoken Nickname:"),
 		nickEntry,
 		widget.NewLabel("Assigned Voice:"),
@@ -226,18 +320,22 @@ func (v *ViewersTabView) showEditDialog(existing *config.ViewerConfig) {
 		if !confirmed {
 			return
 		}
-		userID := strings.TrimSpace(userEntry.Text)
-		if userID == "" {
-			dialog.ShowError(errors.New("username or user ID cannot be empty"), v.window)
+		// Include any pending text typed into userEntry before Save was clicked
+		if strings.TrimSpace(userEntry.Text) != "" {
+			_ = addAccount()
+		}
+		if len(accounts) == 0 {
+			dialog.ShowError(errors.New("at least one platform username or user ID is required"), v.window)
 			return
 		}
 
-		plat := platformSelect.Selected
-		key := config.ViewerKey(plat, userID)
+		primary := accounts[0]
+		key := config.ViewerKey(primary.Platform, primary.UserID)
 
 		vc := config.ViewerConfig{
-			Platform: plat,
-			UserID:   userID,
+			Platform: primary.Platform,
+			UserID:   primary.UserID,
+			Accounts: accounts,
 			Voice:    tts.VoiceIDFromLabel(voiceSelect.Selected),
 			Speed:    float32(speedSlider.Value),
 			Nickname: strings.TrimSpace(nickEntry.Text),
@@ -249,11 +347,14 @@ func (v *ViewersTabView) showEditDialog(existing *config.ViewerConfig) {
 			if cfg.Viewers == nil {
 				cfg.Viewers = make(map[string]config.ViewerConfig)
 			}
+			if existingKey != "" && existingKey != key {
+				delete(cfg.Viewers, existingKey)
+			}
 			cfg.Viewers[key] = vc
 		})
 
 		v.refreshTable()
-		v.setStatus("✓ Saved override for " + userID)
+		v.setStatus("✓ Saved override for " + formatViewerAccountsTitle(vc))
 	}, v.window)
 }
 
