@@ -19,14 +19,14 @@ type TikTokTabView struct {
 	window  fyne.Window
 	session *app.Session
 
-	usernameEntry     *widget.Entry
+	usernameEntry     *ScrollPassEntry
 	statusBadge       *widget.Label
 	enableCheck       *widget.Check
 	allChatCheck      *widget.Check
 	ignorePrefixCheck *widget.Check
-	ignorePrefixEntry *widget.Entry
+	ignorePrefixEntry *ScrollPassEntry
 	prefixCheck       *widget.Check
-	prefixEntry       *widget.Entry
+	prefixEntry       *ScrollPassEntry
 	roleGatedCheck    *widget.Check
 	roleChecks        map[string]*widget.Check
 	paidOnlyCheck     *widget.Check
@@ -67,7 +67,7 @@ func (v *TikTokTabView) Build() fyne.CanvasObject {
 		overridesCard,
 	)
 
-	return container.NewVScroll(content)
+	return newPanelVScroll(content)
 }
 
 // SyncFromConfig updates the TikTok tab controls to match the active session configuration.
@@ -111,7 +111,7 @@ func (v *TikTokTabView) UpdateStatus(status string, detail string) {
 func (v *TikTokTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.Card {
 	v.statusBadge = widget.NewLabelWithStyle("⚪ Disconnected", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
-	v.usernameEntry = widget.NewEntry()
+	v.usernameEntry = NewScrollPassEntry()
 	v.usernameEntry.SetPlaceHolder("e.g. username or https://www.tiktok.com/@username/live")
 	v.usernameEntry.SetText(pCfg.AccountName)
 
@@ -184,7 +184,7 @@ func (v *TikTokTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 	})
 	v.allChatCheck.SetChecked(rr.AllChat)
 
-	v.prefixEntry = widget.NewEntry()
+	v.prefixEntry = NewScrollPassEntry()
 	v.prefixEntry.SetPlaceHolder("!tts")
 	pref := rr.Prefix
 	if pref == "" {
@@ -271,7 +271,7 @@ func (v *TikTokTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 	})
 	v.paidOnlyCheck.SetChecked(rr.PaidOnly)
 
-	v.ignorePrefixEntry = widget.NewEntry()
+	v.ignorePrefixEntry = NewScrollPassEntry()
 	v.ignorePrefixEntry.SetPlaceHolder("!, ?")
 	ignPrefStr := strings.Join(rr.IgnoredPrefixes, ", ")
 	if ignPrefStr == "" && rr.IgnorePrefixes {
@@ -349,7 +349,7 @@ func (v *TikTokTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 	})
 	giftCheck.SetChecked(giftNotif.Enabled)
 
-	giftTmplEntry := widget.NewEntry()
+	giftTmplEntry := NewScrollPassEntry()
 	giftTmplEntry.SetPlaceHolder("{user} sent {count} {gift}!")
 	giftTmplEntry.SetText(giftNotif.Template)
 	giftTmplEntry.OnChanged = func(val string) {
@@ -365,7 +365,7 @@ func (v *TikTokTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 		})
 	}
 
-	minDiamondsEntry := widget.NewEntry()
+	minDiamondsEntry := NewScrollPassEntry()
 	minDiamondsEntry.SetPlaceHolder("0")
 	minDiamondsEntry.SetText(strconv.FormatInt(int64(giftNotif.Threshold), 10))
 	minDiamondsEntry.OnChanged = func(val string) {
@@ -411,7 +411,7 @@ func (v *TikTokTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 	})
 	followCheck.SetChecked(followNotif.Enabled)
 
-	followTmplEntry := widget.NewEntry()
+	followTmplEntry := NewScrollPassEntry()
 	followTmplEntry.SetPlaceHolder("{user} followed on TikTok!")
 	followTmplEntry.SetText(followNotif.Template)
 	followTmplEntry.OnChanged = func(val string) {

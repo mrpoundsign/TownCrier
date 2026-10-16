@@ -24,24 +24,24 @@ type TwitchTabView struct {
 	window  fyne.Window
 	session *app.Session
 
-	channelEntry      *widget.Entry
+	channelEntry      *ScrollPassEntry
 	statusBadge       *widget.Label
 	oauthStatusLabel  *widget.Label
 	connectBtn        *widget.Button
 	enableCheck       *widget.Check
 	allChatCheck      *widget.Check
 	ignorePrefixCheck *widget.Check
-	ignorePrefixEntry *widget.Entry
+	ignorePrefixEntry *ScrollPassEntry
 	prefixCheck       *widget.Check
-	prefixEntry       *widget.Entry
+	prefixEntry       *ScrollPassEntry
 	roleGatedCheck    *widget.Check
 	roleChecks        map[string]*widget.Check
 	paidOnlyCheck     *widget.Check
-	rewardEntry       *widget.Entry
+	rewardEntry       *ScrollPassEntry
 	rewardOAuthHint   *widget.Label
 	modCmdsCheck      *widget.Check
 	followCheck       *widget.Check
-	followTmplEntry   *widget.Entry
+	followTmplEntry   *ScrollPassEntry
 	followOAuthHint   *widget.Label
 	overrideCheck     *widget.Check
 	onStatus          func(msg string)
@@ -84,7 +84,7 @@ func (v *TwitchTabView) Build() fyne.CanvasObject {
 		overridesCard,
 	)
 
-	return container.NewVScroll(content)
+	return newPanelVScroll(content)
 }
 
 // SyncFromConfig updates the Twitch tab controls to match the active session configuration.
@@ -200,7 +200,7 @@ func (v *TwitchTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.
 	v.statusBadge = widget.NewLabelWithStyle("⚪ Disconnected", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	v.oauthStatusLabel = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 
-	v.channelEntry = widget.NewEntry()
+	v.channelEntry = NewScrollPassEntry()
 	v.channelEntry.SetPlaceHolder("e.g. mrpoundsign")
 	v.channelEntry.SetText(pCfg.AccountName)
 
@@ -379,7 +379,7 @@ func (v *TwitchTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 	})
 	v.allChatCheck.SetChecked(rr.AllChat)
 
-	v.prefixEntry = widget.NewEntry()
+	v.prefixEntry = NewScrollPassEntry()
 	v.prefixEntry.SetPlaceHolder("!tts")
 	pref := rr.Prefix
 	if pref == "" {
@@ -458,7 +458,7 @@ func (v *TwitchTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 	})
 	v.paidOnlyCheck.SetChecked(rr.PaidOnly)
 
-	v.ignorePrefixEntry = widget.NewEntry()
+	v.ignorePrefixEntry = NewScrollPassEntry()
 	v.ignorePrefixEntry.SetPlaceHolder("!, ?")
 	ignPrefStr := strings.Join(rr.IgnoredPrefixes, ", ")
 	if ignPrefStr == "" && rr.IgnorePrefixes {
@@ -517,7 +517,7 @@ func (v *TwitchTabView) buildTwitchSettingsCard(pCfg config.PlatformConfig) *wid
 		fyne.TextStyle{Italic: true},
 	)
 
-	v.rewardEntry = widget.NewEntry()
+	v.rewardEntry = NewScrollPassEntry()
 	v.rewardEntry.SetPlaceHolder("Leave blank to read all text redemptions")
 	v.rewardEntry.SetText(pCfg.CustomRewardID)
 	v.rewardEntry.OnChanged = func(val string) {
@@ -592,7 +592,7 @@ func (v *TwitchTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 		})
 		enabledCheck.SetChecked(notif.Enabled)
 
-		tmplEntry := widget.NewEntry()
+		tmplEntry := NewScrollPassEntry()
 		tmplEntry.SetText(notif.Template)
 		tmplEntry.OnChanged = func(val string) {
 			v.updateConfig(func(c *config.Config) {

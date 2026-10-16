@@ -21,7 +21,7 @@ type VoicesTabView struct {
 
 	onStatus     func(msg string)
 	previewBtn   *widget.Button
-	sampleEntry  *widget.Entry
+	sampleEntry  *ScrollPassEntry
 	initializing bool
 }
 
@@ -59,7 +59,7 @@ func (v *VoicesTabView) Build() fyne.CanvasObject {
 		previewCard,
 	)
 
-	return container.NewVScroll(content)
+	return newPanelVScroll(content)
 }
 
 func (v *VoicesTabView) buildPreviewCard() *widget.Card {
@@ -75,7 +75,7 @@ func (v *VoicesTabView) buildPreviewCard() *widget.Card {
 		speedLabel.SetText(fmt.Sprintf("%.2fx", val))
 	}
 
-	v.sampleEntry = widget.NewEntry()
+	v.sampleEntry = NewScrollPassEntry()
 	v.sampleEntry.SetText("Hello! I am reading your livestream chat with natural neural speech.")
 
 	v.previewBtn = widget.NewButtonWithIcon("Preview Voice", theme.MediaPlayIcon(), func() {

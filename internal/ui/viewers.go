@@ -22,7 +22,7 @@ type ViewersTabView struct {
 	window  fyne.Window
 	session *app.Session
 
-	searchEntry *widget.Entry
+	searchEntry *ScrollPassEntry
 	tableList   *fyne.Container
 	onStatus    func(msg string)
 }
@@ -51,7 +51,7 @@ func (v *ViewersTabView) setStatus(msg string) {
 
 // Build creates the Fyne CanvasObject for the Viewers tab.
 func (v *ViewersTabView) Build() fyne.CanvasObject {
-	v.searchEntry = widget.NewEntry()
+	v.searchEntry = NewScrollPassEntry()
 	v.searchEntry.SetPlaceHolder("Search chatter overrides by name or ID...")
 	v.searchEntry.OnChanged = func(s string) {
 		v.refreshTable()
@@ -66,12 +66,15 @@ func (v *ViewersTabView) Build() fyne.CanvasObject {
 
 	v.refreshTable()
 
+	tableScroll := newPanelVScroll(v.tableList)
+	v.searchEntry.SetParentScroll(tableScroll)
+
 	content := container.NewBorder(
 		topBar,
 		nil,
 		nil,
 		nil,
-		container.NewVScroll(v.tableList),
+		tableScroll,
 	)
 
 	return content
@@ -227,7 +230,7 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 		platformSelect.SetSelected("youtube")
 	}
 
-	userEntry := widget.NewEntry()
+	userEntry := NewScrollPassEntry()
 	userEntry.SetPlaceHolder("Username or User ID (no @ needed)")
 
 	addAccount := func() bool {
@@ -266,7 +269,7 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 		userEntry,
 	)
 
-	nickEntry := widget.NewEntry()
+	nickEntry := NewScrollPassEntry()
 	nickEntry.SetPlaceHolder("Spoken nickname (leave blank for actual name)")
 
 	voiceLabels := tts.VoiceDisplayLabels()
@@ -316,7 +319,7 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 		title = "Edit Chatter Override"
 	}
 
-	dlg := dialog.NewCustomConfirm(title, "Save", "Cancel", container.NewVScroll(form), func(confirmed bool) {
+	dlg := dialog.NewCustomConfirm(title, "Save", "Cancel", newPanelVScroll(form), func(confirmed bool) {
 		if !confirmed {
 			return
 		}

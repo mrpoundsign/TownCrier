@@ -167,7 +167,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		botsCard,
 	)
 
-	return container.NewVScroll(content)
+	return newPanelVScroll(content)
 }
 
 func (v *SettingsView) buildServicesCard() *widget.Card {
@@ -631,7 +631,7 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 
 	refreshWords()
 
-	newWordEntry := widget.NewEntry()
+	newWordEntry := NewScrollPassEntry()
 	newWordEntry.SetPlaceHolder("Enter word or pattern to block (e.g. slurs, bad words)")
 
 	addBtn := widget.NewButtonWithIcon("Block Word", theme.ContentAddIcon(), func() {

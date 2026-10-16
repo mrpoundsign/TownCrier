@@ -18,14 +18,14 @@ type KickTabView struct {
 	window  fyne.Window
 	session *app.Session
 
-	channelEntry      *widget.Entry
+	channelEntry      *ScrollPassEntry
 	statusBadge       *widget.Label
 	enableCheck       *widget.Check
 	allChatCheck      *widget.Check
 	ignorePrefixCheck *widget.Check
-	ignorePrefixEntry *widget.Entry
+	ignorePrefixEntry *ScrollPassEntry
 	prefixCheck       *widget.Check
-	prefixEntry       *widget.Entry
+	prefixEntry       *ScrollPassEntry
 	roleGatedCheck    *widget.Check
 	roleChecks        map[string]*widget.Check
 	paidOnlyCheck     *widget.Check
@@ -66,7 +66,7 @@ func (v *KickTabView) Build() fyne.CanvasObject {
 		overridesCard,
 	)
 
-	return container.NewVScroll(content)
+	return newPanelVScroll(content)
 }
 
 // SyncFromConfig updates the Kick tab controls to match the active session configuration.
@@ -110,7 +110,7 @@ func (v *KickTabView) UpdateStatus(status string, detail string) {
 func (v *KickTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.Card {
 	v.statusBadge = widget.NewLabelWithStyle("⚪ Disconnected", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
-	v.channelEntry = widget.NewEntry()
+	v.channelEntry = NewScrollPassEntry()
 	v.channelEntry.SetPlaceHolder("e.g. channelname, https://kick.com/channelname, or channelname#chatroom_id")
 	v.channelEntry.SetText(pCfg.AccountName)
 
@@ -183,7 +183,7 @@ func (v *KickTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.Car
 	})
 	v.allChatCheck.SetChecked(rr.AllChat)
 
-	v.prefixEntry = widget.NewEntry()
+	v.prefixEntry = NewScrollPassEntry()
 	v.prefixEntry.SetPlaceHolder("!tts")
 	pref := rr.Prefix
 	if pref == "" {
@@ -271,7 +271,7 @@ func (v *KickTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.Car
 	})
 	v.paidOnlyCheck.SetChecked(rr.PaidOnly)
 
-	v.ignorePrefixEntry = widget.NewEntry()
+	v.ignorePrefixEntry = NewScrollPassEntry()
 	v.ignorePrefixEntry.SetPlaceHolder("!, ?")
 	ignPrefStr := strings.Join(rr.IgnoredPrefixes, ", ")
 	if ignPrefStr == "" && rr.IgnorePrefixes {
@@ -365,7 +365,7 @@ func (v *KickTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widget
 		})
 		enabledCheck.SetChecked(notif.Enabled)
 
-		tmplEntry := widget.NewEntry()
+		tmplEntry := NewScrollPassEntry()
 		tmplEntry.SetText(notif.Template)
 		tmplEntry.OnChanged = func(val string) {
 			v.updateConfig(func(c *config.Config) {

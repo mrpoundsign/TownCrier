@@ -18,14 +18,14 @@ type YouTubeTabView struct {
 	window  fyne.Window
 	session *app.Session
 
-	channelEntry      *widget.Entry
+	channelEntry      *ScrollPassEntry
 	statusBadge       *widget.Label
 	enableCheck       *widget.Check
 	allChatCheck      *widget.Check
 	ignorePrefixCheck *widget.Check
-	ignorePrefixEntry *widget.Entry
+	ignorePrefixEntry *ScrollPassEntry
 	prefixCheck       *widget.Check
-	prefixEntry       *widget.Entry
+	prefixEntry       *ScrollPassEntry
 	roleGatedCheck    *widget.Check
 	roleChecks        map[string]*widget.Check
 	paidOnlyCheck     *widget.Check
@@ -66,7 +66,7 @@ func (v *YouTubeTabView) Build() fyne.CanvasObject {
 		overridesCard,
 	)
 
-	return container.NewVScroll(content)
+	return newPanelVScroll(content)
 }
 
 // SyncFromConfig updates the YouTube tab controls to match the active session configuration.
@@ -110,7 +110,7 @@ func (v *YouTubeTabView) UpdateStatus(status string, detail string) {
 func (v *YouTubeTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.Card {
 	v.statusBadge = widget.NewLabelWithStyle("⚪ Disconnected", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
-	v.channelEntry = widget.NewEntry()
+	v.channelEntry = NewScrollPassEntry()
 	v.channelEntry.SetPlaceHolder("e.g. mrpoundsign or https://www.youtube.com/watch?v=...")
 	v.channelEntry.SetText(pCfg.AccountName)
 
@@ -183,7 +183,7 @@ func (v *YouTubeTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.
 	})
 	v.allChatCheck.SetChecked(rr.AllChat)
 
-	v.prefixEntry = widget.NewEntry()
+	v.prefixEntry = NewScrollPassEntry()
 	v.prefixEntry.SetPlaceHolder("!tts")
 	pref := rr.Prefix
 	if pref == "" {
@@ -270,7 +270,7 @@ func (v *YouTubeTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.
 	})
 	v.paidOnlyCheck.SetChecked(rr.PaidOnly)
 
-	v.ignorePrefixEntry = widget.NewEntry()
+	v.ignorePrefixEntry = NewScrollPassEntry()
 	v.ignorePrefixEntry.SetPlaceHolder("!, ?")
 	ignPrefStr := strings.Join(rr.IgnoredPrefixes, ", ")
 	if ignPrefStr == "" && rr.IgnorePrefixes {
@@ -364,7 +364,7 @@ func (v *YouTubeTabView) buildNotificationsCard(pCfg config.PlatformConfig) *wid
 		})
 		enabledCheck.SetChecked(notif.Enabled)
 
-		tmplEntry := widget.NewEntry()
+		tmplEntry := NewScrollPassEntry()
 		tmplEntry.SetText(notif.Template)
 		tmplEntry.OnChanged = func(val string) {
 			v.updateConfig(func(c *config.Config) {
