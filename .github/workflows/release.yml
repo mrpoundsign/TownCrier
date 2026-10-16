@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. 0.0.1)'
+        description: 'Release version (e.g. 0.0.2)'
         required: false
-        default: '0.0.1'
+        default: '0.0.2'
 
 permissions:
   contents: write
@@ -69,7 +69,7 @@ jobs:
             RAW_VER="${GITHUB_REF#refs/tags/v}"
             TAG_NAME="${GITHUB_REF#refs/tags/}"
           else
-            RAW_VER="${{ github.event.inputs.version || '0.0.1' }}"
+            RAW_VER="${{ github.event.inputs.version || '0.0.2' }}"
             RAW_VER="${RAW_VER#v}"
             TAG_NAME="v${RAW_VER}"
           fi
