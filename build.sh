@@ -15,7 +15,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
 BIN_DIR="$BUILD_DIR/bin"
 DIST_DIR="$ROOT_DIR/dist"
-VERSION="${VERSION:-0.0.1}"
+VERSION="${VERSION:-0.0.2}"
 
 mkdir -p "$BUILD_DIR" "$BIN_DIR" "$DIST_DIR" "$ROOT_DIR/cmd/launcher/payload"
 touch "$ROOT_DIR/cmd/launcher/payload/placeholder.txt"
@@ -24,15 +24,11 @@ if command -v git &>/dev/null && [ -d "$ROOT_DIR/.git" ] && [ -d "$ROOT_DIR/.git
     git -C "$ROOT_DIR" config core.hooksPath .githooks 2>/dev/null || true
 fi
 
-if ! command -v go &>/dev/null; then
-    if [ -x "/usr/local/go/bin/go" ]; then
-        export PATH="/usr/local/go/bin:$PATH"
-    elif [ -x "$HOME/go/bin/go" ]; then
-        export PATH="$HOME/go/bin:$PATH"
-    elif [ -d "$HOME/.asdf/shims" ]; then
-        export PATH="$HOME/.asdf/shims:$PATH"
+for dir in "$HOME/go/bin" "/usr/local/go/bin" "$HOME/.asdf/shims" "$HOME/.asdf/bin" "/home/linuxbrew/.linuxbrew/bin" "/home/linuxbrew/.linuxbrew/sbin"; do
+    if [ -d "$dir" ] && [[ ":$PATH:" != *":$dir:"* ]]; then
+        export PATH="$dir:$PATH"
     fi
-fi
+done
 
 fetch_dlls() {
     echo "==> Verifying runtime DLLs in $BIN_DIR..."
@@ -57,7 +53,10 @@ run_lint() {
     local diff_output
     local err_file="$BUILD_DIR/gofix.err"
     if ! diff_output=$(go fix --diff ./... 2>"$err_file"); then
-        echo "Error: 'go fix --diff ./...' failed:"
+        echo "Error: 'go fix --diff ./...' failed or found unfixed modernizations:"
+        if [ -n "$diff_output" ]; then
+            echo "$diff_output"
+        fi
         cat "$err_file"
         rm -f "$err_file"
         exit 1
@@ -72,20 +71,17 @@ run_lint() {
     echo "✓ Code modernizations verified (0 diff)!"
 
     echo "==> Running golangci-lint-v2..."
-    if command -v golangci-lint-v2 &>/dev/null; then
-        golangci-lint-v2 run ./...
-    elif command -v golangci-lint &>/dev/null; then
-        golangci-lint run ./...
-    else
-        echo "Error: golangci-lint-v2 / golangci-lint not found in PATH"
+    if ! command -v golangci-lint-v2 &>/dev/null; then
+        echo "Error: golangci-lint-v2 not found in PATH"
         exit 1
     fi
+    golangci-lint-v2 run ./...
     echo "✓ Lint passed (0 issues)!"
 }
 
 run_test() {
     echo "==> Running unit tests..."
-    go test -count=1 -v ./...
+    go test -timeout 60s -count=1 -v ./...
     echo "✓ All tests passed!"
 }
 

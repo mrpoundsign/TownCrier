@@ -1,0 +1,5 @@
+{
+  "event": "App\\Events\\ChatMessageSentEvent",
+  "data": "{\"id\":\"8c2e1f9a-4b3d-4e1a-9c8b-7a6f5e4d3c2b\",\"chatroom_id\":27670567,\"content\":\"Hello Kick stream! [emote:37226:KEKW] let's go\",\"type\":\"message\",\"created_at\":\"2026-10-15T20:00:00+00:00\",\"sender\":{\"id\":987654,\"username\":\"KickViewer_01\",\"slug\":\"kickviewer_01\",\"identity\":{\"color\":\"#53fc18\",\"badges\":[{\"type\":\"moderator\",\"text\":\"Moderator\",\"active\":true},{\"type\":\"subscriber\",\"text\":\"Subscriber\",\"count\":6,\"active\":true},{\"type\":\"og\",\"text\":\"OG\",\"active\":true}]}}}",
+  "channel": "chatrooms.27670567.v2"
+}

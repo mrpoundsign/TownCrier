@@ -15,7 +15,7 @@ echo "==> [pre-commit] Running TownCrier Quality Gate..."
 # If invoked from Windows Git (msys/cygwin) where WSL is the primary build environment, run inside WSL
 if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* ]] && command -v wsl.exe &>/dev/null; then
     WSL_PATH="$(wsl.exe wslpath -a "$ROOT_DIR" | tr -d '\r')"
-    wsl.exe -e bash -ic "cd '$WSL_PATH' && ./build.sh lint && ./build.sh test"
+    wsl.exe -e bash -lc "cd '$WSL_PATH' && ./build.sh lint && ./build.sh test"
 else
     ./build.sh lint
     ./build.sh test

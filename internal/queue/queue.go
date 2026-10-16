@@ -375,12 +375,6 @@ func (q *Queue) popNext() (*Item, int, bool) {
 			continue
 		}
 
-		cfg := q.cfgFn()
-		maxAge := 30 * time.Second
-		if cfg != nil && cfg.Queue.MaxAgeSeconds > 0 {
-			maxAge = time.Duration(cfg.Queue.MaxAgeSeconds) * time.Second
-		}
-
 		// 1. Pop from Events / Paid tier (Tier 0) - NEVER dropped for staleness
 		if len(q.eventsQueue) > 0 {
 			item := q.eventsQueue[0]
@@ -397,6 +391,22 @@ func (q *Queue) popNext() (*Item, int, bool) {
 
 		// 2. Pop from Chat tier (Tier 1) - Dropped if older than maxAge (D30)
 		if len(q.chatQueue) > 0 {
+			cfgFn := q.cfgFn
+			q.mu.Unlock()
+			cfg := cfgFn()
+			q.mu.Lock()
+			if q.closed {
+				return nil, 0, false
+			}
+			if q.paused || len(q.chatQueue) == 0 || len(q.eventsQueue) > 0 {
+				continue
+			}
+
+			maxAge := 30 * time.Second
+			if cfg != nil && cfg.Queue.MaxAgeSeconds > 0 {
+				maxAge = time.Duration(cfg.Queue.MaxAgeSeconds) * time.Second
+			}
+
 			item := q.chatQueue[0]
 			q.chatQueue = q.chatQueue[1:]
 
@@ -433,8 +443,10 @@ func (q *Queue) processItem(item *Item, depth int) {
 	onFinished := q.onItemFinished
 	engine := q.engine
 	player := q.player
-	cfg := q.cfgFn()
+	cfgFn := q.cfgFn
 	q.mu.Unlock()
+
+	cfg := cfgFn()
 
 	defer func() {
 		q.mu.Lock()

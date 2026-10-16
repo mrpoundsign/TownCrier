@@ -1,0 +1,5 @@
+{
+  "event": "App\\Events\\UserBannedEvent",
+  "data": "{\"id\":\"ban-evt-1\",\"user\":{\"id\":987654,\"username\":\"KickViewer_01\",\"slug\":\"kickviewer_01\"},\"banned_by\":{\"id\":111,\"username\":\"ModUser\"}}",
+  "channel": "chatrooms.27670567.v2"
+}

@@ -2,12 +2,14 @@ package tts
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 )
 
@@ -143,14 +145,108 @@ func TestIsModelInstalled(t *testing.T) {
 		t.Error("empty dir should not be reported as installed")
 	}
 
-	// Create dummy files
+	// Create only int8 + shared assets -> still missing model.onnx
 	_ = os.WriteFile(filepath.Join(tmpDir, "model.int8.onnx"), []byte("x"), 0600)
 	_ = os.WriteFile(filepath.Join(tmpDir, "voices.bin"), []byte("x"), 0600)
 	_ = os.WriteFile(filepath.Join(tmpDir, "tokens.txt"), []byte("x"), 0600)
 	_ = os.Mkdir(filepath.Join(tmpDir, "espeak-ng-data"), 0755)
 
+	if IsModelInstalled(tmpDir) {
+		t.Error("dir without model.onnx should not be reported as installed")
+	}
+
+	_ = os.WriteFile(filepath.Join(tmpDir, "model.onnx"), []byte("x"), 0600)
 	if !IsModelInstalled(tmpDir) {
-		t.Error("dir with all assets should be reported as installed")
+		t.Error("dir with all assets (both model.onnx and model.int8.onnx) should be reported as installed")
+	}
+}
+
+func TestDownloadKokoroModelParallel(t *testing.T) {
+	const fp32B64 = "QlpoOTFBWSZTWYefy4YAAVl/gsKgACBAA/+wIQBAAP/v38BAADAIMAE4FBpQ0AGgAAAAAGMhkNBoNGgDQANDBFEmk0aBR+SBM0aGjTao2mp1+R53/M/dNZgQWjmDLeSCRoQFtxxupukGAksHZFIndUcwOAwIEjCyOQyOk28TIfoxHZbzj9eUQmkPHAHYCG/0eHD9iFQe3XQaC03f4Yv8qwREFRi0YR9hp4ZtY1sGh4xSgSwM2DnEsXaWUsPYGo2jJEToDUNaA0NEjI3D2SPgnIgeSccg+E34dMTpdaPHgZEmY4ZwaC4PxeDDb1j5BAwJVqIFyCbMRPBREH2Be4CYRD3wNQenMxG8c4N198RB1Hv6Rcmcd2PXb1HAa1nTq7BA/4u5IpwoSEPP5cMA"
+	const int8B64 = "QlpoOTFBWSZTWZDFmCAAAWN/gsKgACBAA//kIAgAAP7v38BAADAIMAE4a0GkgAGgAAABoAaIygRiYJoaMRk0MTARSKYQ1HqZpqMjTTR6jDUNPUy5D1/bOc5d5cQUjUGPAkCRoQFpv2VznIGAkXjbBE76qRhS4YECQwshxGQ2FvyeY4j0Ngzp6ylr4RCWBbrBtBCOJx941CFAMDAP4OzfOHOMigYVwHdhYNdQwRhASlIJpEwEDY0ARBGoFAJ9wEgJGIDVFAdBKaoYHMUbQJjNNA3yHMnQgeifWIck36u2B2rpHS8ICQOG8XAwDoaBOnvC449V+MZQEy9IC6BHUInAtImB4dB/vg3HiOuBoB5lw6RrBq06IiDIdvaMwFaZx2XZW5DcNFEq+68QP8XckU4UJCQxZggA"
+
+	fp32Archive, err := base64.StdEncoding.DecodeString(fp32B64)
+	if err != nil {
+		t.Fatalf("decode fp32B64: %v", err)
+	}
+	int8Archive, err := base64.StdEncoding.DecodeString(int8B64)
+	if err != nil {
+		t.Fatalf("decode int8B64: %v", err)
+	}
+
+	fp32Sum := sha256.Sum256(fp32Archive)
+	int8Sum := sha256.Sum256(int8Archive)
+
+	origFP32URL, origFP32SHA, origFP32Size := KokoroFP32ArchiveURL, KokoroFP32ArchiveSHA256, KokoroFP32ArchiveSize
+	origINT8URL, origINT8SHA, origINT8Size := KokoroINT8ArchiveURL, KokoroINT8ArchiveSHA256, KokoroINT8ArchiveSize
+	defer func() {
+		KokoroFP32ArchiveURL, KokoroFP32ArchiveSHA256, KokoroFP32ArchiveSize = origFP32URL, origFP32SHA, origFP32Size
+		KokoroINT8ArchiveURL, KokoroINT8ArchiveSHA256, KokoroINT8ArchiveSize = origINT8URL, origINT8SHA, origINT8Size
+	}()
+
+	var fp32Hits, int8Hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/fp32.tar.bz2":
+			fp32Hits.Add(1)
+			_, _ = w.Write(fp32Archive)
+		case "/int8.tar.bz2":
+			int8Hits.Add(1)
+			_, _ = w.Write(int8Archive)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	KokoroFP32ArchiveURL = server.URL + "/fp32.tar.bz2"
+	KokoroFP32ArchiveSHA256 = hex.EncodeToString(fp32Sum[:])
+	KokoroFP32ArchiveSize = int64(len(fp32Archive))
+
+	KokoroINT8ArchiveURL = server.URL + "/int8.tar.bz2"
+	KokoroINT8ArchiveSHA256 = hex.EncodeToString(int8Sum[:])
+	KokoroINT8ArchiveSize = int64(len(int8Archive))
+
+	destDir := t.TempDir()
+	var lastCur, lastTot int64
+	err = DownloadKokoroModel(destDir, func(cur, tot int64) {
+		lastCur = cur
+		lastTot = tot
+	})
+	if err != nil {
+		t.Fatalf("DownloadKokoroModel failed: %v", err)
+	}
+
+	if !IsModelInstalled(destDir) {
+		t.Fatal("expected model to be installed after parallel download")
+	}
+	if fp32Hits.Load() != 1 || int8Hits.Load() != 1 {
+		t.Errorf("expected 1 hit each for fp32 and int8, got fp32=%d int8=%d", fp32Hits.Load(), int8Hits.Load())
+	}
+	if lastCur != lastTot || lastTot == 0 {
+		t.Errorf("expected final progress %d == %d > 0", lastCur, lastTot)
+	}
+
+	// Verify file contents
+	if got, _ := os.ReadFile(filepath.Join(destDir, "model.onnx")); string(got) != "fp32-weights" {
+		t.Errorf("unexpected model.onnx content: %q", string(got))
+	}
+	if got, _ := os.ReadFile(filepath.Join(destDir, "model.int8.onnx")); string(got) != "int8-weights" {
+		t.Errorf("unexpected model.int8.onnx content: %q", string(got))
+	}
+	if got, _ := os.ReadFile(filepath.Join(destDir, "espeak-ng-data", "en_dict")); string(got) != "dict-data" {
+		t.Errorf("unexpected espeak-ng-data/en_dict content: %q", string(got))
+	}
+
+	// Verify checksum failure cleans up staged files and returns ErrChecksumMismatch
+	badDir := t.TempDir()
+	KokoroINT8ArchiveSHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
+	err = DownloadKokoroModel(badDir, nil)
+	if !errors.Is(err, ErrChecksumMismatch) {
+		t.Fatalf("expected ErrChecksumMismatch, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(badDir, "model.int8.onnx")); !os.IsNotExist(statErr) {
+		t.Error("expected model.int8.onnx not to exist after checksum mismatch")
 	}
 }
 

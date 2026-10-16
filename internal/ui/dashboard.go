@@ -253,21 +253,63 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 
 	ignoreCheck := widget.NewCheck("Ignore this chatter (silent)", nil)
 
-	var existingNickname string
-	var existingAllowed bool
+	const newProfileOption = "(New / Standalone Profile)"
+	profileOptions := []string{newProfileOption}
+	profileKeyByLabel := make(map[string]string)
+
+	var matchedKey string
+	var matchedVC config.ViewerConfig
+	var hasMatch bool
+
 	if v.session != nil {
 		cfg := v.session.Config()
-		if vc, ok := config.LookupViewer(cfg.Viewers, platform, username, username); ok {
-			if vc.Voice != "" {
-				voiceSelect.SetSelected(tts.VoiceDisplayName(vc.Voice))
+		matchedKey, matchedVC, hasMatch = config.LookupViewerWithKey(cfg.Viewers, platform, username, username)
+
+		sortedKeys := make([]string, 0, len(cfg.Viewers))
+		for k := range cfg.Viewers {
+			sortedKeys = append(sortedKeys, k)
+		}
+		slices.Sort(sortedKeys)
+		for _, k := range sortedKeys {
+			vc := cfg.Viewers[k]
+			lbl := formatViewerAccountsTitle(vc)
+			profileOptions = append(profileOptions, lbl)
+			profileKeyByLabel[lbl] = k
+		}
+	}
+
+	linkSelect := widget.NewSelect(profileOptions, nil)
+	linkSelect.SetSelected(newProfileOption)
+
+	applyViewerToWidgets := func(vc config.ViewerConfig) {
+		if vc.Voice != "" {
+			voiceSelect.SetSelected(tts.VoiceDisplayName(vc.Voice))
+		}
+		if vc.Speed > 0 {
+			speedSlider.SetValue(float64(vc.Speed))
+			speedLabel.SetText(fmt.Sprintf("%.2fx", vc.Speed))
+		}
+		ignoreCheck.SetChecked(vc.Ignored)
+	}
+
+	if hasMatch {
+		for lbl, k := range profileKeyByLabel {
+			if k == matchedKey {
+				linkSelect.SetSelected(lbl)
+				break
 			}
-			if vc.Speed > 0 {
-				speedSlider.SetValue(float64(vc.Speed))
-				speedLabel.SetText(fmt.Sprintf("%.2fx", vc.Speed))
+		}
+		applyViewerToWidgets(matchedVC)
+	}
+
+	linkSelect.OnChanged = func(selected string) {
+		if v.session == nil {
+			return
+		}
+		if k, ok := profileKeyByLabel[selected]; ok {
+			if vc, exists := v.session.Config().Viewers[k]; exists {
+				applyViewerToWidgets(vc)
 			}
-			ignoreCheck.SetChecked(vc.Ignored)
-			existingNickname = vc.Nickname
-			existingAllowed = vc.Allowed
 		}
 	}
 
@@ -277,6 +319,8 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 
 	formContent := container.NewVBox(
 		widget.NewLabel(fmt.Sprintf("Assign voice for: %s (%s)", username, platform)),
+		widget.NewLabel("Link to Existing Viewer Profile:"),
+		linkSelect,
 		widget.NewLabel("Voice:"),
 		voiceSelect,
 		container.NewBorder(nil, nil, widget.NewLabel("Speed:"), speedLabel, speedSlider),
@@ -291,15 +335,42 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 			if cfg.Viewers == nil {
 				cfg.Viewers = make(map[string]config.ViewerConfig)
 			}
+
+			selectedKey := profileKeyByLabel[linkSelect.Selected]
+			if selectedKey != "" {
+				if existing, ok := cfg.Viewers[selectedKey]; ok {
+					accs := existing.EffectiveAccounts()
+					alreadyHas := false
+					for _, a := range accs {
+						if a.Platform == platform && a.UserID == username {
+							alreadyHas = true
+							break
+						}
+					}
+					if !alreadyHas {
+						accs = append(accs, config.ViewerAccount{Platform: platform, UserID: username})
+					}
+					existing.Accounts = accs
+					if len(accs) > 0 && existing.UserID == "" {
+						existing.Platform = accs[0].Platform
+						existing.UserID = accs[0].UserID
+					}
+					existing.Voice = tts.VoiceIDFromLabel(voiceSelect.Selected)
+					existing.Speed = float32(speedSlider.Value)
+					existing.Ignored = ignoreCheck.Checked
+					cfg.Viewers[selectedKey] = existing
+					return
+				}
+			}
+
 			key := config.ViewerKey(platform, username)
 			cfg.Viewers[key] = config.ViewerConfig{
 				Platform: platform,
 				UserID:   username,
+				Accounts: []config.ViewerAccount{{Platform: platform, UserID: username}},
 				Voice:    tts.VoiceIDFromLabel(voiceSelect.Selected),
 				Speed:    float32(speedSlider.Value),
-				Nickname: existingNickname,
 				Ignored:  ignoreCheck.Checked,
-				Allowed:  existingAllowed,
 			}
 		})
 		if v.onAssignVoice != nil {

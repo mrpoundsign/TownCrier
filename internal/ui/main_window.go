@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"log"
+	"slices"
 	"sync"
 
 	"fyne.io/fyne/v2"
@@ -27,15 +28,30 @@ type MainWindow struct {
 
 	dashboardTab *DashboardView
 	twitchTab    *TwitchTabView
+	youtubeTab   *YouTubeTabView
+	tiktokTab    *TikTokTabView
+	kickTab      *KickTabView
 	voicesTab    *VoicesTabView
 	viewersTab   *ViewersTabView
 	settingsTab  *SettingsView
 
-	twitchStatusDot *widget.Label
-	volumeSlider    *widget.Slider
-	panicBtn        *widget.Button
-	hotkeyMgr       *GlobalHotkeyManager
-	activeShortcut  *desktop.CustomShortcut
+	dashboardTabItem *container.TabItem
+	twitchTabItem    *container.TabItem
+	youtubeTabItem   *container.TabItem
+	tiktokTabItem    *container.TabItem
+	kickTabItem      *container.TabItem
+	voicesTabItem    *container.TabItem
+	viewersTabItem   *container.TabItem
+	settingsTabItem  *container.TabItem
+
+	twitchStatusDot  *widget.Label
+	youtubeStatusDot *widget.Label
+	tiktokStatusDot  *widget.Label
+	kickStatusDot    *widget.Label
+	volumeSlider     *widget.Slider
+	panicBtn         *widget.Button
+	hotkeyMgr        *GlobalHotkeyManager
+	activeShortcut   *desktop.CustomShortcut
 }
 
 // NewMainWindow creates and initializes the complete desktop application window.
@@ -55,6 +71,7 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	mw.initViews()
 	log.Println("[MainWindow] Initializing header...")
 	mw.initHeader()
+	mw.syncServiceVisibility()
 	log.Println("[MainWindow] Initializing shortcuts...")
 	mw.initShortcuts()
 	log.Println("[MainWindow] Setting window content...")
@@ -135,6 +152,12 @@ func (mw *MainWindow) initViews() {
 	mw.dashboardTab.SetStatusHandler(mw.SetStatus)
 	mw.twitchTab = NewTwitchTabView(mw.Window, mw.Session)
 	mw.twitchTab.SetStatusHandler(mw.SetStatus)
+	mw.youtubeTab = NewYouTubeTabView(mw.Window, mw.Session)
+	mw.youtubeTab.SetStatusHandler(mw.SetStatus)
+	mw.tiktokTab = NewTikTokTabView(mw.Window, mw.Session)
+	mw.tiktokTab.SetStatusHandler(mw.SetStatus)
+	mw.kickTab = NewKickTabView(mw.Window, mw.Session)
+	mw.kickTab.SetStatusHandler(mw.SetStatus)
 	mw.voicesTab = NewVoicesTabView(mw.Window, mw.Session)
 	mw.voicesTab.SetStatusHandler(mw.SetStatus)
 	mw.viewersTab = NewViewersTabView(mw.Window, mw.Session)
@@ -148,20 +171,118 @@ func (mw *MainWindow) initViews() {
 	mw.settingsTab.SetHotkeyChangedHandler(func(hotkey string) error {
 		return mw.ApplyPanicHotkey(hotkey)
 	})
+	mw.settingsTab.SetServicesChangedHandler(func() {
+		mw.syncServiceVisibility()
+	})
+
+	mw.dashboardTabItem = container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), mw.dashboardTab.Build())
+	mw.twitchTabItem = container.NewTabItemWithIcon("Twitch", theme.MediaPlayIcon(), mw.twitchTab.Build())
+	mw.youtubeTabItem = container.NewTabItemWithIcon("YouTube", theme.MediaVideoIcon(), mw.youtubeTab.Build())
+	mw.tiktokTabItem = container.NewTabItemWithIcon("TikTok", theme.MediaRecordIcon(), mw.tiktokTab.Build())
+	mw.kickTabItem = container.NewTabItemWithIcon("Kick", theme.MediaFastForwardIcon(), mw.kickTab.Build())
+	mw.voicesTabItem = container.NewTabItemWithIcon("Voices", theme.VolumeUpIcon(), mw.voicesTab.Build())
+	mw.viewersTabItem = container.NewTabItemWithIcon("Viewers", theme.AccountIcon(), mw.viewersTab.Build())
+	mw.settingsTabItem = container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), mw.settingsTab.Build())
 
 	mw.tabsContainer = container.NewAppTabs(
-		container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), mw.dashboardTab.Build()),
-		container.NewTabItemWithIcon("Twitch", theme.MediaPlayIcon(), mw.twitchTab.Build()),
-		container.NewTabItemWithIcon("Voices", theme.VolumeUpIcon(), mw.voicesTab.Build()),
-		container.NewTabItemWithIcon("Viewers", theme.AccountIcon(), mw.viewersTab.Build()),
-		container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), mw.settingsTab.Build()),
+		mw.dashboardTabItem,
+		mw.twitchTabItem,
+		mw.youtubeTabItem,
+		mw.tiktokTabItem,
+		mw.kickTabItem,
+		mw.voicesTabItem,
+		mw.viewersTabItem,
+		mw.settingsTabItem,
 	)
+}
+
+func (mw *MainWindow) syncServiceVisibility() {
+	cfg := mw.Session.Config()
+
+	twitchCfg, hasTwitch := cfg.Platforms["twitch"]
+	twitchVisible := !hasTwitch || twitchCfg.EverEnabled || twitchCfg.Enabled
+
+	ytCfg, hasYT := cfg.Platforms["youtube"]
+	ytVisible := !hasYT || ytCfg.EverEnabled || ytCfg.Enabled
+
+	ttCfg, hasTT := cfg.Platforms["tiktok"]
+	ttVisible := !hasTT || ttCfg.EverEnabled || ttCfg.Enabled
+
+	kickCfg, hasKick := cfg.Platforms["kick"]
+	kickVisible := !hasKick || kickCfg.EverEnabled || kickCfg.Enabled
+
+	if mw.tabsContainer != nil {
+		selected := mw.tabsContainer.Selected()
+		items := []*container.TabItem{mw.dashboardTabItem}
+		if twitchVisible {
+			items = append(items, mw.twitchTabItem)
+		}
+		if ytVisible {
+			items = append(items, mw.youtubeTabItem)
+		}
+		if ttVisible {
+			items = append(items, mw.tiktokTabItem)
+		}
+		if kickVisible {
+			items = append(items, mw.kickTabItem)
+		}
+		items = append(items, mw.voicesTabItem, mw.viewersTabItem, mw.settingsTabItem)
+		mw.tabsContainer.SetItems(items)
+		if slices.Contains(items, selected) {
+			mw.tabsContainer.Select(selected)
+		}
+	}
+
+	if mw.twitchStatusDot != nil {
+		if twitchVisible {
+			mw.twitchStatusDot.Show()
+		} else {
+			mw.twitchStatusDot.Hide()
+		}
+	}
+	if mw.youtubeStatusDot != nil {
+		if ytVisible {
+			mw.youtubeStatusDot.Show()
+		} else {
+			mw.youtubeStatusDot.Hide()
+		}
+	}
+	if mw.tiktokStatusDot != nil {
+		if ttVisible {
+			mw.tiktokStatusDot.Show()
+		} else {
+			mw.tiktokStatusDot.Hide()
+		}
+	}
+	if mw.kickStatusDot != nil {
+		if kickVisible {
+			mw.kickStatusDot.Show()
+		} else {
+			mw.kickStatusDot.Hide()
+		}
+	}
+	if mw.headerBar != nil {
+		mw.headerBar.Refresh()
+	}
+
+	if mw.twitchTab != nil {
+		mw.twitchTab.SyncFromConfig()
+	}
+	if mw.youtubeTab != nil {
+		mw.youtubeTab.SyncFromConfig()
+	}
+	if mw.tiktokTab != nil {
+		mw.tiktokTab.SyncFromConfig()
+	}
+	if mw.kickTab != nil {
+		mw.kickTab.SyncFromConfig()
+	}
 }
 
 func (mw *MainWindow) initHeader() {
 	cfg := mw.Session.Config()
 
-	// Platform indicator
+	// Platform indicators
 	mw.twitchStatusDot = widget.NewLabelWithStyle("Twitch: ⚪", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	pCfg := cfg.Platforms["twitch"]
 	if pCfg.Enabled && pCfg.AccountName != "" {
@@ -171,6 +292,9 @@ func (mw *MainWindow) initHeader() {
 	}
 
 	mw.Session.SetOnTwitchStatus(func(status string, detail string) {
+		if mw.twitchTab != nil {
+			mw.twitchTab.UpdateStatus(status, detail)
+		}
 		fyne.Do(func() {
 			switch status {
 			case "connected":
@@ -178,7 +302,73 @@ func (mw *MainWindow) initHeader() {
 			case "connecting":
 				mw.twitchStatusDot.SetText("Twitch: 🟡 Connecting...")
 			default:
-				mw.twitchStatusDot.SetText("Twitch: ⚪ Disconnected")
+				mw.twitchStatusDot.SetText("Twitch: ⚪")
+			}
+		})
+	})
+
+	mw.youtubeStatusDot = widget.NewLabelWithStyle("YT: ⚪", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	ytCfg := cfg.Platforms["youtube"]
+	if ytCfg.Enabled && ytCfg.AccountName != "" {
+		mw.youtubeStatusDot.SetText("YT: 🟡 Waiting...")
+	}
+
+	mw.Session.SetOnYouTubeStatus(func(status string, detail string) {
+		if mw.youtubeTab != nil {
+			mw.youtubeTab.UpdateStatus(status, detail)
+		}
+		fyne.Do(func() {
+			switch status {
+			case "connected":
+				mw.youtubeStatusDot.SetText("YT: 🟢 " + detail)
+			case "waiting":
+				mw.youtubeStatusDot.SetText("YT: 🟡 Waiting...")
+			default:
+				mw.youtubeStatusDot.SetText("YT: ⚪")
+			}
+		})
+	})
+
+	mw.tiktokStatusDot = widget.NewLabelWithStyle("TikTok: ⚪", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	ttCfg := cfg.Platforms["tiktok"]
+	if ttCfg.Enabled && ttCfg.AccountName != "" {
+		mw.tiktokStatusDot.SetText("TikTok: 🟡 Waiting...")
+	}
+
+	mw.Session.SetOnTikTokStatus(func(status string, detail string) {
+		if mw.tiktokTab != nil {
+			mw.tiktokTab.UpdateStatus(status, detail)
+		}
+		fyne.Do(func() {
+			switch status {
+			case "connected":
+				mw.tiktokStatusDot.SetText("TikTok: 🟢 " + detail)
+			case "waiting":
+				mw.tiktokStatusDot.SetText("TikTok: 🟡 Waiting...")
+			default:
+				mw.tiktokStatusDot.SetText("TikTok: ⚪")
+			}
+		})
+	})
+
+	mw.kickStatusDot = widget.NewLabelWithStyle("Kick: ⚪", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	kickCfg := cfg.Platforms["kick"]
+	if kickCfg.Enabled && kickCfg.AccountName != "" {
+		mw.kickStatusDot.SetText("Kick: 🟡 Connecting...")
+	}
+
+	mw.Session.SetOnKickStatus(func(status string, detail string) {
+		if mw.kickTab != nil {
+			mw.kickTab.UpdateStatus(status, detail)
+		}
+		fyne.Do(func() {
+			switch status {
+			case "connected":
+				mw.kickStatusDot.SetText("Kick: 🟢 " + detail)
+			case "connecting":
+				mw.kickStatusDot.SetText("Kick: 🟡 Connecting...")
+			default:
+				mw.kickStatusDot.SetText("Kick: ⚪")
 			}
 		})
 	})
@@ -226,7 +416,7 @@ func (mw *MainWindow) initHeader() {
 		ShowAboutDialog(mw.Window)
 	})
 
-	leftSide := container.NewHBox(brandTitle, widget.NewSeparator(), mw.twitchStatusDot)
+	leftSide := container.NewHBox(brandTitle, widget.NewSeparator(), mw.twitchStatusDot, mw.youtubeStatusDot, mw.tiktokStatusDot, mw.kickStatusDot)
 	rightSide := container.NewHBox(volContainer, aboutBtn, mw.panicBtn)
 
 	mw.headerBar = container.NewVBox(

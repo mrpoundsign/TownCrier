@@ -1,0 +1,5 @@
+{
+  "event": "App\\Events\\SubscriptionEvent",
+  "data": "{\"chatroom_id\":27670567,\"username\":\"LoyalKickSub\",\"months\":4}",
+  "channel": "chatrooms.27670567.v2"
+}

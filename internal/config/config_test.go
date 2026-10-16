@@ -218,3 +218,42 @@ func TestLookupViewerCaseInsensitive(t *testing.T) {
 		t.Error("expected non-existent viewer to return false")
 	}
 }
+
+func TestLookupViewerMultiPlatform(t *testing.T) {
+	viewers := map[string]ViewerConfig{
+		"twitch:mrpoundsign": {
+			Platform: "twitch",
+			UserID:   "mrpoundsign",
+			Accounts: []ViewerAccount{
+				{Platform: "twitch", UserID: "mrpoundsign"},
+				{Platform: "youtube", UserID: "@MrPoundSignYT"},
+				{Platform: "tiktok", UserID: "poundsign_tt"},
+			},
+			Voice:    "am_adam",
+			Speed:    1.25,
+			Nickname: "Pound",
+		},
+	}
+
+	// Match Twitch account
+	vc, ok := LookupViewer(viewers, "twitch", "mrpoundsign", "mrpoundsign")
+	if !ok || vc.Nickname != "Pound" || vc.Voice != "am_adam" {
+		t.Fatalf("expected Twitch match, got %+v (ok=%v)", vc, ok)
+	}
+
+	// Match YouTube account with or without leading '@'
+	vc, ok = LookupViewer(viewers, "youtube", "UC12345", "@mrpoundsignyt")
+	if !ok || vc.Nickname != "Pound" || vc.Speed != 1.25 {
+		t.Fatalf("expected YouTube match with @handle, got %+v (ok=%v)", vc, ok)
+	}
+	vc, ok = LookupViewer(viewers, "youtube", "", "MrPoundSignYT")
+	if !ok || vc.Nickname != "Pound" {
+		t.Fatalf("expected YouTube match without @ prefix, got %+v (ok=%v)", vc, ok)
+	}
+
+	// Match TikTok account
+	key, vc, ok := LookupViewerWithKey(viewers, "tiktok", "poundsign_tt", "poundsign_tt")
+	if !ok || key != "twitch:mrpoundsign" || vc.Voice != "am_adam" {
+		t.Fatalf("expected TikTok match with key 'twitch:mrpoundsign', got key=%q vc=%+v (ok=%v)", key, vc, ok)
+	}
+}

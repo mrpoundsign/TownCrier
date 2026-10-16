@@ -27,17 +27,20 @@ type SettingsView struct {
 	session  *app.Session
 	modelDir string
 
-	mu              sync.Mutex
-	deviceEnum      func() ([]audio.DeviceInfo, error)
-	statusLabel     *widget.Label
-	onStatus        func(msg string)
-	onHotkeyChanged func(hotkey string) error
-	modelStatus     *widget.Label
-	deviceSelect    *widget.Select
-	deviceMap       map[string]string // device name -> hex ID
-	downloadBtn     *widget.Button
-	downloadProg    *widget.ProgressBar
-	initializing    bool
+	mu                sync.Mutex
+	deviceEnum        func() ([]audio.DeviceInfo, error)
+	statusLabel       *widget.Label
+	onStatus          func(msg string)
+	onHotkeyChanged   func(hotkey string) error
+	onServicesChanged func()
+	twitchCheck       *widget.Check
+	youtubeCheck      *widget.Check
+	tiktokCheck       *widget.Check
+	kickCheck         *widget.Check
+	modelStatus       *widget.Label
+	deviceSelect      *widget.Select
+	deviceMap         map[string]string // device name -> hex ID
+	initializing      bool
 }
 
 // NewSettingsView constructs a SettingsView for configuring audio, TTS hardware, and global rules.
@@ -71,6 +74,37 @@ func (v *SettingsView) SetStatusHandler(fn func(msg string)) {
 // SetHotkeyChangedHandler registers a callback invoked when the user changes the global Panic Mute hotkey.
 func (v *SettingsView) SetHotkeyChangedHandler(fn func(hotkey string) error) {
 	v.onHotkeyChanged = fn
+}
+
+// SetServicesChangedHandler registers a callback invoked when streaming services are enabled or disabled.
+func (v *SettingsView) SetServicesChangedHandler(fn func()) {
+	v.onServicesChanged = fn
+}
+
+// SyncFromConfig updates the service checkboxes in Settings when modified from a platform tab.
+func (v *SettingsView) SyncFromConfig() {
+	if v.session != nil {
+		v.cfg = v.session.Config()
+	}
+	v.initializing = true
+	defer func() { v.initializing = false }()
+
+	if v.twitchCheck != nil {
+		p, ok := v.cfg.Platforms["twitch"]
+		v.twitchCheck.SetChecked(!ok || p.EverEnabled || p.Enabled)
+	}
+	if v.youtubeCheck != nil {
+		p, ok := v.cfg.Platforms["youtube"]
+		v.youtubeCheck.SetChecked(!ok || p.EverEnabled || p.Enabled)
+	}
+	if v.tiktokCheck != nil {
+		p, ok := v.cfg.Platforms["tiktok"]
+		v.tiktokCheck.SetChecked(!ok || p.EverEnabled || p.Enabled)
+	}
+	if v.kickCheck != nil {
+		p, ok := v.cfg.Platforms["kick"]
+		v.kickCheck.SetChecked(!ok || p.EverEnabled || p.Enabled)
+	}
 }
 
 func (v *SettingsView) setStatus(msg string) {
@@ -115,6 +149,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		})
 	}
 
+	servicesCard := v.buildServicesCard()
 	audioCard := v.buildAudioCard()
 	ttsCard := v.buildTTSCard()
 	rulesCard := v.buildRulesCard()
@@ -122,6 +157,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	botsCard := v.buildBotsCard()
 
 	content := container.NewVBox(
+		servicesCard,
 		audioCard,
 		ttsCard,
 		rulesCard,
@@ -129,7 +165,118 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		botsCard,
 	)
 
-	return container.NewVScroll(content)
+	return newPanelVScroll(content)
+}
+
+func (v *SettingsView) buildServicesCard() *widget.Card {
+	twitchCfg, hasTwitch := v.cfg.Platforms["twitch"]
+	twitchVisible := !hasTwitch || twitchCfg.EverEnabled || twitchCfg.Enabled
+
+	v.twitchCheck = widget.NewCheck("Twitch (shows Twitch tab & loads connector)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			if c.Platforms == nil {
+				c.Platforms = make(map[string]config.PlatformConfig)
+			}
+			p, ok := c.Platforms["twitch"]
+			if !ok {
+				p = config.DefaultConfig().Platforms["twitch"]
+			}
+			p.EverEnabled = checked
+			p.Enabled = checked
+			c.Platforms["twitch"] = p
+		})
+		if v.onServicesChanged != nil {
+			v.onServicesChanged()
+		}
+	})
+	v.twitchCheck.SetChecked(twitchVisible)
+
+	ytCfg, hasYT := v.cfg.Platforms["youtube"]
+	ytVisible := !hasYT || ytCfg.EverEnabled || ytCfg.Enabled
+
+	v.youtubeCheck = widget.NewCheck("YouTube Live (shows YouTube tab & loads connector)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			if c.Platforms == nil {
+				c.Platforms = make(map[string]config.PlatformConfig)
+			}
+			p, ok := c.Platforms["youtube"]
+			if !ok {
+				p = config.DefaultConfig().Platforms["youtube"]
+			}
+			p.EverEnabled = checked
+			p.Enabled = checked
+			c.Platforms["youtube"] = p
+		})
+		if v.onServicesChanged != nil {
+			v.onServicesChanged()
+		}
+	})
+	v.youtubeCheck.SetChecked(ytVisible)
+
+	ttCfg, hasTT := v.cfg.Platforms["tiktok"]
+	ttVisible := !hasTT || ttCfg.EverEnabled || ttCfg.Enabled
+
+	v.tiktokCheck = widget.NewCheck("TikTok Live (shows TikTok tab & loads connector)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			if c.Platforms == nil {
+				c.Platforms = make(map[string]config.PlatformConfig)
+			}
+			p, ok := c.Platforms["tiktok"]
+			if !ok {
+				p = config.DefaultConfig().Platforms["tiktok"]
+			}
+			p.EverEnabled = checked
+			p.Enabled = checked
+			c.Platforms["tiktok"] = p
+		})
+		if v.onServicesChanged != nil {
+			v.onServicesChanged()
+		}
+	})
+	v.tiktokCheck.SetChecked(ttVisible)
+
+	kickCfg, hasKick := v.cfg.Platforms["kick"]
+	kickVisible := !hasKick || kickCfg.EverEnabled || kickCfg.Enabled
+
+	v.kickCheck = widget.NewCheck("Kick (shows Kick tab & loads connector)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			if c.Platforms == nil {
+				c.Platforms = make(map[string]config.PlatformConfig)
+			}
+			p, ok := c.Platforms["kick"]
+			if !ok {
+				p = config.DefaultConfig().Platforms["kick"]
+			}
+			p.EverEnabled = checked
+			p.Enabled = checked
+			c.Platforms["kick"] = p
+		})
+		if v.onServicesChanged != nil {
+			v.onServicesChanged()
+		}
+	})
+	v.kickCheck.SetChecked(kickVisible)
+
+	cardContent := container.NewVBox(
+		v.twitchCheck,
+		v.youtubeCheck,
+		v.tiktokCheck,
+		v.kickCheck,
+	)
+
+	return widget.NewCard("Streaming Services", "Enable or disable streaming platforms to show/hide their tabs and load/unload their connectors", cardContent)
 }
 
 func (v *SettingsView) buildAudioCard() *widget.Card {
@@ -223,16 +370,6 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	}
 	v.modelStatus = widget.NewLabel(statusText)
 
-	v.downloadProg = widget.NewProgressBar()
-	v.downloadProg.Hide()
-
-	v.downloadBtn = widget.NewButtonWithIcon("Download Kokoro Model", theme.DownloadIcon(), func() {
-		v.startModelDownload()
-	})
-	if installed {
-		v.downloadBtn.Hide()
-	}
-
 	gpuCheck := widget.NewCheck("Use GPU Acceleration (DirectML)", func(checked bool) {
 		if v.initializing || v.cfg.TTS.UseGPU == checked {
 			return
@@ -270,58 +407,10 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 
 	cardContent := container.NewVBox(
 		v.modelStatus,
-		v.downloadProg,
-		v.downloadBtn,
 		gpuCheck,
 	)
 
 	return widget.NewCard("TTS Engine & Hardware", "Kokoro neural TTS model and DirectML GPU acceleration", cardContent)
-}
-
-func (v *SettingsView) startModelDownload() {
-	v.downloadBtn.Disable()
-	v.downloadProg.Show()
-	v.downloadProg.SetValue(0)
-	v.setStatus("Downloading Kokoro-82M neural model files...")
-
-	go func() {
-		err := tts.DownloadKokoroModel(v.modelDir, func(current, total int64) {
-			if total > 0 {
-				fyne.Do(func() {
-					v.downloadProg.SetValue(float64(current) / float64(total))
-				})
-			}
-		})
-
-		fyne.Do(func() {
-			v.downloadProg.Hide()
-			if err != nil {
-				v.downloadBtn.Enable()
-				v.setStatus(fmt.Sprintf("Download failed: %v", err))
-				dialog.ShowError(err, v.window)
-				return
-			}
-
-			v.modelStatus.SetText(fmt.Sprintf("Kokoro Model: Installed (%s)", filepath.Base(v.modelDir)))
-			v.downloadBtn.Hide()
-			v.setStatus("Kokoro model downloaded and verified! Initializing engine...")
-
-			// Initialize engine
-			threads := v.cfg.TTS.NumThreads
-			if threads <= 0 {
-				threads = 4
-			}
-			eng, engErr := tts.NewSherpaEngine(v.modelDir, threads, v.cfg.TTS.UseGPU)
-			if engErr != nil {
-				v.setStatus(fmt.Sprintf("Failed to initialize TTS engine: %v", engErr))
-				return
-			}
-			v.mu.Lock()
-			v.engine = eng
-			v.mu.Unlock()
-			v.setStatus("Kokoro TTS engine ready.")
-		})
-	}()
 }
 
 func (v *SettingsView) buildRulesCard() *widget.Card {
@@ -482,7 +571,7 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 
 	refreshWords()
 
-	newWordEntry := widget.NewEntry()
+	newWordEntry := NewScrollPassEntry()
 	newWordEntry.SetPlaceHolder("Enter word or pattern to block (e.g. slurs, bad words)")
 
 	addBtn := widget.NewButtonWithIcon("Block Word", theme.ContentAddIcon(), func() {

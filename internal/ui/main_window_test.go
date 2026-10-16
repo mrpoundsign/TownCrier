@@ -24,12 +24,12 @@ func TestMainWindowCreation(t *testing.T) {
 		t.Fatal("expected non-nil tabsContainer")
 	}
 
-	// Should have 5 tabs: Dashboard, Twitch, Voices, Viewers, Settings
-	if len(mw.tabsContainer.Items) != 5 {
-		t.Errorf("expected 5 tabs, got %d", len(mw.tabsContainer.Items))
+	// Should have 8 tabs: Dashboard, Twitch, YouTube, TikTok, Kick, Voices, Viewers, Settings
+	if len(mw.tabsContainer.Items) != 8 {
+		t.Errorf("expected 8 tabs, got %d", len(mw.tabsContainer.Items))
 	}
 
-	expectedTabs := []string{"Dashboard", "Twitch", "Voices", "Viewers", "Settings"}
+	expectedTabs := []string{"Dashboard", "Twitch", "YouTube", "TikTok", "Kick", "Voices", "Viewers", "Settings"}
 	for i, name := range expectedTabs {
 		if mw.tabsContainer.Items[i].Text != name {
 			t.Errorf("tab %d: expected %q, got %q", i, name, mw.tabsContainer.Items[i].Text)
@@ -100,6 +100,67 @@ func TestMainWindowPanicToggle(t *testing.T) {
 	}
 	if mw.panicBtn.Text != "PANIC MUTE (Esc / Alt+F9)" {
 		t.Errorf("unexpected panicBtn text after hotkey change: %q", mw.panicBtn.Text)
+	}
+}
+
+func TestMainWindowServiceVisibilityToggle(t *testing.T) {
+	appObj := test.NewApp()
+	cfg := config.DefaultConfig()
+	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	defer func() { _ = session.Close() }()
+
+	mw := NewMainWindow(appObj, session)
+	defer func() {
+		if mw.hotkeyMgr != nil {
+			mw.hotkeyMgr.Close()
+		}
+	}()
+
+	// Initially 8 tabs (Dashboard, Twitch, YouTube, TikTok, Kick, Voices, Viewers, Settings)
+	if len(mw.tabsContainer.Items) != 8 {
+		t.Fatalf("expected 8 tabs initially, got %d", len(mw.tabsContainer.Items))
+	}
+
+	// Disable YouTube in Settings
+	mw.settingsTab.youtubeCheck.SetChecked(false)
+	if len(mw.tabsContainer.Items) != 7 {
+		t.Fatalf("expected 7 tabs after disabling YouTube, got %d", len(mw.tabsContainer.Items))
+	}
+	if mw.youtubeStatusDot.Visible() {
+		t.Error("expected youtubeStatusDot to be hidden when YouTube service is disabled")
+	}
+	if session.Config().Platforms["youtube"].Enabled {
+		t.Error("expected youtube Enabled to be false when unchecked in Settings")
+	}
+
+	// Re-enable YouTube in Settings
+	mw.settingsTab.youtubeCheck.SetChecked(true)
+	if len(mw.tabsContainer.Items) != 8 {
+		t.Fatalf("expected 8 tabs after re-enabling YouTube, got %d", len(mw.tabsContainer.Items))
+	}
+	if !mw.youtubeStatusDot.Visible() {
+		t.Error("expected youtubeStatusDot to be visible when YouTube service is enabled")
+	}
+	if !session.Config().Platforms["youtube"].Enabled {
+		t.Error("expected youtube Enabled to be true when checked in Settings")
+	}
+
+	// Disable TikTok in Settings
+	mw.settingsTab.tiktokCheck.SetChecked(false)
+	if len(mw.tabsContainer.Items) != 7 {
+		t.Fatalf("expected 7 tabs after disabling TikTok, got %d", len(mw.tabsContainer.Items))
+	}
+	if mw.tiktokStatusDot.Visible() {
+		t.Error("expected tiktokStatusDot to be hidden when TikTok service is disabled")
+	}
+
+	// Disable Kick in Settings
+	mw.settingsTab.kickCheck.SetChecked(false)
+	if len(mw.tabsContainer.Items) != 6 {
+		t.Fatalf("expected 6 tabs after disabling Kick, got %d", len(mw.tabsContainer.Items))
+	}
+	if mw.kickStatusDot.Visible() {
+		t.Error("expected kickStatusDot to be hidden when Kick service is disabled")
 	}
 }
 
