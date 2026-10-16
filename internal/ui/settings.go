@@ -40,8 +40,6 @@ type SettingsView struct {
 	modelStatus       *widget.Label
 	deviceSelect      *widget.Select
 	deviceMap         map[string]string // device name -> hex ID
-	downloadBtn       *widget.Button
-	downloadProg      *widget.ProgressBar
 	initializing      bool
 }
 
@@ -372,16 +370,6 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	}
 	v.modelStatus = widget.NewLabel(statusText)
 
-	v.downloadProg = widget.NewProgressBar()
-	v.downloadProg.Hide()
-
-	v.downloadBtn = widget.NewButtonWithIcon("Download Kokoro Model", theme.DownloadIcon(), func() {
-		v.startModelDownload()
-	})
-	if installed {
-		v.downloadBtn.Hide()
-	}
-
 	gpuCheck := widget.NewCheck("Use GPU Acceleration (DirectML)", func(checked bool) {
 		if v.initializing || v.cfg.TTS.UseGPU == checked {
 			return
@@ -419,58 +407,10 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 
 	cardContent := container.NewVBox(
 		v.modelStatus,
-		v.downloadProg,
-		v.downloadBtn,
 		gpuCheck,
 	)
 
 	return widget.NewCard("TTS Engine & Hardware", "Kokoro neural TTS model and DirectML GPU acceleration", cardContent)
-}
-
-func (v *SettingsView) startModelDownload() {
-	v.downloadBtn.Disable()
-	v.downloadProg.Show()
-	v.downloadProg.SetValue(0)
-	v.setStatus("Downloading Kokoro-82M neural model files...")
-
-	go func() {
-		err := tts.DownloadKokoroModel(v.modelDir, func(current, total int64) {
-			if total > 0 {
-				fyne.Do(func() {
-					v.downloadProg.SetValue(float64(current) / float64(total))
-				})
-			}
-		})
-
-		fyne.Do(func() {
-			v.downloadProg.Hide()
-			if err != nil {
-				v.downloadBtn.Enable()
-				v.setStatus(fmt.Sprintf("Download failed: %v", err))
-				dialog.ShowError(err, v.window)
-				return
-			}
-
-			v.modelStatus.SetText(fmt.Sprintf("Kokoro Model: Installed (%s)", filepath.Base(v.modelDir)))
-			v.downloadBtn.Hide()
-			v.setStatus("Kokoro model downloaded and verified! Initializing engine...")
-
-			// Initialize engine
-			threads := v.cfg.TTS.NumThreads
-			if threads <= 0 {
-				threads = 4
-			}
-			eng, engErr := tts.NewSherpaEngine(v.modelDir, threads, v.cfg.TTS.UseGPU)
-			if engErr != nil {
-				v.setStatus(fmt.Sprintf("Failed to initialize TTS engine: %v", engErr))
-				return
-			}
-			v.mu.Lock()
-			v.engine = eng
-			v.mu.Unlock()
-			v.setStatus("Kokoro TTS engine ready.")
-		})
-	}()
 }
 
 func (v *SettingsView) buildRulesCard() *widget.Card {

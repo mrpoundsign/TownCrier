@@ -142,11 +142,37 @@ func run() error {
 			tracker.SetAudioStatus(true, "WASAPI ready")
 		}
 
-		// Step 3: Neural TTS engine
-		tracker.SetStatus("Initializing Kokoro neural TTS model...")
-		var engine tts.Engine
-		modelDir := tts.DefaultModelDir()
-		if tts.IsModelInstalled(modelDir) {
+		// Step 3 & 4: Neural TTS engine (auto-download if missing, hard gate before opening MainWindow)
+		quitApp := func() {
+			fyne.Do(func() {
+				launchWin.Close()
+				myApp.Quit()
+			})
+		}
+
+		var initTTSAndLaunch func()
+		initTTSAndLaunch = func() {
+			defer logging.RecoverAndExit("tts-init")
+
+			modelDir := tts.DefaultModelDir()
+			if !tts.IsModelInstalled(modelDir) {
+				log.Printf("Kokoro models missing in %s; starting parallel download...", modelDir)
+				tracker.SetStatus("Downloading Kokoro-82M neural TTS models...")
+				dlErr := tts.DownloadKokoroModel(modelDir, tracker.SetDownloadProgress)
+				if dlErr != nil {
+					log.Printf("Error: failed to download Kokoro TTS models: %v", dlErr)
+					tracker.ShowFatalError(
+						"Failed to download required TTS models. Check your internet connection.",
+						"Download failed ("+dlErr.Error()+")",
+						initTTSAndLaunch,
+						quitApp,
+					)
+					return
+				}
+				log.Printf("Kokoro models downloaded and extracted to %s", modelDir)
+			}
+
+			tracker.SetStatus("Initializing Kokoro neural TTS model...")
 			threads := cfg.TTS.NumThreads
 			if threads <= 0 {
 				threads = 4
@@ -154,47 +180,50 @@ func run() error {
 			log.Printf("Found Kokoro models in %s. Initializing sherpa-onnx (threads=%d, gpu=%v)...", modelDir, threads, cfg.TTS.UseGPU)
 			eng, engErr := tts.NewSherpaEngine(modelDir, threads, cfg.TTS.UseGPU)
 			if engErr != nil {
-				log.Printf("Warning: failed to initialize Kokoro TTS engine: %v", engErr)
-				tracker.SetTTSStatus(false, "Init error: "+engErr.Error())
-			} else {
-				engine = eng
-				activeEngine = eng
-				log.Printf("Kokoro engine ready (provider=%s)", eng.Provider())
-				tracker.SetTTSStatus(true, "Kokoro-82M int8 ("+eng.Provider()+")")
+				log.Printf("Error: failed to initialize Kokoro TTS engine: %v", engErr)
+				tracker.ShowFatalError(
+					"Failed to initialize Kokoro TTS engine.",
+					"Init error: "+engErr.Error(),
+					initTTSAndLaunch,
+					quitApp,
+				)
+				return
 			}
-		} else {
-			log.Printf("Kokoro model not installed in %s", modelDir)
-			tracker.SetTTSStatus(false, "Model not installed (available in Settings)")
-		}
 
-		// Brief pause so user can see all status items verified
-		tracker.SetStatus("Ready! Opening main interface...")
-		time.Sleep(400 * time.Millisecond)
+			var engine tts.Engine = eng
+			activeEngine = eng
+			log.Printf("Kokoro engine ready (provider=%s)", eng.Provider())
+			tracker.SetTTSStatus(true, "Kokoro-82M ("+eng.Provider()+")")
 
-		// Step 4: Initialize application session and open full MainWindow
-		log.Println("Starting application session...")
-		session := app.NewSession(cfg, secrets.NewKeyringStore(""))
-		activeSession = session
-		if player != nil {
-			session.SetPlayer(player)
-		}
-		if engine != nil {
+			// Brief pause so user can see all status items verified
+			tracker.SetStatus("Ready! Opening main interface...")
+			time.Sleep(400 * time.Millisecond)
+
+			// Step 4: Initialize application session and open full MainWindow
+			log.Println("Starting application session...")
+			session := app.NewSession(cfg, secrets.NewKeyringStore(""))
+			activeSession = session
+			if player != nil {
+				session.SetPlayer(player)
+			}
 			session.SetEngine(engine)
-		}
-		if startErr := session.Start(); startErr != nil {
-			log.Printf("Warning: session.Start() error: %v", startErr)
+			if startErr := session.Start(); startErr != nil {
+				log.Printf("Warning: session.Start() error: %v", startErr)
+			}
+
+			fyne.Do(func() {
+				defer logging.RecoverAndExit("ui-init")
+				log.Println("Creating MainWindow and rendering tabs...")
+				mainWindow := ui.NewMainWindow(myApp, session)
+				mainWindow.Window.SetMaster()
+				mainWindow.Window.Show()
+				log.Println("MainWindow rendered and shown. Closing launch window...")
+				launchWin.Close()
+				log.Println("Launch window closed.")
+			})
 		}
 
-		fyne.Do(func() {
-			defer logging.RecoverAndExit("ui-init")
-			log.Println("Creating MainWindow and rendering tabs...")
-			mainWindow := ui.NewMainWindow(myApp, session)
-			mainWindow.Window.SetMaster()
-			mainWindow.Window.Show()
-			log.Println("MainWindow rendered and shown. Closing launch window...")
-			launchWin.Close()
-			log.Println("Launch window closed.")
-		})
+		initTTSAndLaunch()
 	}()
 
 	log.Println("Entering Fyne event loop...")

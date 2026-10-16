@@ -81,7 +81,7 @@ run_lint() {
 
 run_test() {
     echo "==> Running unit tests..."
-    go test -count=1 -v ./...
+    go test -timeout 60s -count=1 -v ./...
     echo "✓ All tests passed!"
 }
 
