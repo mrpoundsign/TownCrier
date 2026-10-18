@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS event_logs (
 	display_name    TEXT NOT NULL,
 	roles_json      TEXT NOT NULL DEFAULT '[]',
 	raw_text        TEXT NOT NULL DEFAULT '',
+	emotes_json     TEXT NOT NULL DEFAULT '[]',
 	spoken_text     TEXT NOT NULL DEFAULT '',
 	voice_id        TEXT NOT NULL DEFAULT '',
 	speed           REAL NOT NULL DEFAULT 1.0,
@@ -101,6 +102,9 @@ func NewSQLiteBackend(dbPath string) (*SQLiteBackend, error) {
 		return nil, fmt.Errorf("initialize sqlite event_logs schema: %w", err)
 	}
 
+	// Idempotent migration for existing event_logs tables created before emotes_json was added.
+	_, _ = db.Exec(`ALTER TABLE event_logs ADD COLUMN emotes_json TEXT NOT NULL DEFAULT '[]';`)
+
 	return &SQLiteBackend{
 		db:     db,
 		dbPath: dbPath,
@@ -141,6 +145,11 @@ func (s *SQLiteBackend) Append(ctx context.Context, entry *Entry) error {
 		rolesBytes = []byte("[]")
 	}
 
+	emotesBytes, err := json.Marshal(entry.Emotes)
+	if err != nil || len(entry.Emotes) == 0 {
+		emotesBytes = []byte("[]")
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -152,18 +161,19 @@ func (s *SQLiteBackend) Append(ctx context.Context, entry *Entry) error {
 INSERT INTO event_logs (
 	id, created_at, updated_at, platform, channel, kind, is_paid_event,
 	user_id, user_name, display_name, roles_json,
-	raw_text, spoken_text, voice_id, speed,
+	raw_text, emotes_json, spoken_text, voice_id, speed,
 	amount, currency, months, count,
 	passed_filters, spoken, outcome, outcome_detail
 ) VALUES (
 	?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?,
-	?, ?, ?, ?,
+	?, ?, ?, ?, ?,
 	?, ?, ?, ?,
 	?, ?, ?, ?
 )
 ON CONFLICT(id) DO UPDATE SET
 	updated_at     = excluded.updated_at,
+	emotes_json    = CASE WHEN excluded.emotes_json != '[]' THEN excluded.emotes_json ELSE event_logs.emotes_json END,
 	spoken_text    = CASE WHEN excluded.spoken_text != '' THEN excluded.spoken_text ELSE event_logs.spoken_text END,
 	voice_id       = CASE WHEN excluded.voice_id != '' THEN excluded.voice_id ELSE event_logs.voice_id END,
 	speed          = CASE WHEN excluded.speed > 0 THEN excluded.speed ELSE event_logs.speed END,
@@ -188,6 +198,7 @@ ON CONFLICT(id) DO UPDATE SET
 		strings.TrimSpace(entry.DisplayName),
 		string(rolesBytes),
 		entry.RawText,
+		string(emotesBytes),
 		entry.SpokenText,
 		entry.VoiceID,
 		entry.Speed,
@@ -348,7 +359,7 @@ func (s *SQLiteBackend) Query(ctx context.Context, filter QueryFilter) (*QueryRe
 SELECT
 	id, created_at, updated_at, platform, channel, kind, is_paid_event,
 	user_id, user_name, display_name, roles_json,
-	raw_text, spoken_text, voice_id, speed,
+	raw_text, emotes_json, spoken_text, voice_id, speed,
 	amount, currency, months, count,
 	passed_filters, spoken, outcome, outcome_detail
 FROM event_logs` + whereSQL + `
@@ -365,15 +376,16 @@ LIMIT ? OFFSET ?;`
 	entries := make([]Entry, 0)
 	for rows.Next() {
 		var (
-			e             Entry
-			createdMs     int64
-			updatedMs     int64
-			isPaidInt     int
-			rolesJSON     string
-			passedInt     int
-			spokenInt     int
-			outcomeStr    string
-			speedFloat    float64
+			e          Entry
+			createdMs  int64
+			updatedMs  int64
+			isPaidInt  int
+			rolesJSON  string
+			emotesJSON string
+			passedInt  int
+			spokenInt  int
+			outcomeStr string
+			speedFloat float64
 		)
 		if err := rows.Scan(
 			&e.ID,
@@ -388,6 +400,7 @@ LIMIT ? OFFSET ?;`
 			&e.DisplayName,
 			&rolesJSON,
 			&e.RawText,
+			&emotesJSON,
 			&e.SpokenText,
 			&e.VoiceID,
 			&speedFloat,
@@ -412,6 +425,9 @@ LIMIT ? OFFSET ?;`
 		e.Outcome = EventOutcome(outcomeStr)
 		if rolesJSON != "" && rolesJSON != "[]" {
 			_ = json.Unmarshal([]byte(rolesJSON), &e.Roles)
+		}
+		if emotesJSON != "" && emotesJSON != "[]" {
+			_ = json.Unmarshal([]byte(emotesJSON), &e.Emotes)
 		}
 		entries = append(entries, e)
 	}

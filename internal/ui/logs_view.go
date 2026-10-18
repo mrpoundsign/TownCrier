@@ -88,6 +88,7 @@ type LogsView struct {
 	tooltipLayer  *fyne.Container
 	tooltipBubble *fyne.Container
 	tooltipText   *canvas.Text
+	emoteCache    *EmoteCache
 
 	onStatus      func(msg string)
 	onAssignVoice func(platform, username string)
@@ -101,6 +102,11 @@ func NewLogsView(w fyne.Window, session *app.Session) *LogsView {
 		liveTail: true,
 		listBox:  container.NewVBox(),
 	}
+}
+
+// SetEmoteCache overrides the EmoteCache used for inline emote rendering (useful in tests).
+func (v *LogsView) SetEmoteCache(cache *EmoteCache) {
+	v.emoteCache = cache
 }
 
 // SetStatusHandler sets the status bar callback.
@@ -900,16 +906,23 @@ func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
 		userCell = userNameLabel
 	}
 
-	// [3] Message column (expanding flex, word-wrapped)
-	msgLine := strings.ReplaceAll(strings.TrimSpace(e.RawText), "\n", " ")
-	if msgLine == "" {
-		msgLine = fmt.Sprintf("(%s event)", e.Kind)
-	}
+	// [3] Message column (expanding flex, word-wrapped with inline emote support)
 	msgTip := ""
 	if e.SpokenText != "" && !strings.EqualFold(e.SpokenText, e.RawText) {
 		msgTip = "Spoken as: " + e.SpokenText
 	}
-	msgCell := v.newWrappedCellLabel(msgLine, msgTip, fyne.TextStyle{})
+	var msgCell fyne.CanvasObject
+	if len(e.Emotes) > 0 {
+		ec := newEmoteMessageCell(v.emoteCache, v.showTooltipForObject)
+		ec.SetContent(e.Platform, e.RawText, e.Emotes, msgTip, "")
+		msgCell = ec
+	} else {
+		msgLine := strings.ReplaceAll(strings.TrimSpace(e.RawText), "\n", " ")
+		if msgLine == "" {
+			msgLine = fmt.Sprintf("(%s event)", e.Kind)
+		}
+		msgCell = v.newWrappedCellLabel(msgLine, msgTip, fyne.TextStyle{})
+	}
 
 	// [4] Passed Filters icon column
 	filterRes, filterTip := filterStatusIconAndTip(e)

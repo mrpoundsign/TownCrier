@@ -28,6 +28,26 @@ type EmoteSpan struct {
 	End   int    `json:"end"`
 	ID    string `json:"id"`
 	Name  string `json:"name"`
+	URL   string `json:"url,omitempty"`
+}
+
+// ImageURL returns the direct image URL for this emote on the given platform,
+// falling back to deterministic platform CDN URLs when URL is not explicitly set.
+func (s EmoteSpan) ImageURL(platform string) string {
+	if s.URL != "" {
+		return s.URL
+	}
+	if s.ID == "" {
+		return ""
+	}
+	switch platform {
+	case "twitch":
+		return "https://static-cdn.jtvnw.net/emoticons/v2/" + s.ID + "/static/dark/1.0"
+	case "kick":
+		return "https://files.kick.com/emotes/" + s.ID + "/fullsize"
+	default:
+		return ""
+	}
 }
 
 // Event represents a unified stream chat or notification event across all platforms.

@@ -396,12 +396,17 @@ func mapEmotes(twitchEmotes []*twitch.Emote) []chat.EmoteSpan {
 		if em == nil {
 			continue
 		}
+		var imgURL string
+		if em.ID != "" {
+			imgURL = "https://static-cdn.jtvnw.net/emoticons/v2/" + em.ID + "/static/dark/1.0"
+		}
 		for _, pos := range em.Positions {
 			spans = append(spans, chat.EmoteSpan{
 				Start: pos.Start,
 				End:   pos.End + 1, // Twitch is inclusive; EmoteSpan is exclusive
 				ID:    em.ID,
 				Name:  em.Name,
+				URL:   imgURL,
 			})
 		}
 	}
