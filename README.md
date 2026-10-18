@@ -1,124 +1,54 @@
 # TownCrier
 
-**TownCrier** is an open-source Windows desktop application (`Go` + `Fyne`) that reads livestream chat messages and stream events aloud using 100% free, local neural Text-to-Speech (**Kokoro-82M**) routed through a streamer-selected WASAPI audio device into OBS Studio.
+**TownCrier** is an open-source Windows desktop app that reads livestream chat and stream alerts aloud using local neural text-to-speech. Audio routes directly to any selected playback device—such as a virtual audio cable or dedicated monitor output—so it can be captured cleanly as its own audio track in OBS Studio.
+
+Everything runs offline on the local PC with no cloud subscriptions, character limits, or API keys.
 
 ---
 
 ## Features
 
-### Multi-Platform Stream Connectors
-- **Twitch**: Zero-credential read-only IRC chat (`irc.chat.twitch.tv`) plus optional OAuth Device Code authentication and EventSub WebSocket support for rich channel alerts (Subscriptions, Resubs, Gift Subs, Bits/Cheers, Raids, Follows) and live moderation sync.
-- **YouTube Live**: Zero-credential InnerTube live chat polling supporting `@handle`, channel URL, or live video URL/ID, including Super Chats, Super Stickers, and New Sponsor events.
-- **TikTok Live**: Zero-credential WebCast room connection with binary protobuf decoding (`WebcastChatMessage`, `WebcastSocialMessage`, `WebcastGiftMessage`) and sliding-window gift streak debouncing so rapid gift combos are announced once when the streak finishes.
-- **Kick**: Zero-credential Pusher WebSocket chat and event reader with emote tag parsing (`[emote:id:name]`), subscriptions, gifted subscriptions, and live moderation sync.
-- **Toggleable Services**: Enable or disable individual streaming platforms in **Settings** to dynamically show/hide their tabs and load/unload their background connectors.
+### Multi-Platform Stream Support
+- **Twitch**: Connects to chat immediately with just a channel name. Signing in with a Twitch account adds channel alerts (Subscriptions, Resubs, Gift Subs, Bits, Raids, and Follows) and live moderation sync.
+- **YouTube Live**: Reads live chat, Super Chats, Super Stickers, and New Member alerts using a channel `@handle`, channel URL, or live video URL—no Google Cloud API setup required.
+- **TikTok Live**: Connects to any live `@username` room to read chat, follows, shares, and gifts. Rapid gift combos are grouped together and announced once when the streak finishes.
+- **Kick**: Reads live chat, subscriptions, gifted subscriptions, and moderation events by channel name.
+- **Show or Hide Platforms**: Toggle individual streaming services on or off in **Settings** to keep only active platform tabs visible.
 
-### Local Neural TTS (Kokoro-82M)
-- **Zero Cloud Costs or API Keys**: Runs completely offline on your machine via [`sherpa-onnx`](https://github.com/k2-fsa/sherpa-onnx).
-- **DirectML GPU Acceleration & CPU Fallback**: Uses the FP32 model (`model.onnx`) on DirectML-capable GPUs by default, automatically falling back to the INT8 quantized model (`model.int8.onnx`) on multi-threaded CPU SIMD.
-- **Automatic First-Launch Provisioning**: On first startup, TownCrier automatically downloads, SHA-256 verifies, and extracts both the FP32 and INT8 Kokoro-82M model archives in parallel before opening the main window.
-- **11 Built-In Voices**: Includes US and UK English male and female voices (`af_bella`, `af_nicole`, `af_sarah`, `af_sky`, `am_adam`, `am_michael`, `bf_emma`, `bf_isabella`, `bm_george`, `bm_lewis`, and the default `af` blend) with live voice previewing.
-- **Frequency-Gated Audio Cache**: Automatically caches repeated phrases and alert templates to disk (`%LOCALAPPDATA%\com.github.mrpoundsign.towncrier\cache\audio\`) while ignoring one-off chat messages to keep RAM usage near zero.
+### Local Voice Packs & Hardware Presets
+- **Five Offline Voice Models**: Load one voice pack or run several at the same time to mix and match voices:
+  - **Supertonic (Default)**: Fast, expressive voices (10 voices) with a lightweight memory footprint.
+  - **Kokoro-82M**: Natural US and UK English voices (11 voices), with optional DirectML GPU acceleration.
+  - **Kitten Mini & Kitten Nano**: Ultra-compact 8-voice packs built for minimal RAM usage on single-PC gaming and streaming setups.
+  - **Piper LibriTTS-High**: A 904-speaker voice catalog for giving every regular chatter a unique voice.
+- **Hardware Presets & Impact Meters**: Choose a one-click preset (*Ultra-Light*, *Fast & Lean*, *Studio Quality*, *Crowd Mode*, or *Full Arsenal*) or pick individual voice packs manually. Color-coded stacked bars show how each selected pack contributes to RAM, CPU, and GPU usage.
+- **Automatic Voice Pack Downloads**: Voice packs download and install automatically on first launch or whenever a new pack is enabled in **Settings**.
 
-### Streamer Safety & Queue Intelligence
-- **Instant Emergency Panic Mute (`<50ms`)**: Hit the UI **PANIC MUTE** button, press `Esc` (when focused), or trigger the global system-wide hotkey (`Ctrl+Shift+M` by default, customizable in Settings) to immediately zero out the audio buffer in `<50ms` and flush the speech queue.
-- **Real-Time Moderation Sync**: Automatically removes messages from the speech queue—or aborts audio mid-sentence—when a message is deleted or a user is timed out/banned on Twitch or Kick.
-- **Two-Tier Priority Queue & Staleness Protection**:
-  - **Tier 0 (Paid & Stream Events)**: Subscriptions, Bits, Super Chats, Gifts, Follows, and Raids take priority and are never dropped for staleness.
-  - **Tier 1 (Regular Chat)**: Chat messages older than 30 seconds during heavy chat bursts are automatically dropped so TTS never falls minutes behind live action.
-  - **Fast Catchup Mode**: Automatically accelerates speech playback (`1.3x` default) when the queue depth exceeds 5 pending messages.
-- **Profanity Blocklist & Bot Filtering**:
-  - Masks configured blocked words/phrases prior to synthesis.
-  - Built-in matcher filters out known stream bots (`Nightbot`, `StreamElements`, `Fossabot`, `Moobot`, `Sery_Bot`, etc.) with per-viewer allow/ignore overrides.
+### Voice Assignment & Chat Rules
+- **Per-Chatter & Per-Alert Voices**: Assign specific voices to individual viewers from the **Dashboard** or **Viewers** tab, pick dedicated voices for stream alerts, or set a default voice per platform.
+- **Configurable Reading Rules**: Choose whether to announce chatter names (`"User says..."`), read or strip emotes, or speak the platform name (`"On Twitch..."`), configured globally in **Settings** or overridden per platform.
 
-### Flexible Voice Routing & Rules
-- **Global Chat Rules with Per-Platform Overrides**: Configure whether to speak chatter names (`"User says..."`), speak or strip platform emotes, and announce platform prefixes (`"[Twitch]"`), globally or overridden per platform.
-- **Hierarchical Voice Selection**:
-  `Viewer Custom Voice` → `Event Alert Voice` → `Platform Override Voice` → `Global Default Voice`.
-
----
-
-## Quick Start (Windows)
-
-1. **Launch `TownCrier.exe`**:
-   - Download the portable single-file `TownCrier.exe` from Releases (or build it via `./build.sh`).
-   - On first launch, the startup window will automatically download and extract the Kokoro-82M neural TTS models (~403 MB total) into `%APPDATA%\com.github.mrpoundsign.towncrier\models\kokoro-en`.
-2. **Select Your Audio Output Device**:
-   - Open the **Settings** tab and choose your target WASAPI playback device (for example, a virtual audio cable or dedicated monitor device routed into OBS Studio as an Audio Output Capture source).
-3. **Connect Your Stream**:
-   - Go to the **Twitch**, **YouTube**, **TikTok**, or **Kick** tab, enter your channel name/handle, and toggle **Enable**.
-   - Use the **Dashboard** tab to monitor the live speech queue, pause/resume or skip items, and assign custom voices to active chatters with one click.
-
-### Command-Line Flags
-```powershell
-TownCrier.exe [-twitch <channel>] [-debug]
-```
-- `-twitch <channel>`: Pre-configures and enables the specified Twitch channel on startup.
-- `-debug`: Writes timestamped diagnostic and panic logs to `towncrier-debug.log`.
+### Stream Safety & Queue Control
+- **Instant Panic Mute**: Click **PANIC MUTE**, press `Esc` inside the app, or use the global hotkey (`Ctrl+Shift+M` by default, customizable in **Settings**) to cut audio output immediately and clear the speech queue.
+- **Live Moderation Sync**: Deleting a message or timing out/banning a user on Twitch or Kick automatically removes their queued messages and stops playback mid-sentence if their message is currently being read.
+- **Smart Priority Queue**:
+  - Subscriptions, Bits, Super Chats, Gifts, Follows, and Raids jump ahead of regular chat and never expire in the queue.
+  - During fast chat bursts, regular chat messages waiting longer than 30 seconds are skipped so TTS stays current with the stream.
+  - When the queue backs up past 5 messages, speech automatically speeds up slightly (`1.3x`) until caught up.
+- **Bot & Word Filtering**: Built-in filtering skips known stream bots (`Nightbot`, `StreamElements`, `Fossabot`, `Moobot`, `Sery_Bot`, and others) with per-viewer allow/ignore overrides, and masks custom blocked words or phrases.
 
 ---
 
-## Building from Source (WSL Cross-Compilation)
+## Getting Started
 
-TownCrier is cross-compiled from WSL Ubuntu to Windows `amd64` using MinGW-w64 (`x86_64-w64-mingw32-gcc`) and packaged into a self-extracting single-file portable executable (`build/bin/TownCrier.exe`).
-
-### Prerequisites (WSL Ubuntu)
-- **Go 1.27+**
-- **MinGW-w64 C/C++ toolchain**: `sudo apt install gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64`
-- **Linux GUI headers (for running headless Fyne unit tests in WSL)**: `sudo apt install libgl1-mesa-dev xorg-dev libasound2-dev`
-- **golangci-lint v2**: `golangci-lint-v2` in `PATH`
-
-### Build Commands
-```bash
-# Run lint, unit tests, cross-compile Windows executable, and package release zip into dist/
-./build.sh
-
-# Cross-compile standalone build/bin/TownCrier.exe only
-./build.sh win
-
-# Run go fix --diff ./... and golangci-lint-v2 run ./...
-./build.sh lint
-
-# Run unit test suite with 60s timeout
-./build.sh test
-
-# Package dist/TownCrier-v<VERSION>-windows-amd64.zip
-./build.sh package
-
-# Clean build/ and dist/ artifacts
-./build.sh clean
-```
-
----
-
-## Repository Structure
-
-```text
-TownCrier/
-├── assets/               # Application icons and bundled media
-├── build/                # Local build output and temporary binaries (gitignored)
-│   └── bin/              # Cross-compiled executables (TownCrier.exe) and runtime DLLs
-├── cmd/
-│   ├── launcher/         # Single-file portable executable self-extracting launcher
-│   ├── spike/            # Technical spike & audio engine validation CLI
-│   └── towncrier/        # Main desktop application GUI entry point (main.go)
-├── internal/
-│   ├── app/              # Application lifecycle, session coordination, and wiring
-│   ├── audio/            # Audio device enumeration (WASAPI), mixing, gain, emergency abort
-│   ├── bots/             # Known-bot matcher, embedded bot list, ignore/allow overrides
-│   ├── chat/             # Unified event model, emote stripping, phonetic filtering, voice router
-│   ├── config/           # Configuration schema, global rules, platform overrides, atomic persistence
-│   ├── logging/          # Crash recovery and debug file logging
-│   ├── platform/         # Platform connectors (Twitch, YouTube, TikTok, Kick)
-│   ├── queue/            # Priority speech queue with 30s staleness TTL and fast catchup
-│   ├── secrets/          # OS Keyring (Windows Credential Manager) wrapper with memory fallback
-│   ├── tts/              # Offline neural TTS engine, parallel model downloader, audio cache
-│   └── ui/               # Fyne GUI components (dashboard, voices, viewers, settings, platform tabs)
-├── build.sh              # WSL cross-compilation and quality-gate pipeline script
-├── FyneApp.toml          # Fyne application metadata
-├── LICENSE               # GNU Affero General Public License v3.0
-└── THIRDPARTY_NOTICES.md # Third-party open-source licenses and attributions
-```
+1. **Download and Run**:
+   - Grab `TownCrier.exe` from [Releases](https://github.com/mrpoundsign/TownCrier/releases) and launch it.
+   - On first run, the startup window downloads the default voice pack automatically before opening the main dashboard.
+2. **Pick an Audio Output Device**:
+   - Open the **Settings** tab and choose the playback device where TTS audio should go (for example, a virtual audio cable added as an Audio Output Capture source in OBS).
+3. **Connect a Stream**:
+   - Open the **Twitch**, **YouTube**, **TikTok**, or **Kick** tab, enter a channel name or handle, and toggle **Enable**.
+   - Use the **Dashboard** tab to watch the live queue, pause or skip messages, and assign custom voices to active chatters.
 
 ---
 
