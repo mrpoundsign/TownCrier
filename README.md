@@ -24,8 +24,9 @@ Everything runs offline on the local PC with no cloud subscriptions, character l
 - **Hardware Presets & Impact Meters**: Choose a one-click preset (*Ultra-Light*, *Fast & Lean*, *Studio Quality*, *Crowd Mode*, or *Full Arsenal*) or pick individual voice packs manually. Color-coded stacked bars show how each selected pack contributes to RAM, CPU, and GPU usage.
 - **Automatic Voice Pack Downloads**: Voice packs download and install automatically on first launch or whenever a new pack is enabled in **Settings**.
 
-### Voice Assignment & Chat Rules
-- **Per-Chatter & Per-Alert Voices**: Assign specific voices to individual viewers from the **Dashboard** or **Viewers** tab, pick dedicated voices for stream alerts, or set a default voice per platform.
+### Voice Assignment, Chat Rules & History
+- **Per-Chatter & Per-Alert Voices**: Assign specific voices to individual viewers from the **Dashboard**, **Chat Logs**, or **Viewers** tab, pick dedicated voices for stream alerts, or set a default voice per platform.
+- **Chat Logs & Event History**: Browse live or historical chat messages, stream alerts, and moderation actions in the **Chat Logs** tab, complete with inline Twitch/YouTube/Kick emotes, hoverable user badges and playback status icons, full-text and date-range search, and configurable local SQLite retention.
 - **Configurable Reading Rules**: Choose whether to announce chatter names (`"User says..."`), read or strip emotes, or speak the platform name (`"On Twitch..."`), configured globally in **Settings** or overridden per platform.
 
 ### Stream Safety & Queue Control

@@ -4,8 +4,8 @@ Website = "https://github.com/mrpoundsign/TownCrier"
   Icon = "assets/icon.png"
   Name = "TownCrier"
   ID = "com.github.mrpoundsign.towncrier"
-  Version = "0.0.2"
-  Build = 2
+  Version = "0.0.3"
+  Build = 3
 
 [Migrations]
   fyneDo = true
