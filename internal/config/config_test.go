@@ -132,6 +132,7 @@ func TestClone(t *testing.T) {
 func TestLegacyMigration(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	t.Setenv("APPDATA", tmpDir)
 
 	legacyDir := filepath.Join(tmpDir, "OctochorpeBot")
 	if err := os.MkdirAll(legacyDir, 0700); err != nil {
