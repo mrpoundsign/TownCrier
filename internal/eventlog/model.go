@@ -2,6 +2,8 @@ package eventlog
 
 import (
 	"time"
+
+	"github.com/mrpoundsign/TownCrier/internal/chat"
 )
 
 // EventOutcome represents the pipeline or speech queue fate of an inbound stream event.
@@ -67,29 +69,30 @@ func OutcomeDisplayLabel(outcome EventOutcome) string {
 
 // Entry represents a single structured chat, alert, or moderation log document.
 type Entry struct {
-	ID            string       `json:"id"`
-	CreatedAt     time.Time    `json:"created_at"`
-	UpdatedAt     time.Time    `json:"updated_at"`
-	Platform      string       `json:"platform"`
-	Channel       string       `json:"channel"`
-	Kind          string       `json:"kind"`
-	IsPaidOrEvent bool         `json:"is_paid_or_event"`
-	UserID        string       `json:"user_id"`
-	UserName      string       `json:"user_name"`
-	DisplayName   string       `json:"display_name"`
-	Roles         []string     `json:"roles,omitempty"`
-	RawText       string       `json:"raw_text"`
-	SpokenText    string       `json:"spoken_text,omitempty"`
-	VoiceID       string       `json:"voice_id,omitempty"`
-	Speed         float32      `json:"speed,omitempty"`
-	Amount        float64      `json:"amount,omitempty"`
-	Currency      string       `json:"currency,omitempty"`
-	Months        int          `json:"months,omitempty"`
-	Count         int          `json:"count,omitempty"`
-	PassedFilters bool         `json:"passed_filters"`
-	Spoken        bool         `json:"spoken"`
-	Outcome       EventOutcome `json:"outcome"`
-	OutcomeDetail string       `json:"outcome_detail,omitempty"`
+	ID            string           `json:"id"`
+	CreatedAt     time.Time        `json:"created_at"`
+	UpdatedAt     time.Time        `json:"updated_at"`
+	Platform      string           `json:"platform"`
+	Channel       string           `json:"channel"`
+	Kind          string           `json:"kind"`
+	IsPaidOrEvent bool             `json:"is_paid_or_event"`
+	UserID        string           `json:"user_id"`
+	UserName      string           `json:"user_name"`
+	DisplayName   string           `json:"display_name"`
+	Roles         []string         `json:"roles,omitempty"`
+	RawText       string           `json:"raw_text"`
+	Emotes        []chat.EmoteSpan `json:"emotes,omitempty"`
+	SpokenText    string           `json:"spoken_text,omitempty"`
+	VoiceID       string           `json:"voice_id,omitempty"`
+	Speed         float32          `json:"speed,omitempty"`
+	Amount        float64          `json:"amount,omitempty"`
+	Currency      string           `json:"currency,omitempty"`
+	Months        int              `json:"months,omitempty"`
+	Count         int              `json:"count,omitempty"`
+	PassedFilters bool             `json:"passed_filters"`
+	Spoken        bool             `json:"spoken"`
+	Outcome       EventOutcome     `json:"outcome"`
+	OutcomeDetail string           `json:"outcome_detail,omitempty"`
 }
 
 // Clone returns a deep copy of the Entry.
@@ -101,6 +104,10 @@ func (e *Entry) Clone() *Entry {
 	if len(e.Roles) > 0 {
 		cp.Roles = make([]string, len(e.Roles))
 		copy(cp.Roles, e.Roles)
+	}
+	if len(e.Emotes) > 0 {
+		cp.Emotes = make([]chat.EmoteSpan, len(e.Emotes))
+		copy(cp.Emotes, e.Emotes)
 	}
 	return &cp
 }

@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/mrpoundsign/TownCrier/internal/chat"
 )
 
 type mockWebhookSink struct {
@@ -56,7 +58,7 @@ func TestSQLiteBackendAndManagerLifecycle(t *testing.T) {
 
 	baseTime := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 
-	// 1. Append an event that passed filters and is queued
+	// 1. Append an event that passed filters and is queued (with EmoteSpans)
 	e1 := &Entry{
 		ID:            "msg-1",
 		CreatedAt:     baseTime,
@@ -68,7 +70,10 @@ func TestSQLiteBackendAndManagerLifecycle(t *testing.T) {
 		UserName:      "alice_tw",
 		DisplayName:   "Alice",
 		Roles:         []string{"vip", "subscriber"},
-		RawText:       "Hello stream!",
+		RawText:       "Hello stream! Kappa",
+		Emotes: []chat.EmoteSpan{
+			{Start: 14, End: 19, ID: "25", Name: "Kappa", URL: "https://static-cdn.jtvnw.net/emoticons/v2/25/static/dark/1.0"},
+		},
 		SpokenText:    "Alice says Hello stream!",
 		VoiceID:       "supertonic:f1",
 		Speed:         1.0,
@@ -171,6 +176,9 @@ func TestSQLiteBackendAndManagerLifecycle(t *testing.T) {
 	}
 	if !spokenRes.Entries[0].Spoken || !spokenRes.Entries[0].PassedFilters || spokenRes.Entries[0].Speed != 1.3 {
 		t.Errorf("unexpected msg-1 state: %+v", spokenRes.Entries[0])
+	}
+	if len(spokenRes.Entries[0].Emotes) != 1 || spokenRes.Entries[0].Emotes[0].Name != "Kappa" || spokenRes.Entries[0].Emotes[0].ID != "25" {
+		t.Errorf("expected persisted Kappa EmoteSpan on msg-1, got %+v", spokenRes.Entries[0].Emotes)
 	}
 
 	// Query PassedFilters (should include both msg-1 Spoken and msg-2 DroppedStale, excluding msg-3 DroppedBot)

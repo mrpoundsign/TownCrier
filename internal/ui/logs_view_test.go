@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
 	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/chat"
 	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
@@ -225,4 +226,35 @@ func TestLogsTableIconsAndHoverTooltips(t *testing.T) {
 		t.Errorf("expected long message row MinSize().Width <= 900 (clamped), got %v", row.MinSize().Width)
 	}
 	_ = baseMinW
+
+	// Verify inline emote tokenization and emoteMessageCell rendering
+	cache := NewEmoteCache(t.TempDir(), nil)
+	kappaURL := "https://static-cdn.jtvnw.net/emoticons/v2/25/static/dark/1.0"
+	cache.Put(kappaURL, resPlatformTwitch)
+	lv.SetEmoteCache(cache)
+
+	tokens := tokenizeMessageWithEmotes("twitch", "Hello Kappa world!", []chat.EmoteSpan{
+		{Start: 6, End: 11, ID: "25", Name: "Kappa"},
+	})
+	if len(tokens) != 3 || !tokens[1].isEmote || tokens[1].name != "Kappa" || tokens[1].imageURL != kappaURL {
+		t.Fatalf("unexpected emote tokens: %+v", tokens)
+	}
+
+	emoteRow := lv.buildLogRow(1, eventlog.Entry{
+		CreatedAt:     time.Now(),
+		Platform:      "twitch",
+		Channel:       "testchannel",
+		UserName:      "emote_user",
+		DisplayName:   "EmoteUser",
+		RawText:       "Hello Kappa world!",
+		Emotes:        []chat.EmoteSpan{{Start: 6, End: 11, ID: "25", Name: "Kappa"}},
+		SpokenText:    "EmoteUser says Hello world!",
+		PassedFilters: true,
+		Spoken:        true,
+		Outcome:       eventlog.OutcomeSpoken,
+	})
+	if emoteRow.MinSize().Width > 900 {
+		t.Errorf("expected emote message row MinSize().Width <= 900, got %v", emoteRow.MinSize().Width)
+	}
 }
+

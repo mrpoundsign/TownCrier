@@ -124,6 +124,11 @@ type textRun struct {
 		EmojiID       string   `json:"emojiId"`
 		Shortcuts     []string `json:"shortcuts"`
 		IsCustomEmoji bool     `json:"isCustomEmoji"`
+		Image         *struct {
+			Thumbnails []struct {
+				URL string `json:"url"`
+			} `json:"thumbnails"`
+		} `json:"image"`
 	} `json:"emoji"`
 }
 
@@ -465,6 +470,13 @@ func extractTextAndEmotes(tr textRuns) (string, []chat.EmoteSpan) {
 			if token == "" {
 				token = ":emoji:"
 			}
+			var imgURL string
+			if run.Emoji.Image != nil && len(run.Emoji.Image.Thumbnails) > 0 {
+				imgURL = strings.TrimSpace(run.Emoji.Image.Thumbnails[0].URL)
+				if strings.HasPrefix(imgURL, "//") {
+					imgURL = "https:" + imgURL
+				}
+			}
 			tokenRunes := utf8.RuneCountInString(token)
 			sb.WriteString(token)
 			spans = append(spans, chat.EmoteSpan{
@@ -472,6 +484,7 @@ func extractTextAndEmotes(tr textRuns) (string, []chat.EmoteSpan) {
 				End:   runeOffset + tokenRunes,
 				ID:    run.Emoji.EmojiID,
 				Name:  token,
+				URL:   imgURL,
 			})
 			runeOffset += tokenRunes
 			continue

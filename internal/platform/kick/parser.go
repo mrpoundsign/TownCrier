@@ -47,11 +47,17 @@ func ParseKickEmotes(raw string) (string, []chat.EmoteSpan) {
 		emoteName := raw[nameStart:nameEnd]
 		nameRunes := utf8.RuneCountInString(emoteName)
 
+		var imgURL string
+		if emoteID != "" {
+			imgURL = "https://files.kick.com/emotes/" + emoteID + "/fullsize"
+		}
+
 		spans = append(spans, chat.EmoteSpan{
 			Start: currentRuneCount,
 			End:   currentRuneCount + nameRunes,
 			ID:    emoteID,
 			Name:  emoteName,
+			URL:   imgURL,
 		})
 
 		b.WriteString(emoteName)

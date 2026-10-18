@@ -24,6 +24,7 @@ type ActivityEntry struct {
 	Platform  string
 	UserName  string
 	Text      string
+	Emotes    []chat.EmoteSpan
 	Voice     string
 	Kind      string
 }
@@ -89,6 +90,7 @@ func NewDashboardView(w fyne.Window, session *app.Session) *DashboardView {
 			Platform:  ev.Platform,
 			UserName:  name,
 			Text:      ev.Text,
+			Emotes:    ev.EmoteSpans,
 			Voice:     voice,
 			Kind:      string(ev.Kind),
 		})
@@ -231,14 +233,21 @@ func (v *DashboardView) buildActivityRow(entry ActivityEntry) fyne.CanvasObject 
 	meta := fmt.Sprintf("[%s] %s (%s)", timeStr, entry.UserName, entry.Platform)
 
 	nameLabel := widget.NewLabelWithStyle(meta, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	textLabel := newClampedWrapLabel(entry.Text, fyne.TextStyle{})
+	var msgContent fyne.CanvasObject
+	if len(entry.Emotes) > 0 {
+		ec := newEmoteMessageCell(nil, nil)
+		ec.SetContent(entry.Platform, entry.Text, entry.Emotes, "", "")
+		msgContent = ec
+	} else {
+		msgContent = newClampedWrapLabel(entry.Text, fyne.TextStyle{})
+	}
 
 	assignBtn := widget.NewButtonWithIcon("Assign Voice", theme.AccountIcon(), func() {
 		v.showQuickAssignDialog(entry.Platform, entry.UserName)
 	})
 
 	topRow := container.NewBorder(nil, nil, nameLabel, assignBtn)
-	return container.NewVBox(topRow, textLabel, widget.NewSeparator())
+	return container.NewVBox(topRow, msgContent, widget.NewSeparator())
 }
 
 func (v *DashboardView) showQuickAssignDialog(platform, username string) {

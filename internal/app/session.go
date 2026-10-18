@@ -529,7 +529,7 @@ func (s *Session) IsPanicked() bool {
 	return false
 }
 
-func (s *Session) buildLogEntry(event *chat.Event, rawText, spokenText, voiceID string, speed float32, passedFilters bool, outcome eventlog.EventOutcome, detail string) *eventlog.Entry {
+func (s *Session) buildLogEntry(event *chat.Event, rawText string, rawEmotes []chat.EmoteSpan, spokenText, voiceID string, speed float32, passedFilters bool, outcome eventlog.EventOutcome, detail string) *eventlog.Entry {
 	ts := event.Timestamp
 	if ts.IsZero() {
 		ts = time.Now().UTC()
@@ -537,6 +537,11 @@ func (s *Session) buildLogEntry(event *chat.Event, rawText, spokenText, voiceID 
 	displayName := event.DisplayName
 	if displayName == "" {
 		displayName = event.UserName
+	}
+	var emotesCopy []chat.EmoteSpan
+	if len(rawEmotes) > 0 {
+		emotesCopy = make([]chat.EmoteSpan, len(rawEmotes))
+		copy(emotesCopy, rawEmotes)
 	}
 	return &eventlog.Entry{
 		ID:            event.ID,
@@ -551,6 +556,7 @@ func (s *Session) buildLogEntry(event *chat.Event, rawText, spokenText, voiceID 
 		DisplayName:   displayName,
 		Roles:         event.Roles,
 		RawText:       rawText,
+		Emotes:        emotesCopy,
 		SpokenText:    spokenText,
 		VoiceID:       voiceID,
 		Speed:         speed,
@@ -595,13 +601,18 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		}
 	}
 	rawText := event.Text
+	var rawEmotes []chat.EmoteSpan
+	if len(event.EmoteSpans) > 0 {
+		rawEmotes = make([]chat.EmoteSpan, len(event.EmoteSpans))
+		copy(rawEmotes, event.EmoteSpans)
+	}
 
 	log.Printf("[Session] DispatchEvent: user=%q platform=%s channel=%q text=%q roles=%v", event.UserName, event.Platform, event.Channel, event.Text, event.Roles)
 
 	// 1. Bot Matcher (known bots, platform bot signals, viewer blocklist/allowlist)
 	if s.bots != nil && s.bots.ShouldIgnore(event, cfg) {
 		log.Printf("[Session] Event dropped by bot matcher: user=%q", event.UserName)
-		s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedBot, "Ignored by bot matcher or viewer blocklist"))
+		s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedBot, "Ignored by bot matcher or viewer blocklist"))
 		return nil
 	}
 
@@ -611,7 +622,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 			if notif, hasNotif := pCfg.Notifications[string(event.Kind)]; hasNotif {
 				if !notif.Enabled {
 					log.Printf("[Session] Notification event dropped (disabled): kind=%s user=%q", event.Kind, event.UserName)
-					s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedDisabled, fmt.Sprintf("Notification kind %q disabled", event.Kind)))
+					s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedDisabled, fmt.Sprintf("Notification kind %q disabled", event.Kind)))
 					return nil
 				}
 				if notif.Threshold > 0 {
@@ -621,7 +632,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 					}
 					if val < notif.Threshold {
 						log.Printf("[Session] Notification event below threshold (%.2f < %.2f): kind=%s user=%q", val, notif.Threshold, event.Kind, event.UserName)
-						s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedThreshold, fmt.Sprintf("Below threshold (%.2f < %.2f)", val, notif.Threshold)))
+						s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedThreshold, fmt.Sprintf("Below threshold (%.2f < %.2f)", val, notif.Threshold)))
 						return nil
 					}
 				}
@@ -634,7 +645,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		shouldSpeak, strippedText := chat.EvaluateReadRules(event, pCfg.ReadRules)
 		if !shouldSpeak {
 			log.Printf("[Session] Event dropped by ReadRules: user=%q roles=%v rules=%+v", event.UserName, event.Roles, pCfg.ReadRules)
-			s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedReadRules, "Rejected by platform read rules"))
+			s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedReadRules, "Rejected by platform read rules"))
 			return nil
 		}
 		if strippedText != "" {
@@ -650,7 +661,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		event.EmoteSpans = nil // already applied to event.Text
 		if event.Text == "" && event.Kind == chat.EventKindMessage {
 			log.Printf("[Session] Chat message sanitized to empty text: user=%q", event.UserName)
-			s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Sanitized to empty text (emotes or blocked words)"))
+			s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Sanitized to empty text (emotes or blocked words)"))
 			return nil
 		}
 	}
@@ -659,7 +670,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	resolved := s.router.Resolve(event, cfg)
 	if resolved.Text == "" {
 		log.Printf("[Session] Event resolved to empty text: user=%q", event.UserName)
-		s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Resolved template text is empty"))
+		s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Resolved template text is empty"))
 		return nil
 	}
 
@@ -667,7 +678,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	sanitizedText := s.sanitizer.Sanitize(resolved.Text, nil, true, cfg.Safety.BlockedWords)
 	if sanitizedText == "" {
 		log.Printf("[Session] Event sanitized to empty text: user=%q original=%q", event.UserName, resolved.Text)
-		s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Formatted speech text sanitized to empty"))
+		s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Formatted speech text sanitized to empty"))
 		return nil
 	}
 
@@ -678,7 +689,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	}
 
 	// 7. Record initial PassedFilters=true / Queued log entry before enqueueing so fast queue callbacks find the row
-	s.recordEventLog(s.buildLogEntry(event, rawText, sanitizedText, resolved.VoiceID, resolved.Speed, true, eventlog.OutcomeQueued, ""))
+	s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, sanitizedText, resolved.VoiceID, resolved.Speed, true, eventlog.OutcomeQueued, ""))
 
 	// 8. Enqueue for speech synthesis
 	item := &queue.Item{
@@ -699,7 +710,12 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	onDispatched := s.onEventDispatched
 	s.mu.RUnlock()
 	if onDispatched != nil {
-		go onDispatched(event, resolved.VoiceID)
+		evCopy := *event
+		if rawText != "" {
+			evCopy.Text = rawText
+		}
+		evCopy.EmoteSpans = rawEmotes
+		go onDispatched(&evCopy, resolved.VoiceID)
 	}
 
 	return nil
