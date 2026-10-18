@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# TownCrier Build Script (WSL Cross-Compilation to Windows)
+# TownCrier Build Script (Windows & Linux)
 # Usage:
-#   ./build.sh          # Run lint, test, build Windows binary, and package into dist/
-#   ./build.sh win      # Build Windows GUI executable into build/bin/
+#   ./build.sh          # Run lint, test, build Windows & Linux binaries, and package into dist/
+#   ./build.sh win      # Build Windows GUI executable into build/bin/TownCrier.exe
+#   ./build.sh linux    # Build Linux GUI executable into build/bin/towncrier
 #   ./build.sh lint     # Run go fix --diff and golangci-lint-v2
 #   ./build.sh test     # Run unit tests
-#   ./build.sh package  # Package zip distribution into dist/
+#   ./build.sh package  # Package zip/tar.gz distributions into dist/
 #   ./build.sh clean    # Clean build and dist outputs
 
 TARGET="${1:-all}"
@@ -31,20 +32,38 @@ for dir in "$HOME/go/bin" "/usr/local/go/bin" "$HOME/.asdf/shims" "$HOME/.asdf/b
 done
 
 fetch_dlls() {
-    echo "==> Verifying runtime DLLs in $BIN_DIR..."
+    echo "==> Verifying Windows runtime DLLs in $BIN_DIR..."
     if [ ! -f "$BIN_DIR/onnxruntime.dll" ] || [ ! -f "$BIN_DIR/sherpa-onnx-c-api.dll" ]; then
         echo "--> Fetching sherpa-onnx Windows x64 DLLs from Go module cache..."
         go mod download github.com/k2-fsa/sherpa-onnx-go-windows 2>/dev/null || true
         local win_mod_dir
         win_mod_dir=$(go list -m -f '{{.Dir}}' github.com/k2-fsa/sherpa-onnx-go-windows 2>/dev/null || true)
         if [ -n "$win_mod_dir" ] && [ -d "$win_mod_dir/lib/x86_64-pc-windows-gnu" ]; then
-            cp "$win_mod_dir/lib/x86_64-pc-windows-gnu/"*.dll "$BIN_DIR/"
-            echo "✓ Copied runtime DLLs from $win_mod_dir to $BIN_DIR"
+            cp -f "$win_mod_dir/lib/x86_64-pc-windows-gnu/"*.dll "$BIN_DIR/"
+            echo "✓ Copied Windows runtime DLLs from $win_mod_dir to $BIN_DIR"
         else
             echo "Warning: Could not locate sherpa-onnx-go-windows module cache."
         fi
     else
-        echo "✓ Runtime DLLs present."
+        echo "✓ Windows runtime DLLs present."
+    fi
+}
+
+fetch_linux_libs() {
+    echo "==> Verifying Linux runtime shared libraries in $BIN_DIR..."
+    if [ ! -f "$BIN_DIR/libonnxruntime.so" ] || [ ! -f "$BIN_DIR/libsherpa-onnx-c-api.so" ]; then
+        echo "--> Fetching sherpa-onnx Linux x64 shared libraries from Go module cache..."
+        go mod download github.com/k2-fsa/sherpa-onnx-go-linux 2>/dev/null || true
+        local linux_mod_dir
+        linux_mod_dir=$(go list -m -f '{{.Dir}}' github.com/k2-fsa/sherpa-onnx-go-linux 2>/dev/null || true)
+        if [ -n "$linux_mod_dir" ] && [ -d "$linux_mod_dir/lib/x86_64-unknown-linux-gnu" ]; then
+            cp -f "$linux_mod_dir/lib/x86_64-unknown-linux-gnu/"*.so "$BIN_DIR/"
+            echo "✓ Copied Linux shared libraries from $linux_mod_dir to $BIN_DIR"
+        else
+            echo "Warning: Could not locate sherpa-onnx-go-linux module cache."
+        fi
+    else
+        echo "✓ Linux runtime shared libraries present."
     fi
 }
 
@@ -105,11 +124,11 @@ build_win() {
         -o "$BIN_DIR/towncrier-core.exe" ./cmd/towncrier
     echo "✓ Built $BIN_DIR/towncrier-core.exe"
 
-    echo "==> Staging payload for single-file launcher..."
+    echo "==> Staging Windows payload for single-file launcher..."
     local payload_dir="$ROOT_DIR/cmd/launcher/payload"
     mkdir -p "$payload_dir"
-    rm -f "$payload_dir/towncrier-core.exe" "$payload_dir/"*.dll
-    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core.exe" "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso"' RETURN
+    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so
+    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso"' RETURN
     cp -f "$BIN_DIR/towncrier-core.exe" "$payload_dir/"
     cp -f "$BIN_DIR/onnxruntime.dll" "$payload_dir/"
     cp -f "$BIN_DIR/sherpa-onnx-c-api.dll" "$payload_dir/"
@@ -121,18 +140,53 @@ build_win() {
         -o "$BIN_DIR/TownCrier.exe" ./cmd/launcher
 
     # Clean staged payload and temporary .syso from source tree
-    rm -f "$payload_dir/towncrier-core.exe" "$payload_dir/"*.dll "$core_syso" "$launcher_syso"
+    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so "$core_syso" "$launcher_syso"
     trap - RETURN
 
     echo "✓ Successfully built standalone single-file $BIN_DIR/TownCrier.exe"
+}
+
+build_linux() {
+    fetch_linux_libs
+
+    echo "==> Building towncrier-core v${VERSION} (Linux amd64 CGO)..."
+    CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+        go build -trimpath -ldflags="-s -w -X github.com/mrpoundsign/TownCrier/internal/ui.AppVersion=v${VERSION} -extldflags '-Wl,-rpath,\$ORIGIN'" \
+        -o "$BIN_DIR/towncrier-core" ./cmd/towncrier
+    echo "✓ Built $BIN_DIR/towncrier-core"
+
+    echo "==> Staging Linux payload for single-file launcher..."
+    local payload_dir="$ROOT_DIR/cmd/launcher/payload"
+    mkdir -p "$payload_dir"
+    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so
+    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so' RETURN
+    cp -f "$BIN_DIR/towncrier-core" "$payload_dir/"
+    cp -f "$BIN_DIR/libonnxruntime.so" "$payload_dir/"
+    cp -f "$BIN_DIR/libsherpa-onnx-c-api.so" "$payload_dir/"
+    cp -f "$BIN_DIR/libsherpa-onnx-cxx-api.so" "$payload_dir/"
+
+    echo "==> Building standalone towncrier v${VERSION} (Linux amd64)..."
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+        go build -trimpath -ldflags="-s -w -X main.AppVersion=${VERSION}" \
+        -o "$BIN_DIR/towncrier" ./cmd/launcher
+    chmod +x "$BIN_DIR/towncrier"
+
+    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so
+    trap - RETURN
+
+    echo "✓ Successfully built standalone single-file $BIN_DIR/towncrier"
 }
 
 package_dist() {
     if [ ! -f "$BIN_DIR/TownCrier.exe" ]; then
         build_win
     fi
+    if [ ! -f "$BIN_DIR/towncrier" ]; then
+        build_linux
+    fi
+
     local zip_file="$DIST_DIR/TownCrier-v${VERSION}-windows-amd64.zip"
-    echo "==> Packaging distribution into $zip_file..."
+    echo "==> Packaging Windows distribution into $zip_file..."
     rm -f "$zip_file"
 
     local staging="$BUILD_DIR/package_staging"
@@ -140,15 +194,9 @@ package_dist() {
     mkdir -p "$staging"
 
     cp "$BIN_DIR/TownCrier.exe" "$staging/"
-    if [ -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" ]; then
-        cp "$ROOT_DIR/THIRDPARTY_NOTICES.md" "$staging/"
-    fi
-    if [ -f "$ROOT_DIR/LICENSE" ]; then
-        cp "$ROOT_DIR/LICENSE" "$staging/"
-    fi
-    if [ -f "$ROOT_DIR/FyneApp.toml" ]; then
-        cp "$ROOT_DIR/FyneApp.toml" "$staging/"
-    fi
+    [ -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" ] && cp "$ROOT_DIR/THIRDPARTY_NOTICES.md" "$staging/"
+    [ -f "$ROOT_DIR/LICENSE" ] && cp "$ROOT_DIR/LICENSE" "$staging/"
+    [ -f "$ROOT_DIR/FyneApp.toml" ] && cp "$ROOT_DIR/FyneApp.toml" "$staging/"
 
     if command -v zip &>/dev/null; then
         (cd "$staging" && zip -q -r "$zip_file" .)
@@ -164,6 +212,19 @@ with zipfile.ZipFile('$zip_file', 'w', zipfile.ZIP_DEFLATED) as zf:
     fi
     rm -rf "$staging"
     echo "✓ Successfully packaged $zip_file"
+
+    local tar_file="$DIST_DIR/TownCrier-v${VERSION}-linux-amd64.tar.gz"
+    echo "==> Packaging Linux distribution into $tar_file..."
+    rm -f "$tar_file"
+    mkdir -p "$staging"
+    cp "$BIN_DIR/towncrier" "$staging/"
+    chmod +x "$staging/towncrier"
+    [ -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" ] && cp "$ROOT_DIR/THIRDPARTY_NOTICES.md" "$staging/"
+    [ -f "$ROOT_DIR/LICENSE" ] && cp "$ROOT_DIR/LICENSE" "$staging/"
+    [ -f "$ROOT_DIR/FyneApp.toml" ] && cp "$ROOT_DIR/FyneApp.toml" "$staging/"
+    (cd "$staging" && tar -czf "$tar_file" .)
+    rm -rf "$staging"
+    echo "✓ Successfully packaged $tar_file"
 }
 
 clean() {
@@ -177,10 +238,14 @@ case "$TARGET" in
         run_lint
         run_test
         build_win
+        build_linux
         package_dist
         ;;
     win)
         build_win
+        ;;
+    linux)
+        build_linux
         ;;
     lint)
         run_lint
@@ -199,7 +264,7 @@ case "$TARGET" in
         ;;
     *)
         echo "Unknown target: $TARGET"
-        echo "Valid targets: all, win, lint, test, package, fetch-dlls, clean"
+        echo "Valid targets: all, win, linux, lint, test, package, fetch-dlls, clean"
         exit 1
         ;;
 esac

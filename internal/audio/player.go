@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -50,8 +49,8 @@ type DevicePlayer struct {
 
 // NewDevicePlayer creates an audio player targeting the specified device ID (empty for system default).
 func NewDevicePlayer(targetDeviceIDHex string, defaultSampleRate int) (*DevicePlayer, error) {
-	if runtime.GOOS != "windows" || testing.Testing() {
-		return nil, errors.New("WASAPI audio playback is disabled outside Windows or during unit tests")
+	if testing.Testing() {
+		return nil, errors.New("hardware audio playback is disabled during unit tests")
 	}
 	if defaultSampleRate <= 0 {
 		defaultSampleRate = 24000

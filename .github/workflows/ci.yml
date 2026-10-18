@@ -57,16 +57,20 @@ jobs:
             ${{ runner.os }}-go-1.27-
           save-always: true
 
-      - name: Install Linux Build Dependencies
+      - name: Install Build & Cross-Compilation Dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
             libgl1-mesa-dev xorg-dev libxcursor-dev libxrandr-dev \
             libxinerama-dev libxi-dev libxxf86vm-dev libasound2-dev \
             libwayland-dev libxkbcommon-dev
 
       - name: Download Go Modules
-        run: go mod download
+        run: |
+          go mod download
+          go mod download github.com/k2-fsa/sherpa-onnx-go-windows
+          go mod download github.com/k2-fsa/sherpa-onnx-go-linux
 
       - name: Install golangci-lint-v2 (Cached)
         run: |
@@ -81,43 +85,7 @@ jobs:
           ./build.sh lint
           ./build.sh test
 
-  windows-build:
-    name: Windows Native Build & Test
-    runs-on: windows-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.27'
-          cache: false
-
-      - name: Cache Windows Go Modules & Build Artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~\AppData\Local\go-build
-          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-1.27-
-          save-always: true
-
-      - name: Download Go Modules & Add Sherpa DLLs to PATH
-        shell: bash
+      - name: Build Windows & Linux Binaries
         run: |
-          go mod download
-          go mod download github.com/k2-fsa/sherpa-onnx-go-windows
-          WIN_MOD_DIR=$(go list -m -f '{{.Dir}}' github.com/k2-fsa/sherpa-onnx-go-windows)
-          if [ -n "$WIN_MOD_DIR" ] && [ -d "$WIN_MOD_DIR/lib/x86_64-pc-windows-gnu" ]; then
-            echo "$WIN_MOD_DIR/lib/x86_64-pc-windows-gnu" >> "$GITHUB_PATH"
-          fi
-
-      - name: Run Unit Tests
-        run: go test -count=1 -v ./...
-
-      - name: Build TownCrier Core Executable
-        run: |
-          go build -trimpath -ldflags="-H windowsgui -s -w" -o build/bin/towncrier-core.exe ./cmd/towncrier
+          ./build.sh win
+          ./build.sh linux

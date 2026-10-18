@@ -15,6 +15,7 @@
 > 6. **Prioritize Built-in Agent Tools Over Shelling Out**: Always use built-in tools (`grep_search`, `list_dir`, `view_file`) for searching code, finding files, and inspecting contents. Do not shell out when built-in tools are capable of performing the operation. Only shell out via `run_command` when strictly necessary (e.g., git operations, building/running code, tests, or `gh` CLI).
 > 7. **Build Output Location**: All temporary binaries, DLLs, and build artifacts belong in `build/` (e.g., `build/bin/`), which is gitignored. Never commit binaries or model weights.
 > 8. **Planning Repository Independence**: `planning/` is its own local-only git repository (no remote) ignored by the main repo. Planning commits happen independently inside `planning/` referencing ticket numbers.
+> 9. **Always Link PRs, Issues, and CI Runs**: Whenever creating or referencing GitHub Pull Requests, Issues, or Actions CI runs, always include clickable Markdown links so the user can watch or inspect them directly.
 
 ---
 
