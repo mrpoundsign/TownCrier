@@ -501,30 +501,103 @@ func (q *Queue) processItem(item *Item, depth int) {
 	}
 
 	log.Printf("[Queue] Synthesizing speech for %q (voice=%s, speed=%.2f)...", item.Text, item.VoiceID, speed)
-	samples, sampleRate, err := engine.Synthesize(item.Text, item.VoiceID, speed)
-	if err != nil || len(samples) == 0 {
-		log.Printf("[Queue] Synthesis failed or returned empty samples: err=%v, sampleCount=%d", err, len(samples))
-		return
-	}
 
-	// Check if aborted during synthesis
-	q.mu.Lock()
-	if q.currentAborted || q.closed {
+	if streamEng, ok := engine.(tts.StreamingEngine); ok {
+		chunkCount := 0
+		startedPlaying := false
+		var preBuffer []float32
+		preBufferSR := 24000
+
+		err := streamEng.SynthesizeStream(item.Text, item.VoiceID, speed, func(samples []float32, sampleRate int) bool {
+			q.mu.Lock()
+			aborted := q.currentAborted || q.closed
+			q.mu.Unlock()
+			if aborted {
+				log.Printf("[Queue] Playback aborted: item was cancelled during streaming synthesis")
+				return false
+			}
+			if len(samples) == 0 {
+				return true
+			}
+			chunkCount++
+			if player == nil {
+				log.Printf("[Queue] Playback skipped: audio player is nil")
+				return false
+			}
+			if sampleRate > 0 {
+				preBufferSR = sampleRate
+			}
+
+			// Pre-buffer at least ~0.9s of audio before starting playback so a tiny 1-word
+			// opening doesn't underrun while the next clause synthesizes.
+			minPreBufferSamples := preBufferSR * 9 / 10
+			if !startedPlaying {
+				preBuffer = append(preBuffer, samples...)
+				if len(preBuffer) >= minPreBufferSamples {
+					startedPlaying = true
+					log.Printf("[Queue] Playing pre-buffered clauses 1..%d (%d samples at %d Hz)...", chunkCount, len(preBuffer), preBufferSR)
+					if playErr := player.Play(preBuffer, preBufferSR); playErr != nil {
+						log.Printf("[Queue] Player.Play failed on pre-buffer: %v", playErr)
+						return false
+					}
+					preBuffer = nil
+				}
+				return true
+			}
+
+			log.Printf("[Queue] Playing clause %d (%d samples at %d Hz)...", chunkCount, len(samples), sampleRate)
+			if playErr := player.Play(samples, sampleRate); playErr != nil {
+				log.Printf("[Queue] Player.Play failed on clause %d: %v", chunkCount, playErr)
+				return false
+			}
+			return true
+		})
+		if err != nil || chunkCount == 0 {
+			log.Printf("[Queue] Streaming synthesis failed or returned no audio: err=%v, chunks=%d", err, chunkCount)
+			return
+		}
+		if !startedPlaying && len(preBuffer) > 0 && player != nil {
+			q.mu.Lock()
+			aborted := q.currentAborted || q.closed
+			q.mu.Unlock()
+			if !aborted {
+				log.Printf("[Queue] Playing audio (%d samples at %d Hz)...", len(preBuffer), preBufferSR)
+				if playErr := player.Play(preBuffer, preBufferSR); playErr != nil {
+					log.Printf("[Queue] Player.Play failed: %v", playErr)
+					return
+				}
+			}
+		}
+	} else {
+		samples, sampleRate, err := engine.Synthesize(item.Text, item.VoiceID, speed)
+		if err != nil || len(samples) == 0 {
+			log.Printf("[Queue] Synthesis failed or returned empty samples: err=%v, sampleCount=%d", err, len(samples))
+			return
+		}
+
+		// Check if aborted during synthesis
+		q.mu.Lock()
+		if q.currentAborted || q.closed {
+			q.mu.Unlock()
+			log.Printf("[Queue] Playback aborted: item was cancelled during synthesis")
+			return
+		}
 		q.mu.Unlock()
-		log.Printf("[Queue] Playback aborted: item was cancelled during synthesis")
-		return
-	}
-	q.mu.Unlock()
 
-	// Play via audio player
+		// Play via audio player
+		if player == nil {
+			log.Printf("[Queue] Playback skipped: audio player is nil")
+			return
+		}
+
+		log.Printf("[Queue] Playing audio (%d samples at %d Hz)...", len(samples), sampleRate)
+		if err := player.Play(samples, sampleRate); err != nil {
+			log.Printf("[Queue] Player.Play failed: %v", err)
+			return
+		}
+	}
+
 	if player == nil {
-		log.Printf("[Queue] Playback skipped: audio player is nil")
-		return
-	}
-
-	log.Printf("[Queue] Playing audio (%d samples at %d Hz)...", len(samples), sampleRate)
-	if err := player.Play(samples, sampleRate); err != nil {
-		log.Printf("[Queue] Player.Play failed: %v", err)
 		return
 	}
 

@@ -68,7 +68,7 @@ func DefaultModelDir() string {
 	}
 
 	for _, c := range candidates {
-		if IsModelInstalled(c) {
+		if IsCPUModelInstalled(c) || IsGPUModelInstalled(c) {
 			return c
 		}
 	}
@@ -77,7 +77,7 @@ func DefaultModelDir() string {
 	configDir, err := os.UserConfigDir()
 	if err == nil {
 		newPath := filepath.Join(configDir, "com.github.mrpoundsign.towncrier", "models", "kokoro-en")
-		if IsModelInstalled(newPath) {
+		if IsCPUModelInstalled(newPath) || IsGPUModelInstalled(newPath) {
 			return newPath
 		}
 		for _, legacy := range []string{
@@ -85,7 +85,7 @@ func DefaultModelDir() string {
 			filepath.Join(configDir, "com.github.mrpoundsign.octochorpebot", "models", "kokoro-en"),
 			filepath.Join(configDir, "OctochorpeBot", "models", "kokoro-en"),
 		} {
-			if IsModelInstalled(legacy) {
+			if IsCPUModelInstalled(legacy) || IsGPUModelInstalled(legacy) {
 				return legacy
 			}
 		}
@@ -95,27 +95,27 @@ func DefaultModelDir() string {
 	return "models/kokoro-en"
 }
 
+// IsCPUModelInstalled checks if the INT8 CPU Kokoro model (model.int8.onnx) and shared assets are present.
+func IsCPUModelInstalled(dir string) bool {
+	return fileExists(filepath.Join(dir, "model.int8.onnx")) && hasSharedAssets(dir)
+}
+
+// IsGPUModelInstalled checks if the FP32 DirectML GPU Kokoro model (model.onnx) and shared assets are present.
+func IsGPUModelInstalled(dir string) bool {
+	return fileExists(filepath.Join(dir, "model.onnx")) && hasSharedAssets(dir)
+}
+
+// IsKokoroInstalledForMode checks if the required Kokoro model files for the requested mode (GPU vs CPU) are installed.
+func IsKokoroInstalledForMode(dir string, useGPU bool) bool {
+	if useGPU {
+		return IsGPUModelInstalled(dir)
+	}
+	return IsCPUModelInstalled(dir)
+}
+
 // IsModelInstalled checks if all required Kokoro model assets (both FP32 GPU and INT8 CPU models + shared assets) are present in the directory.
 func IsModelInstalled(dir string) bool {
-	required := []string{
-		"model.onnx",
-		"model.int8.onnx",
-		"voices.bin",
-		"tokens.txt",
-		"espeak-ng-data",
-	}
-
-	for _, req := range required {
-		path := filepath.Join(dir, req)
-		info, err := os.Stat(path)
-		if err != nil {
-			return false
-		}
-		if req == "espeak-ng-data" && !info.IsDir() {
-			return false
-		}
-	}
-	return true
+	return IsCPUModelInstalled(dir) && IsGPUModelInstalled(dir)
 }
 
 func hasSharedAssets(dir string) bool {
@@ -256,8 +256,21 @@ func (p *progressHashReader) Read(buf []byte) (int, error) {
 
 // DownloadKokoroModel downloads and extracts any missing Kokoro model archives (FP32 + INT8) concurrently in parallel.
 func DownloadKokoroModel(destDir string, onProgress DownloadProgressFunc) error {
-	if IsModelInstalled(destDir) {
-		return nil
+	return DownloadKokoroModelForMode(destDir, true, onProgress)
+}
+
+// DownloadKokoroModelForMode downloads only the required Kokoro archive(s) for the requested execution mode.
+// When useGPU is false, only the 98.5 MB INT8 archive (model.int8.onnx + shared assets) is downloaded.
+// When useGPU is true, the FP32 archive (model.onnx + shared assets) and INT8 fallback are downloaded.
+func DownloadKokoroModelForMode(destDir string, useGPU bool, onProgress DownloadProgressFunc) error {
+	if useGPU {
+		if IsModelInstalled(destDir) {
+			return nil
+		}
+	} else {
+		if IsCPUModelInstalled(destDir) {
+			return nil
+		}
 	}
 
 	if err := os.MkdirAll(destDir, 0755); err != nil {
@@ -265,8 +278,8 @@ func DownloadKokoroModel(destDir string, onProgress DownloadProgressFunc) error 
 	}
 
 	sharedPresent := hasSharedAssets(destDir)
-	needFP32 := !fileExists(filepath.Join(destDir, "model.onnx")) || !sharedPresent
-	needINT8 := !fileExists(filepath.Join(destDir, "model.int8.onnx"))
+	needFP32 := useGPU && (!fileExists(filepath.Join(destDir, "model.onnx")) || !sharedPresent)
+	needINT8 := !fileExists(filepath.Join(destDir, "model.int8.onnx")) || (!useGPU && !sharedPresent)
 
 	var tasks []archiveTask
 	var totalBytes int64
@@ -341,7 +354,7 @@ func DownloadKokoroModel(destDir string, onProgress DownloadProgressFunc) error 
 		return firstErr
 	}
 
-	if !IsModelInstalled(destDir) {
+	if !IsKokoroInstalledForMode(destDir, useGPU) {
 		return fmt.Errorf("kokoro model extraction finished but required files are still missing in %s", destDir)
 	}
 

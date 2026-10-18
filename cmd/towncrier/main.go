@@ -155,10 +155,10 @@ func run() error {
 			defer logging.RecoverAndExit("tts-init")
 
 			modelDir := tts.DefaultModelDir()
-			if !tts.IsModelInstalled(modelDir) {
-				log.Printf("Kokoro models missing in %s; starting parallel download...", modelDir)
+			if !tts.IsKokoroInstalledForMode(modelDir, cfg.TTS.UseGPU) {
+				log.Printf("Kokoro models missing in %s (useGPU=%v); starting download...", modelDir, cfg.TTS.UseGPU)
 				tracker.SetStatus("Downloading Kokoro-82M neural TTS models...")
-				dlErr := tts.DownloadKokoroModel(modelDir, tracker.SetDownloadProgress)
+				dlErr := tts.DownloadKokoroModelForMode(modelDir, cfg.TTS.UseGPU, tracker.SetDownloadProgress)
 				if dlErr != nil {
 					log.Printf("Error: failed to download Kokoro TTS models: %v", dlErr)
 					tracker.ShowFatalError(
@@ -188,6 +188,12 @@ func run() error {
 					quitApp,
 				)
 				return
+			}
+			if cfg.TTS.MaxClauseWords > 0 {
+				eng.SetMaxClauseWords(cfg.TTS.MaxClauseWords)
+			}
+			if cfg.TTS.IdleUnloadMinutes > 0 {
+				eng.SetIdleTimeout(time.Duration(cfg.TTS.IdleUnloadMinutes) * time.Minute)
 			}
 
 			var engine tts.Engine = eng

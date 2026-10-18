@@ -277,3 +277,115 @@ func TestSherpaEngineSynthesis(t *testing.T) {
 		t.Errorf("expected 24000 Hz, got %d", sr)
 	}
 }
+
+func TestSplitIntoClauses(t *testing.T) {
+	if got := SplitIntoClauses("   ", 10); len(got) != 0 {
+		t.Errorf("expected nil/empty for blank text, got %v", got)
+	}
+
+	short := "Hello streamer welcome to the stream"
+	if got := SplitIntoClauses(short, 10); len(got) != 1 || got[0] != short {
+		t.Errorf("expected single clause %q, got %v", short, got)
+	}
+
+	// Regression test: single-word sentence "Hello!" followed by a 10-word sentence must NOT
+	// eat into the second sentence's word budget and orphan "speech." at the end!
+	previewText := "Hello! I am reading your livestream chat with natural neural speech."
+	for _, limit := range []int{10, 18} {
+		got := SplitIntoClauses(previewText, limit)
+		if len(got) != 2 || got[0] != "Hello!" || got[1] != "I am reading your livestream chat with natural neural speech." {
+			t.Errorf("limit=%d: expected [\"Hello!\", \"I am reading your livestream chat with natural neural speech.\"], got %q", limit, got)
+		}
+	}
+
+	// Unpunctuated 46-word stream chat message should be split into clauses of <= 10 words with no 1-word orphans
+	longUnpunct := "hey streamer i have been watching your channel for three years now and i just wanted to say that your gameplay today on this boss fight was absolutely incredible even when the whole team wiped twice in a row you kept going and clutched the win"
+	clauses := SplitIntoClauses(longUnpunct, 10)
+	if len(clauses) < 5 {
+		t.Fatalf("expected at least 5 clauses for 46-word message, got %d: %v", len(clauses), clauses)
+	}
+	for i, c := range clauses {
+		words := len(splitWordsTest(c))
+		if words < 2 || words > 10 {
+			t.Errorf("clause %d has %d words (expected 2..10): %q", i, words, c)
+		}
+	}
+
+	// Sentence punctuation split
+	punct := "First sentence here! Second sentence is also here, and it continues nicely for a bit."
+	pClauses := SplitIntoClauses(punct, 10)
+	if len(pClauses) < 2 || pClauses[0] != "First sentence here!" {
+		t.Errorf("expected first clause 'First sentence here!', got %v", pClauses)
+	}
+}
+
+func splitWordsTest(s string) []string {
+	var out []string
+	cur := ""
+	for _, r := range s {
+		if r == ' ' || r == '\t' || r == '\n' {
+			if cur != "" {
+				out = append(out, cur)
+				cur = ""
+			}
+		} else {
+			cur += string(r)
+		}
+	}
+	if cur != "" {
+		out = append(out, cur)
+	}
+	return out
+}
+
+func TestDownloadKokoroModelCPUOnly(t *testing.T) {
+	const int8B64 = "QlpoOTFBWSZTWZDFmCAAAWN/gsKgACBAA//kIAgAAP7v38BAADAIMAE4a0GkgAGgAAABoAaIygRiYJoaMRk0MTARSKYQ1HqZpqMjTTR6jDUNPUy5D1/bOc5d5cQUjUGPAkCRoQFpv2VznIGAkXjbBE76qRhS4YECQwshxGQ2FvyeY4j0Ngzp6ylr4RCWBbrBtBCOJx941CFAMDAP4OzfOHOMigYVwHdhYNdQwRhASlIJpEwEDY0ARBGoFAJ9wEgJGIDVFAdBKaoYHMUbQJjNNA3yHMnQgeifWIck36u2B2rpHS8ICQOG8XAwDoaBOnvC449V+MZQEy9IC6BHUInAtImB4dB/vg3HiOuBoB5lw6RrBq06IiDIdvaMwFaZx2XZW5DcNFEq+68QP8XckU4UJCQxZggA"
+
+	int8Archive, err := base64.StdEncoding.DecodeString(int8B64)
+	if err != nil {
+		t.Fatalf("decode int8B64: %v", err)
+	}
+	int8Sum := sha256.Sum256(int8Archive)
+
+	origFP32URL := KokoroFP32ArchiveURL
+	origINT8URL, origINT8SHA, origINT8Size := KokoroINT8ArchiveURL, KokoroINT8ArchiveSHA256, KokoroINT8ArchiveSize
+	defer func() {
+		KokoroFP32ArchiveURL = origFP32URL
+		KokoroINT8ArchiveURL, KokoroINT8ArchiveSHA256, KokoroINT8ArchiveSize = origINT8URL, origINT8SHA, origINT8Size
+	}()
+
+	var fp32Hits, int8Hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/fp32.tar.bz2":
+			fp32Hits.Add(1)
+			http.Error(w, "should not request fp32 in CPU mode", http.StatusInternalServerError)
+		case "/int8.tar.bz2":
+			int8Hits.Add(1)
+			_, _ = w.Write(int8Archive)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	KokoroFP32ArchiveURL = server.URL + "/fp32.tar.bz2"
+	KokoroINT8ArchiveURL = server.URL + "/int8.tar.bz2"
+	KokoroINT8ArchiveSHA256 = hex.EncodeToString(int8Sum[:])
+	KokoroINT8ArchiveSize = int64(len(int8Archive))
+
+	destDir := t.TempDir()
+	if err := DownloadKokoroModelForMode(destDir, false, nil); err != nil {
+		t.Fatalf("DownloadKokoroModelForMode(useGPU=false) failed: %v", err)
+	}
+	if !IsCPUModelInstalled(destDir) {
+		t.Fatal("expected CPU model to be installed")
+	}
+	if IsGPUModelInstalled(destDir) {
+		t.Fatal("expected GPU model not to be installed in CPU-only download")
+	}
+	if fp32Hits.Load() != 0 || int8Hits.Load() != 1 {
+		t.Errorf("expected fp32Hits=0, int8Hits=1; got fp32=%d, int8=%d", fp32Hits.Load(), int8Hits.Load())
+	}
+}
+

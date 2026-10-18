@@ -32,10 +32,12 @@ type AudioConfig struct {
 }
 
 type TTSConfig struct {
-	ModelFamily string `json:"model_family"` // "kokoro"
-	ModelPath   string `json:"model_path"`
-	NumThreads  int    `json:"num_threads"`
-	UseGPU      bool   `json:"use_gpu"`
+	ModelFamily       string `json:"model_family"` // "kokoro"
+	ModelPath         string `json:"model_path"`
+	NumThreads        int    `json:"num_threads"`
+	UseGPU            bool   `json:"use_gpu"`
+	MaxClauseWords    int    `json:"max_clause_words,omitempty"`
+	IdleUnloadMinutes int    `json:"idle_unload_minutes,omitempty"`
 }
 
 type SafetyConfig struct {
@@ -246,10 +248,12 @@ func DefaultConfig() *Config {
 			Volume:     1.0,
 		},
 		TTS: TTSConfig{
-			ModelFamily: "kokoro",
-			ModelPath:   "",
-			NumThreads:  4,
-			UseGPU:      true,
+			ModelFamily:       "kokoro",
+			ModelPath:         "",
+			NumThreads:        4,
+			UseGPU:            false,
+			MaxClauseWords:    12,
+			IdleUnloadMinutes: 0,
 		},
 		Safety: SafetyConfig{
 			PanicHotkey:  "Ctrl+Shift+M",
