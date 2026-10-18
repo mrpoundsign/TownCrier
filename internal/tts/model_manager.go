@@ -30,6 +30,26 @@ var (
 	KokoroINT8ArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-en-v0_19.tar.bz2"
 	KokoroINT8ArchiveSHA256       = "c9f0dd393615805b0bab050c340834d5e684e732aec91c0e860cd30e982c08bd"
 	KokoroINT8ArchiveSize   int64 = 103248205
+
+	// SupertonicArchiveURL is the upstream sherpa-onnx Supertonic INT8 model archive (10 voices, 44.1 kHz, ultra-fast CPU).
+	SupertonicArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-supertonic-tts-int8-2026-03-06.tar.bz2"
+	SupertonicArchiveSHA256       = "8c74359f63edd5045d47747f65331f0f6dbcbc91d7e898dd756d631295fe3259"
+	SupertonicArchiveSize   int64 = 84692981
+
+	// KittenMiniArchiveURL is the upstream sherpa-onnx Kitten v0.8 Mini model archive (8 voices, 24 kHz).
+	KittenMiniArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kitten-mini-en-v0_8.tar.bz2"
+	KittenMiniArchiveSHA256       = "518f9b130320f690d5b5476df77bde4215fca67773cda16710318e5081234b9d"
+	KittenMiniArchiveSize   int64 = 67547594
+
+	// KittenNanoArchiveURL is the upstream sherpa-onnx Kitten v0.8 Nano INT8 model archive (8 voices, 24 kHz, ultra-low RAM).
+	KittenNanoArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kitten-nano-en-v0_8-int8.tar.bz2"
+	KittenNanoArchiveSHA256       = "6fa5be852612ce761094ba74ee6123b4fc4acfefa79bf64dc63acae4a83af2fd"
+	KittenNanoArchiveSize   int64 = 31220690
+
+	// PiperArchiveURL is the upstream sherpa-onnx Piper LibriTTS-High INT8 model archive (904 speakers, 22.05 kHz).
+	PiperArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-libritts-high-int8.tar.bz2"
+	PiperArchiveSHA256       = "c35f249498fe9406c5ca3b6db1fc16749d7ee415ff2a09d5da9334206c2e0026"
+	PiperArchiveSize   int64 = 36406088
 )
 
 // ModelFile holds metadata for a downloadable model component.
@@ -68,7 +88,7 @@ func DefaultModelDir() string {
 	}
 
 	for _, c := range candidates {
-		if IsCPUModelInstalled(c) || IsGPUModelInstalled(c) {
+		if IsAnyModelFamilyInstalled(c) {
 			return c
 		}
 	}
@@ -77,7 +97,7 @@ func DefaultModelDir() string {
 	configDir, err := os.UserConfigDir()
 	if err == nil {
 		newPath := filepath.Join(configDir, "com.github.mrpoundsign.towncrier", "models", "kokoro-en")
-		if IsCPUModelInstalled(newPath) || IsGPUModelInstalled(newPath) {
+		if IsAnyModelFamilyInstalled(newPath) {
 			return newPath
 		}
 		for _, legacy := range []string{
@@ -85,7 +105,7 @@ func DefaultModelDir() string {
 			filepath.Join(configDir, "com.github.mrpoundsign.octochorpebot", "models", "kokoro-en"),
 			filepath.Join(configDir, "OctochorpeBot", "models", "kokoro-en"),
 		} {
-			if IsCPUModelInstalled(legacy) || IsGPUModelInstalled(legacy) {
+			if IsAnyModelFamilyInstalled(legacy) {
 				return legacy
 			}
 		}
@@ -93,6 +113,19 @@ func DefaultModelDir() string {
 	}
 
 	return "models/kokoro-en"
+}
+
+// IsAnyModelFamilyInstalled reports whether Kokoro or any sibling model family directory is installed relative to kokoroDir.
+func IsAnyModelFamilyInstalled(kokoroDir string) bool {
+	if IsCPUModelInstalled(kokoroDir) || IsGPUModelInstalled(kokoroDir) {
+		return true
+	}
+	for _, spec := range AllModelFamilies {
+		if IsModelFamilyInstalled(kokoroDir, spec.ID, false) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsCPUModelInstalled checks if the INT8 CPU Kokoro model (model.int8.onnx) and shared assets are present.
@@ -491,5 +524,128 @@ func stripTopLevelDir(entryName string) (string, bool) {
 	}
 	return rel, true
 }
+
+// ModelFamilyDir resolves the directory for a specific model family relative to the base Kokoro model directory.
+func ModelFamilyDir(kokoroDir string, family string) string {
+	if kokoroDir == "" {
+		kokoroDir = DefaultModelDir()
+	}
+	fam := strings.ToLower(strings.TrimSpace(family))
+	if fam == "" || fam == ModelKokoro {
+		return kokoroDir
+	}
+	spec, ok := ModelSpecByID(fam)
+	if !ok {
+		return kokoroDir
+	}
+	parent := filepath.Dir(kokoroDir)
+	return filepath.Join(parent, spec.SubDir)
+}
+
+// IsModelFamilyInstalled reports whether all required files for the given model family are installed on disk.
+func IsModelFamilyInstalled(kokoroDir string, family string, useGPU bool) bool {
+	fam := strings.ToLower(strings.TrimSpace(family))
+	dir := ModelFamilyDir(kokoroDir, fam)
+	switch fam {
+	case "", ModelKokoro:
+		return IsKokoroInstalledForMode(dir, useGPU) || IsCPUModelInstalled(dir)
+	case ModelSupertonic:
+		for _, f := range []string{
+			"duration_predictor.int8.onnx",
+			"text_encoder.int8.onnx",
+			"vector_estimator.int8.onnx",
+			"vocoder.int8.onnx",
+			"tts.json",
+			"unicode_indexer.bin",
+			"voice.bin",
+		} {
+			if !fileExists(filepath.Join(dir, f)) {
+				return false
+			}
+		}
+		return true
+	case ModelKittenMini:
+		return (fileExists(filepath.Join(dir, "model.fp16.onnx")) || fileExists(filepath.Join(dir, "model.onnx"))) && hasSharedAssets(dir)
+	case ModelKittenNano:
+		return fileExists(filepath.Join(dir, "model.int8.onnx")) && hasSharedAssets(dir)
+	case ModelPiper:
+		espeakInfo, err := os.Stat(filepath.Join(dir, "espeak-ng-data"))
+		return err == nil && espeakInfo.IsDir() &&
+			fileExists(filepath.Join(dir, "en_US-libritts-high.onnx")) &&
+			fileExists(filepath.Join(dir, "tokens.txt"))
+	default:
+		return false
+	}
+}
+
+// DownloadModelFamily downloads and extracts the archive for the requested model family if not already installed.
+func DownloadModelFamily(kokoroDir string, family string, useGPU bool, onProgress DownloadProgressFunc) error {
+	fam := strings.ToLower(strings.TrimSpace(family))
+	dir := ModelFamilyDir(kokoroDir, fam)
+	if fam == "" || fam == ModelKokoro {
+		return DownloadKokoroModelForMode(dir, useGPU, onProgress)
+	}
+	if IsModelFamilyInstalled(kokoroDir, fam, useGPU) {
+		return nil
+	}
+
+	var task archiveTask
+	switch fam {
+	case ModelSupertonic:
+		task = archiveTask{
+			name:           ModelSupertonic,
+			url:            SupertonicArchiveURL,
+			expectedSHA256: SupertonicArchiveSHA256,
+			expectedSize:   SupertonicArchiveSize,
+		}
+	case ModelKittenMini:
+		task = archiveTask{
+			name:           ModelKittenMini,
+			url:            KittenMiniArchiveURL,
+			expectedSHA256: KittenMiniArchiveSHA256,
+			expectedSize:   KittenMiniArchiveSize,
+		}
+	case ModelKittenNano:
+		task = archiveTask{
+			name:           ModelKittenNano,
+			url:            KittenNanoArchiveURL,
+			expectedSHA256: KittenNanoArchiveSHA256,
+			expectedSize:   KittenNanoArchiveSize,
+		}
+	case ModelPiper:
+		task = archiveTask{
+			name:           ModelPiper,
+			url:            PiperArchiveURL,
+			expectedSHA256: PiperArchiveSHA256,
+			expectedSize:   PiperArchiveSize,
+		}
+	default:
+		return fmt.Errorf("unsupported model family: %s", family)
+	}
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create model directory %s: %w", dir, err)
+	}
+
+	var downloadedBytes atomic.Int64
+	var totalAtomic atomic.Int64
+	totalAtomic.Store(task.expectedSize)
+
+	err := downloadAndExtractTarBz2(context.Background(), task, dir, &totalAtomic, func(delta int64) {
+		cur := downloadedBytes.Add(delta)
+		tot := max(cur, totalAtomic.Load())
+		if onProgress != nil {
+			onProgress(cur, tot)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	if !IsModelFamilyInstalled(kokoroDir, fam, useGPU) {
+		return fmt.Errorf("model family %s extraction finished but required files are missing in %s", fam, dir)
+	}
+	return nil
+}
+
 
 

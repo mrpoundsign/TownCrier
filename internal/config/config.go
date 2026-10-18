@@ -32,12 +32,40 @@ type AudioConfig struct {
 }
 
 type TTSConfig struct {
-	ModelFamily       string `json:"model_family"` // "kokoro"
-	ModelPath         string `json:"model_path"`
-	NumThreads        int    `json:"num_threads"`
-	UseGPU            bool   `json:"use_gpu"`
-	MaxClauseWords    int    `json:"max_clause_words,omitempty"`
-	IdleUnloadMinutes int    `json:"idle_unload_minutes,omitempty"`
+	Preset            string   `json:"preset,omitempty"`         // "ultra_low", "fast_lean", "balanced", "beefy", "custom"
+	EnabledModels     []string `json:"enabled_models,omitempty"` // ["kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper"]
+	ModelFamily       string   `json:"model_family"`             // "kokoro"
+	ModelPath         string   `json:"model_path"`
+	NumThreads        int      `json:"num_threads"`
+	UseGPU            bool     `json:"use_gpu"`
+	MaxClauseWords    int      `json:"max_clause_words,omitempty"`
+	IdleUnloadMinutes int      `json:"idle_unload_minutes,omitempty"`
+}
+
+// EffectiveEnabledModels returns the non-empty list of enabled TTS model families.
+func (t TTSConfig) EffectiveEnabledModels() []string {
+	if len(t.EnabledModels) > 0 {
+		out := make([]string, 0, len(t.EnabledModels))
+		seen := make(map[string]struct{}, len(t.EnabledModels))
+		for _, m := range t.EnabledModels {
+			m = strings.ToLower(strings.TrimSpace(m))
+			if m == "" {
+				continue
+			}
+			if _, ok := seen[m]; !ok {
+				seen[m] = struct{}{}
+				out = append(out, m)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	fam := strings.ToLower(strings.TrimSpace(t.ModelFamily))
+	if fam == "" {
+		fam = "kokoro"
+	}
+	return []string{fam}
 }
 
 type SafetyConfig struct {
@@ -248,7 +276,9 @@ func DefaultConfig() *Config {
 			Volume:     1.0,
 		},
 		TTS: TTSConfig{
-			ModelFamily:       "kokoro",
+			Preset:            "fast_lean",
+			EnabledModels:     []string{"supertonic"},
+			ModelFamily:       "supertonic",
 			ModelPath:         "",
 			NumThreads:        4,
 			UseGPU:            false,
@@ -272,7 +302,7 @@ func DefaultConfig() *Config {
 			SpeakNames:        true,
 			SpeakEmotes:       false,
 			SpeakPlatformName: false,
-			DefaultVoice:      "af_bella",
+			DefaultVoice:      "supertonic:f1",
 			DefaultSpeed:      1.0,
 		},
 		Viewers: make(map[string]ViewerConfig),
@@ -556,6 +586,8 @@ func Load(path string) (*Config, error) {
 				for _, legacyPath := range candidates {
 					if legacyData, errLegacy := os.ReadFile(legacyPath); errLegacy == nil {
 						cfg := DefaultConfig()
+						cfg.TTS.Preset = ""
+						cfg.TTS.EnabledModels = nil
 						if errParse := json.Unmarshal(legacyData, cfg); errParse == nil {
 							_ = migrate(cfg)
 							// Migrate immediately to the new location
@@ -571,6 +603,8 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg := DefaultConfig()
+	cfg.TTS.Preset = ""
+	cfg.TTS.EnabledModels = nil
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config json: %w", err)
 	}
@@ -622,10 +656,71 @@ func saveLocked(path string, cfg *Config) error {
 	return nil
 }
 
+func voiceFamilyFromID(voiceID string) string {
+	id := strings.ToLower(strings.TrimSpace(voiceID))
+	if id == "" {
+		return ""
+	}
+	if prefix, _, ok := strings.Cut(id, ":"); ok {
+		switch prefix {
+		case "supertonic", "kokoro", "kitten_mini", "kitten_nano", "piper":
+			return prefix
+		}
+	}
+	return "kokoro"
+}
+
 func migrate(cfg *Config) error {
 	// Baseline migration runner: upgrade configs older than CurrentVersion
 	if cfg.Version < 1 {
 		cfg.Version = 1
+	}
+
+	if len(cfg.TTS.EnabledModels) == 0 {
+		cfg.TTS.EnabledModels = cfg.TTS.EffectiveEnabledModels()
+	}
+
+	// Ensure any model family referenced by assigned voices (global, viewers, platforms) is enabled
+	enabledSet := make(map[string]bool, len(cfg.TTS.EnabledModels))
+	for _, m := range cfg.TTS.EnabledModels {
+		enabledSet[strings.ToLower(strings.TrimSpace(m))] = true
+	}
+	ensureVoiceFamily := func(voiceID string) {
+		fam := voiceFamilyFromID(voiceID)
+		if fam != "" && !enabledSet[fam] {
+			enabledSet[fam] = true
+			cfg.TTS.EnabledModels = append(cfg.TTS.EnabledModels, fam)
+		}
+	}
+	ensureVoiceFamily(cfg.GlobalChatRules.DefaultVoice)
+	for _, v := range cfg.Viewers {
+		if !v.Ignored {
+			ensureVoiceFamily(v.Voice)
+		}
+	}
+	for _, p := range cfg.Platforms {
+		if p.Overrides.OverrideRules {
+			ensureVoiceFamily(p.Overrides.DefaultVoice)
+		}
+		for _, n := range p.Notifications {
+			if n.Enabled {
+				ensureVoiceFamily(n.Voice)
+			}
+		}
+	}
+
+	if cfg.TTS.Preset == "" {
+		switch {
+		case cfg.TTS.UseGPU || len(cfg.TTS.EnabledModels) > 1:
+			cfg.TTS.Preset = "custom"
+		case len(cfg.TTS.EnabledModels) == 1 && cfg.TTS.EnabledModels[0] == "supertonic":
+			cfg.TTS.Preset = "fast_lean"
+		default:
+			cfg.TTS.Preset = "balanced"
+		}
+	}
+	if cfg.TTS.MaxClauseWords <= 0 {
+		cfg.TTS.MaxClauseWords = 12
 	}
 
 	// Normalize viewer keys and populate multi-platform Accounts slice

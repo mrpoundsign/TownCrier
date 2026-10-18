@@ -109,10 +109,10 @@ func VoiceDisplayLabels() []string {
 	return labels
 }
 
-// VoiceDisplayName returns the human-friendly display label for a voice ID.
+// VoiceDisplayName returns the human-friendly display label for a voice ID across all model families.
 func VoiceDisplayName(voiceID string) string {
 	id := VoiceIDFromLabel(voiceID)
-	for _, v := range KokoroVoiceCatalog {
+	for _, v := range AllVoiceOptions() {
 		if v.ID == id {
 			return v.Label
 		}
@@ -123,14 +123,14 @@ func VoiceDisplayName(voiceID string) string {
 	return id
 }
 
-// VoiceIDFromLabel extracts the canonical voice ID (e.g. "af_bella") from a display label or raw ID.
+// VoiceIDFromLabel extracts the canonical voice ID (e.g. "af_bella" or "supertonic:f1") from a display label or raw ID.
 func VoiceIDFromLabel(labelOrID string) string {
 	s := strings.TrimSpace(labelOrID)
 	if s == "" {
 		return DefaultVoiceID
 	}
 	lower := strings.ToLower(s)
-	for _, v := range KokoroVoiceCatalog {
+	for _, v := range AllVoiceOptions() {
 		if strings.EqualFold(v.Label, s) || v.ID == lower {
 			return v.ID
 		}

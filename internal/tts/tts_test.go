@@ -9,8 +9,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
 func TestResolveSpeakerID(t *testing.T) {
@@ -388,4 +391,102 @@ func TestDownloadKokoroModelCPUOnly(t *testing.T) {
 		t.Errorf("expected fp32Hits=0, int8Hits=1; got fp32=%d, int8=%d", fp32Hits.Load(), int8Hits.Load())
 	}
 }
+
+func TestMultiModelPresetsAndHardwareImpact(t *testing.T) {
+	if fam := VoiceFamily("af_bella"); fam != ModelKokoro {
+		t.Errorf("expected kokoro for af_bella, got %q", fam)
+	}
+	if fam := VoiceFamily("supertonic:m2"); fam != ModelSupertonic {
+		t.Errorf("expected supertonic for supertonic:m2, got %q", fam)
+	}
+	if fam := VoiceFamily("Supertonic M2 — Energetic US Male (supertonic:m2)"); fam != ModelSupertonic {
+		t.Errorf("expected supertonic from display label, got %q", fam)
+	}
+	if fam := VoiceFamily("kitten_mini:f3"); fam != ModelKittenMini {
+		t.Errorf("expected kitten_mini, got %q", fam)
+	}
+	if fam := VoiceFamily("kitten_nano:m1"); fam != ModelKittenNano {
+		t.Errorf("expected kitten_nano, got %q", fam)
+	}
+	if fam := VoiceFamily("piper:spk_10"); fam != ModelPiper {
+		t.Errorf("expected piper, got %q", fam)
+	}
+
+	if sid := ResolveFamilySpeakerID(ModelSupertonic, "supertonic:m2", 10); sid != 6 {
+		t.Errorf("expected sid 6 for supertonic:m2, got %d", sid)
+	}
+	if sid := ResolveFamilySpeakerID(ModelKittenMini, "kitten_mini:m4", 8); sid != 6 {
+		t.Errorf("expected sid 6 for kitten_mini:m4, got %d", sid)
+	}
+	if sid := ResolveFamilySpeakerID(ModelPiper, "piper:spk_42", 904); sid != 42 {
+		t.Errorf("expected sid 42 for piper:spk_42, got %d", sid)
+	}
+
+	labels := VoiceDisplayLabelsForModels([]string{ModelSupertonic, ModelKittenNano})
+	expectedCount := len(SupertonicVoiceCatalog) + len(KittenNanoVoiceCatalog)
+	if len(labels) != expectedCount {
+		t.Errorf("expected %d labels for supertonic+kitten_nano, got %d", expectedCount, len(labels))
+	}
+
+	pFast := PresetByID(PresetFastLean)
+	if pFast.ID != PresetFastLean || len(pFast.EnabledModels) != 1 || pFast.EnabledModels[0] != ModelSupertonic {
+		t.Errorf("unexpected fast_lean preset: %+v", pFast)
+	}
+
+	cpuImpact := EstimateHardwareImpact([]string{ModelKokoro}, false, 4)
+	gpuImpact := EstimateHardwareImpact([]string{ModelKokoro}, true, 4)
+	superImpact := EstimateHardwareImpact([]string{ModelSupertonic}, false, 4)
+
+	if cpuImpact.ActiveRAMMB >= gpuImpact.ActiveRAMMB {
+		t.Errorf("expected CPU Kokoro RAM (%d MB) < GPU Kokoro RAM (%d MB)", cpuImpact.ActiveRAMMB, gpuImpact.ActiveRAMMB)
+	}
+	if superImpact.LatencyMeter >= cpuImpact.LatencyMeter {
+		t.Errorf("expected Supertonic CPU latency (%f) < Kokoro CPU latency (%f)", superImpact.LatencyMeter, cpuImpact.LatencyMeter)
+	}
+	if gpuImpact.GPUMeter <= 0 {
+		t.Errorf("expected positive GPUMeter when UseGPU=true with Kokoro, got %f", gpuImpact.GPUMeter)
+	}
+	if cpuImpact.TradeoffNotice == "" {
+		t.Error("expected non-empty TradeoffNotice")
+	}
+
+	multiImpact := EstimateHardwareImpact([]string{ModelSupertonic, ModelKittenNano}, false, 4)
+	if len(multiImpact.RAMSegments) != 3 { // base + supertonic + kitten_nano
+		t.Errorf("expected 3 RAM segments for 2 enabled models, got %d", len(multiImpact.RAMSegments))
+	}
+	if len(multiImpact.CPUSegments) != 2 {
+		t.Errorf("expected 2 CPU segments for 2 enabled models, got %d", len(multiImpact.CPUSegments))
+	}
+	if multiImpact.CPUSegments[1].Fraction <= multiImpact.CPUSegments[0].Fraction*2.5 {
+		t.Errorf("expected Kitten Nano CPU segment (%f) to be ~3x Supertonic CPU segment (%f)",
+			multiImpact.CPUSegments[1].Fraction, multiImpact.CPUSegments[0].Fraction)
+	}
+}
+
+func TestFindVoiceUsages(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.GlobalChatRules.DefaultVoice = "supertonic:f1"
+	cfg.Viewers["twitch:alice"] = config.ViewerConfig{
+		Platform: "twitch",
+		UserID:   "alice",
+		Voice:    "kitten_nano:f4",
+	}
+
+	usages := FindVoiceUsages(cfg, []string{ModelSupertonic, ModelKittenNano})
+	if len(usages) != 2 {
+		t.Fatalf("expected 2 voice usages, got %d: %+v", len(usages), usages)
+	}
+
+	warning := FormatVoiceUsagesWarning(usages)
+	if !strings.Contains(warning, "Global Default Voice") || !strings.Contains(warning, "alice") {
+		t.Errorf("expected warning to list both Global Default Voice and alice, got: %s", warning)
+	}
+
+	disabled := DisabledModelFamilies([]string{ModelSupertonic, ModelKittenNano}, []string{ModelSupertonic})
+	if len(disabled) != 1 || disabled[0] != ModelKittenNano {
+		t.Errorf("expected disabled=[kitten_nano], got %v", disabled)
+	}
+}
+
+
 

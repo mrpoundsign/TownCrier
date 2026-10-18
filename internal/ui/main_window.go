@@ -174,6 +174,14 @@ func (mw *MainWindow) initViews() {
 	mw.settingsTab.SetServicesChangedHandler(func() {
 		mw.syncServiceVisibility()
 	})
+	mw.settingsTab.SetModelsChangedHandler(func() {
+		if mw.voicesTab != nil {
+			mw.voicesTab.RefreshVoices()
+		}
+		if mw.viewersTab != nil {
+			mw.viewersTab.Refresh()
+		}
+	})
 
 	mw.dashboardTabItem = container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), mw.dashboardTab.Build())
 	mw.twitchTabItem = container.NewTabItemWithIcon("Twitch", theme.MediaPlayIcon(), mw.twitchTab.Build())
@@ -194,6 +202,11 @@ func (mw *MainWindow) initViews() {
 		mw.viewersTabItem,
 		mw.settingsTabItem,
 	)
+	mw.tabsContainer.OnSelected = func(item *container.TabItem) {
+		if item == mw.settingsTabItem && mw.settingsTab != nil {
+			mw.settingsTab.SyncFromConfig()
+		}
+	}
 }
 
 func (mw *MainWindow) syncServiceVisibility() {

@@ -17,8 +17,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.GlobalChatRules.SpeakEmotes {
 		t.Error("expected speak_emotes to be false by default")
 	}
-	if cfg.GlobalChatRules.DefaultVoice != "af_bella" {
-		t.Errorf("expected default voice 'af_bella', got %q", cfg.GlobalChatRules.DefaultVoice)
+	if cfg.GlobalChatRules.DefaultVoice != "supertonic:f1" {
+		t.Errorf("expected default voice 'supertonic:f1', got %q", cfg.GlobalChatRules.DefaultVoice)
 	}
 	if cfg.GlobalChatRules.DefaultSpeed != 1.0 {
 		t.Errorf("expected default speed 1.0, got %f", cfg.GlobalChatRules.DefaultSpeed)
