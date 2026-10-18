@@ -47,6 +47,29 @@ var commonAbbreviations = map[string]struct{}{
 	"i.e.":  {},
 }
 
+// SplitIntoSentences divides input text into complete sentences on hard punctuation (., !, ?, ;, :)
+// without splitting any sentence mid-clause.
+func SplitIntoSentences(text string) []string {
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return nil
+	}
+
+	var sentences []string
+	var curSent []string
+	for _, w := range words {
+		curSent = append(curSent, w)
+		if endsWithHardPunct(w) {
+			sentences = append(sentences, strings.Join(curSent, " "))
+			curSent = nil
+		}
+	}
+	if len(curSent) > 0 {
+		sentences = append(sentences, strings.Join(curSent, " "))
+	}
+	return sentences
+}
+
 // SplitIntoClauses divides input text into natural prosodic clauses of at most maxWords words.
 //  1. Hard sentence boundaries (., !, ?, ;, :) always split first (even after a single-word
 //     greeting like "Hello!"), so adjacent sentences never steal each other's word budget.

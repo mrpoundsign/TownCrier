@@ -259,17 +259,13 @@ func (e *SherpaEngine) unloadIfIdle() {
 	ReclaimOSMemory()
 }
 
-// SynthesizeStream splits input text into prosodic clauses and invokes onChunk for each clause.
-// This bounds ONNX Runtime intermediate tensor memory and dramatically lowers Time-To-First-Audio.
+// SynthesizeStream splits input text into complete sentences and invokes onChunk for each sentence.
+// Avoiding mid-sentence splits preserves natural prosody across all neural TTS models.
 func (e *SherpaEngine) SynthesizeStream(text string, voiceID string, speed float32, onChunk StreamCallback) error {
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
 		return ErrEngineClosed
-	}
-	maxWords := e.maxClauseWords
-	if maxWords <= 0 {
-		maxWords = DefaultMaxClauseWords
 	}
 	sr := e.sampleRate
 	if sr <= 0 {
@@ -287,7 +283,7 @@ func (e *SherpaEngine) SynthesizeStream(text string, voiceID string, speed float
 		speed = 3.0
 	}
 
-	clauses := SplitIntoClauses(text, maxWords)
+	clauses := SplitIntoSentences(text)
 	if len(clauses) == 0 {
 		return nil
 	}

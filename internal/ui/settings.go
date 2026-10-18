@@ -456,15 +456,6 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	threadsSlider.Step = 1
 	threadsSlider.SetValue(float64(initThreads))
 
-	initClause := v.cfg.TTS.MaxClauseWords
-	if initClause <= 0 {
-		initClause = tts.DefaultMaxClauseWords
-	}
-	clauseValLabel := widget.NewLabel(fmt.Sprintf("%d words/clause", initClause))
-	clauseSlider := widget.NewSlider(6, 20)
-	clauseSlider.Step = 1
-	clauseSlider.SetValue(float64(initClause))
-
 	idleOptions := []string{
 		"Never (Keep Models Warm in RAM)",
 		"After 5 minutes idle",
@@ -567,13 +558,6 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		}
 		threadsSlider.SetValue(float64(th))
 		threadsValLabel.SetText(fmt.Sprintf("%d threads", th))
-
-		cw := cfg.TTS.MaxClauseWords
-		if cw <= 0 {
-			cw = tts.DefaultMaxClauseWords
-		}
-		clauseSlider.SetValue(float64(cw))
-		clauseValLabel.SetText(fmt.Sprintf("%d words/clause", cw))
 
 		idleSelect.SetSelected(idleLabelFromMinutes(cfg.TTS.IdleUnloadMinutes))
 		refreshPackLabels()
@@ -734,20 +718,6 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		v.reloadTTSEngine(refreshPackLabels)
 	}
 
-	clauseSlider.OnChanged = func(val float64) {
-		cfg := v.currentConfig()
-		cw := max(int(val), 6)
-		clauseValLabel.SetText(fmt.Sprintf("%d words/clause", cw))
-		if v.initializing || syncingControls || cfg.TTS.MaxClauseWords == cw {
-			return
-		}
-		v.updateConfig(func(c *config.Config) {
-			c.TTS.Preset = tts.PresetCustom
-			c.TTS.MaxClauseWords = cw
-		})
-		markCustomPreset()
-	}
-
 	idleSelect.OnChanged = func(selected string) {
 		cfg := v.currentConfig()
 		mins := idleMinutesFromLabel(selected)
@@ -789,13 +759,6 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		threadsValLabel,
 		threadsSlider,
 	)
-	clauseRow := container.NewBorder(
-		nil,
-		nil,
-		widget.NewLabel("Max Words Per Clause (bounds peak synthesis RAM):"),
-		clauseValLabel,
-		clauseSlider,
-	)
 	idleRow := container.NewBorder(
 		nil,
 		nil,
@@ -816,7 +779,6 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("CPU & Memory Tuning:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		threadsRow,
-		clauseRow,
 		idleRow,
 	)
 
