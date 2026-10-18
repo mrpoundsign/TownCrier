@@ -16,6 +16,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/internal/audio"
 	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 	"github.com/mrpoundsign/TownCrier/internal/logging"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
 	"github.com/mrpoundsign/TownCrier/internal/tts"
@@ -232,6 +233,20 @@ func run() error {
 			log.Println("Starting application session...")
 			session := app.NewSession(cfg, secrets.NewKeyringStore(""))
 			activeSession = session
+
+			if sqlStore, logErr := eventlog.NewSQLiteBackend(cfg.Logging.DBPath); logErr != nil {
+				log.Printf("Warning: failed to initialize SQLite event log store: %v", logErr)
+			} else {
+				logMgr := eventlog.NewManager(eventlog.RetentionPolicy{
+					ChatRetentionDays:  cfg.Logging.ChatRetentionDays,
+					EventRetentionDays: cfg.Logging.EventRetentionDays,
+				}, sqlStore)
+				logMgr.SetEnabled(cfg.Logging.Enabled)
+				logMgr.StartAutoPrune(15 * time.Minute)
+				session.SetEventLogger(logMgr)
+				log.Printf("Event log initialized at %s", sqlStore.Path())
+			}
+
 			if player != nil {
 				session.SetPlayer(player)
 			}

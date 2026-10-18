@@ -214,9 +214,15 @@ func (c *Connector) handlePrivateMessage(msg twitch.PrivateMessage) {
 		displayName = msg.User.Name
 	}
 
+	ch := cleanChannelName(msg.Channel)
+	if ch == "" {
+		ch = c.Channel()
+	}
+
 	ev := &chat.Event{
 		ID:          msg.ID,
 		Platform:    "twitch",
+		Channel:     ch,
 		Kind:        kind,
 		Timestamp:   msg.Time,
 		UserID:      msg.User.ID,
@@ -238,8 +244,14 @@ func (c *Connector) handleClearMessage(msg twitch.ClearMessage) {
 		return
 	}
 
+	ch := cleanChannelName(msg.Channel)
+	if ch == "" {
+		ch = c.Channel()
+	}
+
 	c.onModeration(&chat.ModerationEvent{
 		Platform:        "twitch",
+		Channel:         ch,
 		Action:          chat.ModActionDeleteMessage,
 		TargetMessageID: msg.TargetMsgID,
 		Timestamp:       time.Now(),
@@ -251,10 +263,16 @@ func (c *Connector) handleClearChat(msg twitch.ClearChatMessage) {
 		return
 	}
 
+	ch := cleanChannelName(msg.Channel)
+	if ch == "" {
+		ch = c.Channel()
+	}
+
 	// If msg.TargetUsername is empty, entire chat was cleared
 	if msg.TargetUsername == "" {
 		c.onModeration(&chat.ModerationEvent{
 			Platform:  "twitch",
+			Channel:   ch,
 			Action:    chat.ModActionClearChat,
 			Timestamp: time.Now(),
 		})
@@ -268,6 +286,7 @@ func (c *Connector) handleClearChat(msg twitch.ClearChatMessage) {
 	}
 	c.onModeration(&chat.ModerationEvent{
 		Platform:     "twitch",
+		Channel:      ch,
 		Action:       chat.ModActionBanUser,
 		TargetUserID: target,
 		Timestamp:    time.Now(),
@@ -329,9 +348,15 @@ func (c *Connector) handleUserNotice(msg twitch.UserNoticeMessage) {
 		return
 	}
 
+	ch := cleanChannelName(msg.Channel)
+	if ch == "" {
+		ch = c.Channel()
+	}
+
 	ev := &chat.Event{
 		ID:          msg.ID,
 		Platform:    "twitch",
+		Channel:     ch,
 		Kind:        kind,
 		Timestamp:   msg.Time,
 		UserID:      msg.User.ID,

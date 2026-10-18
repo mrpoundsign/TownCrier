@@ -2,7 +2,9 @@ package queue
 
 import (
 	"errors"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,9 +40,11 @@ type Queue struct {
 	engine tts.Engine
 	cfgFn  func() *config.Config
 
-	currentItem    *Item
-	currentAborted bool
-	stopPlaybackCh chan struct{}
+	currentItem         *Item
+	currentAborted      bool
+	currentAbortOutcome string
+	currentAbortDetail  string
+	stopPlaybackCh      chan struct{}
 
 	paused   bool
 	panicked bool
@@ -48,6 +52,7 @@ type Queue struct {
 
 	onItemStarted  func(item *Item)
 	onItemFinished func(item *Item)
+	onItemOutcome  func(item *Item, spoken bool, outcome string, detail string)
 	onDepthChanged func(depth int)
 	onStateChanged func(paused, panicked bool)
 }
@@ -79,14 +84,18 @@ func (q *Queue) Enqueue(item *Item) error {
 	}
 
 	q.mu.Lock()
-	defer q.mu.Unlock()
-
 	if q.closed {
+		q.mu.Unlock()
 		return ErrQueueClosed
 	}
 
-	// While Panic Mode is latched active, silently drop incoming speech items
+	// While Panic Mode is latched active, drop incoming speech items and report outcome
 	if q.panicked {
+		outcomeFn := q.onItemOutcome
+		q.mu.Unlock()
+		if outcomeFn != nil {
+			outcomeFn(item, false, "dropped_panic", "Dropped while Emergency Panic Mute active")
+		}
 		return nil
 	}
 
@@ -107,6 +116,7 @@ func (q *Queue) Enqueue(item *Item) error {
 	}
 
 	q.cond.Signal()
+	q.mu.Unlock()
 	return nil
 }
 
@@ -174,20 +184,28 @@ func (q *Queue) Skip() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	q.abortCurrentLocked()
+	q.abortWithReasonLocked("skipped", "Skipped by user")
 }
 
 // Clear flushes all pending items in both tiers without interrupting current speech.
 func (q *Queue) Clear() {
 	q.mu.Lock()
-	defer q.mu.Unlock()
-
+	flushed := make([]*Item, 0, len(q.eventsQueue)+len(q.chatQueue))
+	flushed = append(flushed, q.eventsQueue...)
+	flushed = append(flushed, q.chatQueue...)
 	q.eventsQueue = q.eventsQueue[:0]
 	q.chatQueue = q.chatQueue[:0]
+	depthFn := q.onDepthChanged
+	outcomeFn := q.onItemOutcome
+	q.mu.Unlock()
 
-	if q.onDepthChanged != nil {
-		fn := q.onDepthChanged
-		go fn(0)
+	if outcomeFn != nil {
+		for _, it := range flushed {
+			outcomeFn(it, false, "skipped", "Pending queue cleared by user")
+		}
+	}
+	if depthFn != nil {
+		go depthFn(0)
 	}
 }
 
@@ -196,15 +214,25 @@ func (q *Queue) Panic() {
 	q.mu.Lock()
 	q.panicked = true
 	q.paused = true
+
+	flushed := make([]*Item, 0, len(q.eventsQueue)+len(q.chatQueue))
+	flushed = append(flushed, q.eventsQueue...)
+	flushed = append(flushed, q.chatQueue...)
 	q.eventsQueue = q.eventsQueue[:0]
 	q.chatQueue = q.chatQueue[:0]
 
 	depthFn := q.onDepthChanged
 	stateFn := q.onStateChanged
+	outcomeFn := q.onItemOutcome
 
-	q.abortCurrentLocked()
+	q.abortWithReasonLocked("dropped_panic", "Aborted by Emergency Panic Mute")
 	q.mu.Unlock()
 
+	if outcomeFn != nil {
+		for _, it := range flushed {
+			outcomeFn(it, false, "dropped_panic", "Flushed by Emergency Panic Mute")
+		}
+	}
 	if depthFn != nil {
 		go depthFn(0)
 	}
@@ -236,19 +264,26 @@ func (q *Queue) CancelMessage(targetMessageID string) {
 	}
 
 	q.mu.Lock()
-	defer q.mu.Unlock()
-
 	if q.currentItem != nil && q.currentItem.ID == targetMessageID {
-		q.abortCurrentLocked()
+		q.abortWithReasonLocked("dropped_moderation", "Cancelled by message deletion")
 	}
 
-	q.eventsQueue = filterOutID(q.eventsQueue, targetMessageID)
-	q.chatQueue = filterOutID(q.chatQueue, targetMessageID)
+	var removed []*Item
+	q.eventsQueue, removed = filterOutIDWithRemoved(q.eventsQueue, targetMessageID, removed)
+	q.chatQueue, removed = filterOutIDWithRemoved(q.chatQueue, targetMessageID, removed)
 
 	depth := len(q.eventsQueue) + len(q.chatQueue)
-	if q.onDepthChanged != nil {
-		fn := q.onDepthChanged
-		go fn(depth)
+	depthFn := q.onDepthChanged
+	outcomeFn := q.onItemOutcome
+	q.mu.Unlock()
+
+	if outcomeFn != nil {
+		for _, it := range removed {
+			outcomeFn(it, false, "dropped_moderation", "Removed from queue by message deletion")
+		}
+	}
+	if depthFn != nil {
+		go depthFn(depth)
 	}
 }
 
@@ -260,21 +295,58 @@ func (q *Queue) CancelUser(platform string, targetUserID string) {
 	}
 
 	q.mu.Lock()
-	defer q.mu.Unlock()
-
 	if q.currentItem != nil && q.currentItem.Event != nil {
-		if q.currentItem.Event.Platform == platform && q.currentItem.Event.UserID == targetUserID {
-			q.abortCurrentLocked()
+		if matchesPlatformAndUser(q.currentItem.Event, platform, targetUserID) {
+			q.abortWithReasonLocked("dropped_moderation", "Cancelled by user ban/timeout")
 		}
 	}
 
-	q.eventsQueue = filterOutUser(q.eventsQueue, platform, targetUserID)
-	q.chatQueue = filterOutUser(q.chatQueue, platform, targetUserID)
+	var removed []*Item
+	q.eventsQueue, removed = filterOutUserWithRemoved(q.eventsQueue, platform, targetUserID, removed)
+	q.chatQueue, removed = filterOutUserWithRemoved(q.chatQueue, platform, targetUserID, removed)
 
 	depth := len(q.eventsQueue) + len(q.chatQueue)
-	if q.onDepthChanged != nil {
-		fn := q.onDepthChanged
-		go fn(depth)
+	depthFn := q.onDepthChanged
+	outcomeFn := q.onItemOutcome
+	q.mu.Unlock()
+
+	if outcomeFn != nil {
+		for _, it := range removed {
+			outcomeFn(it, false, "dropped_moderation", "Removed from queue by user ban/timeout")
+		}
+	}
+	if depthFn != nil {
+		go depthFn(depth)
+	}
+}
+
+// CancelAllForPlatform drops all queued items and halts active speech for a platform on clear_chat moderation.
+func (q *Queue) CancelAllForPlatform(platform string) {
+	if platform == "" {
+		return
+	}
+
+	q.mu.Lock()
+	if q.currentItem != nil && q.currentItem.Event != nil && strings.EqualFold(q.currentItem.Event.Platform, platform) {
+		q.abortWithReasonLocked("dropped_moderation", "Cancelled by platform clear_chat")
+	}
+
+	var removed []*Item
+	q.eventsQueue, removed = filterOutPlatformWithRemoved(q.eventsQueue, platform, removed)
+	q.chatQueue, removed = filterOutPlatformWithRemoved(q.chatQueue, platform, removed)
+
+	depth := len(q.eventsQueue) + len(q.chatQueue)
+	depthFn := q.onDepthChanged
+	outcomeFn := q.onItemOutcome
+	q.mu.Unlock()
+
+	if outcomeFn != nil {
+		for _, it := range removed {
+			outcomeFn(it, false, "dropped_moderation", "Removed from queue by platform clear_chat")
+		}
+	}
+	if depthFn != nil {
+		go depthFn(depth)
 	}
 }
 
@@ -306,6 +378,14 @@ func (q *Queue) SetOnItemFinished(fn func(item *Item)) {
 	q.onItemFinished = fn
 }
 
+// SetOnItemOutcome registers a callback invoked whenever an enqueued item reaches a terminal
+// outcome (spoken, dropped_stale, dropped_panic, dropped_moderation, skipped, or error_tts).
+func (q *Queue) SetOnItemOutcome(fn func(item *Item, spoken bool, outcome string, detail string)) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.onItemOutcome = fn
+}
+
 // SetOnQueueDepthChanged registers a callback invoked whenever queue depth changes.
 func (q *Queue) SetOnQueueDepthChanged(fn func(depth int)) {
 	q.mu.Lock()
@@ -328,13 +408,17 @@ func (q *Queue) Close() {
 		return
 	}
 	q.closed = true
-	q.abortCurrentLocked()
+	q.abortWithReasonLocked("skipped", "Queue closed")
 	q.cond.Broadcast()
 	q.mu.Unlock()
 }
 
-func (q *Queue) abortCurrentLocked() {
+func (q *Queue) abortWithReasonLocked(outcome, detail string) {
 	q.currentAborted = true
+	if q.currentAbortOutcome == "" {
+		q.currentAbortOutcome = outcome
+		q.currentAbortDetail = detail
+	}
 	if q.player != nil {
 		q.player.Stop()
 	}
@@ -381,6 +465,8 @@ func (q *Queue) popNext() (*Item, int, bool) {
 			q.eventsQueue = q.eventsQueue[1:]
 			q.currentItem = item
 			q.currentAborted = false
+			q.currentAbortOutcome = ""
+			q.currentAbortDetail = ""
 			depth := len(q.eventsQueue) + len(q.chatQueue)
 			if q.onDepthChanged != nil {
 				fn := q.onDepthChanged
@@ -411,18 +497,27 @@ func (q *Queue) popNext() (*Item, int, bool) {
 			q.chatQueue = q.chatQueue[1:]
 
 			// Staleness check (D30)
-			if time.Since(item.EnqueuedAt) > maxAge {
+			age := time.Since(item.EnqueuedAt)
+			if age > maxAge {
 				// Drop stale chat message
 				depth := len(q.eventsQueue) + len(q.chatQueue)
-				if q.onDepthChanged != nil {
-					fn := q.onDepthChanged
-					go fn(depth)
+				depthFn := q.onDepthChanged
+				outcomeFn := q.onItemOutcome
+				q.mu.Unlock()
+				if outcomeFn != nil {
+					outcomeFn(item, false, "dropped_stale", fmt.Sprintf("Exceeded %ds queue staleness TTL (waited %.1fs)", int(maxAge.Seconds()), age.Seconds()))
 				}
+				if depthFn != nil {
+					go depthFn(depth)
+				}
+				q.mu.Lock()
 				continue
 			}
 
 			q.currentItem = item
 			q.currentAborted = false
+			q.currentAbortOutcome = ""
+			q.currentAbortDetail = ""
 			depth := len(q.eventsQueue) + len(q.chatQueue)
 			if q.onDepthChanged != nil {
 				fn := q.onDepthChanged
@@ -441,6 +536,7 @@ func (q *Queue) processItem(item *Item, depth int) {
 	q.mu.Lock()
 	onStarted := q.onItemStarted
 	onFinished := q.onItemFinished
+	onOutcome := q.onItemOutcome
 	engine := q.engine
 	player := q.player
 	cfgFn := q.cfgFn
@@ -448,11 +544,39 @@ func (q *Queue) processItem(item *Item, depth int) {
 
 	cfg := cfgFn()
 
+	var synthOrPlayErr string
+
 	defer func() {
 		q.mu.Lock()
+		aborted := q.currentAborted || q.closed
+		abortOutcome := q.currentAbortOutcome
+		abortDetail := q.currentAbortDetail
+		panicked := q.panicked
 		q.currentItem = nil
 		q.currentAborted = false
+		q.currentAbortOutcome = ""
+		q.currentAbortDetail = ""
 		q.mu.Unlock()
+
+		if onOutcome != nil {
+			switch {
+			case aborted:
+				if abortOutcome == "" {
+					if panicked {
+						abortOutcome = "dropped_panic"
+						abortDetail = "Aborted by Emergency Panic Mute"
+					} else {
+						abortOutcome = "skipped"
+						abortDetail = "Aborted during playback"
+					}
+				}
+				onOutcome(item, false, abortOutcome, abortDetail)
+			case synthOrPlayErr != "":
+				onOutcome(item, false, "error_tts", synthOrPlayErr)
+			default:
+				onOutcome(item, true, "spoken", "")
+			}
+		}
 
 		if onFinished != nil {
 			onFinished(item)
@@ -538,6 +662,7 @@ func (q *Queue) processItem(item *Item, depth int) {
 					log.Printf("[Queue] Playing pre-buffered clauses 1..%d (%d samples at %d Hz)...", chunkCount, len(preBuffer), preBufferSR)
 					if playErr := player.Play(preBuffer, preBufferSR); playErr != nil {
 						log.Printf("[Queue] Player.Play failed on pre-buffer: %v", playErr)
+						synthOrPlayErr = fmt.Sprintf("audio play error: %v", playErr)
 						return false
 					}
 					preBuffer = nil
@@ -548,12 +673,18 @@ func (q *Queue) processItem(item *Item, depth int) {
 			log.Printf("[Queue] Playing clause %d (%d samples at %d Hz)...", chunkCount, len(samples), sampleRate)
 			if playErr := player.Play(samples, sampleRate); playErr != nil {
 				log.Printf("[Queue] Player.Play failed on clause %d: %v", chunkCount, playErr)
+				synthOrPlayErr = fmt.Sprintf("audio play error: %v", playErr)
 				return false
 			}
 			return true
 		})
 		if err != nil || chunkCount == 0 {
 			log.Printf("[Queue] Streaming synthesis failed or returned no audio: err=%v, chunks=%d", err, chunkCount)
+			if err != nil {
+				synthOrPlayErr = fmt.Sprintf("synthesis error: %v", err)
+			} else {
+				synthOrPlayErr = "synthesis returned no audio samples"
+			}
 			return
 		}
 		if !startedPlaying && len(preBuffer) > 0 && player != nil {
@@ -564,6 +695,7 @@ func (q *Queue) processItem(item *Item, depth int) {
 				log.Printf("[Queue] Playing audio (%d samples at %d Hz)...", len(preBuffer), preBufferSR)
 				if playErr := player.Play(preBuffer, preBufferSR); playErr != nil {
 					log.Printf("[Queue] Player.Play failed: %v", playErr)
+					synthOrPlayErr = fmt.Sprintf("audio play error: %v", playErr)
 					return
 				}
 			}
@@ -572,6 +704,11 @@ func (q *Queue) processItem(item *Item, depth int) {
 		samples, sampleRate, err := engine.Synthesize(item.Text, item.VoiceID, speed)
 		if err != nil || len(samples) == 0 {
 			log.Printf("[Queue] Synthesis failed or returned empty samples: err=%v, sampleCount=%d", err, len(samples))
+			if err != nil {
+				synthOrPlayErr = fmt.Sprintf("synthesis error: %v", err)
+			} else {
+				synthOrPlayErr = "synthesis returned empty samples"
+			}
 			return
 		}
 
@@ -593,6 +730,7 @@ func (q *Queue) processItem(item *Item, depth int) {
 		log.Printf("[Queue] Playing audio (%d samples at %d Hz)...", len(samples), sampleRate)
 		if err := player.Play(samples, sampleRate); err != nil {
 			log.Printf("[Queue] Player.Play failed: %v", err)
+			synthOrPlayErr = fmt.Sprintf("audio play error: %v", err)
 			return
 		}
 	}
@@ -622,23 +760,46 @@ func (q *Queue) processItem(item *Item, depth int) {
 	}
 }
 
-func filterOutID(slice []*Item, id string) []*Item {
+func matchesPlatformAndUser(ev *chat.Event, platform, targetUserID string) bool {
+	if ev == nil || !strings.EqualFold(ev.Platform, platform) {
+		return false
+	}
+	return strings.EqualFold(ev.UserID, targetUserID) || strings.EqualFold(ev.UserName, targetUserID)
+}
+
+func filterOutIDWithRemoved(slice []*Item, id string, removed []*Item) ([]*Item, []*Item) {
 	filtered := make([]*Item, 0, len(slice))
 	for _, it := range slice {
-		if it.ID != id {
+		if it.ID == id {
+			removed = append(removed, it)
+		} else {
 			filtered = append(filtered, it)
 		}
 	}
-	return filtered
+	return filtered, removed
 }
 
-func filterOutUser(slice []*Item, platform string, userID string) []*Item {
+func filterOutUserWithRemoved(slice []*Item, platform string, userID string, removed []*Item) ([]*Item, []*Item) {
 	filtered := make([]*Item, 0, len(slice))
 	for _, it := range slice {
-		if it.Event != nil && it.Event.Platform == platform && it.Event.UserID == userID {
+		if it.Event != nil && matchesPlatformAndUser(it.Event, platform, userID) {
+			removed = append(removed, it)
 			continue
 		}
 		filtered = append(filtered, it)
 	}
-	return filtered
+	return filtered, removed
 }
+
+func filterOutPlatformWithRemoved(slice []*Item, platform string, removed []*Item) ([]*Item, []*Item) {
+	filtered := make([]*Item, 0, len(slice))
+	for _, it := range slice {
+		if it.Event != nil && strings.EqualFold(it.Event.Platform, platform) {
+			removed = append(removed, it)
+			continue
+		}
+		filtered = append(filtered, it)
+	}
+	return filtered, removed
+}
+

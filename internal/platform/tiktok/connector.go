@@ -111,6 +111,9 @@ func (c *Connector) Start(target string) error {
 	c.username = cleanUser
 	c.running = true
 	c.debouncer = NewGiftDebouncer(c.debounceWindow, func(ev *chat.Event) {
+		if ev != nil && ev.Channel == "" {
+			ev.Channel = cleanUser
+		}
 		if c.onEvent != nil {
 			c.onEvent(ev)
 		}
@@ -236,8 +239,13 @@ func (c *Connector) handleRawEvent(rawEv gotiktoklive.Event) bool {
 			return false
 		}
 		ev := mapChatEvent(e)
-		if ev != nil && c.onEvent != nil {
-			c.onEvent(ev)
+		if ev != nil {
+			if ev.Channel == "" {
+				ev.Channel = c.Username()
+			}
+			if c.onEvent != nil {
+				c.onEvent(ev)
+			}
 		}
 
 	case gotiktoklive.GiftEvent:
@@ -257,8 +265,13 @@ func (c *Connector) handleRawEvent(rawEv gotiktoklive.Event) bool {
 			return false
 		}
 		ev := mapUserEvent(e)
-		if ev != nil && c.onEvent != nil {
-			c.onEvent(ev)
+		if ev != nil {
+			if ev.Channel == "" {
+				ev.Channel = c.Username()
+			}
+			if c.onEvent != nil {
+				c.onEvent(ev)
+			}
 		}
 
 	case gotiktoklive.ControlEvent:

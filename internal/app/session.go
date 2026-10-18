@@ -1,15 +1,19 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/mrpoundsign/TownCrier/internal/audio"
 	"github.com/mrpoundsign/TownCrier/internal/bots"
 	"github.com/mrpoundsign/TownCrier/internal/chat"
 	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 	"github.com/mrpoundsign/TownCrier/internal/platform/kick"
 	"github.com/mrpoundsign/TownCrier/internal/platform/tiktok"
 	"github.com/mrpoundsign/TownCrier/internal/platform/twitch"
@@ -38,6 +42,8 @@ type Session struct {
 	router    *chat.Router
 	sanitizer *chat.Sanitizer
 	bots      *bots.Matcher
+	eventLog  *eventlog.Manager
+	eventSeq  atomic.Uint64
 
 	twitchConnector   *twitch.Connector
 	twitchOAuth       *twitch.OAuthManager
@@ -139,6 +145,21 @@ func NewSession(cfg *config.Config, store secrets.Store) *Session {
 	)
 
 	s.queue = queue.NewQueue(nil, nil, s.Config)
+	s.queue.SetOnItemOutcome(func(item *queue.Item, spoken bool, outcome string, detail string) {
+		if item == nil || item.ID == "" {
+			return
+		}
+		elog := s.EventLogger()
+		if elog == nil {
+			return
+		}
+		_ = elog.UpdateOutcome(context.Background(), item.ID, eventlog.OutcomeUpdate{
+			Spoken:        spoken,
+			Outcome:       eventlog.EventOutcome(outcome),
+			OutcomeDetail: detail,
+			Speed:         item.Speed,
+		})
+	})
 	return s
 }
 
@@ -186,8 +207,6 @@ func (s *Session) Stop() error {
 // Close permanently shuts down the session, queue dispatcher, and platform connectors.
 func (s *Session) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	s.running = false
 	if s.twitchConnector != nil {
 		_ = s.twitchConnector.Stop()
@@ -203,6 +222,13 @@ func (s *Session) Close() error {
 	}
 	if s.queue != nil {
 		s.queue.Close()
+	}
+	elog := s.eventLog
+	s.eventLog = nil
+	s.mu.Unlock()
+
+	if elog != nil {
+		_ = elog.Close()
 	}
 	return nil
 }
@@ -235,11 +261,19 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	s.cfg = newCfg.Clone()
+	elog := s.eventLog
 	if s.running {
 		s.syncConnectorsLocked()
+	}
+	s.mu.Unlock()
+
+	if elog != nil {
+		elog.SetEnabled(newCfg.Logging.Enabled)
+		elog.SetRetentionPolicy(eventlog.RetentionPolicy{
+			ChatRetentionDays:  newCfg.Logging.ChatRetentionDays,
+			EventRetentionDays: newCfg.Logging.EventRetentionDays,
+		})
 	}
 	return nil
 }
@@ -442,6 +476,29 @@ func (s *Session) Bots() *bots.Matcher {
 	return s.bots
 }
 
+// SetEventLogger attaches or updates the structured event log manager.
+func (s *Session) SetEventLogger(mgr *eventlog.Manager) {
+	s.mu.Lock()
+	s.eventLog = mgr
+	cfg := s.cfg.Clone()
+	s.mu.Unlock()
+
+	if mgr != nil && cfg != nil {
+		mgr.SetEnabled(cfg.Logging.Enabled)
+		mgr.SetRetentionPolicy(eventlog.RetentionPolicy{
+			ChatRetentionDays:  cfg.Logging.ChatRetentionDays,
+			EventRetentionDays: cfg.Logging.EventRetentionDays,
+		})
+	}
+}
+
+// EventLogger returns the active structured event log manager, if any.
+func (s *Session) EventLogger() *eventlog.Manager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.eventLog
+}
+
 // Panic immediately halts audio playback (<50ms), purges the speech queue, and latches Panic Mode (D28).
 func (s *Session) Panic() {
 	if s.queue != nil {
@@ -472,6 +529,50 @@ func (s *Session) IsPanicked() bool {
 	return false
 }
 
+func (s *Session) buildLogEntry(event *chat.Event, rawText, spokenText, voiceID string, speed float32, passedFilters bool, outcome eventlog.EventOutcome, detail string) *eventlog.Entry {
+	ts := event.Timestamp
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+	displayName := event.DisplayName
+	if displayName == "" {
+		displayName = event.UserName
+	}
+	return &eventlog.Entry{
+		ID:            event.ID,
+		CreatedAt:     ts,
+		UpdatedAt:     time.Now().UTC(),
+		Platform:      event.Platform,
+		Channel:       event.Channel,
+		Kind:          string(event.Kind),
+		IsPaidOrEvent: event.IsPaidOrEvent(),
+		UserID:        event.UserID,
+		UserName:      event.UserName,
+		DisplayName:   displayName,
+		Roles:         event.Roles,
+		RawText:       rawText,
+		SpokenText:    spokenText,
+		VoiceID:       voiceID,
+		Speed:         speed,
+		Amount:        event.Amount,
+		Currency:      event.Currency,
+		Months:        event.Months,
+		Count:         event.Count,
+		PassedFilters: passedFilters,
+		Spoken:        false,
+		Outcome:       outcome,
+		OutcomeDetail: detail,
+	}
+}
+
+func (s *Session) recordEventLog(entry *eventlog.Entry) {
+	elog := s.EventLogger()
+	if elog == nil || entry == nil {
+		return
+	}
+	_ = elog.Append(context.Background(), entry)
+}
+
 // DispatchEvent routes an inbound stream event through bot matching, routing, sanitization, and queueing.
 func (s *Session) DispatchEvent(event *chat.Event) error {
 	if event == nil {
@@ -479,11 +580,28 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	}
 
 	cfg := s.Config()
-	log.Printf("[Session] DispatchEvent: user=%q platform=%s text=%q roles=%v", event.UserName, event.Platform, event.Text, event.Roles)
+	if event.ID == "" {
+		event.ID = fmt.Sprintf("ev-%d-%d", time.Now().UTC().UnixNano(), s.eventSeq.Add(1))
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	if event.Kind == "" {
+		event.Kind = chat.EventKindMessage
+	}
+	if event.Channel == "" {
+		if pCfg, ok := cfg.Platforms[event.Platform]; ok && pCfg.AccountName != "" {
+			event.Channel = pCfg.AccountName
+		}
+	}
+	rawText := event.Text
+
+	log.Printf("[Session] DispatchEvent: user=%q platform=%s channel=%q text=%q roles=%v", event.UserName, event.Platform, event.Channel, event.Text, event.Roles)
 
 	// 1. Bot Matcher (known bots, platform bot signals, viewer blocklist/allowlist)
 	if s.bots != nil && s.bots.ShouldIgnore(event, cfg) {
 		log.Printf("[Session] Event dropped by bot matcher: user=%q", event.UserName)
+		s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedBot, "Ignored by bot matcher or viewer blocklist"))
 		return nil
 	}
 
@@ -493,6 +611,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 			if notif, hasNotif := pCfg.Notifications[string(event.Kind)]; hasNotif {
 				if !notif.Enabled {
 					log.Printf("[Session] Notification event dropped (disabled): kind=%s user=%q", event.Kind, event.UserName)
+					s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedDisabled, fmt.Sprintf("Notification kind %q disabled", event.Kind)))
 					return nil
 				}
 				if notif.Threshold > 0 {
@@ -502,6 +621,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 					}
 					if val < notif.Threshold {
 						log.Printf("[Session] Notification event below threshold (%.2f < %.2f): kind=%s user=%q", val, notif.Threshold, event.Kind, event.UserName)
+						s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedThreshold, fmt.Sprintf("Below threshold (%.2f < %.2f)", val, notif.Threshold)))
 						return nil
 					}
 				}
@@ -514,6 +634,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		shouldSpeak, strippedText := chat.EvaluateReadRules(event, pCfg.ReadRules)
 		if !shouldSpeak {
 			log.Printf("[Session] Event dropped by ReadRules: user=%q roles=%v rules=%+v", event.UserName, event.Roles, pCfg.ReadRules)
+			s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedReadRules, "Rejected by platform read rules"))
 			return nil
 		}
 		if strippedText != "" {
@@ -529,6 +650,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		event.EmoteSpans = nil // already applied to event.Text
 		if event.Text == "" && event.Kind == chat.EventKindMessage {
 			log.Printf("[Session] Chat message sanitized to empty text: user=%q", event.UserName)
+			s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Sanitized to empty text (emotes or blocked words)"))
 			return nil
 		}
 	}
@@ -537,6 +659,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	resolved := s.router.Resolve(event, cfg)
 	if resolved.Text == "" {
 		log.Printf("[Session] Event resolved to empty text: user=%q", event.UserName)
+		s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Resolved template text is empty"))
 		return nil
 	}
 
@@ -544,16 +667,20 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	sanitizedText := s.sanitizer.Sanitize(resolved.Text, nil, true, cfg.Safety.BlockedWords)
 	if sanitizedText == "" {
 		log.Printf("[Session] Event sanitized to empty text: user=%q original=%q", event.UserName, resolved.Text)
+		s.recordEventLog(s.buildLogEntry(event, rawText, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Formatted speech text sanitized to empty"))
 		return nil
 	}
 
-	// 5. Priority tier assignment
+	// 6. Priority tier assignment
 	priority := 1
 	if event.IsPaidOrEvent() {
 		priority = 0
 	}
 
-	// 6. Enqueue for speech synthesis
+	// 7. Record initial PassedFilters=true / Queued log entry before enqueueing so fast queue callbacks find the row
+	s.recordEventLog(s.buildLogEntry(event, rawText, sanitizedText, resolved.VoiceID, resolved.Speed, true, eventlog.OutcomeQueued, ""))
+
+	// 8. Enqueue for speech synthesis
 	item := &queue.Item{
 		ID:       event.ID,
 		Event:    event,
@@ -578,16 +705,56 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	return nil
 }
 
-// DispatchModeration processes Twitch or YouTube moderation sync events (D29).
+// DispatchModeration processes Twitch, YouTube, or Kick moderation sync events (D29).
 func (s *Session) DispatchModeration(modEvent *chat.ModerationEvent) {
 	if modEvent == nil || s.queue == nil {
 		return
 	}
+
+	cfg := s.Config()
+	ch := modEvent.Channel
+	if ch == "" {
+		if pCfg, ok := cfg.Platforms[modEvent.Platform]; ok && pCfg.AccountName != "" {
+			ch = pCfg.AccountName
+		}
+	}
+	ts := modEvent.Timestamp
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+
+	detail := string(modEvent.Action)
+	if modEvent.TargetMessageID != "" {
+		detail += " (msg=" + modEvent.TargetMessageID + ")"
+	}
+	if modEvent.TargetUserID != "" {
+		detail += " (user=" + modEvent.TargetUserID + ")"
+	}
+
+	s.recordEventLog(&eventlog.Entry{
+		ID:            fmt.Sprintf("mod-%d-%d", ts.UTC().UnixNano(), s.eventSeq.Add(1)),
+		CreatedAt:     ts,
+		UpdatedAt:     ts,
+		Platform:      modEvent.Platform,
+		Channel:       ch,
+		Kind:          "moderation",
+		IsPaidOrEvent: false,
+		UserID:        modEvent.TargetUserID,
+		UserName:      modEvent.TargetUserID,
+		DisplayName:   modEvent.TargetUserID,
+		RawText:       fmt.Sprintf("Moderation action: %s", modEvent.Action),
+		PassedFilters: false,
+		Spoken:        false,
+		Outcome:       eventlog.OutcomeModerationEvent,
+		OutcomeDetail: detail,
+	})
 
 	switch modEvent.Action {
 	case chat.ModActionDeleteMessage:
 		s.queue.CancelMessage(modEvent.TargetMessageID)
 	case chat.ModActionBanUser:
 		s.queue.CancelUser(modEvent.Platform, modEvent.TargetUserID)
+	case chat.ModActionClearChat:
+		s.queue.CancelAllForPlatform(modEvent.Platform)
 	}
 }
