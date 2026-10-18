@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"testing"
 
 	"fyne.io/fyne/v2/test"
@@ -49,6 +50,51 @@ func TestSettingsViewBuild(t *testing.T) {
 	if view.logsView == nil {
 		t.Error("expected logsView to be initialized")
 	}
+	if view.uiScaleSelect == nil {
+		t.Fatal("expected uiScaleSelect to be initialized")
+	}
+	if view.uiScaleSelect.Selected != FormatUIScaleLabel("1.0") {
+		t.Errorf("expected default UI scale %q, got %q", FormatUIScaleLabel("1.0"), view.uiScaleSelect.Selected)
+	}
+}
+
+func TestUIScaleSettingAndEnv(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestUIScale")
+
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) { return nil, nil })
+	_ = view.Build()
+
+	view.uiScaleSelect.SetSelected("125%")
+	if sess.Config().UIScale != "1.25" {
+		t.Errorf("expected UIScale '1.25', got %q", sess.Config().UIScale)
+	}
+	if got := os.Getenv("FYNE_DISABLE_DPI_DETECTION"); got != "true" {
+		t.Errorf("expected FYNE_DISABLE_DPI_DETECTION='true', got %q", got)
+	}
+	if got := os.Getenv("FYNE_SCALE"); got != "1.25" {
+		t.Errorf("expected FYNE_SCALE='1.25', got %q", got)
+	}
+
+	view.uiScaleSelect.SetSelected(FormatUIScaleLabel("auto"))
+	if sess.Config().UIScale != "auto" {
+		t.Errorf("expected UIScale 'auto', got %q", sess.Config().UIScale)
+	}
+	if got := os.Getenv("FYNE_DISABLE_DPI_DETECTION"); got != "false" {
+		t.Errorf("expected FYNE_DISABLE_DPI_DETECTION='false', got %q", got)
+	}
+	if got := os.Getenv("FYNE_SCALE"); got != "auto" {
+		t.Errorf("expected FYNE_SCALE='auto', got %q", got)
+	}
+
+	// Restore default 1.0 after test
+	ApplyUIScale(appObj, "1.0")
 }
 
 func TestSettingsViewAutoSave(t *testing.T) {
@@ -109,4 +155,5 @@ func TestLaunchWindowProgressAndError(t *testing.T) {
 		t.Error("expected onQuit callback to be invoked when Quit button is tapped")
 	}
 }
+
 

@@ -2,10 +2,106 @@ package ui
 
 import (
 	"image/color"
+	"os"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/theme"
 )
+
+// UI scale mode constants and display labels.
+const (
+	UIScale100  = "1.0"
+	UIScale115  = "1.15"
+	UIScale125  = "1.25"
+	UIScale150  = "1.5"
+	UIScaleAuto = "auto"
+
+	uiScaleLabel100  = "100% (Default — Lock Multi-Monitor DPI)"
+	uiScaleLabel115  = "115%"
+	uiScaleLabel125  = "125%"
+	uiScaleLabel150  = "150%"
+	uiScaleLabelAuto = "Auto (Per-Monitor EDID)"
+)
+
+// UIScaleOptions returns the human-readable labels for the UI Scale selector.
+func UIScaleOptions() []string {
+	return []string{
+		uiScaleLabel100,
+		uiScaleLabel115,
+		uiScaleLabel125,
+		uiScaleLabel150,
+		uiScaleLabelAuto,
+	}
+}
+
+// NormalizeUIScale Mode returns a canonical UI scale mode string ("1.0", "1.15", "1.25", "1.5", or "auto").
+func NormalizeUIScale(mode string) string {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case UIScale100, "1", "100%":
+		return UIScale100
+	case UIScale115, "115%":
+		return UIScale115
+	case UIScale125, "125%":
+		return UIScale125
+	case UIScale150, "1.50", "150%":
+		return UIScale150
+	case UIScaleAuto:
+		return UIScaleAuto
+	default:
+		return UIScale100
+	}
+}
+
+// FormatUIScaleLabel maps a persisted config UIScale mode to its dropdown label.
+func FormatUIScaleLabel(mode string) string {
+	switch NormalizeUIScale(mode) {
+	case UIScale115:
+		return uiScaleLabel115
+	case UIScale125:
+		return uiScaleLabel125
+	case UIScale150:
+		return uiScaleLabel150
+	case UIScaleAuto:
+		return uiScaleLabelAuto
+	default:
+		return uiScaleLabel100
+	}
+}
+
+// ParseUIScaleLabel maps a dropdown label back to its persisted config UIScale mode.
+func ParseUIScaleLabel(label string) string {
+	switch strings.TrimSpace(label) {
+	case uiScaleLabel115:
+		return UIScale115
+	case uiScaleLabel125:
+		return UIScale125
+	case uiScaleLabel150:
+		return UIScale150
+	case uiScaleLabelAuto:
+		return UIScaleAuto
+	default:
+		return UIScale100
+	}
+}
+
+// ApplyUIScale configures Fyne's DPI detection and user scale environment variables,
+// and triggers a live scale reload across all open windows if appObj is non-nil.
+// By default ("1.0"), Fyne's EDID-based per-monitor DPI detection is disabled so Windows DWM
+// handles multi-monitor scaling without zoom jumps when dragging between laptop and desktop screens.
+func ApplyUIScale(appObj fyne.App, scaleMode string) {
+	mode := NormalizeUIScale(scaleMode)
+	if mode == UIScaleAuto {
+		_ = os.Setenv("FYNE_DISABLE_DPI_DETECTION", "false")
+		_ = os.Setenv("FYNE_SCALE", "auto")
+	} else {
+		_ = os.Setenv("FYNE_DISABLE_DPI_DETECTION", "true")
+		_ = os.Setenv("FYNE_SCALE", mode)
+	}
+	if appObj != nil {
+		appObj.Settings().SetTheme(NewObsidianTheme())
+	}
+}
 
 // ObsidianTheme implements the custom visual identity for TownCrier.
 // Palette: Obsidian Slate (#0F172A), Chrome White (#F8FAFC), Electric Sky Blue (#38BDF8).
@@ -75,3 +171,4 @@ func (t *ObsidianTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
 func (t *ObsidianTheme) Size(name fyne.ThemeSizeName) float32 {
 	return theme.DefaultTheme().Size(name)
 }
+

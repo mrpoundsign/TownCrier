@@ -45,6 +45,7 @@ type SettingsView struct {
 	modelStatus       *widget.Label
 	deviceSelect      *widget.Select
 	deviceMap         map[string]string // device name -> hex ID
+	uiScaleSelect     *widget.Select
 	initializing      bool
 }
 
@@ -133,6 +134,9 @@ func (v *SettingsView) SyncFromConfig() {
 		p, ok := v.cfg.Platforms["kick"]
 		v.kickCheck.SetChecked(!ok || p.EverEnabled || p.Enabled)
 	}
+	if v.uiScaleSelect != nil {
+		v.uiScaleSelect.SetSelected(FormatUIScaleLabel(v.cfg.UIScale))
+	}
 	if v.logsView != nil {
 		v.logsView.RefreshQuery()
 	}
@@ -182,6 +186,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 
 	servicesCard := v.buildServicesCard()
 	audioCard := v.buildAudioCard()
+	displayCard := v.buildDisplayCard()
 	ttsCard := v.buildTTSCard()
 	rulesCard := v.buildRulesCard()
 	safetyCard := v.buildSafetyCard()
@@ -190,6 +195,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	generalTabContent := newPanelVScroll(container.NewVBox(
 		servicesCard,
 		audioCard,
+		displayCard,
 	))
 	ttsTabContent := newPanelVScroll(container.NewVBox(
 		ttsCard,
@@ -414,6 +420,28 @@ func (v *SettingsView) refreshDeviceList() {
 		}
 		v.deviceSelect.SetSelected(selected)
 	}
+}
+
+func (v *SettingsView) buildDisplayCard() *widget.Card {
+	v.uiScaleSelect = widget.NewSelect(UIScaleOptions(), func(selected string) {
+		if v.initializing {
+			return
+		}
+		mode := ParseUIScaleLabel(selected)
+		v.updateConfig(func(c *config.Config) {
+			c.UIScale = mode
+		})
+		ApplyUIScale(fyne.CurrentApp(), mode)
+		v.setStatus("UI Scale updated to " + selected)
+	})
+	v.uiScaleSelect.SetSelected(FormatUIScaleLabel(v.cfg.UIScale))
+
+	scaleRow := container.NewBorder(nil, nil, widget.NewLabel("UI Scale:"), nil, v.uiScaleSelect)
+	cardContent := container.NewVBox(
+		scaleRow,
+	)
+
+	return widget.NewCard("Display & Scaling", "Lock DPI scaling to prevent multi-monitor zoom jumps, or customize interface size", cardContent)
 }
 
 func (v *SettingsView) buildTTSCard() *widget.Card {

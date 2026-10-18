@@ -61,6 +61,14 @@ func run() error {
 	flag.Parse()
 	_ = logFlag
 
+	if os.Getenv("FYNE_DISABLE_DPI_DETECTION") == "" && os.Getenv("FYNE_SCALE") == "" {
+		initialScale := ui.UIScale100
+		if preCfg, cfgErr := config.Load(""); cfgErr == nil && preCfg != nil && preCfg.UIScale != "" {
+			initialScale = preCfg.UIScale
+		}
+		ui.ApplyUIScale(nil, initialScale)
+	}
+
 	myApp := fyneapp.NewWithID("com.github.mrpoundsign.towncrier")
 	myApp.SetIcon(assets.AppIcon)
 

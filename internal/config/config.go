@@ -15,6 +15,7 @@ const CurrentVersion = 1
 // Config represents the application configuration hierarchy.
 type Config struct {
 	Version         int                       `json:"version"`
+	UIScale         string                    `json:"ui_scale,omitempty"`
 	Audio           AudioConfig               `json:"audio"`
 	TTS             TTSConfig                 `json:"tts"`
 	Safety          SafetyConfig              `json:"safety"`
@@ -279,6 +280,7 @@ func LookupViewer(viewers map[string]ViewerConfig, platform, userID, userName st
 func DefaultConfig() *Config {
 	return &Config{
 		Version: CurrentVersion,
+		UIScale: "1.0",
 		Audio: AudioConfig{
 			DeviceID:   "",
 			DeviceName: "",
@@ -739,6 +741,9 @@ func migrate(cfg *Config) error {
 		cfg.TTS.MaxClauseWords = 12
 	}
 
+	if strings.TrimSpace(cfg.UIScale) == "" {
+		cfg.UIScale = "1.0"
+	}
 	if strings.TrimSpace(cfg.Logging.Backend) == "" {
 		cfg.Logging.Backend = "sqlite"
 	}
