@@ -1,6 +1,6 @@
 # TownCrier
 
-**TownCrier** is an open-source Windows desktop app that reads livestream chat and stream alerts aloud using local neural text-to-speech. Audio routes directly to any selected playback device—such as a virtual audio cable or dedicated monitor output—so it can be captured cleanly as its own audio track in OBS Studio.
+**TownCrier** is an open-source Windows and Linux desktop app that reads livestream chat and stream alerts aloud using local neural text-to-speech. Audio routes directly to any selected playback device—such as a virtual audio cable, PipeWire/PulseAudio sink, or dedicated monitor output—so it can be captured cleanly as its own audio track in OBS Studio.
 
 Everything runs offline on the local PC with no cloud subscriptions, character limits, or API keys.
 
@@ -18,7 +18,7 @@ Everything runs offline on the local PC with no cloud subscriptions, character l
 ### Local Voice Packs & Hardware Presets
 - **Five Offline Voice Models**: Load one voice pack or run several at the same time to mix and match voices:
   - **Supertonic (Default)**: Fast, expressive voices (10 voices) with a lightweight memory footprint.
-  - **Kokoro-82M**: Natural US and UK English voices (11 voices), with optional DirectML GPU acceleration.
+  - **Kokoro-82M**: Natural US and UK English voices (11 voices), with optional DirectML GPU acceleration on Windows.
   - **Kitten Mini & Kitten Nano**: Ultra-compact 8-voice packs built for minimal RAM usage on single-PC gaming and streaming setups.
   - **Piper LibriTTS-High**: A 904-speaker voice catalog for giving every regular chatter a unique voice.
 - **Hardware Presets & Impact Meters**: Choose a one-click preset (*Ultra-Light*, *Fast & Lean*, *Studio Quality*, *Crowd Mode*, or *Full Arsenal*) or pick individual voice packs manually. Color-coded stacked bars show how each selected pack contributes to RAM, CPU, and GPU usage.
@@ -29,7 +29,7 @@ Everything runs offline on the local PC with no cloud subscriptions, character l
 - **Configurable Reading Rules**: Choose whether to announce chatter names (`"User says..."`), read or strip emotes, or speak the platform name (`"On Twitch..."`), configured globally in **Settings** or overridden per platform.
 
 ### Stream Safety & Queue Control
-- **Instant Panic Mute**: Click **PANIC MUTE**, press `Esc` inside the app, or use the global hotkey (`Ctrl+Shift+M` by default, customizable in **Settings**) to cut audio output immediately and clear the speech queue.
+- **Instant Panic Mute**: Click **PANIC MUTE**, press `Esc` inside the app, or use the global hotkey (`Ctrl+Shift+M` by default on Windows, customizable in **Settings**) to cut audio output immediately and clear the speech queue.
 - **Live Moderation Sync**: Deleting a message or timing out/banning a user on Twitch or Kick automatically removes their queued messages and stops playback mid-sentence if their message is currently being read.
 - **Smart Priority Queue**:
   - Subscriptions, Bits, Super Chats, Gifts, Follows, and Raids jump ahead of regular chat and never expire in the queue.
@@ -42,7 +42,7 @@ Everything runs offline on the local PC with no cloud subscriptions, character l
 ## Getting Started
 
 1. **Download and Run**:
-   - Grab `TownCrier.exe` from [Releases](https://github.com/mrpoundsign/TownCrier/releases) and launch it.
+   - Grab `TownCrier.exe` (Windows) or `towncrier` (Linux) from [Releases](https://github.com/mrpoundsign/TownCrier/releases) and launch it.
    - On first run, the startup window downloads the default voice pack automatically before opening the main dashboard.
 2. **Pick an Audio Output Device**:
    - Open the **Settings** tab and choose the playback device where TTS audio should go (for example, a virtual audio cable added as an Audio Output Capture source in OBS).

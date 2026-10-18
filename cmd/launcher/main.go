@@ -28,6 +28,13 @@ const (
 	CoreExe = "towncrier-core.exe"
 )
 
+func coreExeName() string {
+	if runtime.GOOS == "windows" {
+		return CoreExe
+	}
+	return "towncrier-core"
+}
+
 func main() {
 	exitCode, err := run()
 	if err != nil {
@@ -52,7 +59,8 @@ func run() (int, error) {
 	runtime.GC()
 	debug.FreeOSMemory()
 
-	coreExePath := filepath.Join(runtimeDir, CoreExe)
+	exeName := coreExeName()
+	coreExePath := filepath.Join(runtimeDir, exeName)
 	if _, err := os.Stat(coreExePath); err != nil {
 		return 1, fmt.Errorf("core executable not found at %s: %w", coreExePath, err)
 	}
@@ -62,13 +70,24 @@ func run() (int, error) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	// Prepend runtime directory to PATH so DLLs are always resolved
-	cmd.Env = append(os.Environ(), "PATH="+runtimeDir+";"+os.Getenv("PATH"))
+	// Prepend runtime directory to PATH / LD_LIBRARY_PATH so shared libraries are always resolved
+	if runtime.GOOS == "windows" {
+		cmd.Env = append(os.Environ(), "PATH="+runtimeDir+";"+os.Getenv("PATH"))
+	} else {
+		ldPath := runtimeDir
+		if existing := os.Getenv("LD_LIBRARY_PATH"); existing != "" {
+			ldPath = runtimeDir + ":" + existing
+		}
+		cmd.Env = append(os.Environ(),
+			"PATH="+runtimeDir+":"+os.Getenv("PATH"),
+			"LD_LIBRARY_PATH="+ldPath,
+		)
+	}
 
 	setSysProcAttr(cmd)
 
 	if err := cmd.Start(); err != nil {
-		return 1, fmt.Errorf("start %s: %w", CoreExe, err)
+		return 1, fmt.Errorf("start %s: %w", exeName, err)
 	}
 
 	// Trap SIGINT / SIGTERM so terminal detachment (Ctrl+C) exits the launcher cleanly

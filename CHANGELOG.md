@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Linux Desktop Support**: Added single-file portable Linux (`amd64`) builds with PipeWire, PulseAudio, and ALSA audio output support and standard XDG config/cache paths (`~/.config/com.github.mrpoundsign.towncrier/`).
 - **Multi-Model Voice Engine**: Run up to five local TTS voice packs at the same time—Supertonic (new default, 10 voices), Kokoro-82M (11 voices), Kitten Mini (8 voices), Kitten Nano (8 voices), and Piper LibriTTS-High (904 speakers)—and assign voices from any loaded pack to chatters, alerts, or platforms.
 - **Hardware Presets & Resource Impact Meters**: Added one-click presets (*Ultra-Light*, *Fast & Lean*, *Studio Quality*, *Crowd Mode*, and *Full Arsenal*) in **Settings**, paired with color-coded stacked bars showing each model pack's share of RAM, CPU, and GPU usage.
 - **Optional Kokoro GPU Acceleration**: Moved DirectML GPU acceleration to a dedicated sub-option under **Kokoro-82M**. The larger FP32 GPU model now downloads only when GPU acceleration is turned on.

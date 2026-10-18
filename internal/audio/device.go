@@ -2,7 +2,6 @@ package audio
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -18,7 +17,7 @@ type DeviceInfo struct {
 
 // EnumeratePlaybackDevices returns all available audio playback devices on the host system.
 func EnumeratePlaybackDevices() ([]DeviceInfo, error) {
-	if runtime.GOOS != "windows" || testing.Testing() {
+	if testing.Testing() {
 		return nil, nil
 	}
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
