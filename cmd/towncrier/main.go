@@ -155,51 +155,74 @@ func run() error {
 			defer logging.RecoverAndExit("tts-init")
 
 			modelDir := tts.DefaultModelDir()
-			if !tts.IsKokoroInstalledForMode(modelDir, cfg.TTS.UseGPU) {
-				log.Printf("Kokoro models missing in %s (useGPU=%v); starting download...", modelDir, cfg.TTS.UseGPU)
-				tracker.SetStatus("Downloading Kokoro-82M neural TTS models...")
-				dlErr := tts.DownloadKokoroModelForMode(modelDir, cfg.TTS.UseGPU, tracker.SetDownloadProgress)
-				if dlErr != nil {
-					log.Printf("Error: failed to download Kokoro TTS models: %v", dlErr)
-					tracker.ShowFatalError(
-						"Failed to download required TTS models. Check your internet connection.",
-						"Download failed ("+dlErr.Error()+")",
-						initTTSAndLaunch,
-						quitApp,
-					)
-					return
+			enabledModels := cfg.TTS.EffectiveEnabledModels()
+
+			for _, fam := range enabledModels {
+				if fam == tts.ModelKokoro {
+					if !tts.IsKokoroInstalledForMode(modelDir, cfg.TTS.UseGPU) {
+						log.Printf("Kokoro models missing in %s (useGPU=%v); starting download...", modelDir, cfg.TTS.UseGPU)
+						tracker.SetStatus("Downloading Kokoro-82M neural TTS models...")
+						dlErr := tts.DownloadKokoroModelForMode(modelDir, cfg.TTS.UseGPU, tracker.SetDownloadProgress)
+						if dlErr != nil {
+							log.Printf("Error: failed to download Kokoro TTS models: %v", dlErr)
+							tracker.ShowFatalError(
+								"Failed to download required TTS models. Check your internet connection.",
+								"Download failed ("+dlErr.Error()+")",
+								initTTSAndLaunch,
+								quitApp,
+							)
+							return
+						}
+						log.Printf("Kokoro models downloaded and extracted to %s", modelDir)
+					}
+					continue
 				}
-				log.Printf("Kokoro models downloaded and extracted to %s", modelDir)
+
+				if !tts.IsModelFamilyInstalled(modelDir, fam, cfg.TTS.UseGPU) {
+					spec, _ := tts.ModelSpecByID(fam)
+					log.Printf("Model pack %q missing in %s; starting download...", fam, modelDir)
+					tracker.SetStatus("Downloading " + spec.ShortName + " neural TTS models...")
+					dlErr := tts.DownloadModelFamily(modelDir, fam, cfg.TTS.UseGPU, tracker.SetDownloadProgress)
+					if dlErr != nil {
+						log.Printf("Error: failed to download %s TTS models: %v", fam, dlErr)
+						tracker.ShowFatalError(
+							"Failed to download "+spec.ShortName+" TTS models. Check your internet connection.",
+							"Download failed ("+dlErr.Error()+")",
+							initTTSAndLaunch,
+							quitApp,
+						)
+						return
+					}
+					log.Printf("Model pack %q downloaded and extracted", fam)
+				}
 			}
 
-			tracker.SetStatus("Initializing Kokoro neural TTS model...")
+			tracker.SetStatus("Initializing neural TTS model(s)...")
 			threads := cfg.TTS.NumThreads
 			if threads <= 0 {
 				threads = 4
 			}
-			log.Printf("Found Kokoro models in %s. Initializing sherpa-onnx (threads=%d, gpu=%v)...", modelDir, threads, cfg.TTS.UseGPU)
-			eng, engErr := tts.NewSherpaEngine(modelDir, threads, cfg.TTS.UseGPU)
+			maxClause := cfg.TTS.MaxClauseWords
+			if maxClause <= 0 {
+				maxClause = tts.DefaultMaxClauseWords
+			}
+			log.Printf("Initializing MultiEngine (models=%v, threads=%d, gpu=%v)...", enabledModels, threads, cfg.TTS.UseGPU)
+			eng, engErr := tts.NewMultiEngine(modelDir, enabledModels, threads, cfg.TTS.UseGPU, maxClause, cfg.TTS.IdleUnloadMinutes)
 			if engErr != nil {
-				log.Printf("Error: failed to initialize Kokoro TTS engine: %v", engErr)
+				log.Printf("Error: failed to initialize TTS engine: %v", engErr)
 				tracker.ShowFatalError(
-					"Failed to initialize Kokoro TTS engine.",
+					"Failed to initialize neural TTS engine.",
 					"Init error: "+engErr.Error(),
 					initTTSAndLaunch,
 					quitApp,
 				)
 				return
 			}
-			if cfg.TTS.MaxClauseWords > 0 {
-				eng.SetMaxClauseWords(cfg.TTS.MaxClauseWords)
-			}
-			if cfg.TTS.IdleUnloadMinutes > 0 {
-				eng.SetIdleTimeout(time.Duration(cfg.TTS.IdleUnloadMinutes) * time.Minute)
-			}
 
 			var engine tts.Engine = eng
 			activeEngine = eng
-			log.Printf("Kokoro engine ready (provider=%s)", eng.Provider())
-			tracker.SetTTSStatus(true, "Kokoro-82M ("+eng.Provider()+")")
+			log.Printf("TTS engine ready (provider=%s)", eng.Provider())
+			tracker.SetTTSStatus(true, eng.Provider())
 
 			// Brief pause so user can see all status items verified
 			tracker.SetStatus("Ready! Opening main interface...")

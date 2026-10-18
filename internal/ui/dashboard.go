@@ -242,9 +242,15 @@ func (v *DashboardView) buildActivityRow(entry ActivityEntry) fyne.CanvasObject 
 }
 
 func (v *DashboardView) showQuickAssignDialog(platform, username string) {
-	voiceLabels := tts.VoiceDisplayLabels()
+	var enabledModels []string
+	if v.session != nil {
+		enabledModels = v.session.Config().TTS.EffectiveEnabledModels()
+	}
+	voiceLabels := tts.VoiceDisplayLabelsForModels(enabledModels)
 	voiceSelect := widget.NewSelect(voiceLabels, nil)
-	voiceSelect.SetSelected(tts.VoiceDisplayName("af_bella"))
+	if len(voiceLabels) > 0 {
+		voiceSelect.SetSelected(voiceLabels[0])
+	}
 
 	speedSlider := widget.NewSlider(0.5, 2.0)
 	speedSlider.Step = 0.05

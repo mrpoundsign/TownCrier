@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -19,10 +20,12 @@ type VoicesTabView struct {
 	window  fyne.Window
 	session *app.Session
 
-	onStatus     func(msg string)
-	previewBtn   *widget.Button
-	sampleEntry  *ScrollPassEntry
-	initializing bool
+	onStatus           func(msg string)
+	previewBtn         *widget.Button
+	previewVoiceSelect *widget.Select
+	globalVoiceSelect  *widget.Select
+	sampleEntry        *ScrollPassEntry
+	initializing       bool
 }
 
 // NewVoicesTabView constructs a VoicesTabView.
@@ -46,6 +49,37 @@ func (v *VoicesTabView) setStatus(msg string) {
 	})
 }
 
+// RefreshVoices updates the voice dropdown options when enabled model packs change in Settings.
+func (v *VoicesTabView) RefreshVoices() {
+	fyne.Do(func() {
+		cfg := v.session.Config()
+		labels := tts.VoiceDisplayLabelsForModels(cfg.TTS.EffectiveEnabledModels())
+		v.initializing = true
+		defer func() { v.initializing = false }()
+
+		if v.globalVoiceSelect != nil {
+			v.globalVoiceSelect.Options = labels
+			defVoice := cfg.GlobalChatRules.DefaultVoice
+			if defVoice == "" && len(labels) > 0 {
+				defVoice = tts.VoiceIDFromLabel(labels[0])
+			}
+			v.globalVoiceSelect.SetSelected(tts.VoiceDisplayName(defVoice))
+			v.globalVoiceSelect.Refresh()
+		}
+		if v.previewVoiceSelect != nil {
+			prev := v.previewVoiceSelect.Selected
+			v.previewVoiceSelect.Options = labels
+			found := slices.Contains(labels, prev)
+			if found {
+				v.previewVoiceSelect.SetSelected(prev)
+			} else if len(labels) > 0 {
+				v.previewVoiceSelect.SetSelected(labels[0])
+			}
+			v.previewVoiceSelect.Refresh()
+		}
+	})
+}
+
 // Build creates the Fyne CanvasObject for the Voices tab.
 func (v *VoicesTabView) Build() fyne.CanvasObject {
 	v.initializing = true
@@ -63,9 +97,12 @@ func (v *VoicesTabView) Build() fyne.CanvasObject {
 }
 
 func (v *VoicesTabView) buildPreviewCard() *widget.Card {
-	voiceLabels := tts.VoiceDisplayLabels()
-	voiceSelect := widget.NewSelect(voiceLabels, nil)
-	voiceSelect.SetSelected(tts.VoiceDisplayName("af_bella"))
+	cfg := v.session.Config()
+	voiceLabels := tts.VoiceDisplayLabelsForModels(cfg.TTS.EffectiveEnabledModels())
+	v.previewVoiceSelect = widget.NewSelect(voiceLabels, nil)
+	if len(voiceLabels) > 0 {
+		v.previewVoiceSelect.SetSelected(voiceLabels[0])
+	}
 
 	speedLabel := widget.NewLabel("1.00x")
 	speedSlider := widget.NewSlider(0.5, 2.0)
@@ -80,35 +117,35 @@ func (v *VoicesTabView) buildPreviewCard() *widget.Card {
 
 	v.previewBtn = widget.NewButtonWithIcon("Preview Voice", theme.MediaPlayIcon(), func() {
 		text := v.sampleEntry.Text
-		voice := tts.VoiceIDFromLabel(voiceSelect.Selected)
+		voice := tts.VoiceIDFromLabel(v.previewVoiceSelect.Selected)
 		speed := float32(speedSlider.Value)
 		v.previewVoice(text, voice, speed)
 	})
 	v.previewBtn.Importance = widget.HighImportance
 
 	cardContent := container.NewVBox(
-		container.NewBorder(nil, nil, widget.NewLabel("Voice:"), nil, voiceSelect),
+		container.NewBorder(nil, nil, widget.NewLabel("Voice:"), nil, v.previewVoiceSelect),
 		container.NewBorder(nil, nil, widget.NewLabel("Speed:"), speedLabel, speedSlider),
 		widget.NewLabel("Sample Text:"),
 		v.sampleEntry,
 		v.previewBtn,
 	)
 
-	return widget.NewCard("Voice Selector & Preview", "Audition available Kokoro voices", cardContent)
+	return widget.NewCard("Voice Selector & Preview", "Audition available voices across enabled neural TTS model packs", cardContent)
 }
 
 func (v *VoicesTabView) buildGlobalDefaultsCard() *widget.Card {
 	cfg := v.session.Config()
-	voiceLabels := tts.VoiceDisplayLabels()
+	voiceLabels := tts.VoiceDisplayLabelsForModels(cfg.TTS.EffectiveEnabledModels())
 
 	selectedVoice := cfg.GlobalChatRules.DefaultVoice
 	if selectedVoice == "" {
 		selectedVoice = "af_bella"
 	}
 
-	globalVoiceSelect := widget.NewSelect(voiceLabels, nil)
-	globalVoiceSelect.SetSelected(tts.VoiceDisplayName(selectedVoice))
-	globalVoiceSelect.OnChanged = func(s string) {
+	v.globalVoiceSelect = widget.NewSelect(voiceLabels, nil)
+	v.globalVoiceSelect.SetSelected(tts.VoiceDisplayName(selectedVoice))
+	v.globalVoiceSelect.OnChanged = func(s string) {
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.DefaultVoice = tts.VoiceIDFromLabel(s)
 		})
@@ -130,7 +167,7 @@ func (v *VoicesTabView) buildGlobalDefaultsCard() *widget.Card {
 	}
 
 	cardContent := container.NewVBox(
-		container.NewBorder(nil, nil, widget.NewLabel("Global Default Voice:"), nil, globalVoiceSelect),
+		container.NewBorder(nil, nil, widget.NewLabel("Global Default Voice:"), nil, v.globalVoiceSelect),
 		container.NewBorder(nil, nil, widget.NewLabel("Global Default Speed:"), globalSpeedLabel, globalSpeedSlider),
 	)
 

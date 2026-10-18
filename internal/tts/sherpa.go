@@ -5,16 +5,18 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 )
 
-// SherpaEngine wraps sherpa-onnx OfflineTts for Kokoro speech synthesis.
+// SherpaEngine wraps sherpa-onnx OfflineTts for neural speech synthesis.
 type SherpaEngine struct {
 	mu             sync.Mutex
 	tts            *sherpa.OfflineTts
+	family         string
 	modelDir       string
 	numThreads     int
 	useGPU         bool
@@ -27,15 +29,24 @@ type SherpaEngine struct {
 	closed         bool
 }
 
-// NewSherpaEngine creates a new SherpaEngine instance from the specified model directory.
+// NewSherpaEngine creates a new Kokoro SherpaEngine instance from the specified model directory.
 // If useGPU is true, it attempts to use DirectML with the floating-point model (model.onnx),
 // falling back to CPU with the quantized model (model.int8.onnx) if unavailable.
 func NewSherpaEngine(modelDir string, numThreads int, useGPU bool) (*SherpaEngine, error) {
+	return NewFamilySherpaEngine(ModelKokoro, modelDir, numThreads, useGPU)
+}
+
+// NewFamilySherpaEngine creates a SherpaEngine for the specified model family ("kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper").
+func NewFamilySherpaEngine(family string, modelDir string, numThreads int, useGPU bool) (*SherpaEngine, error) {
 	if numThreads <= 0 {
 		numThreads = 4
 	}
+	if family == "" {
+		family = ModelKokoro
+	}
 
 	e := &SherpaEngine{
+		family:         family,
 		modelDir:       modelDir,
 		numThreads:     numThreads,
 		useGPU:         useGPU,
@@ -57,49 +68,106 @@ func (e *SherpaEngine) ensureLoadedLocked() error {
 		return nil
 	}
 
-	voicesFile := filepath.Join(e.modelDir, "voices.bin")
-	tokensFile := filepath.Join(e.modelDir, "tokens.txt")
-	dataDir := filepath.Join(e.modelDir, "espeak-ng-data")
-
-	var modelFile string
 	provider := "cpu"
+	var config *sherpa.OfflineTtsConfig
 
-	if e.useGPU {
-		// Prefer full floating-point model for DirectML GPU execution
-		fpModel := filepath.Join(e.modelDir, "model.onnx")
-		if _, err := os.Stat(fpModel); err == nil {
-			modelFile = fpModel
-		} else {
-			modelFile = filepath.Join(e.modelDir, "model.int8.onnx")
-		}
-		provider = "directml"
-	} else {
-		// Prefer INT8 quantized model for CPU SIMD execution
-		int8Model := filepath.Join(e.modelDir, "model.int8.onnx")
-		if _, err := os.Stat(int8Model); err == nil {
-			modelFile = int8Model
-		} else {
-			modelFile = filepath.Join(e.modelDir, "model.onnx")
-		}
-	}
-
-	config := &sherpa.OfflineTtsConfig{
-		Model: sherpa.OfflineTtsModelConfig{
-			Kokoro: sherpa.OfflineTtsKokoroModelConfig{
-				Model:       modelFile,
-				Voices:      voicesFile,
-				Tokens:      tokensFile,
-				DataDir:     dataDir,
-				LengthScale: 1.0,
+	switch e.family {
+	case ModelSupertonic:
+		config = &sherpa.OfflineTtsConfig{
+			Model: sherpa.OfflineTtsModelConfig{
+				Supertonic: sherpa.OfflineTtsSupertonicModelConfig{
+					DurationPredictor: filepath.Join(e.modelDir, "duration_predictor.int8.onnx"),
+					TextEncoder:       filepath.Join(e.modelDir, "text_encoder.int8.onnx"),
+					VectorEstimator:   filepath.Join(e.modelDir, "vector_estimator.int8.onnx"),
+					Vocoder:           filepath.Join(e.modelDir, "vocoder.int8.onnx"),
+					TtsJson:           filepath.Join(e.modelDir, "tts.json"),
+					UnicodeIndexer:    filepath.Join(e.modelDir, "unicode_indexer.bin"),
+					VoiceStyle:        filepath.Join(e.modelDir, "voice.bin"),
+				},
+				NumThreads: e.numThreads,
+				Debug:      0,
+				Provider:   "cpu",
 			},
-			NumThreads: e.numThreads,
-			Debug:      0,
-			Provider:   provider,
-		},
+		}
+	case ModelKittenMini, ModelKittenNano:
+		modelFile := filepath.Join(e.modelDir, "model.int8.onnx")
+		for _, candidate := range []string{"model.int8.onnx", "model.fp16.onnx", "model.onnx"} {
+			if p := filepath.Join(e.modelDir, candidate); fileExists(p) {
+				modelFile = p
+				break
+			}
+		}
+		config = &sherpa.OfflineTtsConfig{
+			Model: sherpa.OfflineTtsModelConfig{
+				Kitten: sherpa.OfflineTtsKittenModelConfig{
+					Model:       modelFile,
+					Voices:      filepath.Join(e.modelDir, "voices.bin"),
+					Tokens:      filepath.Join(e.modelDir, "tokens.txt"),
+					DataDir:     filepath.Join(e.modelDir, "espeak-ng-data"),
+					LengthScale: 1.0,
+				},
+				NumThreads: e.numThreads,
+				Debug:      0,
+				Provider:   "cpu",
+			},
+		}
+	case ModelPiper:
+		config = &sherpa.OfflineTtsConfig{
+			Model: sherpa.OfflineTtsModelConfig{
+				Vits: sherpa.OfflineTtsVitsModelConfig{
+					Model:       filepath.Join(e.modelDir, "en_US-libritts-high.onnx"),
+					Tokens:      filepath.Join(e.modelDir, "tokens.txt"),
+					DataDir:     filepath.Join(e.modelDir, "espeak-ng-data"),
+					NoiseScale:  0.667,
+					NoiseScaleW: 0.8,
+					LengthScale: 1.0,
+				},
+				NumThreads: e.numThreads,
+				Debug:      0,
+				Provider:   "cpu",
+			},
+		}
+	default:
+		voicesFile := filepath.Join(e.modelDir, "voices.bin")
+		tokensFile := filepath.Join(e.modelDir, "tokens.txt")
+		dataDir := filepath.Join(e.modelDir, "espeak-ng-data")
+
+		var modelFile string
+		if e.useGPU {
+			fpModel := filepath.Join(e.modelDir, "model.onnx")
+			if _, err := os.Stat(fpModel); err == nil {
+				modelFile = fpModel
+			} else {
+				modelFile = filepath.Join(e.modelDir, "model.int8.onnx")
+			}
+			provider = "directml"
+		} else {
+			int8Model := filepath.Join(e.modelDir, "model.int8.onnx")
+			if _, err := os.Stat(int8Model); err == nil {
+				modelFile = int8Model
+			} else {
+				modelFile = filepath.Join(e.modelDir, "model.onnx")
+			}
+		}
+
+		config = &sherpa.OfflineTtsConfig{
+			Model: sherpa.OfflineTtsModelConfig{
+				Kokoro: sherpa.OfflineTtsKokoroModelConfig{
+					Model:       modelFile,
+					Voices:      voicesFile,
+					Tokens:      tokensFile,
+					DataDir:     dataDir,
+					LengthScale: 1.0,
+				},
+				NumThreads: e.numThreads,
+				Debug:      0,
+				Provider:   provider,
+			},
+		}
 	}
 
 	tts := sherpa.NewOfflineTts(config)
-	if tts == nil && e.useGPU {
+	if tts == nil && e.useGPU && (e.family == "" || e.family == ModelKokoro) {
 		// Fallback to CPU with INT8 model if DirectML fails on host system
 		config.Model.Provider = "cpu"
 		int8Model := filepath.Join(e.modelDir, "model.int8.onnx")
@@ -111,7 +179,7 @@ func (e *SherpaEngine) ensureLoadedLocked() error {
 	}
 
 	if tts == nil {
-		return fmt.Errorf("initialize sherpa-onnx OfflineTts from %s: %w", e.modelDir, ErrModelNotFound)
+		return fmt.Errorf("initialize sherpa-onnx OfflineTts (%s) from %s: %w", e.family, e.modelDir, ErrModelNotFound)
 	}
 
 	sampleRate := tts.SampleRate()
@@ -126,6 +194,11 @@ func (e *SherpaEngine) ensureLoadedLocked() error {
 
 	ReclaimOSMemory()
 	return nil
+}
+
+// Family returns the model family ID ("kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper").
+func (e *SherpaEngine) Family() string {
+	return e.family
 }
 
 // Provider returns the active execution provider ("directml" or "cpu").
@@ -220,6 +293,11 @@ func (e *SherpaEngine) SynthesizeStream(text string, voiceID string, speed float
 	}
 
 	for i, clause := range clauses {
+		if e.family == ModelKittenMini || e.family == ModelKittenNano {
+			// Kitten v0.8 INT8/FP16 models suffer an 85% amplitude collapse (peak 0.076 vs 0.490)
+			// when short phrases end with token ID 5 ('!'). Replacing '!' with '.' preserves full volume and prosody.
+			clause = strings.ReplaceAll(clause, "!", ".")
+		}
 		e.mu.Lock()
 		if e.closed {
 			e.mu.Unlock()
@@ -229,7 +307,7 @@ func (e *SherpaEngine) SynthesizeStream(text string, voiceID string, speed float
 			e.mu.Unlock()
 			return err
 		}
-		sid := ResolveSpeakerIDForModel(voiceID, e.numSpk)
+		sid := ResolveFamilySpeakerID(e.family, voiceID, e.numSpk)
 		audio := e.tts.Generate(clause, sid, speed)
 		e.resetIdleTimerLocked()
 		e.mu.Unlock()
@@ -299,8 +377,15 @@ func (e *SherpaEngine) Synthesize(text string, voiceID string, speed float32) ([
 	return allSamples, outSR, nil
 }
 
-// Voices returns available Kokoro voice names.
+// Voices returns available voice IDs for this engine's model family.
 func (e *SherpaEngine) Voices() []string {
+	if spec, ok := ModelSpecByID(e.family); ok && len(spec.Voices) > 0 {
+		out := make([]string, len(spec.Voices))
+		for i, v := range spec.Voices {
+			out[i] = v.ID
+		}
+		return out
+	}
 	return KokoroVoiceNames
 }
 

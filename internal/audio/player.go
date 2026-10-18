@@ -191,8 +191,37 @@ func (p *DevicePlayer) onAudioCallback(pOutput, pInput []byte, frameCount uint32
 	}
 }
 
-// Play queues PCM float32 samples into the player.
+// ResamplePCM converts mono float32 PCM samples from srcRate to dstRate using linear interpolation.
+func ResamplePCM(samples []float32, srcRate, dstRate int) []float32 {
+	if len(samples) == 0 || srcRate <= 0 || dstRate <= 0 || srcRate == dstRate {
+		return samples
+	}
+	ratio := float64(srcRate) / float64(dstRate)
+	outLen := int(float64(len(samples)) / ratio)
+	if outLen <= 0 {
+		return samples
+	}
+	out := make([]float32, outLen)
+	lastIdx := len(samples) - 1
+	for i := range outLen {
+		srcPos := float64(i) * ratio
+		idx := int(srcPos)
+		if idx >= lastIdx {
+			out[i] = samples[lastIdx]
+			continue
+		}
+		frac := float32(srcPos - float64(idx))
+		out[i] = samples[idx]*(1.0-frac) + samples[idx+1]*frac
+	}
+	return out
+}
+
+// Play queues PCM float32 samples into the player, automatically resampling if sampleRate differs from device sampleRate.
 func (p *DevicePlayer) Play(samples []float32, sampleRate int) error {
+	if sampleRate > 0 && p.sampleRate > 0 && sampleRate != int(p.sampleRate) {
+		samples = ResamplePCM(samples, sampleRate, int(p.sampleRate))
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

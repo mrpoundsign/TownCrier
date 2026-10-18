@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -272,9 +273,18 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 	nickEntry := NewScrollPassEntry()
 	nickEntry.SetPlaceHolder("Spoken nickname (leave blank for actual name)")
 
-	voiceLabels := tts.VoiceDisplayLabels()
+	cfg := v.session.Config()
+	voiceLabels := tts.VoiceDisplayLabelsForModels(cfg.TTS.EffectiveEnabledModels())
+	if isEdit && existing.Voice != "" {
+		curLabel := tts.VoiceDisplayName(existing.Voice)
+		if !slices.Contains(voiceLabels, curLabel) {
+			voiceLabels = append([]string{curLabel}, voiceLabels...)
+		}
+	}
 	voiceSelect := widget.NewSelect(voiceLabels, nil)
-	voiceSelect.SetSelected(tts.VoiceDisplayName("af_bella"))
+	if len(voiceLabels) > 0 {
+		voiceSelect.SetSelected(voiceLabels[0])
+	}
 
 	speedLabel := widget.NewLabel("1.00x")
 	speedSlider := widget.NewSlider(0.5, 2.0)
@@ -286,7 +296,8 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 
 	if isEdit {
 		nickEntry.SetText(existing.Nickname)
-		voiceSelect.SetSelected(tts.VoiceDisplayName(existing.Voice))
+		curLabel := tts.VoiceDisplayName(existing.Voice)
+		voiceSelect.SetSelected(curLabel)
 		if existing.Speed > 0 {
 			speedSlider.SetValue(float64(existing.Speed))
 			speedLabel.SetText(fmt.Sprintf("%.2fx", existing.Speed))
