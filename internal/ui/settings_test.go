@@ -39,6 +39,16 @@ func TestSettingsViewBuild(t *testing.T) {
 	if len(view.deviceSelect.Options) == 0 {
 		t.Error("expected at least Default Audio Device option")
 	}
+
+	if view.subTabs == nil {
+		t.Fatal("expected subTabs to be initialized")
+	}
+	if len(view.subTabs.Items) != 4 {
+		t.Errorf("expected 4 settings sub-tabs, got %d", len(view.subTabs.Items))
+	}
+	if view.logsView == nil {
+		t.Error("expected logsView to be initialized")
+	}
 }
 
 func TestSettingsViewAutoSave(t *testing.T) {

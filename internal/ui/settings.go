@@ -35,6 +35,9 @@ type SettingsView struct {
 	onHotkeyChanged   func(hotkey string) error
 	onServicesChanged func()
 	onModelsChanged   func()
+	onAssignVoice     func(platform, username string)
+	subTabs           *container.AppTabs
+	logsView          *LogsView
 	twitchCheck       *widget.Check
 	youtubeCheck      *widget.Check
 	tiktokCheck       *widget.Check
@@ -88,6 +91,19 @@ func (v *SettingsView) SetModelsChangedHandler(fn func()) {
 	v.onModelsChanged = fn
 }
 
+// SetOnAssignVoice registers a callback invoked when a viewer voice is assigned from the Event Logs sub-tab.
+func (v *SettingsView) SetOnAssignVoice(fn func(platform, username string)) {
+	v.onAssignVoice = fn
+	if v.logsView != nil {
+		v.logsView.SetOnAssignVoice(fn)
+	}
+}
+
+// LogsView returns the embedded Event Logs sub-tab view.
+func (v *SettingsView) LogsView() *LogsView {
+	return v.logsView
+}
+
 func (v *SettingsView) currentConfig() *config.Config {
 	if v.session != nil {
 		v.cfg = v.session.Config()
@@ -117,6 +133,9 @@ func (v *SettingsView) SyncFromConfig() {
 		p, ok := v.cfg.Platforms["kick"]
 		v.kickCheck.SetChecked(!ok || p.EverEnabled || p.Enabled)
 	}
+	if v.logsView != nil {
+		v.logsView.RefreshQuery()
+	}
 }
 
 func (v *SettingsView) setStatus(msg string) {
@@ -144,7 +163,7 @@ func (v *SettingsView) updateConfig(fn func(c *config.Config)) {
 	v.setStatus("✓ Settings saved.")
 }
 
-// Build generates the Fyne CanvasObject containing the Settings interface.
+// Build generates the Fyne CanvasObject containing the sub-tabbed Settings interface.
 func (v *SettingsView) Build() fyne.CanvasObject {
 	v.initializing = true
 	defer func() { v.initializing = false }()
@@ -168,16 +187,39 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	safetyCard := v.buildSafetyCard()
 	botsCard := v.buildBotsCard()
 
-	content := container.NewVBox(
+	generalTabContent := newPanelVScroll(container.NewVBox(
 		servicesCard,
 		audioCard,
+	))
+	ttsTabContent := newPanelVScroll(container.NewVBox(
 		ttsCard,
+	))
+	rulesTabContent := newPanelVScroll(container.NewVBox(
 		rulesCard,
 		safetyCard,
 		botsCard,
+	))
+
+	v.logsView = NewLogsView(v.window, v.session)
+	v.logsView.SetStatusHandler(v.setStatus)
+	v.logsView.SetOnAssignVoice(v.onAssignVoice)
+	logsTabContent := newPanelVScroll(container.NewVBox(
+		v.logsView.BuildRetentionCard(),
+	))
+
+	generalTabItem := container.NewTabItemWithIcon("General & Audio", theme.VolumeUpIcon(), generalTabContent)
+	ttsTabItem := container.NewTabItemWithIcon("TTS & Hardware", theme.ComputerIcon(), ttsTabContent)
+	rulesTabItem := container.NewTabItemWithIcon("Rules & Safety", theme.ConfirmIcon(), rulesTabContent)
+	logsTabItem := container.NewTabItemWithIcon("Event Logs", theme.DocumentIcon(), logsTabContent)
+
+	v.subTabs = container.NewAppTabs(
+		generalTabItem,
+		ttsTabItem,
+		rulesTabItem,
+		logsTabItem,
 	)
 
-	return newPanelVScroll(content)
+	return v.subTabs
 }
 
 func (v *SettingsView) buildServicesCard() *widget.Card {
