@@ -33,6 +33,7 @@ type MainWindow struct {
 	kickTab      *KickTabView
 	voicesTab    *VoicesTabView
 	viewersTab   *ViewersTabView
+	chatLogsTab  *LogsView
 	settingsTab  *SettingsView
 
 	dashboardTabItem *container.TabItem
@@ -42,6 +43,7 @@ type MainWindow struct {
 	kickTabItem      *container.TabItem
 	voicesTabItem    *container.TabItem
 	viewersTabItem   *container.TabItem
+	chatLogsTabItem  *container.TabItem
 	settingsTabItem  *container.TabItem
 
 	twitchStatusDot  *widget.Label
@@ -162,12 +164,20 @@ func (mw *MainWindow) initViews() {
 	mw.voicesTab.SetStatusHandler(mw.SetStatus)
 	mw.viewersTab = NewViewersTabView(mw.Window, mw.Session)
 	mw.viewersTab.SetStatusHandler(mw.SetStatus)
+	mw.chatLogsTab = NewLogsView(mw.Window, mw.Session)
+	mw.chatLogsTab.SetStatusHandler(mw.SetStatus)
+	mw.chatLogsTab.SetOnAssignVoice(func(platform, username string) {
+		mw.viewersTab.Refresh()
+	})
 	mw.dashboardTab.SetOnAssignVoice(func(platform, username string) {
 		mw.viewersTab.Refresh()
 	})
 	mw.settingsTab = NewSettingsView(mw.Window, cfg, player, engine)
 	mw.settingsTab.SetSession(mw.Session)
 	mw.settingsTab.SetStatusHandler(mw.SetStatus)
+	mw.settingsTab.SetOnAssignVoice(func(platform, username string) {
+		mw.viewersTab.Refresh()
+	})
 	mw.settingsTab.SetHotkeyChangedHandler(func(hotkey string) error {
 		return mw.ApplyPanicHotkey(hotkey)
 	})
@@ -190,6 +200,7 @@ func (mw *MainWindow) initViews() {
 	mw.kickTabItem = container.NewTabItemWithIcon("Kick", theme.MediaFastForwardIcon(), mw.kickTab.Build())
 	mw.voicesTabItem = container.NewTabItemWithIcon("Voices", theme.VolumeUpIcon(), mw.voicesTab.Build())
 	mw.viewersTabItem = container.NewTabItemWithIcon("Viewers", theme.AccountIcon(), mw.viewersTab.Build())
+	mw.chatLogsTabItem = container.NewTabItemWithIcon("Chat Logs", theme.DocumentIcon(), mw.chatLogsTab.Build())
 	mw.settingsTabItem = container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), mw.settingsTab.Build())
 
 	mw.tabsContainer = container.NewAppTabs(
@@ -200,11 +211,19 @@ func (mw *MainWindow) initViews() {
 		mw.kickTabItem,
 		mw.voicesTabItem,
 		mw.viewersTabItem,
+		mw.chatLogsTabItem,
 		mw.settingsTabItem,
 	)
 	mw.tabsContainer.OnSelected = func(item *container.TabItem) {
-		if item == mw.settingsTabItem && mw.settingsTab != nil {
-			mw.settingsTab.SyncFromConfig()
+		switch item {
+		case mw.chatLogsTabItem:
+			if mw.chatLogsTab != nil {
+				mw.chatLogsTab.RefreshQuery()
+			}
+		case mw.settingsTabItem:
+			if mw.settingsTab != nil {
+				mw.settingsTab.SyncFromConfig()
+			}
 		}
 	}
 }
@@ -239,7 +258,7 @@ func (mw *MainWindow) syncServiceVisibility() {
 		if kickVisible {
 			items = append(items, mw.kickTabItem)
 		}
-		items = append(items, mw.voicesTabItem, mw.viewersTabItem, mw.settingsTabItem)
+		items = append(items, mw.voicesTabItem, mw.viewersTabItem, mw.chatLogsTabItem, mw.settingsTabItem)
 		mw.tabsContainer.SetItems(items)
 		if slices.Contains(items, selected) {
 			mw.tabsContainer.Select(selected)

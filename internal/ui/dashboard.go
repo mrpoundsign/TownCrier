@@ -36,7 +36,7 @@ type DashboardView struct {
 	mu         sync.Mutex
 	activities []ActivityEntry
 
-	nowPlayingLabel *widget.Label
+	nowPlayingLabel *wrappedCellLabel
 	queueDepthLabel *widget.Label
 	pauseResumeBtn  *widget.Button
 	feedContainer   *fyne.Container
@@ -128,7 +128,7 @@ func (v *DashboardView) Build() fyne.CanvasObject {
 }
 
 func (v *DashboardView) buildSpeakingCard() *widget.Card {
-	v.nowPlayingLabel = widget.NewLabelWithStyle("Idle (No speech active)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	v.nowPlayingLabel = newClampedWrapLabel("Idle (No speech active)", fyne.TextStyle{Bold: true})
 
 	cardContent := container.NewVBox(
 		v.nowPlayingLabel,
@@ -231,7 +231,7 @@ func (v *DashboardView) buildActivityRow(entry ActivityEntry) fyne.CanvasObject 
 	meta := fmt.Sprintf("[%s] %s (%s)", timeStr, entry.UserName, entry.Platform)
 
 	nameLabel := widget.NewLabelWithStyle(meta, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	textLabel := widget.NewLabel(entry.Text)
+	textLabel := newClampedWrapLabel(entry.Text, fyne.TextStyle{})
 
 	assignBtn := widget.NewButtonWithIcon("Assign Voice", theme.AccountIcon(), func() {
 		v.showQuickAssignDialog(entry.Platform, entry.UserName)
