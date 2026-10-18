@@ -8,6 +8,7 @@ import (
 
 	"github.com/mrpoundsign/TownCrier/internal/chat"
 	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
 type mockPlayer struct {
@@ -393,3 +394,63 @@ func TestQueuePauseResume(t *testing.T) {
 		t.Fatal("timed out waiting for item after resume")
 	}
 }
+
+type mockStreamingEngine struct {
+	mockEngine
+	clauses [][]float32
+}
+
+func (m *mockStreamingEngine) SynthesizeStream(text string, voiceID string, speed float32, onChunk tts.StreamCallback) error {
+	m.mu.Lock()
+	m.synthesized = append(m.synthesized, text)
+	m.speeds = append(m.speeds, speed)
+	chunks := m.clauses
+	m.mu.Unlock()
+
+	for _, c := range chunks {
+		if !onChunk(c, 24000) {
+			break
+		}
+	}
+	return nil
+}
+
+func TestQueueStreamingClauses(t *testing.T) {
+	player := &mockPlayer{}
+	sEng := &mockStreamingEngine{
+		clauses: [][]float32{
+			{0.1, 0.2},
+			{0.3, 0.4},
+			{0.5, 0.6},
+		},
+	}
+	cfg := config.DefaultConfig()
+
+	q := NewQueue(player, sEng, func() *config.Config { return cfg })
+	defer q.Close()
+
+	done := make(chan struct{})
+	q.SetOnItemFinished(func(item *Item) {
+		close(done)
+	})
+
+	_ = q.Enqueue(&Item{
+		ID:       "stream-1",
+		Text:     "Clause one, clause two, clause three.",
+		Priority: 1,
+	})
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for streaming item")
+	}
+
+	player.mu.Lock()
+	lastSamples := player.samples
+	player.mu.Unlock()
+	if len(lastSamples) != 6 || lastSamples[0] != 0.1 || lastSamples[5] != 0.6 {
+		t.Errorf("expected pre-buffered streamed clauses [0.1..0.6] (len 6), got %v", lastSamples)
+	}
+}
+

@@ -201,6 +201,16 @@ func (p *DevicePlayer) Play(samples []float32, sampleRate int) error {
 	}
 
 	p.aborted.Store(false)
+	if p.cursor > 0 {
+		remaining := len(p.buffer) - p.cursor
+		if remaining > 0 {
+			copy(p.buffer, p.buffer[p.cursor:])
+			p.buffer = p.buffer[:remaining]
+		} else {
+			p.buffer = p.buffer[:0]
+		}
+		p.cursor = 0
+	}
 	p.buffer = append(p.buffer, samples...)
 	return nil
 }

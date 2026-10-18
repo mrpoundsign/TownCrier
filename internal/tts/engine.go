@@ -153,6 +153,17 @@ type Engine interface {
 	Close() error
 }
 
+// StreamCallback receives synthesized audio chunks (clauses) as they are generated.
+// Returning false aborts synthesis of remaining clauses immediately.
+type StreamCallback func(samples []float32, sampleRate int) bool
+
+// StreamingEngine is an optional extension of Engine that supports clause-by-clause
+// synthesis streaming to reduce peak RAM and Time-To-First-Audio (TTFA).
+type StreamingEngine interface {
+	Engine
+	SynthesizeStream(text string, voiceID string, speed float32, onChunk StreamCallback) error
+}
+
 // ResolveSpeakerID resolves a string voice ID or display label to an integer speaker index for v0.19, falling back to 0.
 func ResolveSpeakerID(voiceID string) int {
 	return ResolveSpeakerIDForModel(voiceID, 11)

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -363,7 +364,7 @@ func (v *SettingsView) refreshDeviceList() {
 }
 
 func (v *SettingsView) buildTTSCard() *widget.Card {
-	installed := tts.IsModelInstalled(v.modelDir)
+	installed := tts.IsCPUModelInstalled(v.modelDir) || tts.IsGPUModelInstalled(v.modelDir)
 	statusText := fmt.Sprintf("Kokoro Model: Installed (%s)", filepath.Base(v.modelDir))
 	if !installed {
 		statusText = "Kokoro Model: Not Found in " + v.modelDir
@@ -377,21 +378,52 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		v.updateConfig(func(c *config.Config) {
 			c.TTS.UseGPU = checked
 		})
-		if tts.IsModelInstalled(v.modelDir) {
+		if tts.IsCPUModelInstalled(v.modelDir) || tts.IsGPUModelInstalled(v.modelDir) {
 			go func() {
+				// 1. Detach and close the existing engine FIRST so both models are never held in RAM simultaneously
+				v.mu.Lock()
+				oldEng := v.engine
+				v.engine = nil
+				v.mu.Unlock()
+				if v.session != nil {
+					v.session.SetEngine(nil)
+				}
+				if oldEng != nil {
+					_ = oldEng.Close()
+				}
+				tts.ReclaimOSMemory()
+
+				// 2. If enabling GPU and FP32 model.onnx is not yet downloaded, download it now
+				if checked && !tts.IsGPUModelInstalled(v.modelDir) {
+					v.setStatus("Downloading Kokoro FP32 GPU model (~305 MB)...")
+					if dlErr := tts.DownloadKokoroModelForMode(v.modelDir, true, nil); dlErr != nil {
+						v.setStatus(fmt.Sprintf("GPU model download failed (%v); staying on CPU INT8", dlErr))
+						checked = false
+						v.updateConfig(func(c *config.Config) {
+							c.TTS.UseGPU = false
+						})
+					}
+				}
+
 				threads := v.cfg.TTS.NumThreads
 				if threads <= 0 {
 					threads = 4
 				}
+				v.setStatus("Reloading TTS engine...")
 				eng, err := tts.NewSherpaEngine(v.modelDir, threads, checked)
+				if err == nil && eng != nil {
+					if v.cfg.TTS.MaxClauseWords > 0 {
+						eng.SetMaxClauseWords(v.cfg.TTS.MaxClauseWords)
+					}
+					if v.cfg.TTS.IdleUnloadMinutes > 0 {
+						eng.SetIdleTimeout(time.Duration(v.cfg.TTS.IdleUnloadMinutes) * time.Minute)
+					}
+				}
 				fyne.Do(func() {
 					if err != nil {
-						v.setStatus(fmt.Sprintf("Failed to switch GPU acceleration: %v", err))
+						v.setStatus(fmt.Sprintf("Failed to reload TTS engine: %v", err))
 					} else {
 						v.mu.Lock()
-						if v.engine != nil {
-							_ = v.engine.Close()
-						}
 						v.engine = eng
 						v.mu.Unlock()
 						if v.session != nil {
