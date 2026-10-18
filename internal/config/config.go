@@ -20,9 +20,18 @@ type Config struct {
 	Safety          SafetyConfig              `json:"safety"`
 	Queue           QueueConfig               `json:"queue"`
 	Bots            BotConfig                 `json:"bots"`
+	Logging         LoggingConfig             `json:"logging"`
 	GlobalChatRules GlobalChatRules           `json:"global_chat_rules"`
 	Viewers         map[string]ViewerConfig   `json:"viewers"`
 	Platforms       map[string]PlatformConfig `json:"platforms"`
+}
+
+type LoggingConfig struct {
+	Enabled            bool   `json:"enabled"`
+	Backend            string `json:"backend"`
+	DBPath             string `json:"db_path,omitempty"`
+	ChatRetentionDays  int    `json:"chat_retention_days"`
+	EventRetentionDays int    `json:"event_retention_days"`
 }
 
 type AudioConfig struct {
@@ -297,6 +306,13 @@ func DefaultConfig() *Config {
 		Bots: BotConfig{
 			IgnoreKnownBots: true,
 			AutoUpdate:      false,
+		},
+		Logging: LoggingConfig{
+			Enabled:            true,
+			Backend:            "sqlite",
+			DBPath:             "",
+			ChatRetentionDays:  30,
+			EventRetentionDays: 90,
 		},
 		GlobalChatRules: GlobalChatRules{
 			SpeakNames:        true,
@@ -721,6 +737,16 @@ func migrate(cfg *Config) error {
 	}
 	if cfg.TTS.MaxClauseWords <= 0 {
 		cfg.TTS.MaxClauseWords = 12
+	}
+
+	if strings.TrimSpace(cfg.Logging.Backend) == "" {
+		cfg.Logging.Backend = "sqlite"
+	}
+	if cfg.Logging.ChatRetentionDays < 0 {
+		cfg.Logging.ChatRetentionDays = 0
+	}
+	if cfg.Logging.EventRetentionDays < 0 {
+		cfg.Logging.EventRetentionDays = 0
 	}
 
 	// Normalize viewer keys and populate multi-platform Accounts slice
