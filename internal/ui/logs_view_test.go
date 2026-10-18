@@ -109,16 +109,70 @@ func TestLogsViewLiveTailAndSearch(t *testing.T) {
 		t.Fatalf("Append log-2 failed: %v", err)
 	}
 
+	// Append a bot event and a custom-bot event
+	err = mgr.Append(ctx, &eventlog.Entry{
+		ID:            "log-bot-1",
+		CreatedAt:     now.Add(-30 * time.Second),
+		Platform:      "twitch",
+		Channel:       "streamer_one",
+		Kind:          "chat",
+		UserID:        "u999",
+		UserName:      "nightbot",
+		DisplayName:   "Nightbot",
+		Roles:         []string{"bot"},
+		RawText:       "Follow the stream!",
+		PassedFilters: false,
+		Spoken:        false,
+		Outcome:       eventlog.OutcomeDroppedBot,
+	})
+	if err != nil {
+		t.Fatalf("Append log-bot-1 failed: %v", err)
+	}
+
+	_ = sess.UpdateConfig(func(c *config.Config) {
+		c.Bots.CustomBots = []string{"customspammerbot"}
+	})
+	err = mgr.Append(ctx, &eventlog.Entry{
+		ID:            "log-bot-2",
+		CreatedAt:     now.Add(-20 * time.Second),
+		Platform:      "twitch",
+		Channel:       "streamer_one",
+		Kind:          "chat",
+		UserID:        "u998",
+		UserName:      "customspammerbot",
+		DisplayName:   "CustomSpammerBot",
+		RawText:       "Automated promo",
+		PassedFilters: true,
+		Spoken:        true,
+		Outcome:       eventlog.OutcomeSpoken,
+	})
+	if err != nil {
+		t.Fatalf("Append log-bot-2 failed: %v", err)
+	}
+
 	// Switch off Live Tail to run historical search queries
 	lv.liveTailCheck.SetChecked(false)
 
+	// By default, Hide Bots is checked (true), so only Alice and Bob (2 entries) appear
 	lv.RefreshQuery()
 	lv.mu.Lock()
 	totalCount := len(lv.entries)
 	lv.mu.Unlock()
 	if totalCount != 2 {
-		t.Fatalf("expected 2 entries in unrestricted query, got %d", totalCount)
+		t.Fatalf("expected 2 non-bot entries with Hide Bots checked, got %d", totalCount)
 	}
+
+	// Uncheck Hide Bots and verify all 4 entries (including Nightbot and CustomSpammerBot) appear
+	lv.hideBotsCheck.SetChecked(false)
+	lv.mu.Lock()
+	allWithBotsCount := len(lv.entries)
+	lv.mu.Unlock()
+	if allWithBotsCount != 4 {
+		t.Fatalf("expected 4 entries with Hide Bots unchecked, got %d", allWithBotsCount)
+	}
+
+	// Re-check Hide Bots
+	lv.hideBotsCheck.SetChecked(true)
 
 	// Filter by Dropped in Queue
 	lv.outcomeSel.SetSelected(outcomeLabelDroppedQ)
@@ -129,7 +183,7 @@ func TestLogsViewLiveTailAndSearch(t *testing.T) {
 		t.Fatalf("expected 1 entry for Dropped in Queue, got %d", droppedCount)
 	}
 
-	// Reset filters and verify both return
+	// Reset filters and verify both non-bot entries return and Hide Bots is restored to true
 	lv.ResetFilters()
 	lv.mu.Lock()
 	afterResetCount := len(lv.entries)

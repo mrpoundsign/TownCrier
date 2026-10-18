@@ -63,10 +63,23 @@ func (m *Matcher) ShouldIgnore(event *chat.Event, cfg *config.Config) bool {
 		return true
 	}
 
-	// 3. Known Bots List
+	// 3. User-Configured Custom Bots List
+	uIDLower := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(event.UserID), "@"))
+	uNameClean := strings.TrimPrefix(userNameLower, "@")
+	for _, cb := range cfg.Bots.CustomBots {
+		cbNorm := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(cb), "@"))
+		if cbNorm != "" && (cbNorm == uNameClean || cbNorm == userNameLower || (uIDLower != "" && cbNorm == uIDLower)) {
+			return true
+		}
+	}
+
+	// 4. Known Bots List
 	if cfg.Bots.IgnoreKnownBots {
 		m.mu.RLock()
 		_, isBot := m.knownBots[userNameLower]
+		if !isBot && uNameClean != userNameLower {
+			_, isBot = m.knownBots[uNameClean]
+		}
 		m.mu.RUnlock()
 		if isBot {
 			return true
@@ -74,6 +87,64 @@ func (m *Matcher) ShouldIgnore(event *chat.Event, cfg *config.Config) bool {
 	}
 
 	return false
+}
+
+// ExcludedUserNames returns the deduplicated list of lowercased bot and ignored usernames
+// from the active configuration (known bots if enabled, custom bots, and ignored viewers,
+// minus any explicitly allowed viewer accounts).
+func ExcludedUserNames(cfg *config.Config) []string {
+	allowed := make(map[string]struct{})
+	seen := make(map[string]struct{})
+	var result []string
+
+	add := func(name string) {
+		n := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "@"))
+		if n == "" {
+			return
+		}
+		if _, isAllowed := allowed[n]; isAllowed {
+			return
+		}
+		if _, ok := seen[n]; ok {
+			return
+		}
+		seen[n] = struct{}{}
+		result = append(result, n)
+	}
+
+	if cfg != nil {
+		for _, v := range cfg.Viewers {
+			if v.Allowed {
+				for _, acc := range v.EffectiveAccounts() {
+					n := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(acc.UserID), "@"))
+					if n != "" {
+						allowed[n] = struct{}{}
+					}
+				}
+			}
+		}
+		for _, v := range cfg.Viewers {
+			if v.Ignored && !v.Allowed {
+				for _, acc := range v.EffectiveAccounts() {
+					add(acc.UserID)
+				}
+			}
+		}
+		for _, cb := range cfg.Bots.CustomBots {
+			add(cb)
+		}
+	}
+
+	if cfg == nil || cfg.Bots.IgnoreKnownBots {
+		var known []string
+		if err := json.Unmarshal(defaultKnownBotsJSON, &known); err == nil {
+			for _, kb := range known {
+				add(kb)
+			}
+		}
+	}
+
+	return result
 }
 
 // IsKnownBot reports whether the given name is in the known bots set.
@@ -97,3 +168,4 @@ func (m *Matcher) RemoveBot(name string) {
 	defer m.mu.Unlock()
 	delete(m.knownBots, strings.ToLower(strings.TrimSpace(name)))
 }
+

@@ -335,6 +335,30 @@ func (s *SQLiteBackend) Query(ctx context.Context, filter QueryFilter) (*QueryRe
 		}
 	}
 
+	// 7. Hide Bots filter (excludes dropped_bot outcome, bot role tag, and configured known/custom/ignored bots)
+	if filter.HideBots && filter.Outcome != OutcomeDroppedBot {
+		whereClauses = append(whereClauses, "(outcome != ? AND LOWER(roles_json) NOT LIKE ?)")
+		args = append(args, string(OutcomeDroppedBot), `%"bot"%`)
+
+		if len(filter.ExcludedUsers) > 0 {
+			var placeholders []string
+			var userArgs []any
+			for _, u := range filter.ExcludedUsers {
+				uClean := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(u), "@"))
+				if uClean != "" {
+					placeholders = append(placeholders, "?")
+					userArgs = append(userArgs, uClean)
+				}
+			}
+			if len(placeholders) > 0 {
+				inList := strings.Join(placeholders, ",")
+				whereClauses = append(whereClauses, fmt.Sprintf("(LOWER(LTRIM(user_name, '@')) NOT IN (%s) AND LOWER(LTRIM(user_id, '@')) NOT IN (%s))", inList, inList))
+				args = append(args, userArgs...)
+				args = append(args, userArgs...)
+			}
+		}
+	}
+
 	whereSQL := ""
 	if len(whereClauses) > 0 {
 		whereSQL = " WHERE " + strings.Join(whereClauses, " AND ")

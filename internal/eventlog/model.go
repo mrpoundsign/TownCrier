@@ -162,17 +162,19 @@ func (p RetentionPolicy) Cutoffs() (chatCutoff time.Time, eventCutoff time.Time)
 
 // QueryFilter specifies search, date-range, attribute, and pagination parameters.
 type QueryFilter struct {
-	From        *time.Time        `json:"from,omitempty"`
-	To          *time.Time        `json:"to,omitempty"`
-	Platform    string            `json:"platform,omitempty"`
-	Channel     string            `json:"channel,omitempty"`
-	UserQuery   string            `json:"user_query,omitempty"`
-	TextQuery   string            `json:"text_query,omitempty"`
-	OutcomeMode OutcomeFilterMode `json:"outcome_mode,omitempty"`
-	Outcome     EventOutcome      `json:"outcome,omitempty"`
-	Limit       int               `json:"limit,omitempty"`
-	Offset      int               `json:"offset,omitempty"`
-	Retention   RetentionPolicy   `json:"-"`
+	From          *time.Time        `json:"from,omitempty"`
+	To            *time.Time        `json:"to,omitempty"`
+	Platform      string            `json:"platform,omitempty"`
+	Channel       string            `json:"channel,omitempty"`
+	UserQuery     string            `json:"user_query,omitempty"`
+	TextQuery     string            `json:"text_query,omitempty"`
+	OutcomeMode   OutcomeFilterMode `json:"outcome_mode,omitempty"`
+	Outcome       EventOutcome      `json:"outcome,omitempty"`
+	HideBots      bool              `json:"hide_bots,omitempty"`
+	ExcludedUsers []string          `json:"excluded_users,omitempty"`
+	Limit         int               `json:"limit,omitempty"`
+	Offset        int               `json:"offset,omitempty"`
+	Retention     RetentionPolicy   `json:"-"`
 }
 
 // QueryResult holds a page of matching log entries and the total matching row count.

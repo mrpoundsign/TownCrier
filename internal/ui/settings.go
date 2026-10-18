@@ -1248,8 +1248,59 @@ func (v *SettingsView) buildBotsCard() *widget.Card {
 	})
 	knownBotsCheck.SetChecked(v.cfg.Bots.IgnoreKnownBots)
 
+	botListContainer := container.NewVBox()
+	var refreshBots func()
+	refreshBots = func() {
+		v.currentConfig()
+		botListContainer.Objects = nil
+		if len(v.cfg.Bots.CustomBots) == 0 {
+			botListContainer.Add(widget.NewLabelWithStyle("No custom bot accounts added.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
+		} else {
+			for i, botName := range v.cfg.Bots.CustomBots {
+				idx := i
+				bName := botName
+				delBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
+					v.updateConfig(func(c *config.Config) {
+						if idx >= 0 && idx < len(c.Bots.CustomBots) {
+							c.Bots.CustomBots = append(c.Bots.CustomBots[:idx], c.Bots.CustomBots[idx+1:]...)
+						}
+					})
+					refreshBots()
+					v.setStatus(fmt.Sprintf("Removed %q from custom bots.", bName))
+				})
+				row := container.NewBorder(nil, nil, nil, delBtn, widget.NewLabel(bName))
+				botListContainer.Add(row)
+			}
+		}
+		botListContainer.Refresh()
+	}
+	refreshBots()
+
+	newBotEntry := NewScrollPassEntry()
+	newBotEntry.SetPlaceHolder("Enter custom bot username (e.g. mychannelbot)...")
+	addBotBtn := widget.NewButtonWithIcon("Add Bot", theme.ContentAddIcon(), func() {
+		text := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(newBotEntry.Text), "@"))
+		if text == "" {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			if !slices.Contains(c.Bots.CustomBots, text) {
+				c.Bots.CustomBots = append(c.Bots.CustomBots, text)
+			}
+		})
+		newBotEntry.SetText("")
+		refreshBots()
+		v.setStatus(fmt.Sprintf("Added %q to custom bots.", text))
+	})
+
+	addRow := container.NewBorder(nil, nil, nil, addBotBtn, newBotEntry)
+
 	cardContent := container.NewVBox(
 		knownBotsCheck,
+		widget.NewSeparator(),
+		widget.NewLabel("Custom Bot Usernames (ignored by TTS and hidden when 'Hide Bots' is active):"),
+		botListContainer,
+		addRow,
 	)
 
 	return widget.NewCard("Bot Filters", "Filter out automated stream bots", cardContent)

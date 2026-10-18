@@ -17,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/bots"
 	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 )
@@ -58,12 +59,14 @@ type LogsView struct {
 	totalCount   int
 	currentPage  int
 	liveTail     bool
+	hideBots     bool
 	fromDate     *time.Time
 	toDate       *time.Time
 	unsubLive    func()
 	initializing bool
 
 	liveTailCheck   *widget.Check
+	hideBotsCheck   *widget.Check
 	datePresetSel   *widget.Select
 	fromDateBtn     *widget.Button
 	toDateBtn       *widget.Button
@@ -100,6 +103,7 @@ func NewLogsView(w fyne.Window, session *app.Session) *LogsView {
 		window:   w,
 		session:  session,
 		liveTail: true,
+		hideBots: true,
 		listBox:  container.NewVBox(),
 	}
 }
@@ -342,6 +346,18 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 	})
 	v.liveTailCheck.SetChecked(true)
 
+	v.hideBotsCheck = widget.NewCheck("🤖 Hide Bots", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.mu.Lock()
+		v.hideBots = checked
+		v.currentPage = 0
+		v.mu.Unlock()
+		v.RefreshQuery()
+	})
+	v.hideBotsCheck.SetChecked(v.hideBots)
+
 	presets := []string{
 		datePresetAllTime,
 		datePresetToday,
@@ -454,6 +470,7 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 
 	topRow := container.NewHBox(
 		v.liveTailCheck,
+		v.hideBotsCheck,
 		widget.NewSeparator(),
 		widget.NewLabel("Date Range:"),
 		v.datePresetSel,
@@ -574,8 +591,12 @@ func (v *LogsView) ResetFilters() {
 	if v.liveTailCheck != nil {
 		v.liveTailCheck.SetChecked(true)
 	}
+	if v.hideBotsCheck != nil {
+		v.hideBotsCheck.SetChecked(true)
+	}
 	v.mu.Lock()
 	v.liveTail = true
+	v.hideBots = true
 	v.currentPage = 0
 	v.mu.Unlock()
 	v.initializing = false
@@ -610,6 +631,7 @@ func (v *LogsView) currentFilter() eventlog.QueryFilter {
 	from := v.fromDate
 	to := v.toDate
 	page := v.currentPage
+	hideBots := v.hideBots
 	v.mu.Unlock()
 
 	plat := ""
@@ -642,15 +664,26 @@ func (v *LogsView) currentFilter() eventlog.QueryFilter {
 		textQ = strings.TrimSpace(v.textSearchEntry.Text)
 	}
 
+	var excludedUsers []string
+	if hideBots {
+		var cfg *config.Config
+		if v.session != nil {
+			cfg = v.session.Config()
+		}
+		excludedUsers = bots.ExcludedUserNames(cfg)
+	}
+
 	return eventlog.QueryFilter{
-		From:        from,
-		To:          to,
-		Platform:    plat,
-		UserQuery:   userQ,
-		TextQuery:   textQ,
-		OutcomeMode: mode,
-		Limit:       logsPageSize,
-		Offset:      page * logsPageSize,
+		From:          from,
+		To:            to,
+		Platform:      plat,
+		UserQuery:     userQ,
+		TextQuery:     textQ,
+		OutcomeMode:   mode,
+		HideBots:      hideBots,
+		ExcludedUsers: excludedUsers,
+		Limit:         logsPageSize,
+		Offset:        page * logsPageSize,
 	}
 }
 
@@ -762,6 +795,24 @@ func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
 	}
 	if f.Channel != "" && !strings.EqualFold(f.Channel, "all") && !strings.EqualFold(e.Channel, f.Channel) {
 		return false
+	}
+	if f.HideBots && f.Outcome != eventlog.OutcomeDroppedBot {
+		if e.Outcome == eventlog.OutcomeDroppedBot {
+			return false
+		}
+		for _, r := range e.Roles {
+			if strings.EqualFold(strings.TrimSpace(r), "bot") {
+				return false
+			}
+		}
+		uName := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(e.UserName), "@"))
+		uID := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(e.UserID), "@"))
+		for _, ex := range f.ExcludedUsers {
+			exClean := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(ex), "@"))
+			if exClean != "" && (exClean == uName || (uID != "" && exClean == uID)) {
+				return false
+			}
+		}
 	}
 	if f.UserQuery != "" {
 		uq := strings.ToLower(f.UserQuery)
@@ -973,7 +1024,12 @@ func (v *LogsView) showAssignVoiceDialog(platform, username string) {
 		return
 	}
 	dash := NewDashboardView(v.window, v.session)
-	dash.SetOnAssignVoice(v.onAssignVoice)
+	dash.SetOnAssignVoice(func(p, u string) {
+		if v.onAssignVoice != nil {
+			v.onAssignVoice(p, u)
+		}
+		v.RefreshQuery()
+	})
 	dash.SetStatusHandler(v.onStatus)
 	dash.showQuickAssignDialog(platform, username)
 }

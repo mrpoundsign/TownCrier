@@ -90,8 +90,9 @@ type QueueConfig struct {
 }
 
 type BotConfig struct {
-	IgnoreKnownBots bool `json:"ignore_known_bots"`
-	AutoUpdate      bool `json:"auto_update"`
+	IgnoreKnownBots bool     `json:"ignore_known_bots"`
+	AutoUpdate      bool     `json:"auto_update"`
+	CustomBots      []string `json:"custom_bots,omitempty"`
 }
 
 type GlobalChatRules struct {
