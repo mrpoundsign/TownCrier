@@ -34,6 +34,7 @@ type EmoteSpan struct {
 type Event struct {
 	ID            string      `json:"id"`
 	Platform      string      `json:"platform"`
+	Channel       string      `json:"channel,omitempty"`
 	Kind          EventKind   `json:"kind"`
 	Timestamp     time.Time   `json:"timestamp"`
 	UserID        string      `json:"user_id"`
@@ -75,6 +76,7 @@ const (
 // ModerationEvent represents a moderation sync action from Twitch, YouTube, etc.
 type ModerationEvent struct {
 	Platform        string           `json:"platform"`
+	Channel         string           `json:"channel,omitempty"`
 	Action          ModerationAction `json:"action"`
 	TargetMessageID string           `json:"target_message_id,omitempty"`
 	TargetUserID    string           `json:"target_user_id,omitempty"`

@@ -394,11 +394,21 @@ func (c *Connector) connectAndStream(ctx context.Context, slug string, chatroomI
 			continue
 		}
 
-		if ev != nil && c.onEvent != nil {
-			c.onEvent(ev)
+		if ev != nil {
+			if ev.Channel == "" {
+				ev.Channel = slug
+			}
+			if c.onEvent != nil {
+				c.onEvent(ev)
+			}
 		}
-		if mod != nil && c.onModeration != nil {
-			c.onModeration(mod)
+		if mod != nil {
+			if mod.Channel == "" {
+				mod.Channel = slug
+			}
+			if c.onModeration != nil {
+				c.onModeration(mod)
+			}
 		}
 	}
 }

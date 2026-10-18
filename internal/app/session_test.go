@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/mrpoundsign/TownCrier/internal/chat"
 	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 	"github.com/mrpoundsign/TownCrier/internal/queue"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
 )
@@ -327,4 +329,98 @@ func TestSessionDispatchEventEmotes(t *testing.T) {
 		t.Fatal("timed out waiting for dispatched item with speakEmotes=true")
 	}
 }
+
+func TestSessionEventLogOutcomes(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.DefaultConfig()
+	p := cfg.Platforms["twitch"]
+	p.AccountName = "mrpoundsign"
+	cfg.Platforms["twitch"] = p
+	cfg.Queue.MaxAgeSeconds = 1
+
+	sqlStore, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend failed: %v", err)
+	}
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, sqlStore)
+
+	session := NewSession(cfg, secrets.NewMemoryStore())
+	session.SetEventLogger(logMgr)
+	defer func() { _ = session.Close() }()
+
+	// Pause queue initially so we can test moderation cancel and staleness before resuming
+	session.Queue().Pause()
+
+	// 1. Known bot -> PassedFilters = false, Spoken = false, Outcome = dropped_bot
+	_ = session.DispatchEvent(&chat.Event{
+		ID:       "ev-bot",
+		Platform: "twitch",
+		UserID:   "999",
+		UserName: "nightbot",
+		Text:     "bot message",
+	})
+
+	// 2. Message that passes filters and will be deleted by moderation while queued
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "ev-mod-del",
+		Platform:    "twitch",
+		UserID:      "200",
+		UserName:    "troll",
+		DisplayName: "Troll",
+		Text:        "delete me",
+	})
+	session.DispatchModeration(&chat.ModerationEvent{
+		Platform:        "twitch",
+		Action:          chat.ModActionDeleteMessage,
+		TargetMessageID: "ev-mod-del",
+	})
+
+	// 3. Message that passes filters and will be spoken when queue resumes
+	doneSpoken := make(chan struct{})
+	session.Queue().SetOnItemFinished(func(item *queue.Item) {
+		if item != nil && item.ID == "ev-spoken" {
+			close(doneSpoken)
+		}
+	})
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "ev-spoken",
+		Platform:    "twitch",
+		UserID:      "300",
+		UserName:    "alice",
+		DisplayName: "Alice",
+		Text:        "hello streamer",
+	})
+
+	session.Queue().Resume()
+
+	select {
+	case <-doneSpoken:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for ev-spoken to finish")
+	}
+
+	res, err := logMgr.Query(ctx, eventlog.QueryFilter{})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	byID := make(map[string]eventlog.Entry)
+	for _, e := range res.Entries {
+		byID[e.ID] = e
+	}
+
+	if b, ok := byID["ev-bot"]; !ok || b.PassedFilters || b.Spoken || b.Outcome != eventlog.OutcomeDroppedBot || b.Channel != "mrpoundsign" {
+		t.Errorf("unexpected ev-bot log entry: %+v", b)
+	}
+	if m, ok := byID["ev-mod-del"]; !ok || !m.PassedFilters || m.Spoken || m.Outcome != eventlog.OutcomeDroppedModeration {
+		t.Errorf("unexpected ev-mod-del log entry: %+v", m)
+	}
+	if s, ok := byID["ev-spoken"]; !ok || !s.PassedFilters || !s.Spoken || s.Outcome != eventlog.OutcomeSpoken {
+		t.Errorf("unexpected ev-spoken log entry: %+v", s)
+	}
+}
+
 

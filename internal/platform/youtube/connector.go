@@ -223,8 +223,13 @@ func (c *Connector) streamLiveChat(ctx context.Context, apiKey string, initialCo
 			return
 		}
 
+		targetChan := c.Target()
+
 		// Dispatch moderation events immediately
 		for _, modEv := range modEvents {
+			if modEv != nil && modEv.Channel == "" {
+				modEv.Channel = targetChan
+			}
 			if c.onModeration != nil {
 				c.onModeration(modEv)
 			}
@@ -236,6 +241,9 @@ func (c *Connector) streamLiveChat(ctx context.Context, apiKey string, initialCo
 		for _, ev := range events {
 			if ev == nil {
 				continue
+			}
+			if ev.Channel == "" {
+				ev.Channel = targetChan
 			}
 			c.mu.Lock()
 			_, alreadySeen := c.seenIDs[ev.ID]
