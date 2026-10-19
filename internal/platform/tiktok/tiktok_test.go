@@ -1,12 +1,16 @@
 package tiktok
 
 import (
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/steampoweredtaco/gotiktoklive"
+	pb "github.com/steampoweredtaco/gotiktoklive/proto"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/mrpoundsign/TownCrier/internal/chat"
 )
@@ -330,4 +334,137 @@ func TestExtractRoles_FanClubAndSuperFan(t *testing.T) {
 		t.Errorf("sfRoles = %v, want [subscriber fan_club]", sfRoles)
 	}
 }
+
+func TestGiftCatalogAndHeartMeInlineImage(t *testing.T) {
+	cat := NewGiftCatalog()
+
+	// Default Heart Me lookup by ID or Name
+	hmMeta, ok := cat.Lookup(7934, "Heart Me")
+	if !ok || hmMeta.ImageURL == "" {
+		t.Fatalf("expected default Heart Me icon URL in catalog, got %+v (ok=%v)", hmMeta, ok)
+	}
+
+	var got *chat.Event
+	d := NewGiftDebouncer(50*time.Millisecond, func(ev *chat.Event) {
+		got = ev
+	})
+	defer d.Close()
+
+	d.Submit(GiftInput{
+		UserID:       "501",
+		UserName:     "wifestreamviewer",
+		DisplayName:  "Wife Stream Viewer",
+		GiftID:       7934,
+		GiftName:     "Heart Me",
+		ImageURL:     hmMeta.ImageURL,
+		UnitDiamonds: 1,
+		RepeatCount:  1,
+		RepeatEnd:    true,
+		IsStreakable: false,
+	})
+
+	if got == nil {
+		t.Fatal("expected Heart Me gift event to flush immediately")
+	}
+	if got.ItemName != "Heart Me" || got.UnitAmount != 1 || got.Amount != 1 || got.Count != 1 {
+		t.Errorf("unexpected Heart Me metadata: ItemName=%q UnitAmount=%v Amount=%v Count=%d", got.ItemName, got.UnitAmount, got.Amount, got.Count)
+	}
+	if len(got.EmoteSpans) != 1 || got.EmoteSpans[0].URL != hmMeta.ImageURL {
+		t.Errorf("expected inline EmoteSpan with Heart Me image URL, got %+v", got.EmoteSpans)
+	}
+}
+
+func TestParseDebugProtoMessages_BarrageEmoteAndSubNotify(t *testing.T) {
+	var gotEvents []*chat.Event
+	c := NewConnector(func(ev *chat.Event) {
+		gotEvents = append(gotEvents, ev)
+	}, nil)
+
+	// 1. WebcastBarrageMessage (FANSLEVELUPGRADE -> Heart Me gift with inline image)
+	barrageMsg := &pb.WebcastBarrageMessage{
+		MsgType: pb.WebcastBarrageMessage_FANSLEVELUPGRADE,
+		Content: &pb.Text{
+			DefaultPattern: "sent a Heart Me",
+		},
+		Icon: &pb.Image{
+			UrlList: []string{"https://p16-webcast.tiktokcdn.com/img/maliva/webcast-va/heart_me_custom.png"},
+		},
+		FansLevelParam: &pb.WebcastBarrageMessage_BarrageTypeFansLevelParam{
+			CurrentGrade: 5,
+			User: &pb.User{
+				Id:        777,
+				DisplayId: "heartfan",
+				Nickname:  "Heart Fan",
+			},
+		},
+	}
+	rawBarrage, err := proto.Marshal(barrageMsg)
+	if err != nil {
+		t.Fatalf("proto.Marshal barrage: %v", err)
+	}
+	debugRaw := fmt.Sprintf("unimplemented type %T\n%s", barrageMsg, base64.RawStdEncoding.EncodeToString(rawBarrage))
+	decoded, err := ParseDebugProtoMessage(debugRaw)
+	if err != nil || decoded == nil {
+		t.Fatalf("expected ParseDebugProtoMessage to decode WebcastBarrageMessage, got err=%v", err)
+	}
+	c.HandleProtoMessage(decoded)
+
+	// 2. WebcastEmoteChatMessage (subscriber custom emote)
+	emoteMsg := &pb.WebcastEmoteChatMessage{
+		User: &pb.User{
+			Id:        888,
+			DisplayId: "subuser",
+			Nickname:  "Sub User",
+		},
+		UserIdentity: &pb.UserIdentity{
+			IsSubscriberOfAnchor: true,
+		},
+		EmoteList: []*pb.Emote{
+			{
+				EmoteId: "em_heart_1",
+				Image: &pb.Image{
+					UrlList: []string{"https://p16-webcast.tiktokcdn.com/img/emote1.png"},
+				},
+			},
+		},
+	}
+	c.HandleProtoMessage(emoteMsg)
+
+	// 3. WebcastSubNotifyMessage (resubscription 6 months)
+	subMsg := &pb.WebcastSubNotifyMessage{
+		User: &pb.User{
+			Id:        999,
+			DisplayId: "loyalsub",
+			Nickname:  "Loyal Sub",
+		},
+		SubMonth: 6,
+	}
+	c.HandleProtoMessage(subMsg)
+
+	if len(gotEvents) != 3 {
+		t.Fatalf("expected 3 events from protobuf messages, got %d", len(gotEvents))
+	}
+
+	// Verify Heart Me barrage gift
+	ev0 := gotEvents[0]
+	if ev0.Kind != chat.EventKindGift || ev0.ItemName != "Heart Me" || len(ev0.EmoteSpans) != 1 {
+		t.Errorf("unexpected Heart Me barrage event: %+v", ev0)
+	}
+	if ev0.EmoteSpans[0].URL != "https://p16-webcast.tiktokcdn.com/img/maliva/webcast-va/heart_me_custom.png" {
+		t.Errorf("unexpected Heart Me image URL: %q", ev0.EmoteSpans[0].URL)
+	}
+
+	// Verify EmoteChatMessage
+	ev1 := gotEvents[1]
+	if ev1.Kind != chat.EventKindMessage || len(ev1.EmoteSpans) != 1 || ev1.EmoteSpans[0].URL != "https://p16-webcast.tiktokcdn.com/img/emote1.png" {
+		t.Errorf("unexpected EmoteChat event: %+v", ev1)
+	}
+
+	// Verify SubNotifyMessage
+	ev2 := gotEvents[2]
+	if ev2.Kind != chat.EventKindResub || ev2.Months != 6 {
+		t.Errorf("unexpected SubNotify event: %+v", ev2)
+	}
+}
+
 

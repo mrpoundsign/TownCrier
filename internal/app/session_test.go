@@ -629,3 +629,124 @@ func TestUnifiedStreamSessionLifecycleAcrossPlatforms(t *testing.T) {
 		t.Errorf("expected TotalBits=500 in session summary, got %+v", res.Summary)
 	}
 }
+
+func TestSession_InlineGiftAndStickerLogFormatting(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.DefaultConfig()
+	cfg.GlobalChatRules.SpeakEmotes = false // Ensure SpeakEmotes=false does NOT strip gift names from TTS!
+
+	sqlStore, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, sqlStore)
+
+	session := NewSession(cfg, secrets.NewMemoryStore())
+	session.SetEventLogger(logMgr)
+	defer func() { _ = session.Close() }()
+	session.Queue().Pause()
+
+	// 1. Dispatch TikTok Heart Me Gift with inline EmoteSpan
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "tt-heartme-1",
+		Platform:    "tiktok",
+		Kind:        chat.EventKindGift,
+		UserID:      "501",
+		UserName:    "heartgifter",
+		DisplayName: "Heart Gifter",
+		Text:        "Heart Me",
+		ItemName:    "Heart Me",
+		RewardTitle: "Heart Me",
+		Count:       1,
+		UnitAmount:  1,
+		Amount:      1,
+		Currency:    "Diamonds",
+		EmoteSpans: []chat.EmoteSpan{
+			{
+				ID:    "7934",
+				Name:  "Heart Me",
+				Start: 0,
+				End:   8,
+				URL:   "https://p16-webcast.tiktokcdn.com/img/maliva/webcast-va/d56945782445b0b8c8658ed44f894c7b~tplv-obj.webp",
+			},
+		},
+		Timestamp: time.Now(),
+	})
+
+	// 2. Dispatch YouTube Super Sticker with inline EmoteSpan
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "yt-sticker-1",
+		Platform:    "youtube",
+		Kind:        chat.EventKindSuperSticker,
+		UserID:      "601",
+		UserName:    "stickerfan",
+		DisplayName: "Sticker Fan",
+		Text:        "Pear cheering",
+		ItemName:    "Pear cheering",
+		Count:       1,
+		UnitAmount:  5,
+		Amount:      5,
+		Currency:    "dollars",
+		EmoteSpans: []chat.EmoteSpan{
+			{
+				ID:    "yt-sticker",
+				Name:  "Pear cheering",
+				Start: 0,
+				End:   13,
+				URL:   "https://lh3.googleusercontent.com/sticker.png",
+			},
+		},
+		Timestamp: time.Now(),
+	})
+
+	res, err := logMgr.Query(ctx, eventlog.QueryFilter{})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(res.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(res.Entries))
+	}
+
+	var ttEntry, ytEntry eventlog.Entry
+	for _, e := range res.Entries {
+		switch e.ID {
+		case "tt-heartme-1":
+			ttEntry = e
+		case "yt-sticker-1":
+			ytEntry = e
+		}
+	}
+
+	// Verify TikTok Heart Me entry has both text and trailing inline icon span
+	if ttEntry.RawText != "Sent 1 Heart Me :Heart Me:" {
+		t.Errorf("ttEntry.RawText = %q, want %q", ttEntry.RawText, "Sent 1 Heart Me :Heart Me:")
+	}
+	if len(ttEntry.Emotes) != 1 {
+		t.Fatalf("expected 1 emote span on ttEntry, got %d", len(ttEntry.Emotes))
+	}
+	runes := []rune(ttEntry.RawText)
+	emSpan := ttEntry.Emotes[0]
+	if string(runes[emSpan.Start:emSpan.End]) != ":Heart Me:" {
+		t.Errorf("ttEntry emote span slice = %q, want %q", string(runes[emSpan.Start:emSpan.End]), ":Heart Me:")
+	}
+	if ttEntry.SpokenText == "" {
+		t.Errorf("expected Heart Me gift to be spoken even when SpeakEmotes=false")
+	}
+
+	// Verify YouTube Super Sticker entry has trailing inline sticker span
+	if ytEntry.RawText != "Super Sticker (5 dollars) :Pear cheering:" {
+		t.Errorf("ytEntry.RawText = %q, want %q", ytEntry.RawText, "Super Sticker (5 dollars) :Pear cheering:")
+	}
+	if len(ytEntry.Emotes) != 1 {
+		t.Fatalf("expected 1 emote span on ytEntry, got %d", len(ytEntry.Emotes))
+	}
+	ytRunes := []rune(ytEntry.RawText)
+	ytSpan := ytEntry.Emotes[0]
+	if string(ytRunes[ytSpan.Start:ytSpan.End]) != ":Pear cheering:" {
+		t.Errorf("ytEntry emote span slice = %q, want %q", string(ytRunes[ytSpan.Start:ytSpan.End]), ":Pear cheering:")
+	}
+}
+

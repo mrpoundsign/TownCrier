@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -145,11 +146,11 @@ type authorBadge struct {
 type chatAction struct {
 	AddChatItemAction *struct {
 		Item struct {
-			LiveChatTextMessageRenderer                          *textMessageRenderer        `json:"liveChatTextMessageRenderer"`
-			LiveChatPaidMessageRenderer                          *paidMessageRenderer        `json:"liveChatPaidMessageRenderer"`
-			LiveChatPaidStickerRenderer                          *paidStickerRenderer        `json:"liveChatPaidStickerRenderer"`
-			LiveChatMembershipItemRenderer                       *membershipItemRenderer     `json:"liveChatMembershipItemRenderer"`
-			LiveChatSponsorshipsGiftPurchaseAnnouncementRenderer *giftPurchaseRenderer       `json:"liveChatSponsorshipsGiftPurchaseAnnouncementRenderer"`
+			LiveChatTextMessageRenderer                          *textMessageRenderer    `json:"liveChatTextMessageRenderer"`
+			LiveChatPaidMessageRenderer                          *paidMessageRenderer    `json:"liveChatPaidMessageRenderer"`
+			LiveChatPaidStickerRenderer                          *paidStickerRenderer    `json:"liveChatPaidStickerRenderer"`
+			LiveChatMembershipItemRenderer                       *membershipItemRenderer `json:"liveChatMembershipItemRenderer"`
+			LiveChatSponsorshipsGiftPurchaseAnnouncementRenderer *giftPurchaseRenderer   `json:"liveChatSponsorshipsGiftPurchaseAnnouncementRenderer"`
 		} `json:"item"`
 	} `json:"addChatItemAction"`
 	MarkChatItemAsDeletedAction *struct {
@@ -186,6 +187,16 @@ type paidStickerRenderer struct {
 	AuthorExternalChannelID string        `json:"authorExternalChannelId"`
 	AuthorBadges            []authorBadge `json:"authorBadges"`
 	PurchaseAmountText      textRuns      `json:"purchaseAmountText"`
+	Sticker                 *struct {
+		Thumbnails []struct {
+			URL string `json:"url"`
+		} `json:"thumbnails"`
+		Accessibility *struct {
+			AccessibilityData *struct {
+				Label string `json:"label"`
+			} `json:"accessibilityData"`
+		} `json:"accessibility"`
+	} `json:"sticker"`
 }
 
 type membershipItemRenderer struct {
@@ -205,8 +216,8 @@ type giftPurchaseRenderer struct {
 	AuthorExternalChannelID string `json:"authorExternalChannelId"`
 	Header                  *struct {
 		LiveChatSponsorshipsHeaderRenderer *struct {
-			AuthorName  textRuns      `json:"authorName"`
-			PrimaryText textRuns      `json:"primaryText"`
+			AuthorName   textRuns      `json:"authorName"`
+			PrimaryText  textRuns      `json:"primaryText"`
 			AuthorBadges []authorBadge `json:"authorBadges"`
 		} `json:"liveChatSponsorshipsHeaderRenderer"`
 	} `json:"header"`
@@ -352,6 +363,8 @@ func parsePaidMessage(r *paidMessageRenderer) *chat.Event {
 		Roles:       extractAuthorRoles(r.AuthorBadges),
 		Text:        text,
 		EmoteSpans:  emotes,
+		Count:       1,
+		UnitAmount:  amount,
 		Amount:      amount,
 		Currency:    currency,
 	}
@@ -362,6 +375,39 @@ func parsePaidSticker(r *paidStickerRenderer) *chat.Event {
 	amountStr := flattenText(r.PurchaseAmountText)
 	amount, currency := parsePurchaseAmount(amountStr)
 
+	stickerLabel := "Super Sticker"
+	var stickerURL string
+	if r.Sticker != nil {
+		for _, v := range slices.Backward(r.Sticker.Thumbnails) {
+			u := strings.TrimSpace(v.URL)
+			if u != "" {
+				stickerURL = u
+				if strings.HasPrefix(stickerURL, "//") {
+					stickerURL = "https:" + stickerURL
+				}
+				break
+			}
+		}
+		if r.Sticker.Accessibility != nil && r.Sticker.Accessibility.AccessibilityData != nil {
+			if lbl := strings.TrimSpace(r.Sticker.Accessibility.AccessibilityData.Label); lbl != "" {
+				stickerLabel = lbl
+			}
+		}
+	}
+
+	var spans []chat.EmoteSpan
+	if stickerURL != "" {
+		spans = []chat.EmoteSpan{
+			{
+				Start: 0,
+				End:   utf8.RuneCountInString(stickerLabel),
+				ID:    "super_sticker",
+				Name:  stickerLabel,
+				URL:   stickerURL,
+			},
+		}
+	}
+
 	return &chat.Event{
 		ID:          r.ID,
 		Platform:    "youtube",
@@ -371,6 +417,11 @@ func parsePaidSticker(r *paidStickerRenderer) *chat.Event {
 		UserName:    author,
 		DisplayName: author,
 		Roles:       extractAuthorRoles(r.AuthorBadges),
+		ItemName:    stickerLabel,
+		RewardTitle: stickerLabel,
+		EmoteSpans:  spans,
+		Count:       1,
+		UnitAmount:  amount,
 		Amount:      amount,
 		Currency:    currency,
 	}

@@ -2,7 +2,9 @@ package tiktok
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"log"
 	"net/url"
 	"regexp"
@@ -10,8 +12,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/steampoweredtaco/gotiktoklive"
+	pb "github.com/steampoweredtaco/gotiktoklive/proto"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 
 	"github.com/mrpoundsign/TownCrier/internal/chat"
 )
@@ -54,6 +61,7 @@ type Connector struct {
 	running        bool
 	cancelFn       context.CancelFunc
 	debouncer      *GiftDebouncer
+	catalog        *GiftCatalog
 	trackUserFn    func(username string) (<-chan gotiktoklive.Event, func(), error)
 	onEvent        func(event *chat.Event)
 	onStatusChange func(status ConnectionStatus, detail string)
@@ -68,18 +76,30 @@ func NewConnector(
 		waitInterval:   defaultStreamWaitPoll,
 		debounceWindow: DefaultGiftDebounceWindow,
 		status:         StatusDisconnected,
+		catalog:        NewGiftCatalog(),
 		onEvent:        onEvent,
 		onStatusChange: onStatusChange,
 	}
-	c.trackUserFn = defaultTrackUser
+	c.trackUserFn = c.defaultTrackUser
 	return c
 }
 
-func defaultTrackUser(username string) (<-chan gotiktoklive.Event, func(), error) {
+// Catalog returns the TikTok gift metadata and icon catalog.
+func (c *Connector) Catalog() *GiftCatalog {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.catalog
+}
+
+func (c *Connector) defaultTrackUser(username string) (<-chan gotiktoklive.Event, func(), error) {
 	tt, err := gotiktoklive.NewTikTok()
 	if err != nil {
 		return nil, nil, err
 	}
+	tt.Debug = true
+	tt.SetDebugHandler(func(args ...any) {
+		c.handleDebugArgs(args...)
+	})
 	tt.SetErrorHandler(func(args ...any) {
 		log.Printf("[TikTok] WebCast warning/error: %v", args)
 	})
@@ -90,6 +110,9 @@ func defaultTrackUser(username string) (<-chan gotiktoklive.Event, func(), error
 	live, err := tt.TrackUser(username)
 	if err != nil {
 		return nil, nil, err
+	}
+	if live.GiftInfo != nil && c.catalog != nil {
+		c.catalog.PopulateFromGiftInfo(live.GiftInfo)
 	}
 	return live.Events, live.Close, nil
 }
@@ -253,7 +276,7 @@ func (c *Connector) handleRawEvent(rawEv gotiktoklive.Event) bool {
 		if e.IsHistory() {
 			return false
 		}
-		in := mapGiftEvent(e)
+		in := c.mapGiftEvent(e)
 		c.mu.Lock()
 		deb := c.debouncer
 		c.mu.Unlock()
@@ -320,7 +343,7 @@ func mapChatEvent(e gotiktoklive.ChatEvent) *chat.Event {
 	}
 }
 
-func mapGiftEvent(e gotiktoklive.GiftEvent) GiftInput {
+func (c *Connector) mapGiftEvent(e gotiktoklive.GiftEvent) GiftInput {
 	userID, userName, displayName := extractUserFields(e.User)
 	roles, fanClubLevel := extractRoles(e.User, e.UserIdentity)
 
@@ -334,6 +357,21 @@ func mapGiftEvent(e gotiktoklive.GiftEvent) GiftInput {
 		msgID = "tt-gift-" + strconv.FormatInt(e.MessageID, 10)
 	}
 
+	giftName := strings.TrimSpace(e.Name)
+	unitDiamonds := e.Diamonds
+	var imageURL string
+	if c != nil && c.catalog != nil {
+		if entry, ok := c.catalog.Lookup(e.ID, giftName); ok {
+			if giftName == "" && entry.Name != "" {
+				giftName = entry.Name
+			}
+			if unitDiamonds <= 0 && entry.Diamonds > 0 {
+				unitDiamonds = entry.Diamonds
+			}
+			imageURL = entry.ImageURL
+		}
+	}
+
 	return GiftInput{
 		MessageID:    msgID,
 		UserID:       userID,
@@ -342,12 +380,420 @@ func mapGiftEvent(e gotiktoklive.GiftEvent) GiftInput {
 		Roles:        roles,
 		FanClubLevel: fanClubLevel,
 		GiftID:       e.ID,
-		GiftName:     e.Name,
-		UnitDiamonds: e.Diamonds,
+		GiftName:     giftName,
+		UnitDiamonds: unitDiamonds,
 		RepeatCount:  e.RepeatCount,
 		RepeatEnd:    e.RepeatEnd,
 		IsStreakable: e.Type == 1 || e.IsComboGift,
+		ImageURL:     imageURL,
 		Timestamp:    ts,
+	}
+}
+
+// ParseDebugProtoMessage decodes a gotiktoklive debugHandler "unimplemented type *gotiktoklive.<Type>\n<base64>" string
+// into its typed protobuf message.
+func ParseDebugProtoMessage(raw string) (proto.Message, error) {
+	const prefix = "unimplemented type "
+	_, after, ok0 := strings.Cut(raw, prefix)
+	if !ok0 {
+		return nil, nil
+	}
+	typePart, b64Part, ok := strings.Cut(after, "\n")
+	if !ok {
+		return nil, nil
+	}
+	typeName := strings.TrimSpace(typePart)
+	typeName = strings.TrimPrefix(typeName, "*")
+	if dot := strings.LastIndexByte(typeName, '.'); dot >= 0 {
+		typeName = typeName[dot+1:]
+	}
+	if typeName == "" {
+		return nil, nil
+	}
+
+	b64Clean := strings.TrimSpace(b64Part)
+	if b64Clean == "" {
+		return nil, nil
+	}
+	payload, err := base64.RawStdEncoding.DecodeString(b64Clean)
+	if err != nil {
+		payload, err = base64.StdEncoding.DecodeString(b64Clean)
+		if err != nil {
+			return nil, fmt.Errorf("decode base64 proto payload for %s: %w", typeName, err)
+		}
+	}
+
+	var msg proto.Message
+	switch typeName {
+	case "WebcastBarrageMessage":
+		msg = &pb.WebcastBarrageMessage{}
+	case "WebcastEmoteChatMessage":
+		msg = &pb.WebcastEmoteChatMessage{}
+	case "WebcastSubNotifyMessage":
+		msg = &pb.WebcastSubNotifyMessage{}
+	default:
+		mt, findErr := protoregistry.GlobalTypes.FindMessageByName(protoreflect.FullName("TikTok." + typeName))
+		if findErr != nil {
+			mt, findErr = protoregistry.GlobalTypes.FindMessageByName(protoreflect.FullName(typeName))
+		}
+		if findErr != nil {
+			return nil, fmt.Errorf("find proto message %s: %w", typeName, findErr)
+		}
+		msg = mt.New().Interface()
+	}
+
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return nil, fmt.Errorf("unmarshal proto %s: %w", typeName, err)
+	}
+	return msg, nil
+}
+
+func (c *Connector) handleDebugArgs(args ...any) {
+	for _, arg := range args {
+		if arg == nil {
+			continue
+		}
+		msg, err := ParseDebugProtoMessage(fmt.Sprint(arg))
+		if err != nil || msg == nil {
+			continue
+		}
+		c.HandleProtoMessage(msg)
+	}
+}
+
+// HandleProtoMessage translates unimplemented gotiktoklive protobuf messages (Barrage, EmoteChat, SubNotify)
+// into normalized TownCrier events.
+func (c *Connector) HandleProtoMessage(msg proto.Message) {
+	if msg == nil {
+		return
+	}
+
+	switch pt := msg.(type) {
+	case *pb.WebcastBarrageMessage:
+		c.handleBarrageMessage(pt)
+	case *pb.WebcastEmoteChatMessage:
+		if ev := mapEmoteChatMessage(pt); ev != nil {
+			c.emitEvent(ev)
+		}
+	case *pb.WebcastSubNotifyMessage:
+		if ev := mapSubNotifyMessage(pt); ev != nil {
+			c.emitEvent(ev)
+		}
+	}
+}
+
+func (c *Connector) emitEvent(ev *chat.Event) {
+	if ev == nil {
+		return
+	}
+	if ev.Channel == "" {
+		ev.Channel = c.Username()
+	}
+	if c.onEvent != nil {
+		c.onEvent(ev)
+	}
+}
+
+func (c *Connector) handleBarrageMessage(pt *pb.WebcastBarrageMessage) {
+	if pt == nil {
+		return
+	}
+
+	ts := time.Now()
+	var msgID int64
+	if cm := pt.GetCommon(); cm != nil {
+		msgID = cm.GetMsgId()
+		if cm.GetCreateTime() > 0 {
+			ts = parseTikTokTimestamp(cm.GetCreateTime())
+		}
+	}
+
+	switch pt.GetMsgType() {
+	case pb.WebcastBarrageMessage_FANSLEVELUPGRADE:
+		var pbUser *pb.User
+		var grade int
+		if fl := pt.GetFansLevelParam(); fl != nil {
+			pbUser = fl.GetUser()
+			grade = int(fl.GetCurrentGrade())
+		}
+		if pbUser == nil {
+			pbUser = firstUserInText(pt.GetContent())
+		}
+		u := protoUserToTikTokUser(pbUser)
+		userID, userName, displayName := extractUserFields(u)
+		roles, fanLvl := extractRoles(u, nil)
+		if grade > fanLvl {
+			fanLvl = grade
+		}
+		iconURL := firstProtoImageURL(pt.GetIcon())
+		if iconURL == "" && c.catalog != nil {
+			if entry, ok := c.catalog.Lookup(DefaultHeartMeGiftID, "Heart Me"); ok {
+				iconURL = entry.ImageURL
+			}
+		}
+		if iconURL == "" {
+			iconURL = DefaultHeartMeIconURL
+		}
+
+		idStr := ""
+		if msgID != 0 {
+			idStr = "tt-barrage-gift-" + strconv.FormatInt(msgID, 10)
+		}
+		in := GiftInput{
+			MessageID:    idStr,
+			UserID:       userID,
+			UserName:     userName,
+			DisplayName:  displayName,
+			Roles:        roles,
+			FanClubLevel: fanLvl,
+			GiftID:       DefaultHeartMeGiftID,
+			GiftName:     "Heart Me",
+			UnitDiamonds: 1,
+			RepeatCount:  1,
+			RepeatEnd:    true,
+			IsStreakable: false,
+			ImageURL:     iconURL,
+			Timestamp:    ts,
+		}
+		c.mu.Lock()
+		deb := c.debouncer
+		c.mu.Unlock()
+		if deb != nil {
+			deb.Submit(in)
+		} else {
+			c.emitEvent(buildGiftChatEvent(in))
+		}
+
+	case pb.WebcastBarrageMessage_SUBSCRIBE:
+		pbUser := firstUserInText(pt.GetContent())
+		u := protoUserToTikTokUser(pbUser)
+		userID, userName, displayName := extractUserFields(u)
+		roles, fanLvl := extractRoles(u, nil)
+		idStr := fmt.Sprintf("tt-sub-%s-%d", userID, ts.UnixNano())
+		if msgID != 0 {
+			idStr = "tt-sub-" + strconv.FormatInt(msgID, 10)
+		}
+		c.emitEvent(&chat.Event{
+			ID:           idStr,
+			Platform:     "tiktok",
+			Kind:         chat.EventKindSub,
+			Timestamp:    ts,
+			UserID:       userID,
+			UserName:     userName,
+			DisplayName:  displayName,
+			Roles:        roles,
+			FanClubLevel: fanLvl,
+			Months:       1,
+		})
+
+	case pb.WebcastBarrageMessage_SUBSCRIBEGIFT:
+		pbUser := firstUserInText(pt.GetContent())
+		u := protoUserToTikTokUser(pbUser)
+		userID, userName, displayName := extractUserFields(u)
+		roles, fanLvl := extractRoles(u, nil)
+		count := 1
+		if sg := pt.GetSubscribeGiftParam(); sg != nil && sg.GetGiftSubCount() > 0 {
+			count = int(sg.GetGiftSubCount())
+		}
+		idStr := fmt.Sprintf("tt-giftsub-%s-%d", userID, ts.UnixNano())
+		if msgID != 0 {
+			idStr = "tt-giftsub-" + strconv.FormatInt(msgID, 10)
+		}
+		c.emitEvent(&chat.Event{
+			ID:           idStr,
+			Platform:     "tiktok",
+			Kind:         chat.EventKindGiftSub,
+			Timestamp:    ts,
+			UserID:       userID,
+			UserName:     userName,
+			DisplayName:  displayName,
+			Roles:        roles,
+			FanClubLevel: fanLvl,
+			Count:        count,
+		})
+	}
+}
+
+func mapEmoteChatMessage(pt *pb.WebcastEmoteChatMessage) *chat.Event {
+	if pt == nil || len(pt.GetEmoteList()) == 0 {
+		return nil
+	}
+	u := protoUserToTikTokUser(pt.GetUser())
+	ident := protoIdentityToTikTokIdentity(pt.GetUserIdentity())
+	userID, userName, displayName := extractUserFields(u)
+	roles, fanLvl := extractRoles(u, ident)
+
+	ts := time.Now()
+	var msgID int64
+	if cm := pt.GetCommon(); cm != nil {
+		msgID = cm.GetMsgId()
+		if cm.GetCreateTime() > 0 {
+			ts = parseTikTokTimestamp(cm.GetCreateTime())
+		}
+	}
+
+	var sb strings.Builder
+	var spans []chat.EmoteSpan
+	runeOffset := 0
+
+	for _, em := range pt.GetEmoteList() {
+		if em == nil {
+			continue
+		}
+		emID := strings.TrimSpace(em.GetEmoteId())
+		if emID == "" {
+			emID = "emote"
+		}
+		token := ":emote_" + emID + ":"
+		imgURL := firstProtoImageURL(em.GetImage())
+
+		if sb.Len() > 0 {
+			sb.WriteByte(' ')
+			runeOffset++
+		}
+		tokenRunes := utf8.RuneCountInString(token)
+		sb.WriteString(token)
+		spans = append(spans, chat.EmoteSpan{
+			Start: runeOffset,
+			End:   runeOffset + tokenRunes,
+			ID:    emID,
+			Name:  token,
+			URL:   imgURL,
+		})
+		runeOffset += tokenRunes
+	}
+
+	if sb.Len() == 0 {
+		return nil
+	}
+
+	idStr := fmt.Sprintf("tt-emote-%s-%d", userID, ts.UnixNano())
+	if msgID != 0 {
+		idStr = "tt-emote-" + strconv.FormatInt(msgID, 10)
+	}
+
+	return &chat.Event{
+		ID:           idStr,
+		Platform:     "tiktok",
+		Kind:         chat.EventKindMessage,
+		Timestamp:    ts,
+		UserID:       userID,
+		UserName:     userName,
+		DisplayName:  displayName,
+		Roles:        roles,
+		FanClubLevel: fanLvl,
+		Text:         sb.String(),
+		EmoteSpans:   spans,
+	}
+}
+
+func mapSubNotifyMessage(pt *pb.WebcastSubNotifyMessage) *chat.Event {
+	if pt == nil {
+		return nil
+	}
+	u := protoUserToTikTokUser(pt.GetUser())
+	userID, userName, displayName := extractUserFields(u)
+	roles, fanLvl := extractRoles(u, nil)
+
+	ts := time.Now()
+	var msgID int64
+	if cm := pt.GetCommon(); cm != nil {
+		msgID = cm.GetMsgId()
+		if cm.GetCreateTime() > 0 {
+			ts = parseTikTokTimestamp(cm.GetCreateTime())
+		}
+	}
+
+	months := int(pt.GetSubMonth())
+	if months <= 0 {
+		months = 1
+	}
+	kind := chat.EventKindSub
+	if months > 1 {
+		kind = chat.EventKindResub
+	}
+
+	idStr := fmt.Sprintf("tt-subnotify-%s-%d", userID, ts.UnixNano())
+	if msgID != 0 {
+		idStr = "tt-subnotify-" + strconv.FormatInt(msgID, 10)
+	}
+
+	return &chat.Event{
+		ID:           idStr,
+		Platform:     "tiktok",
+		Kind:         kind,
+		Timestamp:    ts,
+		UserID:       userID,
+		UserName:     userName,
+		DisplayName:  displayName,
+		Roles:        roles,
+		FanClubLevel: fanLvl,
+		Months:       months,
+	}
+}
+
+func firstProtoImageURL(img *pb.Image) string {
+	if img == nil {
+		return ""
+	}
+	return firstNonEmptyURL(img.GetUrlList())
+}
+
+func firstUserInText(txt *pb.Text) *pb.User {
+	if txt == nil {
+		return nil
+	}
+	for _, p := range txt.GetPiecesList() {
+		if uv := p.GetUserValue(); uv != nil && uv.GetUser() != nil {
+			return uv.GetUser()
+		}
+	}
+	return nil
+}
+
+func protoUserToTikTokUser(u *pb.User) *gotiktoklive.User {
+	if u == nil {
+		return nil
+	}
+	username := u.GetDisplayId()
+	if username == "" {
+		username = u.GetIdStr()
+	}
+	if username == "" {
+		username = u.GetNickname()
+	}
+	out := &gotiktoklive.User{
+		ID:       u.GetId(),
+		Username: username,
+		Nickname: u.GetNickname(),
+	}
+	if bl := u.GetBadgeList(); len(bl) > 0 {
+		var badges []*gotiktoklive.UserBadge
+		for _, b := range bl {
+			if b == nil {
+				continue
+			}
+			badges = append(badges, &gotiktoklive.UserBadge{
+				Type: b.GetDisplayType().String(),
+				Name: b.String(),
+			})
+		}
+		out.Badge = &gotiktoklive.BadgeAttributes{Badges: badges}
+	}
+	return out
+}
+
+func protoIdentityToTikTokIdentity(uid *pb.UserIdentity) *gotiktoklive.UserIdentity {
+	if uid == nil {
+		return nil
+	}
+	return &gotiktoklive.UserIdentity{
+		IsGiftGiver:       uid.GetIsGiftGiverOfAnchor(),
+		IsSubscriber:      uid.GetIsSubscriberOfAnchor(),
+		IsMutualFollowing: uid.GetIsMutualFollowingWithAnchor(),
+		IsFollower:        uid.GetIsFollowerOfAnchor(),
+		IsModerator:       uid.GetIsModeratorOfAnchor(),
+		IsAnchor:          uid.GetIsAnchor(),
 	}
 }
 

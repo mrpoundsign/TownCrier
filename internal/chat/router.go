@@ -196,7 +196,10 @@ func (r *Router) formatEventText(event *Event, spokenName string, pCfg config.Pl
 		rewardName = "a reward"
 	}
 
-	giftName := strings.TrimSpace(event.RewardTitle)
+	giftName := strings.TrimSpace(event.ItemName)
+	if giftName == "" {
+		giftName = strings.TrimSpace(event.RewardTitle)
+	}
 	if giftName == "" {
 		giftName = strings.TrimSpace(event.Text)
 	}
