@@ -92,6 +92,13 @@ type LogsView struct {
 	chatRetSel     *widget.Select
 	eventRetSel    *widget.Select
 
+	selectedSessionID      int64
+	sessionMap             map[string]int64
+	sessionSel             *widget.Select
+	summary                eventlog.QuerySummary
+	summaryTotalsLabel     *widget.Label
+	summaryTotalsContainer *fyne.Container
+
 	summaryLabel    *widget.Label
 	hoverInfoLabel  *hoverCellLabel
 	prevPageBtn     *widget.Button
@@ -237,6 +244,16 @@ func (v *LogsView) Build() fyne.CanvasObject {
 	// Initialize retention widgets as well so programmatic/test access works seamlessly.
 	_ = v.BuildRetentionCard()
 
+	v.summaryTotalsLabel = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	totalsBg := canvas.NewRectangle(colorSlateSurface)
+	totalsBorder := canvas.NewRectangle(colorSkyBlueDim)
+	totalsBorder.SetMinSize(fyne.NewSize(1, 1))
+	v.summaryTotalsContainer = container.NewStack(
+		totalsBg,
+		container.NewBorder(nil, totalsBorder, nil, nil, container.NewPadded(v.summaryTotalsLabel)),
+	)
+	v.summaryTotalsContainer.Hide()
+
 	v.filterDrawer = v.buildFilterDrawer()
 	v.filterDrawer.Hide()
 	v.filtersExpanded = false
@@ -253,11 +270,13 @@ func (v *LogsView) Build() fyne.CanvasObject {
 		v.textSearchEntry.SetParentScroll(listScroll)
 	}
 
+	v.refreshSessionDropdown()
 	v.subscribeLiveTail()
 	v.RefreshQuery()
 
 	topSection := container.NewVBox(
 		compactTopBar,
+		v.summaryTotalsContainer,
 		v.filterDrawer,
 		tableHeader,
 	)
@@ -271,6 +290,43 @@ func (v *LogsView) Build() fyne.CanvasObject {
 	)
 
 	return container.NewStack(mainLayout, v.tooltipLayer)
+}
+
+func formatSummaryTotals(s eventlog.QuerySummary) string {
+	var parts []string
+	if s.TotalBits > 0 {
+		parts = append(parts, fmt.Sprintf("🪙 %.0f Bits", s.TotalBits))
+	}
+	if s.TotalDiamonds > 0 {
+		parts = append(parts, fmt.Sprintf("💎 %.0f Diamonds", s.TotalDiamonds))
+	}
+	for curr, amt := range s.SuperChatByCurr {
+		if amt > 0 {
+			parts = append(parts, fmt.Sprintf("💬 %.0f %s", amt, curr))
+		}
+	}
+	if s.TotalSubs > 0 {
+		parts = append(parts, fmt.Sprintf("⭐ %d Subs", s.TotalSubs))
+	}
+	if s.TotalGiftSubs > 0 {
+		parts = append(parts, fmt.Sprintf("🎁 %d Gift Subs", s.TotalGiftSubs))
+	}
+	if s.TotalKicks > 0 {
+		parts = append(parts, fmt.Sprintf("🟢 %.0f Kicks", s.TotalKicks))
+	}
+	if s.TotalFollows > 0 {
+		parts = append(parts, fmt.Sprintf("❤️ %d Follows", s.TotalFollows))
+	}
+	if s.TotalRaids > 0 {
+		parts = append(parts, fmt.Sprintf("🚀 %d Raids", s.TotalRaids))
+	}
+	if s.TotalRedemptions > 0 {
+		parts = append(parts, fmt.Sprintf("🎟️ %d Redemptions", s.TotalRedemptions))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "   •   ")
 }
 
 // BuildRetentionCard constructs the Log Retention & Storage settings card for the Settings tab.
@@ -428,6 +484,20 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 		})
 	})
 
+	v.sessionMap = map[string]int64{"All Sessions": 0}
+	v.sessionSel = widget.NewSelect([]string{"All Sessions"}, func(selected string) {
+		if v.initializing {
+			return
+		}
+		sid := v.sessionMap[selected]
+		v.mu.Lock()
+		v.selectedSessionID = sid
+		v.currentPage = 0
+		v.mu.Unlock()
+		v.RefreshQuery()
+	})
+	v.sessionSel.SetSelected("All Sessions")
+
 	v.platformSel = widget.NewSelect([]string{platformOptionAll, "Twitch", "YouTube", "TikTok", "Kick"}, func(_ string) {
 		if v.initializing {
 			return
@@ -497,6 +567,7 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 	})
 
 	refreshBtn := widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() {
+		v.refreshSessionDropdown()
 		v.RefreshQuery()
 	})
 
@@ -512,7 +583,8 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 		refreshBtn,
 	)
 
-	midRow := container.NewGridWithColumns(3,
+	midRow := container.NewGridWithColumns(4,
+		container.NewBorder(nil, nil, widget.NewLabel("Session:"), nil, v.sessionSel),
 		container.NewBorder(nil, nil, widget.NewLabel("Platform:"), nil, v.platformSel),
 		container.NewBorder(nil, nil, widget.NewLabel("Type:"), nil, v.eventTypeSel),
 		container.NewBorder(nil, nil, widget.NewLabel("Status:"), nil, v.outcomeSel),
@@ -528,6 +600,61 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 		drawerBg,
 		container.NewPadded(container.NewVBox(topRow, midRow, searchRow)),
 	)
+}
+
+func (v *LogsView) refreshSessionDropdown() {
+	if v.sessionSel == nil {
+		return
+	}
+	var sessions []eventlog.StreamSession
+	if v.session != nil && v.session.EventLogger() != nil {
+		sList, err := v.session.EventLogger().ListSessions(context.Background(), 25)
+		if err == nil {
+			sessions = sList
+		}
+	}
+
+	options := []string{"All Sessions"}
+	newMap := map[string]int64{"All Sessions": 0}
+
+	activeSID := int64(0)
+	if v.session != nil {
+		activeSID = v.session.ActiveSessionID()
+	}
+
+	for _, s := range sessions {
+		durStr := ""
+		endStr := "LIVE"
+		if !s.EndedAt.IsZero() {
+			endStr = s.EndedAt.Local().Format("15:04")
+			dur := s.EndedAt.Sub(s.StartedAt).Round(time.Minute)
+			durStr = fmt.Sprintf(" (%s)", dur)
+		} else if s.ID == activeSID {
+			endStr = "LIVE NOW"
+		}
+		platStr := strings.Join(s.Platforms, "/")
+		if platStr == "" {
+			platStr = "Stream"
+		}
+		label := fmt.Sprintf("#%d: %s %s–%s%s", s.ID, platStr, s.StartedAt.Local().Format("01/02 15:04"), endStr, durStr)
+		if s.ID == activeSID {
+			label = "🟢 " + label
+		}
+		options = append(options, label)
+		newMap[label] = s.ID
+	}
+
+	v.sessionMap = newMap
+	v.sessionSel.Options = options
+	selectedLabel := "All Sessions"
+	for lbl, id := range v.sessionMap {
+		if id == v.selectedSessionID {
+			selectedLabel = lbl
+			break
+		}
+	}
+	v.sessionSel.SetSelected(selectedLabel)
+	v.sessionSel.Refresh()
 }
 
 func (v *LogsView) buildPaginationBar() *fyne.Container {
@@ -605,6 +732,10 @@ func (v *LogsView) buildTableHeader() fyne.CanvasObject {
 // ResetFilters clears all active search filters and restores Live Tail mode.
 func (v *LogsView) ResetFilters() {
 	v.initializing = true
+	v.selectedSessionID = 0
+	if v.sessionSel != nil {
+		v.sessionSel.SetSelected("All Sessions")
+	}
 	v.setDateRange(nil, nil)
 	if v.datePresetSel != nil {
 		v.datePresetSel.SetSelected(datePresetAllTime)
@@ -650,14 +781,14 @@ func (v *LogsView) setDateRange(from, to *time.Time) {
 		if from == nil || from.IsZero() {
 			v.fromDateBtn.SetText("From: Any")
 		} else {
-			v.fromDateBtn.SetText("From: " + from.Format("2006-01-02"))
+			v.fromDateBtn.SetText("From: " + from.Format("2006-01-02 15:04:05"))
 		}
 	}
 	if v.toDateBtn != nil {
 		if to == nil || to.IsZero() {
 			v.toDateBtn.SetText("To: Any")
 		} else {
-			v.toDateBtn.SetText("To: " + to.Format("2006-01-02"))
+			v.toDateBtn.SetText("To: " + to.Format("2006-01-02 15:04:05"))
 		}
 	}
 }
@@ -668,6 +799,7 @@ func (v *LogsView) currentFilter() eventlog.QueryFilter {
 	to := v.toDate
 	page := v.currentPage
 	hideBots := v.hideBots
+	sessionID := v.selectedSessionID
 	v.mu.Unlock()
 
 	plat := ""
@@ -732,6 +864,7 @@ func (v *LogsView) currentFilter() eventlog.QueryFilter {
 	}
 
 	return eventlog.QueryFilter{
+		SessionID:     sessionID,
 		From:          from,
 		To:            to,
 		Platform:      plat,
@@ -764,6 +897,7 @@ func (v *LogsView) RefreshQuery() {
 	v.mu.Lock()
 	v.entries = res.Entries
 	v.totalCount = res.TotalCount
+	v.summary = res.Summary
 	v.mu.Unlock()
 
 	fyne.Do(func() {
@@ -843,6 +977,9 @@ func (v *LogsView) subscribeLiveTail() {
 }
 
 func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
+	if f.SessionID > 0 && e.SessionID != f.SessionID {
+		return false
+	}
 	if f.From != nil && !f.From.IsZero() && e.CreatedAt.Before(*f.From) {
 		return false
 	}
@@ -878,7 +1015,7 @@ func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
 		}
 	case "cheer":
 		switch kindLower {
-		case "cheer", "gift", "superchat", "supersticker":
+		case "cheer", "gift", "superchat", "supersticker", "super_chat", "super_sticker":
 		default:
 			return false
 		}
@@ -969,6 +1106,21 @@ func (v *LogsView) renderEntries() {
 		}
 	}
 
+	if v.summaryTotalsLabel != nil {
+		txt := formatSummaryTotals(v.summary)
+		if txt != "" {
+			v.summaryTotalsLabel.SetText(txt)
+			if v.summaryTotalsContainer != nil {
+				v.summaryTotalsContainer.Show()
+			}
+		} else {
+			v.summaryTotalsLabel.SetText("")
+			if v.summaryTotalsContainer != nil {
+				v.summaryTotalsContainer.Hide()
+			}
+		}
+	}
+
 	if v.prevPageBtn != nil {
 		if page > 0 {
 			v.prevPageBtn.Enable()
@@ -1048,6 +1200,18 @@ func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
 	}
 	if len(e.Roles) > 0 {
 		userTip += " • Tags: " + strings.Join(e.Roles, ", ")
+	}
+	if e.Recipient != "" {
+		userTip += " • Recipient: @" + e.Recipient
+	}
+	if e.ItemName != "" {
+		userTip += " • Item: " + e.ItemName
+		if e.UnitAmount > 0 {
+			userTip += fmt.Sprintf(" (%.0f each)", e.UnitAmount)
+		}
+	}
+	if e.SubTier != "" {
+		userTip += " • Tier: " + e.SubTier
 	}
 
 	roleIcons := v.userRoleIcons(e)
@@ -1152,6 +1316,17 @@ func (v *LogsView) showDatePickerDialog(title string, initial *time.Time, endOfD
 		dateEntry.SetText(initial.Local().Format("2006-01-02"))
 	}
 
+	timeEntry := widget.NewEntry()
+	timeEntry.SetPlaceHolder("HH:MM:SS")
+	switch {
+	case initial != nil && !initial.IsZero():
+		timeEntry.SetText(initial.Local().Format("15:04:05"))
+	case endOfDay:
+		timeEntry.SetText("23:59:59")
+	default:
+		timeEntry.SetText("00:00:00")
+	}
+
 	monthLabel := widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	gridBox := container.NewGridWithColumns(7)
 
@@ -1203,39 +1378,64 @@ func (v *LogsView) showDatePickerDialog(title string, initial *time.Time, endOfD
 		dateEntry.SetText(viewDate.Format("2006-01-02"))
 		renderCalendar()
 	})
+	nowBtn := widget.NewButton("Now", func() {
+		viewDate = time.Now()
+		dateEntry.SetText(viewDate.Format("2006-01-02"))
+		timeEntry.SetText(viewDate.Format("15:04:05"))
+		renderCalendar()
+	})
 	clearBtn := widget.NewButton("Clear (Any)", func() {
 		dateEntry.SetText("")
+		timeEntry.SetText("")
 		renderCalendar()
 	})
 
 	renderCalendar()
 
 	navRow := container.NewBorder(nil, nil, prevMonthBtn, nextMonthBtn, monthLabel)
-	entryRow := container.NewBorder(nil, nil, widget.NewLabel("Date (YYYY-MM-DD):"), container.NewHBox(todayBtn, clearBtn), dateEntry)
+	entryRow := container.NewBorder(nil, nil, widget.NewLabel("Date (YYYY-MM-DD):"), container.NewHBox(todayBtn, nowBtn, clearBtn), dateEntry)
+	timeRow := container.NewBorder(nil, nil, widget.NewLabel("Time (HH:MM:SS):"), nil, timeEntry)
 
 	content := container.NewVBox(
 		navRow,
 		gridBox,
 		widget.NewSeparator(),
 		entryRow,
+		timeRow,
 	)
 
 	dialog.ShowCustomConfirm(title, "Apply", "Cancel", content, func(ok bool) {
 		if !ok {
 			return
 		}
-		txt := strings.TrimSpace(dateEntry.Text)
-		if txt == "" {
+		dTxt := strings.TrimSpace(dateEntry.Text)
+		if dTxt == "" {
 			onSelect(nil)
 			return
 		}
-		parsed, err := time.ParseInLocation("2006-01-02", txt, now.Location())
-		if err != nil {
-			v.setStatus("⚠️ Invalid date format. Use YYYY-MM-DD.")
-			return
+		tTxt := strings.TrimSpace(timeEntry.Text)
+		if tTxt == "" {
+			if endOfDay {
+				tTxt = "23:59:59"
+			} else {
+				tTxt = "00:00:00"
+			}
 		}
-		if endOfDay {
-			parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 23, 59, 59, int(time.Second-time.Nanosecond), now.Location())
+
+		combined := dTxt + " " + tTxt
+		parsed, err := time.ParseInLocation("2006-01-02 15:04:05", combined, now.Location())
+		if err != nil {
+			parsed, err = time.ParseInLocation("2006-01-02 15:04", combined, now.Location())
+			if err != nil {
+				parsed, err = time.ParseInLocation("2006-01-02", dTxt, now.Location())
+				if err != nil {
+					v.setStatus("⚠️ Invalid date/time format. Use YYYY-MM-DD and HH:MM:SS.")
+					return
+				}
+				if endOfDay {
+					parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 23, 59, 59, 0, now.Location())
+				}
+			}
 		}
 		onSelect(&parsed)
 	}, v.window)

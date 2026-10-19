@@ -312,3 +312,214 @@ func TestLogsTableIconsAndHoverTooltips(t *testing.T) {
 	}
 }
 
+func TestLogsViewStreamSessionAndTotalsSummary(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestStreamSessionsAndTotals")
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "sessions_events.db")
+	backend, err := eventlog.NewSQLiteBackend(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open sqlite backend: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	mgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, backend)
+	defer func() { _ = mgr.Close() }()
+
+	ctx := context.Background()
+	startTime := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+	streamSess, err := backend.StartSession(ctx, startTime, "twitch", "teststreamer")
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	sid := streamSess.ID
+	_ = backend.AddSessionPlatform(ctx, sid, "youtube", "teststreamer")
+
+	// Event 1: in session 1 (Bits cheer with Recipient and UnitAmount)
+	_ = mgr.Append(ctx, &eventlog.Entry{
+		ID:            "sess-ev-1",
+		SessionID:     sid,
+		CreatedAt:     startTime.Add(15 * time.Minute),
+		Platform:      "twitch",
+		Channel:       "teststreamer",
+		Kind:          "cheer",
+		UserID:        "u1",
+		UserName:      "bitsfan",
+		DisplayName:   "BitsFan",
+		Amount:        500,
+		Count:         500,
+		Currency:      "BITS",
+		PassedFilters: true,
+		Spoken:        true,
+		Outcome:       eventlog.OutcomeSpoken,
+	})
+
+	// Event 2: in session 1 (YouTube Super Sticker with ItemName and UnitAmount)
+	_ = mgr.Append(ctx, &eventlog.Entry{
+		ID:            "sess-ev-2",
+		SessionID:     sid,
+		CreatedAt:     startTime.Add(30 * time.Minute),
+		Platform:      "youtube",
+		Channel:       "teststreamer",
+		Kind:          string(chat.EventKindSuperSticker),
+		UserID:        "u2",
+		UserName:      "stickerfan",
+		DisplayName:   "StickerFan",
+		ItemName:      "Pear Cheering",
+		UnitAmount:    5,
+		Amount:        5,
+		Currency:      "dollars",
+		PassedFilters: true,
+		Spoken:        true,
+		Outcome:       eventlog.OutcomeSpoken,
+	})
+
+	// Event 3: in session 1 (Twitch Gift Sub with Recipient and SubTier)
+	_ = mgr.Append(ctx, &eventlog.Entry{
+		ID:            "sess-ev-3",
+		SessionID:     sid,
+		CreatedAt:     startTime.Add(45 * time.Minute),
+		Platform:      "twitch",
+		Channel:       "teststreamer",
+		Kind:          string(chat.EventKindGiftSub),
+		UserID:        "u3",
+		UserName:      "gifter",
+		DisplayName:   "Gifter",
+		Recipient:     "lucky_viewer",
+		SubTier:       "Tier 1",
+		Count:         1,
+		PassedFilters: true,
+		Spoken:        true,
+		Outcome:       eventlog.OutcomeSpoken,
+	})
+
+	// Close session 1
+	endTime := startTime.Add(2 * time.Hour)
+	_ = backend.EndSession(ctx, sid, endTime)
+
+	// Event 4: outside session 1 (SessionID = 0)
+	_ = mgr.Append(ctx, &eventlog.Entry{
+		ID:            "out-ev-1",
+		SessionID:     0,
+		CreatedAt:     endTime.Add(1 * time.Hour),
+		Platform:      "tiktok",
+		Channel:       "teststreamer",
+		Kind:          string(chat.EventKindGift),
+		UserID:        "u4",
+		UserName:      "ttfan",
+		DisplayName:   "TTFan",
+		ItemName:      "Heart Me",
+		UnitAmount:    1,
+		Amount:        10,
+		Count:         10,
+		Currency:      "Diamonds",
+		PassedFilters: true,
+		Spoken:        true,
+		Outcome:       eventlog.OutcomeSpoken,
+	})
+
+	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess.SetEventLogger(mgr)
+
+	lv := NewLogsView(w, sess)
+	defer lv.Close()
+	_ = lv.Build()
+
+	// 1. Initial All Sessions query: should return all 4 events
+	lv.liveTailCheck.SetChecked(false)
+	lv.RefreshQuery()
+	lv.mu.Lock()
+	countAll := len(lv.entries)
+	totalBits := lv.summary.TotalBits
+	lv.mu.Unlock()
+	if countAll != 4 {
+		t.Fatalf("expected 4 entries for All Sessions, got %d", countAll)
+	}
+	if totalBits != 500 {
+		t.Errorf("expected 500 bits in All Sessions summary, got %v", totalBits)
+	}
+
+	// 2. Verify Stream Session dropdown options
+	if len(lv.sessionSel.Options) < 2 {
+		t.Fatalf("expected at least 2 session options ('All Sessions' + Session #1), got %v", lv.sessionSel.Options)
+	}
+
+	// 3. Select Session #1 via dropdown
+	var sess1Label string
+	for lbl, sID := range lv.sessionMap {
+		if sID == sid {
+			sess1Label = lbl
+			break
+		}
+	}
+	if sess1Label == "" {
+		t.Fatalf("session #%d not found in sessionMap: %+v", sid, lv.sessionMap)
+	}
+
+	lv.sessionSel.SetSelected(sess1Label)
+	lv.mu.Lock()
+	sessEntries := len(lv.entries)
+	sessSummary := lv.summary
+	lv.mu.Unlock()
+	if sessEntries != 3 {
+		t.Fatalf("expected 3 entries filtered by Session #%d, got %d", sid, sessEntries)
+	}
+	if sessSummary.TotalBits != 500 || sessSummary.TotalGiftSubs != 1 {
+		t.Errorf("unexpected session summary: %+v", sessSummary)
+	}
+
+	// 4. Verify summaryTotalsLabel rendering
+	totalsText := lv.summaryTotalsLabel.Text
+	if !strings.Contains(totalsText, "500 Bits") || !strings.Contains(totalsText, "1 Gift Subs") {
+		t.Errorf("summaryTotalsLabel does not contain expected metrics: %q", totalsText)
+	}
+
+	// 5. Verify row tooltip contains ItemName, Recipient, and SubTier
+	rolesEntry := eventlog.Entry{
+		Kind:       string(chat.EventKindGiftSub),
+		Recipient:  "lucky_viewer",
+		SubTier:    "Tier 1",
+		ItemName:   "Sub Gift",
+		UnitAmount: 1,
+	}
+	row := lv.buildLogRow(0, rolesEntry)
+	if row == nil {
+		t.Fatal("expected non-nil row")
+	}
+
+	// 6. Test timestamp range query with HH:MM:SS
+	fromTime := startTime.Add(20 * time.Minute) // 10:20:00 (excludes ev-1 at 10:15:00)
+	toTime := startTime.Add(35 * time.Minute)   // 10:35:00 (includes ev-2 at 10:30:00, excludes ev-3 at 10:45:00)
+	lv.setDateRange(&fromTime, &toTime)
+	lv.RefreshQuery()
+	lv.mu.Lock()
+	timeEntries := len(lv.entries)
+	lv.mu.Unlock()
+	if timeEntries != 1 {
+		t.Fatalf("expected 1 entry in timestamp range 10:20:00–10:35:00, got %d", timeEntries)
+	}
+
+	// 7. Verify formatSummaryTotals helper
+	testSummary := eventlog.QuerySummary{
+		TotalBits:       1000,
+		TotalDiamonds:   250,
+		TotalSubs:       3,
+		TotalGiftSubs:   1,
+		TotalFollows:    10,
+		TotalRaids:      2,
+		SuperChatByCurr: map[string]float64{"USD": 50},
+	}
+	formatted := formatSummaryTotals(testSummary)
+	for _, expectedToken := range []string{"1000 Bits", "250 Diamonds", "3 Subs", "1 Gift Subs", "10 Follows", "2 Raids", "50 USD"} {
+		if !strings.Contains(formatted, expectedToken) {
+			t.Errorf("formatSummaryTotals missing %q: %q", expectedToken, formatted)
+		}
+	}
+}
+
+
