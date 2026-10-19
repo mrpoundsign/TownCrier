@@ -2,11 +2,13 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"log"
 	"slices"
 	"sync"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
@@ -44,14 +46,18 @@ type MainWindow struct {
 	chatLogsTabItem  *container.TabItem
 	settingsTabItem  *container.TabItem
 
-	twitchStatusDot  *widget.Label
-	youtubeStatusDot *widget.Label
-	tiktokStatusDot  *widget.Label
-	kickStatusDot    *widget.Label
-	volumeSlider     *widget.Slider
-	panicBtn         *widget.Button
-	hotkeyMgr        *GlobalHotkeyManager
-	activeShortcut   *desktop.CustomShortcut
+	twitchStatusDot  *platformConnectionBadge
+	youtubeStatusDot *platformConnectionBadge
+	tiktokStatusDot  *platformConnectionBadge
+	kickStatusDot    *platformConnectionBadge
+
+	tooltipLayer   *fyne.Container
+	tooltipBubble  *fyne.Container
+	tooltipText    *canvas.Text
+	volumeSlider   *widget.Slider
+	panicBtn       *widget.Button
+	hotkeyMgr      *GlobalHotkeyManager
+	activeShortcut *desktop.CustomShortcut
 }
 
 // NewMainWindow creates and initializes the complete desktop application window.
@@ -84,7 +90,18 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 		mw.tabsContainer,
 	)
 
-	w.SetContent(mainContent)
+	mw.tooltipText = canvas.NewText("", color.NRGBA{R: 248, G: 250, B: 252, A: 255})
+	mw.tooltipText.TextSize = 11
+	mw.tooltipBubble = container.NewStack(
+		canvas.NewRectangle(color.NRGBA{R: 15, G: 23, B: 42, A: 235}),
+		container.NewPadded(mw.tooltipText),
+	)
+	mw.tooltipBubble.Hide()
+	mw.tooltipLayer = container.NewWithoutLayout(mw.tooltipBubble)
+
+	rootContent := container.NewStack(mainContent, mw.tooltipLayer)
+
+	w.SetContent(rootContent)
 	w.Resize(fyne.NewSize(950, 720))
 	w.CenterOnScreen()
 
@@ -133,6 +150,53 @@ func (mw *MainWindow) SetStatus(msg string) {
 			mw.statusLabel.SetText(msg)
 		}
 	})
+}
+
+func (mw *MainWindow) showTooltipForObject(obj fyne.CanvasObject, tip string, hovered bool) {
+	if !hovered || tip == "" {
+		if mw.tooltipBubble != nil {
+			mw.tooltipBubble.Hide()
+		}
+		return
+	}
+
+	if mw.statusLabel != nil {
+		mw.statusLabel.SetText(tip)
+	}
+
+	if mw.tooltipBubble == nil || mw.tooltipText == nil || mw.tooltipLayer == nil {
+		return
+	}
+
+	mw.tooltipText.Text = tip
+	mw.tooltipText.Refresh()
+	bubbleSize := mw.tooltipBubble.MinSize()
+	mw.tooltipBubble.Resize(bubbleSize)
+
+	appInstance := fyne.CurrentApp()
+	if appInstance == nil || appInstance.Driver() == nil {
+		return
+	}
+	objPos := appInstance.Driver().AbsolutePositionForObject(obj)
+	layerPos := appInstance.Driver().AbsolutePositionForObject(mw.tooltipLayer)
+	rel := objPos.Subtract(layerPos)
+
+	x := rel.X + (obj.Size().Width-bubbleSize.Width)/2
+	layerSize := mw.tooltipLayer.Size()
+	if layerSize.Width > 0 && x+bubbleSize.Width > layerSize.Width-8 {
+		x = layerSize.Width - bubbleSize.Width - 8
+	}
+	if x < 8 {
+		x = 8
+	}
+	y := rel.Y + obj.Size().Height + 4
+	if layerSize.Height > 0 && y+bubbleSize.Height > layerSize.Height-8 {
+		y = rel.Y - bubbleSize.Height - 4
+	}
+
+	mw.tooltipBubble.Move(fyne.NewPos(x, y))
+	mw.tooltipBubble.Show()
+	mw.tooltipBubble.Refresh()
 }
 
 func (mw *MainWindow) currentHotkeyLabel() string {
@@ -321,13 +385,28 @@ func (mw *MainWindow) initHeader() {
 	cfg := mw.Session.Config()
 
 	// Platform indicators
-	mw.twitchStatusDot = widget.NewLabelWithStyle("Twitch: ⚪", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	pCfg := cfg.Platforms["twitch"]
+	twitchDot := "⚪"
+	twitchTip := "Twitch: Inactive"
 	if pCfg.Enabled && pCfg.AccountName != "" {
-		mw.twitchStatusDot.SetText("Twitch: 🟡 Connecting...")
+		twitchDot = "🟡"
+		twitchTip = fmt.Sprintf("Twitch: Connecting... (#%s)", pCfg.AccountName)
 	} else if pCfg.Enabled {
-		mw.twitchStatusDot.SetText("Twitch: 🟡 (No Channel)")
+		twitchDot = "🟡"
+		twitchTip = "Twitch: Enabled (No Channel Configured)"
 	}
+	mw.twitchStatusDot = newPlatformConnectionBadge(
+		"Twitch",
+		resPlatformTwitch,
+		twitchDot,
+		twitchTip,
+		mw.showTooltipForObject,
+		func() {
+			if mw.tabsContainer != nil && mw.twitchTabItem != nil {
+				mw.tabsContainer.Select(mw.twitchTabItem)
+			}
+		},
+	)
 
 	mw.Session.SetOnTwitchStatus(func(status string, detail string) {
 		if mw.twitchTab != nil {
@@ -336,20 +415,47 @@ func (mw *MainWindow) initHeader() {
 		fyne.Do(func() {
 			switch status {
 			case "connected":
-				mw.twitchStatusDot.SetText("Twitch: 🟢 " + detail)
+				tip := "Twitch: Connected"
+				if detail != "" {
+					tip += " (" + detail + ")"
+				}
+				mw.twitchStatusDot.SetStatus("🟢", tip)
 			case "connecting":
-				mw.twitchStatusDot.SetText("Twitch: 🟡 Connecting...")
+				mw.twitchStatusDot.SetStatus("🟡", "Twitch: Connecting...")
+			case "disconnected":
+				tip := "Twitch: Disconnected"
+				if detail != "" {
+					tip += " (" + detail + ")"
+				}
+				mw.twitchStatusDot.SetStatus("🔴", tip)
 			default:
-				mw.twitchStatusDot.SetText("Twitch: ⚪")
+				mw.twitchStatusDot.SetStatus("⚪", "Twitch: Inactive")
 			}
 		})
 	})
 
-	mw.youtubeStatusDot = widget.NewLabelWithStyle("YT: ⚪", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	ytCfg := cfg.Platforms["youtube"]
+	ytDot := "⚪"
+	ytTip := "YouTube: Inactive"
 	if ytCfg.Enabled && ytCfg.AccountName != "" {
-		mw.youtubeStatusDot.SetText("YT: 🟡 Waiting...")
+		ytDot = "🟡"
+		ytTip = fmt.Sprintf("YouTube: Waiting for stream... (%s)", ytCfg.AccountName)
+	} else if ytCfg.Enabled {
+		ytDot = "🟡"
+		ytTip = "YouTube: Enabled (No Channel Configured)"
 	}
+	mw.youtubeStatusDot = newPlatformConnectionBadge(
+		"YouTube",
+		resPlatformYouTube,
+		ytDot,
+		ytTip,
+		mw.showTooltipForObject,
+		func() {
+			if mw.tabsContainer != nil && mw.youtubeTabItem != nil {
+				mw.tabsContainer.Select(mw.youtubeTabItem)
+			}
+		},
+	)
 
 	mw.Session.SetOnYouTubeStatus(func(status string, detail string) {
 		if mw.youtubeTab != nil {
@@ -358,20 +464,47 @@ func (mw *MainWindow) initHeader() {
 		fyne.Do(func() {
 			switch status {
 			case "connected":
-				mw.youtubeStatusDot.SetText("YT: 🟢 " + detail)
+				tip := "YouTube: Connected"
+				if detail != "" {
+					tip += " (" + detail + ")"
+				}
+				mw.youtubeStatusDot.SetStatus("🟢", tip)
 			case "waiting":
-				mw.youtubeStatusDot.SetText("YT: 🟡 Waiting...")
+				mw.youtubeStatusDot.SetStatus("🟡", "YouTube: Waiting for stream...")
+			case "disconnected":
+				tip := "YouTube: Disconnected"
+				if detail != "" {
+					tip += " (" + detail + ")"
+				}
+				mw.youtubeStatusDot.SetStatus("🔴", tip)
 			default:
-				mw.youtubeStatusDot.SetText("YT: ⚪")
+				mw.youtubeStatusDot.SetStatus("⚪", "YouTube: Inactive")
 			}
 		})
 	})
 
-	mw.tiktokStatusDot = widget.NewLabelWithStyle("TikTok: ⚪", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	ttCfg := cfg.Platforms["tiktok"]
+	ttDot := "⚪"
+	ttTip := "TikTok: Inactive"
 	if ttCfg.Enabled && ttCfg.AccountName != "" {
-		mw.tiktokStatusDot.SetText("TikTok: 🟡 Waiting...")
+		ttDot = "🟡"
+		ttTip = fmt.Sprintf("TikTok: Waiting for stream... (@%s)", ttCfg.AccountName)
+	} else if ttCfg.Enabled {
+		ttDot = "🟡"
+		ttTip = "TikTok: Enabled (No Channel Configured)"
 	}
+	mw.tiktokStatusDot = newPlatformConnectionBadge(
+		"TikTok",
+		resPlatformTikTok,
+		ttDot,
+		ttTip,
+		mw.showTooltipForObject,
+		func() {
+			if mw.tabsContainer != nil && mw.tiktokTabItem != nil {
+				mw.tabsContainer.Select(mw.tiktokTabItem)
+			}
+		},
+	)
 
 	mw.Session.SetOnTikTokStatus(func(status string, detail string) {
 		if mw.tiktokTab != nil {
@@ -380,20 +513,47 @@ func (mw *MainWindow) initHeader() {
 		fyne.Do(func() {
 			switch status {
 			case "connected":
-				mw.tiktokStatusDot.SetText("TikTok: 🟢 " + detail)
+				tip := "TikTok: Connected"
+				if detail != "" {
+					tip += " (" + detail + ")"
+				}
+				mw.tiktokStatusDot.SetStatus("🟢", tip)
 			case "waiting":
-				mw.tiktokStatusDot.SetText("TikTok: 🟡 Waiting...")
+				mw.tiktokStatusDot.SetStatus("🟡", "TikTok: Waiting for stream...")
+			case "disconnected":
+				tip := "TikTok: Disconnected"
+				if detail != "" {
+					tip += " (" + detail + ")"
+				}
+				mw.tiktokStatusDot.SetStatus("🔴", tip)
 			default:
-				mw.tiktokStatusDot.SetText("TikTok: ⚪")
+				mw.tiktokStatusDot.SetStatus("⚪", "TikTok: Inactive")
 			}
 		})
 	})
 
-	mw.kickStatusDot = widget.NewLabelWithStyle("Kick: ⚪", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	kickCfg := cfg.Platforms["kick"]
+	kickDot := "⚪"
+	kickTip := "Kick: Inactive"
 	if kickCfg.Enabled && kickCfg.AccountName != "" {
-		mw.kickStatusDot.SetText("Kick: 🟡 Connecting...")
+		kickDot = "🟡"
+		kickTip = fmt.Sprintf("Kick: Connecting... (%s)", kickCfg.AccountName)
+	} else if kickCfg.Enabled {
+		kickDot = "🟡"
+		kickTip = "Kick: Enabled (No Channel Configured)"
 	}
+	mw.kickStatusDot = newPlatformConnectionBadge(
+		"Kick",
+		resPlatformKick,
+		kickDot,
+		kickTip,
+		mw.showTooltipForObject,
+		func() {
+			if mw.tabsContainer != nil && mw.kickTabItem != nil {
+				mw.tabsContainer.Select(mw.kickTabItem)
+			}
+		},
+	)
 
 	mw.Session.SetOnKickStatus(func(status string, detail string) {
 		if mw.kickTab != nil {
@@ -402,11 +562,21 @@ func (mw *MainWindow) initHeader() {
 		fyne.Do(func() {
 			switch status {
 			case "connected":
-				mw.kickStatusDot.SetText("Kick: 🟢 " + detail)
+				tip := "Kick: Connected"
+				if detail != "" {
+					tip += " (" + detail + ")"
+				}
+				mw.kickStatusDot.SetStatus("🟢", tip)
 			case "connecting":
-				mw.kickStatusDot.SetText("Kick: 🟡 Connecting...")
+				mw.kickStatusDot.SetStatus("🟡", "Kick: Connecting...")
+			case "disconnected":
+				tip := "Kick: Disconnected"
+				if detail != "" {
+					tip += " (" + detail + ")"
+				}
+				mw.kickStatusDot.SetStatus("🔴", tip)
 			default:
-				mw.kickStatusDot.SetText("Kick: ⚪")
+				mw.kickStatusDot.SetStatus("⚪", "Kick: Inactive")
 			}
 		})
 	})
