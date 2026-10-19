@@ -9,7 +9,6 @@ import (
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/internal/config"
-	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
 // YouTubeTabView provides the Fyne UI controls for zero-config YouTube Live integration.
@@ -29,6 +28,7 @@ type YouTubeTabView struct {
 	roleChecks         map[string]*widget.Check
 	paidOnlyCheck      *widget.Check
 	overrideCheck      *widget.Check
+	overridesBox       *fyne.Container
 	overrideVoiceField *VoiceSpeedField
 	onStatus           func(msg string)
 	initializing       bool
@@ -83,11 +83,7 @@ func (v *YouTubeTabView) SyncFromConfig() {
 		v.enableCheck.SetChecked(pCfg.Enabled)
 	}
 	if v.overrideVoiceField != nil {
-		voice := pCfg.Overrides.DefaultVoice
-		if voice == "" {
-			voice = tts.DefaultVoiceID
-		}
-		v.overrideVoiceField.SetVoiceAndSpeed(voice, pCfg.Overrides.DefaultSpeed)
+		v.overrideVoiceField.SetVoiceAndSpeed(pCfg.Overrides.DefaultVoice, pCfg.Overrides.DefaultSpeed)
 	}
 	v.initializing = false
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
@@ -415,9 +411,6 @@ func (v *YouTubeTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.
 	emotesCheck.SetChecked(ov.SpeakEmotes)
 
 	selectedVoice := ov.DefaultVoice
-	if selectedVoice == "" {
-		selectedVoice = tts.DefaultVoiceID
-	}
 	sp := ov.DefaultSpeed
 	if sp <= 0 {
 		sp = 1.0
@@ -441,20 +434,26 @@ func (v *YouTubeTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.
 	)
 	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("YouTube Default Voice & Speed:"), nil, v.overrideVoiceField.Container)
 
+	v.overridesBox = container.NewVBox(
+		namesCheck,
+		emotesCheck,
+		voiceRow,
+	)
+
+	var cardContent *fyne.Container
 	toggleOverrides := func(enabled bool) {
 		if enabled {
-			namesCheck.Enable()
-			emotesCheck.Enable()
-			v.overrideVoiceField.Enable()
+			v.overridesBox.Show()
 		} else {
-			namesCheck.Disable()
-			emotesCheck.Disable()
-			v.overrideVoiceField.Disable()
+			v.overridesBox.Hide()
+		}
+		if cardContent != nil {
+			cardContent.Refresh()
 		}
 	}
 	toggleOverrides(ov.OverrideRules)
 
-	v.overrideCheck = widget.NewCheck("Override Global Chat Rules for YouTube", func(b bool) {
+	v.overrideCheck = widget.NewCheck("Override Global Defaults", func(b bool) {
 		toggleOverrides(b)
 		v.updateConfig(func(c *config.Config) {
 			p := c.Platforms["youtube"]
@@ -464,14 +463,32 @@ func (v *YouTubeTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.
 	})
 	v.overrideCheck.SetChecked(ov.OverrideRules)
 
-	cardContent := container.NewVBox(
+	cardContent = container.NewVBox(
 		v.overrideCheck,
-		namesCheck,
-		emotesCheck,
-		voiceRow,
+		v.overridesBox,
 	)
 
 	return widget.NewCard("Platform Overrides", "Custom rules applied only to YouTube", cardContent)
+}
+
+// RefreshVoices updates the platform override voice field when enabled model packs change in Settings.
+func (v *YouTubeTabView) RefreshVoices() {
+	fyne.Do(func() {
+		if v.overrideVoiceField == nil || v.session == nil {
+			return
+		}
+		cfg := v.session.Config()
+		ov := cfg.Platforms["youtube"].Overrides
+		voice := ov.DefaultVoice
+		if voice == "" {
+			voice = cfg.GlobalChatRules.DefaultVoice
+		}
+		sp := ov.DefaultSpeed
+		if sp <= 0 {
+			sp = 1.0
+		}
+		v.overrideVoiceField.SetVoiceAndSpeed(voice, sp)
+	})
 }
 
 func (v *YouTubeTabView) saveRoles() {

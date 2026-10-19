@@ -31,7 +31,6 @@ type MainWindow struct {
 	youtubeTab   *YouTubeTabView
 	tiktokTab    *TikTokTabView
 	kickTab      *KickTabView
-	voicesTab    *VoicesTabView
 	viewersTab   *ViewersTabView
 	chatLogsTab  *LogsView
 	settingsTab  *SettingsView
@@ -41,7 +40,6 @@ type MainWindow struct {
 	youtubeTabItem   *container.TabItem
 	tiktokTabItem    *container.TabItem
 	kickTabItem      *container.TabItem
-	voicesTabItem    *container.TabItem
 	viewersTabItem   *container.TabItem
 	chatLogsTabItem  *container.TabItem
 	settingsTabItem  *container.TabItem
@@ -160,8 +158,6 @@ func (mw *MainWindow) initViews() {
 	mw.tiktokTab.SetStatusHandler(mw.SetStatus)
 	mw.kickTab = NewKickTabView(mw.Window, mw.Session)
 	mw.kickTab.SetStatusHandler(mw.SetStatus)
-	mw.voicesTab = NewVoicesTabView(mw.Window, mw.Session)
-	mw.voicesTab.SetStatusHandler(mw.SetStatus)
 	mw.viewersTab = NewViewersTabView(mw.Window, mw.Session)
 	mw.viewersTab.SetStatusHandler(mw.SetStatus)
 	mw.chatLogsTab = NewLogsView(mw.Window, mw.Session)
@@ -185,8 +181,20 @@ func (mw *MainWindow) initViews() {
 		mw.syncServiceVisibility()
 	})
 	mw.settingsTab.SetModelsChangedHandler(func() {
-		if mw.voicesTab != nil {
-			mw.voicesTab.RefreshVoices()
+		if mw.settingsTab != nil {
+			mw.settingsTab.RefreshVoices()
+		}
+		if mw.twitchTab != nil {
+			mw.twitchTab.RefreshVoices()
+		}
+		if mw.youtubeTab != nil {
+			mw.youtubeTab.RefreshVoices()
+		}
+		if mw.tiktokTab != nil {
+			mw.tiktokTab.RefreshVoices()
+		}
+		if mw.kickTab != nil {
+			mw.kickTab.RefreshVoices()
 		}
 		if mw.viewersTab != nil {
 			mw.viewersTab.Refresh()
@@ -198,7 +206,6 @@ func (mw *MainWindow) initViews() {
 	mw.youtubeTabItem = container.NewTabItemWithIcon("YouTube", theme.MediaVideoIcon(), mw.youtubeTab.Build())
 	mw.tiktokTabItem = container.NewTabItemWithIcon("TikTok", theme.MediaRecordIcon(), mw.tiktokTab.Build())
 	mw.kickTabItem = container.NewTabItemWithIcon("Kick", theme.MediaFastForwardIcon(), mw.kickTab.Build())
-	mw.voicesTabItem = container.NewTabItemWithIcon("Voices", theme.VolumeUpIcon(), mw.voicesTab.Build())
 	mw.viewersTabItem = container.NewTabItemWithIcon("Viewers", theme.AccountIcon(), mw.viewersTab.Build())
 	mw.chatLogsTabItem = container.NewTabItemWithIcon("Chat Logs", theme.DocumentIcon(), mw.chatLogsTab.Build())
 	mw.settingsTabItem = container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), mw.settingsTab.Build())
@@ -209,7 +216,6 @@ func (mw *MainWindow) initViews() {
 		mw.youtubeTabItem,
 		mw.tiktokTabItem,
 		mw.kickTabItem,
-		mw.voicesTabItem,
 		mw.viewersTabItem,
 		mw.chatLogsTabItem,
 		mw.settingsTabItem,
@@ -258,7 +264,7 @@ func (mw *MainWindow) syncServiceVisibility() {
 		if kickVisible {
 			items = append(items, mw.kickTabItem)
 		}
-		items = append(items, mw.voicesTabItem, mw.viewersTabItem, mw.chatLogsTabItem, mw.settingsTabItem)
+		items = append(items, mw.viewersTabItem, mw.chatLogsTabItem, mw.settingsTabItem)
 		mw.tabsContainer.SetItems(items)
 		if slices.Contains(items, selected) {
 			mw.tabsContainer.Select(selected)

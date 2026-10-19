@@ -24,4 +24,14 @@ func TestYouTubeTabViewBuild(t *testing.T) {
 	if content == nil {
 		t.Fatal("expected non-nil YouTube tab content")
 	}
+	if ytView.overrideCheck.Text != "Override Global Defaults" {
+		t.Errorf("overrideCheck.Text = %q, want 'Override Global Defaults'", ytView.overrideCheck.Text)
+	}
+	if ytView.overridesBox.Visible() {
+		t.Error("expected overridesBox to be hidden when Override Global Defaults is unchecked")
+	}
+	ytView.overrideCheck.SetChecked(true)
+	if !ytView.overridesBox.Visible() {
+		t.Error("expected overridesBox to be visible when Override Global Defaults is checked")
+	}
 }

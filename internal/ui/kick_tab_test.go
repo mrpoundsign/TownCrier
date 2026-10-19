@@ -24,4 +24,14 @@ func TestKickTabViewBuild(t *testing.T) {
 	if content == nil {
 		t.Fatal("expected non-nil Kick tab content")
 	}
+	if kickView.overrideCheck.Text != "Override Global Defaults" {
+		t.Errorf("overrideCheck.Text = %q, want 'Override Global Defaults'", kickView.overrideCheck.Text)
+	}
+	if kickView.overridesBox.Visible() {
+		t.Error("expected overridesBox to be hidden when Override Global Defaults is unchecked")
+	}
+	kickView.overrideCheck.SetChecked(true)
+	if !kickView.overridesBox.Visible() {
+		t.Error("expected overridesBox to be visible when Override Global Defaults is checked")
+	}
 }

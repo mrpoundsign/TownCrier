@@ -127,6 +127,19 @@ type VoiceSpeedField struct {
 	onStatus    func(msg string)
 }
 
+func resolveInitialVoiceID(session *app.Session, voiceID string) string {
+	if strings.TrimSpace(voiceID) == "" && session != nil {
+		cfg := session.Config()
+		if strings.TrimSpace(cfg.GlobalChatRules.DefaultVoice) != "" {
+			return tts.VoiceIDFromLabel(cfg.GlobalChatRules.DefaultVoice)
+		}
+		if labels := tts.VoiceDisplayLabelsForModels(cfg.TTS.EffectiveEnabledModels()); len(labels) > 0 {
+			return tts.VoiceIDFromLabel(labels[0])
+		}
+	}
+	return tts.VoiceIDFromLabel(voiceID)
+}
+
 // NewVoiceSpeedField creates an inline voice and speed display paired with an Edit button.
 func NewVoiceSpeedField(
 	w fyne.Window,
@@ -140,13 +153,7 @@ func NewVoiceSpeedField(
 	if initialSpeed <= 0 {
 		initialSpeed = 1.0
 	}
-	canonVoice := tts.VoiceIDFromLabel(initialVoice)
-	if strings.TrimSpace(initialVoice) == "" && session != nil {
-		labels := tts.VoiceDisplayLabelsForModels(session.Config().TTS.EffectiveEnabledModels())
-		if len(labels) > 0 {
-			canonVoice = tts.VoiceIDFromLabel(labels[0])
-		}
-	}
+	canonVoice := resolveInitialVoiceID(session, initialVoice)
 
 	f := &VoiceSpeedField{
 		window:      w,
@@ -187,7 +194,7 @@ func (f *VoiceSpeedField) SetVoiceAndSpeed(voiceID string, speed float32) {
 	if speed <= 0 {
 		speed = 1.0
 	}
-	f.voiceID = tts.VoiceIDFromLabel(voiceID)
+	f.voiceID = resolveInitialVoiceID(f.session, voiceID)
 	f.speed = speed
 	if f.Label != nil {
 		f.Label.SetText(FormatVoiceSpeedSummary(f.voiceID, f.speed))

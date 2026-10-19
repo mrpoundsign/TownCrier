@@ -47,11 +47,11 @@ var SupertonicVoiceCatalog = []VoiceOption{
 	{ID: "supertonic:f3", Label: "Supertonic F3 — Calm US Female (supertonic:f3)", SIDv019: 2},
 	{ID: "supertonic:f4", Label: "Supertonic F4 — Expressive US Female (supertonic:f4)", SIDv019: 3},
 	{ID: "supertonic:f5", Label: "Supertonic F5 — Clear US Female (supertonic:f5)", SIDv019: 4},
-	{ID: "supertonic:m1", Label: "Supertonic M1 — Deep US Male (supertonic:m1)", SIDv019: 5},
-	{ID: "supertonic:m2", Label: "Supertonic M2 — Energetic US Male (supertonic:m2)", SIDv019: 6},
-	{ID: "supertonic:m3", Label: "Supertonic M3 — Calm US Male (supertonic:m3)", SIDv019: 7},
+	{ID: "supertonic:m1", Label: "Supertonic M1 — Light Tenor Male (supertonic:m1)", SIDv019: 5},
+	{ID: "supertonic:m2", Label: "Supertonic M2 — Deep US Male (supertonic:m2)", SIDv019: 6},
+	{ID: "supertonic:m3", Label: "Supertonic M3 — Calm Baritone Male (supertonic:m3)", SIDv019: 7},
 	{ID: "supertonic:m4", Label: "Supertonic M4 — Narrator US Male (supertonic:m4)", SIDv019: 8},
-	{ID: "supertonic:m5", Label: "Supertonic M5 — Casual US Male (supertonic:m5)", SIDv019: 9},
+	{ID: "supertonic:m5", Label: "Supertonic M5 — Deep Casual Male (supertonic:m5)", SIDv019: 9},
 }
 
 // KittenMiniVoiceCatalog lists the 8 built-in voices in Kitten v0.8 Mini (odd=female, even=male per model metadata).

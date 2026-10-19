@@ -399,7 +399,7 @@ func TestMultiModelPresetsAndHardwareImpact(t *testing.T) {
 	if fam := VoiceFamily("supertonic:m2"); fam != ModelSupertonic {
 		t.Errorf("expected supertonic for supertonic:m2, got %q", fam)
 	}
-	if fam := VoiceFamily("Supertonic M2 — Energetic US Male (supertonic:m2)"); fam != ModelSupertonic {
+	if fam := VoiceFamily("Supertonic M2 — Deep US Male (supertonic:m2)"); fam != ModelSupertonic {
 		t.Errorf("expected supertonic from display label, got %q", fam)
 	}
 	if fam := VoiceFamily("kitten_mini:f3"); fam != ModelKittenMini {

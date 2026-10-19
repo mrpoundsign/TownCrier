@@ -51,4 +51,15 @@ func TestTikTokTabViewBuild(t *testing.T) {
 	if gotCfg.MinFanClubLevel != 15 {
 		t.Errorf("MinFanClubLevel = %d, want 15", gotCfg.MinFanClubLevel)
 	}
+
+	if ttView.overrideCheck.Text != "Override Global Defaults" {
+		t.Errorf("overrideCheck.Text = %q, want 'Override Global Defaults'", ttView.overrideCheck.Text)
+	}
+	if ttView.overridesBox.Visible() {
+		t.Error("expected overridesBox to be hidden when Override Global Defaults is unchecked")
+	}
+	ttView.overrideCheck.SetChecked(true)
+	if !ttView.overridesBox.Visible() {
+		t.Error("expected overridesBox to be visible when Override Global Defaults is checked")
+	}
 }

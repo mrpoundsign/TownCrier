@@ -16,7 +16,6 @@ import (
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/internal/config"
-	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
 // TwitchTabView provides the full Fyne UI controls for Twitch platform integration.
@@ -24,26 +23,27 @@ type TwitchTabView struct {
 	window  fyne.Window
 	session *app.Session
 
-	channelEntry      *ScrollPassEntry
-	statusBadge       *widget.Label
-	oauthStatusLabel  *widget.Label
-	connectBtn        *widget.Button
-	enableCheck       *widget.Check
-	allChatCheck      *widget.Check
-	ignorePrefixCheck *widget.Check
-	ignorePrefixEntry *ScrollPassEntry
-	prefixCheck       *widget.Check
-	prefixEntry       *ScrollPassEntry
-	roleGatedCheck    *widget.Check
-	roleChecks        map[string]*widget.Check
-	paidOnlyCheck     *widget.Check
-	rewardEntry       *ScrollPassEntry
-	rewardOAuthHint   *widget.Label
-	modCmdsCheck      *widget.Check
+	channelEntry       *ScrollPassEntry
+	statusBadge        *widget.Label
+	oauthStatusLabel   *widget.Label
+	connectBtn         *widget.Button
+	enableCheck        *widget.Check
+	allChatCheck       *widget.Check
+	ignorePrefixCheck  *widget.Check
+	ignorePrefixEntry  *ScrollPassEntry
+	prefixCheck        *widget.Check
+	prefixEntry        *ScrollPassEntry
+	roleGatedCheck     *widget.Check
+	roleChecks         map[string]*widget.Check
+	paidOnlyCheck      *widget.Check
+	rewardEntry        *ScrollPassEntry
+	rewardOAuthHint    *widget.Label
+	modCmdsCheck       *widget.Check
 	followCheck        *widget.Check
 	followTmplEntry    *ScrollPassEntry
 	followOAuthHint    *widget.Label
 	overrideCheck      *widget.Check
+	overridesBox       *fyne.Container
 	overrideVoiceField *VoiceSpeedField
 	onStatus           func(msg string)
 	initializing       bool
@@ -102,11 +102,7 @@ func (v *TwitchTabView) SyncFromConfig() {
 		v.enableCheck.SetChecked(pCfg.Enabled)
 	}
 	if v.overrideVoiceField != nil {
-		voice := pCfg.Overrides.DefaultVoice
-		if voice == "" {
-			voice = tts.DefaultVoiceID
-		}
-		v.overrideVoiceField.SetVoiceAndSpeed(voice, pCfg.Overrides.DefaultSpeed)
+		v.overrideVoiceField.SetVoiceAndSpeed(pCfg.Overrides.DefaultVoice, pCfg.Overrides.DefaultSpeed)
 	}
 	v.initializing = false
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
@@ -646,9 +642,6 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 	emotesCheck.SetChecked(ov.SpeakEmotes)
 
 	selectedVoice := ov.DefaultVoice
-	if selectedVoice == "" {
-		selectedVoice = tts.DefaultVoiceID
-	}
 	sp := ov.DefaultSpeed
 	if sp <= 0 {
 		sp = 1.0
@@ -672,20 +665,26 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 	)
 	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("Twitch Default Voice & Speed:"), nil, v.overrideVoiceField.Container)
 
+	v.overridesBox = container.NewVBox(
+		namesCheck,
+		emotesCheck,
+		voiceRow,
+	)
+
+	var cardContent *fyne.Container
 	toggleOverrides := func(enabled bool) {
 		if enabled {
-			namesCheck.Enable()
-			emotesCheck.Enable()
-			v.overrideVoiceField.Enable()
+			v.overridesBox.Show()
 		} else {
-			namesCheck.Disable()
-			emotesCheck.Disable()
-			v.overrideVoiceField.Disable()
+			v.overridesBox.Hide()
+		}
+		if cardContent != nil {
+			cardContent.Refresh()
 		}
 	}
 	toggleOverrides(ov.OverrideRules)
 
-	v.overrideCheck = widget.NewCheck("Override Global Chat Rules for Twitch", func(b bool) {
+	v.overrideCheck = widget.NewCheck("Override Global Defaults", func(b bool) {
 		toggleOverrides(b)
 		v.updateConfig(func(c *config.Config) {
 			p := c.Platforms["twitch"]
@@ -695,14 +694,32 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 	})
 	v.overrideCheck.SetChecked(ov.OverrideRules)
 
-	cardContent := container.NewVBox(
+	cardContent = container.NewVBox(
 		v.overrideCheck,
-		namesCheck,
-		emotesCheck,
-		voiceRow,
+		v.overridesBox,
 	)
 
 	return widget.NewCard("Platform Overrides", "Custom rules applied only to Twitch", cardContent)
+}
+
+// RefreshVoices updates the platform override voice field when enabled model packs change in Settings.
+func (v *TwitchTabView) RefreshVoices() {
+	fyne.Do(func() {
+		if v.overrideVoiceField == nil || v.session == nil {
+			return
+		}
+		cfg := v.session.Config()
+		ov := cfg.Platforms["twitch"].Overrides
+		voice := ov.DefaultVoice
+		if voice == "" {
+			voice = cfg.GlobalChatRules.DefaultVoice
+		}
+		sp := ov.DefaultSpeed
+		if sp <= 0 {
+			sp = 1.0
+		}
+		v.overrideVoiceField.SetVoiceAndSpeed(voice, sp)
+	})
 }
 
 func (v *TwitchTabView) saveRoles() {

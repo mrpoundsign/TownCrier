@@ -72,10 +72,10 @@ func TestBuildVoiceGroupsForModels(t *testing.T) {
 	}
 }
 
-func TestVoicesTabViewBuildAndRefresh(t *testing.T) {
+func TestSettingsGlobalVoiceFieldAndRefresh(t *testing.T) {
 	appObj := test.NewApp()
 	defer appObj.Quit()
-	win := appObj.NewWindow("Test VoicesTabView")
+	win := appObj.NewWindow("Test SettingsGlobalVoiceField")
 
 	cfg := config.DefaultConfig()
 	cfg.GlobalChatRules.DefaultVoice = "supertonic:f1"
@@ -83,10 +83,11 @@ func TestVoicesTabViewBuildAndRefresh(t *testing.T) {
 	session := app.NewSession(cfg, secrets.NewMemoryStore())
 	defer func() { _ = session.Close() }()
 
-	view := NewVoicesTabView(win, session)
+	view := NewSettingsView(win, cfg, nil, nil)
+	view.SetSession(session)
 	content := view.Build()
 	if content == nil {
-		t.Fatal("expected non-nil content from VoicesTabView.Build")
+		t.Fatal("expected non-nil content from SettingsView.Build")
 	}
 	if view.globalVoiceField == nil {
 		t.Fatal("expected non-nil globalVoiceField")

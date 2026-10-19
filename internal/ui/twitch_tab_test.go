@@ -80,7 +80,17 @@ func TestTwitchTabStatusHandler(t *testing.T) {
 
 	_ = tab.Build()
 
+	if tab.overrideCheck.Text != "Override Global Defaults" {
+		t.Errorf("overrideCheck.Text = %q, want 'Override Global Defaults'", tab.overrideCheck.Text)
+	}
+	if tab.overridesBox.Visible() {
+		t.Error("expected overridesBox to be hidden when Override Global Defaults is unchecked")
+	}
+
 	tab.overrideCheck.SetChecked(true)
+	if !tab.overridesBox.Visible() {
+		t.Error("expected overridesBox to be visible when Override Global Defaults is checked")
+	}
 	if lastStatus != "✓ Settings saved." {
 		t.Errorf("expected '✓ Settings saved.', got %q", lastStatus)
 	}

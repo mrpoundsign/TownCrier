@@ -46,6 +46,7 @@ type SettingsView struct {
 	deviceSelect      *widget.Select
 	deviceMap         map[string]string // device name -> hex ID
 	uiScaleSelect     *widget.Select
+	globalVoiceField  *VoiceSpeedField
 	initializing      bool
 }
 
@@ -112,6 +113,29 @@ func (v *SettingsView) currentConfig() *config.Config {
 	return v.cfg
 }
 
+// RefreshVoices updates the global voice field when enabled model packs change.
+func (v *SettingsView) RefreshVoices() {
+	fyne.Do(func() {
+		cfg := v.currentConfig()
+		v.initializing = true
+		defer func() { v.initializing = false }()
+
+		if v.globalVoiceField != nil {
+			defVoice := cfg.GlobalChatRules.DefaultVoice
+			if strings.TrimSpace(defVoice) == "" {
+				if labels := tts.VoiceDisplayLabelsForModels(cfg.TTS.EffectiveEnabledModels()); len(labels) > 0 {
+					defVoice = tts.VoiceIDFromLabel(labels[0])
+				}
+			}
+			defSpeed := cfg.GlobalChatRules.DefaultSpeed
+			if defSpeed <= 0 {
+				defSpeed = 1.0
+			}
+			v.globalVoiceField.SetVoiceAndSpeed(defVoice, defSpeed)
+		}
+	})
+}
+
 // SyncFromConfig updates the service checkboxes in Settings when modified from a platform tab.
 func (v *SettingsView) SyncFromConfig() {
 	v.currentConfig()
@@ -136,6 +160,9 @@ func (v *SettingsView) SyncFromConfig() {
 	}
 	if v.uiScaleSelect != nil {
 		v.uiScaleSelect.SetSelected(FormatUIScaleLabel(v.cfg.UIScale))
+	}
+	if v.globalVoiceField != nil {
+		v.globalVoiceField.SetVoiceAndSpeed(v.cfg.GlobalChatRules.DefaultVoice, v.cfg.GlobalChatRules.DefaultSpeed)
 	}
 	if v.logsView != nil {
 		v.logsView.RefreshQuery()
@@ -185,6 +212,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	}
 
 	servicesCard := v.buildServicesCard()
+	globalVoiceCard := v.buildGlobalVoiceCard()
 	audioCard := v.buildAudioCard()
 	displayCard := v.buildDisplayCard()
 	ttsCard := v.buildTTSCard()
@@ -194,6 +222,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 
 	generalTabContent := newPanelVScroll(container.NewVBox(
 		servicesCard,
+		globalVoiceCard,
 		audioCard,
 		displayCard,
 	))
@@ -337,6 +366,42 @@ func (v *SettingsView) buildServicesCard() *widget.Card {
 	)
 
 	return widget.NewCard("Streaming Services", "Enable or disable streaming platforms to show/hide their tabs and load/unload their connectors", cardContent)
+}
+
+func (v *SettingsView) buildGlobalVoiceCard() *widget.Card {
+	cfg := v.currentConfig()
+
+	selectedVoice := cfg.GlobalChatRules.DefaultVoice
+	if strings.TrimSpace(selectedVoice) == "" {
+		if labels := tts.VoiceDisplayLabelsForModels(cfg.TTS.EffectiveEnabledModels()); len(labels) > 0 {
+			selectedVoice = tts.VoiceIDFromLabel(labels[0])
+		}
+	}
+	sp := cfg.GlobalChatRules.DefaultSpeed
+	if sp <= 0 {
+		sp = 1.0
+	}
+
+	v.globalVoiceField = NewVoiceSpeedField(
+		v.window,
+		v.session,
+		"Edit Global Default Voice & Speed",
+		selectedVoice,
+		sp,
+		func(voiceID string, speed float32) {
+			v.updateConfig(func(c *config.Config) {
+				c.GlobalChatRules.DefaultVoice = voiceID
+				c.GlobalChatRules.DefaultSpeed = speed
+			})
+		},
+		v.setStatus,
+	)
+
+	cardContent := container.NewVBox(
+		container.NewBorder(nil, nil, widget.NewLabel("Global Default Voice & Speed:"), nil, v.globalVoiceField.Container),
+	)
+
+	return widget.NewCard("Global Default Voice", "Default voice and speed for chat and alerts", cardContent)
 }
 
 func (v *SettingsView) buildAudioCard() *widget.Card {
