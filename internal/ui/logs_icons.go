@@ -244,7 +244,7 @@ func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 			evIcon = resEventFollow
 		case "sub", "resub", "gift_sub", "membership", "gift_membership":
 			evIcon = resEventSub
-		case "cheer", "gift", "superchat", "supersticker":
+		case "cheer", "gift", "superchat", "supersticker", "super_chat", "super_sticker":
 			evIcon = resEventCheer
 		case "raid":
 			evIcon = resEventRaid
@@ -252,6 +252,12 @@ func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 			evIcon = resEventRedemption
 		}
 		tip := "Stream Event: " + strings.ToUpper(e.Kind)
+		if e.Recipient != "" {
+			tip += fmt.Sprintf(" (to @%s)", e.Recipient)
+		}
+		if e.SubTier != "" {
+			tip += fmt.Sprintf(" [%s]", e.SubTier)
+		}
 		if e.Amount > 0 {
 			if e.Currency != "" {
 				tip += fmt.Sprintf(" (%.0f %s)", e.Amount, e.Currency)
