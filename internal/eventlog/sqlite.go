@@ -22,9 +22,9 @@ import (
 const (
 	defaultQueryLimit      = 100
 	maxQueryLimit          = 1000
-	currentSchemaVersion   = 2
+	currentSchemaVersion   = 3
 	maxDBBackups           = 5
-	historicalSessionGapMs = 60 * 60 * 1000 // 1 hour inactivity gap splits historical stream sessions
+	historicalSessionGapMs = 4 * 60 * 60 * 1000 // 4 hour inactivity gap splits historical stream sessions
 )
 
 const sqliteBaseTablesSchema = `
@@ -246,7 +246,7 @@ func migrateAndRecover(db *sql.DB, cleanFile string) error {
 		return fmt.Errorf("initialize sqlite indexes: %w", err)
 	}
 
-	// 5. Run v1 data migration & historical session backfill before attaching FTS5 triggers
+	// 5. Run v1 data migration before attaching FTS5 triggers
 	if userVersion < 1 {
 		if err := runVersion1DataMigration(db); err != nil {
 			return fmt.Errorf("migrate sqlite data to v1: %w", err)
@@ -262,13 +262,21 @@ func migrateAndRecover(db *sql.DB, cleanFile string) error {
 			return fmt.Errorf("migrate sqlite data to v2: %w", err)
 		}
 	}
+
+	// 7. Cluster historical unassigned events into stream sessions with 4-hour gap rule when upgrading to v3
+	if userVersion < 3 {
+		if err := runVersion3DataMigration(db); err != nil {
+			return fmt.Errorf("migrate sqlite data to v3: %w", err)
+		}
+	}
+
 	if userVersion < currentSchemaVersion {
 		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d;", currentSchemaVersion)); err != nil {
 			return fmt.Errorf("set sqlite user_version: %w", err)
 		}
 	}
 
-	// 7. Auto-close any open stream_sessions left over from a previous run/crash
+	// 8. Auto-close any open stream_sessions left over from a previous run/crash
 	if err := recoverOpenSessions(db); err != nil {
 		return fmt.Errorf("recover open stream sessions: %w", err)
 	}
@@ -524,101 +532,112 @@ func runVersion1DataMigration(db *sql.DB) error {
 		return err
 	}
 
-	// 3. Backfill historical stream_sessions from existing event_logs if no sessions exist yet
-	var sessCount int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM stream_sessions;`).Scan(&sessCount); err != nil {
+	return tx.Commit()
+}
+
+func clusterAndAssignHistoricalSessions(tx *sql.Tx, gapMs int64) error {
+	type histRow struct {
+		id        string
+		createdAt int64
+		platform  string
+		channel   string
+	}
+	rows, err := tx.Query(`SELECT id, created_at, platform, channel FROM event_logs WHERE session_id = 0 ORDER BY created_at ASC, id ASC;`)
+	if err != nil {
 		return err
 	}
-
-	if sessCount == 0 {
-		type histRow struct {
-			id        string
-			createdAt int64
-			platform  string
-			channel   string
+	var allRows []histRow
+	for rows.Next() {
+		var r histRow
+		if err := rows.Scan(&r.id, &r.createdAt, &r.platform, &r.channel); err != nil {
+			_ = rows.Close()
+			return err
 		}
-		rows, err := tx.Query(`SELECT id, created_at, platform, channel FROM event_logs ORDER BY created_at ASC, id ASC;`)
+		allRows = append(allRows, r)
+	}
+	_ = rows.Close()
+
+	if len(allRows) == 0 {
+		return nil
+	}
+
+	type sessionBucket struct {
+		startMs   int64
+		endMs     int64
+		platforms []string
+		channels  []string
+	}
+	var buckets []sessionBucket
+	for _, r := range allRows {
+		if len(buckets) == 0 || r.createdAt-buckets[len(buckets)-1].endMs > gapMs {
+			var plats, chans []string
+			if p := strings.ToLower(strings.TrimSpace(r.platform)); p != "" {
+				plats = append(plats, p)
+			}
+			if ch := strings.TrimSpace(r.channel); ch != "" {
+				chans = append(chans, ch)
+			}
+			buckets = append(buckets, sessionBucket{
+				startMs:   r.createdAt,
+				endMs:     r.createdAt,
+				platforms: plats,
+				channels:  chans,
+			})
+			continue
+		}
+		b := &buckets[len(buckets)-1]
+		if r.createdAt > b.endMs {
+			b.endMs = r.createdAt
+		}
+		if p := strings.ToLower(strings.TrimSpace(r.platform)); p != "" && !slices.Contains(b.platforms, p) {
+			b.platforms = append(b.platforms, p)
+		}
+		if ch := strings.TrimSpace(r.channel); ch != "" && !slices.Contains(b.channels, ch) {
+			b.channels = append(b.channels, ch)
+		}
+	}
+
+	for _, b := range buckets {
+		platsJSON, _ := json.Marshal(b.platforms)
+		chansJSON, _ := json.Marshal(b.channels)
+		res, err := tx.Exec(
+			`INSERT INTO stream_sessions (started_at, ended_at, platforms_json, channels_json) VALUES (?, ?, ?, ?);`,
+			b.startMs, b.endMs, string(platsJSON), string(chansJSON),
+		)
 		if err != nil {
 			return err
 		}
-		var allRows []histRow
-		for rows.Next() {
-			var r histRow
-			if err := rows.Scan(&r.id, &r.createdAt, &r.platform, &r.channel); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			allRows = append(allRows, r)
+		sessID, err := res.LastInsertId()
+		if err != nil {
+			return err
 		}
-		_ = rows.Close()
-
-		if len(allRows) > 0 {
-			type sessionBucket struct {
-				startMs   int64
-				endMs     int64
-				platforms []string
-				channels  []string
-			}
-			var buckets []sessionBucket
-			for _, r := range allRows {
-				if len(buckets) == 0 || r.createdAt-buckets[len(buckets)-1].endMs > historicalSessionGapMs {
-					var plats, chans []string
-					if p := strings.ToLower(strings.TrimSpace(r.platform)); p != "" {
-						plats = append(plats, p)
-					}
-					if ch := strings.TrimSpace(r.channel); ch != "" {
-						chans = append(chans, ch)
-					}
-					buckets = append(buckets, sessionBucket{
-						startMs:   r.createdAt,
-						endMs:     r.createdAt,
-						platforms: plats,
-						channels:  chans,
-					})
-					continue
-				}
-				b := &buckets[len(buckets)-1]
-				if r.createdAt > b.endMs {
-					b.endMs = r.createdAt
-				}
-				if p := strings.ToLower(strings.TrimSpace(r.platform)); p != "" && !slices.Contains(b.platforms, p) {
-					b.platforms = append(b.platforms, p)
-				}
-				if ch := strings.TrimSpace(r.channel); ch != "" && !slices.Contains(b.channels, ch) {
-					b.channels = append(b.channels, ch)
-				}
-			}
-
-			for _, b := range buckets {
-				platsJSON, _ := json.Marshal(b.platforms)
-				chansJSON, _ := json.Marshal(b.channels)
-				res, err := tx.Exec(
-					`INSERT INTO stream_sessions (started_at, ended_at, platforms_json, channels_json) VALUES (?, ?, ?, ?);`,
-					b.startMs, b.endMs, string(platsJSON), string(chansJSON),
-				)
-				if err != nil {
-					return err
-				}
-				sessID, err := res.LastInsertId()
-				if err != nil {
-					return err
-				}
-				if _, err := tx.Exec(
-					`UPDATE event_logs SET session_id = ? WHERE created_at >= ? AND created_at <= ? AND session_id = 0;`,
-					sessID, b.startMs, b.endMs,
-				); err != nil {
-					return err
-				}
-			}
+		if _, err := tx.Exec(
+			`UPDATE event_logs SET session_id = ? WHERE created_at >= ? AND created_at <= ? AND session_id = 0;`,
+			sessID, b.startMs, b.endMs,
+		); err != nil {
+			return err
 		}
 	}
-
-	return tx.Commit()
+	return nil
 }
 
 func runVersion2DataMigration(db *sql.DB) error {
 	_, err := db.Exec(`INSERT INTO event_logs_fts(event_logs_fts) VALUES('rebuild');`)
 	return err
+}
+
+func runVersion3DataMigration(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := clusterAndAssignHistoricalSessions(tx, historicalSessionGapMs); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // recoverOpenSessions inspects stream_sessions for any rows left open (ended_at = 0)

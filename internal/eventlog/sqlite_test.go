@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -456,8 +457,8 @@ CREATE TABLE event_logs (
 
 	t1 := time.Date(2026, 10, 15, 18, 0, 0, 0, time.UTC)
 	t2 := t1.Add(20 * time.Minute)
-	// t3 is 3 hours later -> should be split into a second backfilled historical session
-	t3 := t1.Add(3 * time.Hour)
+	// t3 is 5 hours later -> should be split into a second backfilled historical session under 4-hour rule
+	t3 := t1.Add(5 * time.Hour)
 
 	insertLegacy := `
 INSERT INTO event_logs (id, created_at, updated_at, platform, channel, kind, is_paid_event, user_id, user_name, display_name, raw_text, amount, currency, count, passed_filters, spoken, outcome)
@@ -588,6 +589,156 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 'u1', 'alice', 'Alice', ?, ?, ?, ?, 1, 1, 'spoken')
 	// The very first backup should have been pruned
 	if rotatedBackups[0] == backups[0] {
 		t.Errorf("expected oldest backup %q to be pruned, but it is still present in %v", backups[0], rotatedBackups)
+	}
+}
+
+func TestV2ToV3MigrationHistoricalUnassignedSessions(t *testing.T) {
+	ctx := context.Background()
+	dbFile := filepath.Join(t.TempDir(), "events_v2.db")
+
+	// 1. Manually create a v2 database with user_version = 2 and an existing session
+	rawDB, err := sql.Open("sqlite", dbFile)
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+
+	// Create tables matching v2 schema
+	if _, err := rawDB.Exec(sqliteBaseTablesSchema); err != nil {
+		t.Fatalf("create base tables: %v", err)
+	}
+	if _, err := rawDB.Exec(sqliteIndexesSchema); err != nil {
+		t.Fatalf("create indexes: %v", err)
+	}
+	if _, err := rawDB.Exec(sqliteFTSSchema); err != nil {
+		t.Fatalf("create fts schema: %v", err)
+	}
+	if _, err := rawDB.Exec(`PRAGMA user_version = 2;`); err != nil {
+		t.Fatalf("set user_version = 2: %v", err)
+	}
+
+	// Insert Session 1 (ended)
+	tSess1Start := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	tSess1End := tSess1Start.Add(2 * time.Hour)
+	if _, err := rawDB.Exec(
+		`INSERT INTO stream_sessions (id, started_at, ended_at, platforms_json, channels_json) VALUES (1, ?, ?, '["twitch"]', '["mrpoundsign"]');`,
+		tSess1Start.UnixMilli(), tSess1End.UnixMilli(),
+	); err != nil {
+		t.Fatalf("insert session 1: %v", err)
+	}
+
+	// Insert event in Session 1
+	insertEvent := `
+INSERT INTO event_logs (
+	id, session_id, created_at, updated_at, platform, channel, kind, is_paid_event,
+	user_id, user_name, display_name, roles_json, raw_text, emotes_json, spoken_text,
+	voice_id, speed, amount, unit_amount, currency, item_name, sub_tier, recipient,
+	reward_id, reward_title, months, count, passed_filters, spoken, outcome, outcome_detail
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'uid', 'user', 'User', '[]', 'msg', '[]', 'spoken', '', 1.0, 0, 0, '', '', '', '', '', '', 0, 0, 1, 1, 'spoken', '');`
+
+	if _, err := rawDB.Exec(insertEvent, "sess1-ev", 1, tSess1Start.Add(10*time.Minute).UnixMilli(), tSess1Start.Add(10*time.Minute).UnixMilli(), "twitch", "mrpoundsign", "message", 0); err != nil {
+		t.Fatalf("insert sess1-ev: %v", err)
+	}
+
+	// Insert unassigned events (session_id = 0):
+	// Cluster A:
+	//   u1: t0 (10/19 10:00)
+	//   u2: t0 + 1 hr (10/19 11:00) - gap 1h < 4h
+	//   u3: t0 + 3 hr (10/19 13:00) - gap 2h < 4h -> should all be in Cluster A
+	// Cluster B:
+	//   u4: t0 + 8 hr (10/19 18:00) - gap 5h > 4h -> should start new Cluster B
+	//   u5: t0 + 9 hr (10/19 19:00) - gap 1h < 4h -> in Cluster B
+	t0 := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+	u1Time := t0
+	u2Time := t0.Add(1 * time.Hour)
+	u3Time := t0.Add(3 * time.Hour)
+	u4Time := t0.Add(8 * time.Hour)
+	u5Time := t0.Add(9 * time.Hour)
+
+	if _, err := rawDB.Exec(insertEvent, "u-1", 0, u1Time.UnixMilli(), u1Time.UnixMilli(), "twitch", "mrpoundsign", "message", 0); err != nil {
+		t.Fatalf("insert u-1: %v", err)
+	}
+	if _, err := rawDB.Exec(insertEvent, "u-2", 0, u2Time.UnixMilli(), u2Time.UnixMilli(), "twitch", "mrpoundsign", "message", 0); err != nil {
+		t.Fatalf("insert u-2: %v", err)
+	}
+	if _, err := rawDB.Exec(insertEvent, "u-3", 0, u3Time.UnixMilli(), u3Time.UnixMilli(), "tiktok", "@mrpoundsign", "gift", 1); err != nil {
+		t.Fatalf("insert u-3: %v", err)
+	}
+	if _, err := rawDB.Exec(insertEvent, "u-4", 0, u4Time.UnixMilli(), u4Time.UnixMilli(), "kick", "mrpoundsign", "message", 0); err != nil {
+		t.Fatalf("insert u-4: %v", err)
+	}
+	if _, err := rawDB.Exec(insertEvent, "u-5", 0, u5Time.UnixMilli(), u5Time.UnixMilli(), "kick", "mrpoundsign", "sub", 1); err != nil {
+		t.Fatalf("insert u-5: %v", err)
+	}
+	_ = rawDB.Close()
+
+	// 2. Open with NewSQLiteBackend -> triggers v2->v3 migration
+	backend, err := NewSQLiteBackend(dbFile)
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend on v2 DB failed: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+
+	// Verify pre-migration backup was created for v2
+	backups, err := ListBackups(dbFile)
+	if err != nil {
+		t.Fatalf("ListBackups failed: %v", err)
+	}
+	if len(backups) != 1 || !strings.Contains(backups[0], ".v2.") {
+		t.Fatalf("expected 1 v2 backup file, got %v", backups)
+	}
+
+	// Verify user_version is now 3
+	var userVer int
+	if err := backend.db.QueryRow(`PRAGMA user_version;`).Scan(&userVer); err != nil {
+		t.Fatalf("query user_version: %v", err)
+	}
+	if userVer != 3 {
+		t.Errorf("expected user_version=3, got %d", userVer)
+	}
+
+	// Verify sessions: should be 3 total (1 existing + 2 backfilled)
+	sessions, err := backend.ListSessions(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+	if len(sessions) != 3 {
+		t.Fatalf("expected 3 stream sessions, got %d: %+v", len(sessions), sessions)
+	}
+
+	// Verify events are correctly assigned
+	res, err := backend.Query(ctx, QueryFilter{})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if res.TotalCount != 6 {
+		t.Fatalf("expected 6 total entries, got %d", res.TotalCount)
+	}
+
+	sessMap := make(map[string]int64)
+	for _, e := range res.Entries {
+		sessMap[e.ID] = e.SessionID
+	}
+
+	if sessMap["sess1-ev"] != 1 {
+		t.Errorf("expected sess1-ev session_id=1, got %d", sessMap["sess1-ev"])
+	}
+	sessA := sessMap["u-1"]
+	if sessA <= 1 {
+		t.Errorf("expected u-1 to be assigned to new session > 1, got %d", sessA)
+	}
+	if sessMap["u-2"] != sessA {
+		t.Errorf("expected u-2 to share session %d with u-1, got %d", sessA, sessMap["u-2"])
+	}
+	if sessMap["u-3"] != sessA {
+		t.Errorf("expected u-3 to share session %d with u-1, got %d", sessA, sessMap["u-3"])
+	}
+
+	sessB := sessMap["u-4"]
+	if sessB <= sessA {
+		t.Errorf("expected u-4 to be in distinct session > %d, got %d", sessA, sessB)
+	}
+	if sessMap["u-5"] != sessB {
+		t.Errorf("expected u-5 to share session %d with u-4, got %d", sessB, sessMap["u-5"])
 	}
 }
 
