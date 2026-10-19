@@ -520,6 +520,26 @@ func TestLogsViewStreamSessionAndTotalsSummary(t *testing.T) {
 			t.Errorf("formatSummaryTotals missing %q: %q", expectedToken, formatted)
 		}
 	}
+
+	// 8. Verify debounced userSearchEntry and textSearchEntry filtering
+	lv.ResetFilters()
+	lv.liveTailCheck.SetChecked(false)
+
+	lv.userSearchEntry.SetText("sticker")
+	lv.textSearchEntry.SetText("Pear")
+	time.Sleep(searchDebounceDuration + 100*time.Millisecond)
+
+	lv.mu.Lock()
+	debouncedCount := len(lv.entries)
+	var firstID string
+	if debouncedCount > 0 {
+		firstID = lv.entries[0].ID
+	}
+	lv.mu.Unlock()
+	if debouncedCount != 1 || firstID != "sess-ev-2" {
+		t.Fatalf("expected debounced search to match sess-ev-2, got count=%d firstID=%q", debouncedCount, firstID)
+	}
 }
+
 
 

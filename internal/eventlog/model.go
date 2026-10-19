@@ -192,6 +192,7 @@ type QueryFilter struct {
 	ExcludedUsers []string          `json:"excluded_users,omitempty"`
 	Limit         int               `json:"limit,omitempty"`
 	Offset        int               `json:"offset,omitempty"`
+	SkipSummary   bool              `json:"skip_summary,omitempty"`
 	Retention     RetentionPolicy   `json:"-"`
 }
 

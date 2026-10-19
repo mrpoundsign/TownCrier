@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	_ "modernc.org/sqlite" // Pure-Go SQLite driver
 )
@@ -21,7 +22,7 @@ import (
 const (
 	defaultQueryLimit      = 100
 	maxQueryLimit          = 1000
-	currentSchemaVersion   = 1
+	currentSchemaVersion   = 2
 	maxDBBackups           = 5
 	historicalSessionGapMs = 60 * 60 * 1000 // 1 hour inactivity gap splits historical stream sessions
 )
@@ -72,13 +73,51 @@ CREATE TABLE IF NOT EXISTS event_logs (
 
 const sqliteIndexesSchema = `
 CREATE INDEX IF NOT EXISTS idx_event_logs_created_at ON event_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_logs_paid_time ON event_logs(is_paid_event, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_logs_session_id ON event_logs(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_logs_kind_time ON event_logs(kind, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_logs_plat_chan_time ON event_logs(platform, channel, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_logs_user_id_time ON event_logs(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_logs_user_name_time ON event_logs(user_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_logs_user_name_clean ON event_logs(LOWER(LTRIM(user_name, '@')), created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_logs_user_id_clean ON event_logs(LOWER(LTRIM(user_id, '@')), created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_logs_display_name_lower ON event_logs(LOWER(display_name), created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_logs_outcome_time ON event_logs(outcome, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_logs_alert_summary ON event_logs(created_at DESC, kind, platform, currency) WHERE kind NOT IN ('message', 'moderation') AND kind != '';
 CREATE INDEX IF NOT EXISTS idx_stream_sessions_started_at ON stream_sessions(started_at DESC);
+`
+
+const sqliteFTSSchema = `
+CREATE VIRTUAL TABLE IF NOT EXISTS event_logs_fts USING fts5(
+	user_id,
+	user_name,
+	display_name,
+	raw_text,
+	spoken_text,
+	item_name,
+	reward_title,
+	recipient,
+	content='event_logs',
+	content_rowid='rowid',
+	tokenize='trigram'
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_event_logs_ai AFTER INSERT ON event_logs BEGIN
+	INSERT INTO event_logs_fts(rowid, user_id, user_name, display_name, raw_text, spoken_text, item_name, reward_title, recipient)
+	VALUES (new.rowid, new.user_id, new.user_name, new.display_name, new.raw_text, new.spoken_text, new.item_name, new.reward_title, new.recipient);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_event_logs_ad AFTER DELETE ON event_logs BEGIN
+	INSERT INTO event_logs_fts(event_logs_fts, rowid, user_id, user_name, display_name, raw_text, spoken_text, item_name, reward_title, recipient)
+	VALUES ('delete', old.rowid, old.user_id, old.user_name, old.display_name, old.raw_text, old.spoken_text, old.item_name, old.reward_title, old.recipient);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_event_logs_au AFTER UPDATE OF user_id, user_name, display_name, raw_text, spoken_text, item_name, reward_title, recipient ON event_logs BEGIN
+	INSERT INTO event_logs_fts(event_logs_fts, rowid, user_id, user_name, display_name, raw_text, spoken_text, item_name, reward_title, recipient)
+	VALUES ('delete', old.rowid, old.user_id, old.user_name, old.display_name, old.raw_text, old.spoken_text, old.item_name, old.reward_title, old.recipient);
+	INSERT INTO event_logs_fts(rowid, user_id, user_name, display_name, raw_text, spoken_text, item_name, reward_title, recipient)
+	VALUES (new.rowid, new.user_id, new.user_name, new.display_name, new.raw_text, new.spoken_text, new.item_name, new.reward_title, new.recipient);
+END;
 `
 
 type columnSpec struct {
@@ -177,6 +216,7 @@ func cleanDBFilePath(p string) string {
 
 func migrateAndRecover(db *sql.DB, cleanFile string) error {
 	existingEventLogs := tableExists(db, "event_logs")
+	existingFTS := tableExists(db, "event_logs_fts")
 	userVersion := getUserVersion(db)
 
 	// 1. Pre-migration safety backup for existing on-disk databases before any schema/data migration runs
@@ -201,22 +241,34 @@ func migrateAndRecover(db *sql.DB, cleanFile string) error {
 		return err
 	}
 
-	// 4. Create indexes now that all target columns are guaranteed to exist
+	// 4. Create base B-tree indexes now that all target columns exist
 	if _, err := db.Exec(sqliteIndexesSchema); err != nil {
 		return fmt.Errorf("initialize sqlite indexes: %w", err)
 	}
 
-	// 5. Run one-time data migrations & historical session backfill when upgrading from user_version < 1
-	if userVersion < currentSchemaVersion {
+	// 5. Run v1 data migration & historical session backfill before attaching FTS5 triggers
+	if userVersion < 1 {
 		if err := runVersion1DataMigration(db); err != nil {
-			return fmt.Errorf("migrate sqlite data to v%d: %w", currentSchemaVersion, err)
+			return fmt.Errorf("migrate sqlite data to v1: %w", err)
 		}
+	}
+
+	// 6. Create FTS5 virtual table and sync triggers, then rebuild FTS5 index when upgrading to v2
+	if _, err := db.Exec(sqliteFTSSchema); err != nil {
+		return fmt.Errorf("initialize sqlite fts5 schema: %w", err)
+	}
+	if userVersion < 2 || (existingEventLogs && !existingFTS) {
+		if err := runVersion2DataMigration(db); err != nil {
+			return fmt.Errorf("migrate sqlite data to v2: %w", err)
+		}
+	}
+	if userVersion < currentSchemaVersion {
 		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d;", currentSchemaVersion)); err != nil {
 			return fmt.Errorf("set sqlite user_version: %w", err)
 		}
 	}
 
-	// 6. Auto-close any open stream_sessions left over from a previous run/crash
+	// 7. Auto-close any open stream_sessions left over from a previous run/crash
 	if err := recoverOpenSessions(db); err != nil {
 		return fmt.Errorf("recover open stream sessions: %w", err)
 	}
@@ -265,7 +317,7 @@ func needsMigration(db *sql.DB, userVersion int) bool {
 	if userVersion < currentSchemaVersion {
 		return true
 	}
-	if !tableExists(db, "stream_sessions") {
+	if !tableExists(db, "stream_sessions") || !tableExists(db, "event_logs_fts") {
 		return true
 	}
 	cols, err := tableColumns(db, "event_logs")
@@ -562,6 +614,11 @@ func runVersion1DataMigration(db *sql.DB) error {
 	}
 
 	return tx.Commit()
+}
+
+func runVersion2DataMigration(db *sql.DB) error {
+	_, err := db.Exec(`INSERT INTO event_logs_fts(event_logs_fts) VALUES('rebuild');`)
+	return err
 }
 
 // recoverOpenSessions inspects stream_sessions for any rows left open (ended_at = 0)
@@ -1006,15 +1063,30 @@ func buildWhereClause(filter QueryFilter) (string, []any) {
 		args = append(args, strings.TrimSpace(filter.KindFilter))
 	}
 
-	// 6. User / UserID filter
-	if uq := strings.TrimSpace(filter.UserQuery); uq != "" {
+	// 6 & 7. User / UserID and Message text substring filters (accelerated via FTS5 trigram index for >= 3 runes)
+	uq := strings.TrimSpace(filter.UserQuery)
+	tq := strings.TrimSpace(filter.TextQuery)
+	userFTS, hasUserFTS := ftsTrigramColumnExpr("user_id user_name display_name", uq)
+	textFTS, hasTextFTS := ftsTrigramColumnExpr("raw_text spoken_text item_name reward_title recipient", tq)
+	switch {
+	case hasUserFTS && hasTextFTS:
+		whereClauses = append(whereClauses, "rowid IN (SELECT rowid FROM event_logs_fts WHERE event_logs_fts MATCH ?)")
+		args = append(args, fmt.Sprintf("(%s) AND (%s)", userFTS, textFTS))
+	case hasUserFTS:
+		whereClauses = append(whereClauses, "rowid IN (SELECT rowid FROM event_logs_fts WHERE event_logs_fts MATCH ?)")
+		args = append(args, userFTS)
+	case hasTextFTS:
+		whereClauses = append(whereClauses, "rowid IN (SELECT rowid FROM event_logs_fts WHERE event_logs_fts MATCH ?)")
+		args = append(args, textFTS)
+	}
+
+	if uq != "" && !hasUserFTS {
 		likePat := "%" + strings.ToLower(uq) + "%"
 		whereClauses = append(whereClauses, "(LOWER(user_id) LIKE ? OR LOWER(user_name) LIKE ? OR LOWER(display_name) LIKE ?)")
 		args = append(args, likePat, likePat, likePat)
 	}
 
-	// 7. Message text substring filter (including item_name, reward_title, and recipient)
-	if tq := strings.TrimSpace(filter.TextQuery); tq != "" {
+	if tq != "" && !hasTextFTS {
 		likePat := "%" + strings.ToLower(tq) + "%"
 		whereClauses = append(whereClauses, "(LOWER(raw_text) LIKE ? OR LOWER(spoken_text) LIKE ? OR LOWER(item_name) LIKE ? OR LOWER(reward_title) LIKE ? OR LOWER(recipient) LIKE ?)")
 		args = append(args, likePat, likePat, likePat, likePat, likePat)
@@ -1073,6 +1145,25 @@ func buildWhereClause(filter QueryFilter) (string, []any) {
 	return whereSQL, args
 }
 
+// ftsTrigramColumnExpr formats an FTS5 column-filter phrase query for the trigram tokenizer
+// when rawQuery contains at least 3 runes.
+func ftsTrigramColumnExpr(cols, rawQuery string) (string, bool) {
+	if utf8.RuneCountInString(rawQuery) < 3 {
+		return "", false
+	}
+	escaped := strings.ReplaceAll(rawQuery, `"`, `""`)
+	return fmt.Sprintf(`{%s} : "%s"`, cols, escaped), true
+}
+
+func isSummaryEmptyForKindFilter(kindFilter string) bool {
+	switch strings.ToLower(strings.TrimSpace(kindFilter)) {
+	case "chat", "message", "moderation":
+		return true
+	default:
+		return false
+	}
+}
+
 // Summarize computes aggregated stream event and monetization metrics across all rows matching filter.
 func (s *SQLiteBackend) Summarize(ctx context.Context, filter QueryFilter) (*QuerySummary, error) {
 	s.mu.Lock()
@@ -1080,6 +1171,10 @@ func (s *SQLiteBackend) Summarize(ctx context.Context, filter QueryFilter) (*Que
 
 	if s.db == nil {
 		return nil, errors.New("sqlite backend is closed")
+	}
+
+	if isSummaryEmptyForKindFilter(filter.KindFilter) {
+		return &QuerySummary{}, nil
 	}
 
 	whereSQL, args := buildWhereClause(filter)
@@ -1129,42 +1224,74 @@ GROUP BY LOWER(kind), LOWER(platform), UPPER(TRIM(currency));`
 			return summary, fmt.Errorf("scan summary row: %w", err)
 		}
 
-		switch kind {
-		case "sub", "resub", "membership":
-			summary.TotalSubs += rowCount
-		case "gift_sub", "gift_membership":
-			summary.TotalGiftSubs += sumCount
-		case "cheer":
-			summary.TotalBits += sumAmount
-		case "gift":
-			val := sumAmount
-			if val <= 0 {
-				val = float64(sumCount)
-			}
-			if platform == "kick" || currency == "KICKS" {
-				summary.TotalKicks += val
-			} else {
-				summary.TotalDiamonds += val
-			}
-		case "super_chat", "super_sticker", "superchat", "supersticker":
-			curr := currency
-			if curr == "" {
-				curr = "USD"
-			}
-			if summary.SuperChatByCurr == nil {
-				summary.SuperChatByCurr = make(map[string]float64)
-			}
-			summary.SuperChatByCurr[curr] += sumAmount
-		case "raid":
-			summary.TotalRaids += rowCount
-			summary.TotalRaidViewers += sumCount
-		case "follow":
-			summary.TotalFollows += rowCount
-		case "redemption":
-			summary.TotalRedemptions += rowCount
-		}
+		accumulateSummaryRow(&summary, kind, platform, currency, rowCount, sumAmount, sumCount)
 	}
 	return summary, rows.Err()
+}
+
+func accumulateSummaryRow(summary *QuerySummary, kind, platform, currency string, rowCount int, sumAmount float64, sumCount int) {
+	switch kind {
+	case "sub", "resub", "membership":
+		summary.TotalSubs += rowCount
+	case "gift_sub", "gift_membership":
+		summary.TotalGiftSubs += sumCount
+	case "cheer":
+		summary.TotalBits += sumAmount
+	case "gift":
+		val := sumAmount
+		if val <= 0 {
+			val = float64(sumCount)
+		}
+		if platform == "kick" || currency == "KICKS" {
+			summary.TotalKicks += val
+		} else {
+			summary.TotalDiamonds += val
+		}
+	case "super_chat", "super_sticker", "superchat", "supersticker":
+		curr := currency
+		if curr == "" {
+			curr = "USD"
+		}
+		if summary.SuperChatByCurr == nil {
+			summary.SuperChatByCurr = make(map[string]float64)
+		}
+		summary.SuperChatByCurr[curr] += sumAmount
+	case "raid":
+		summary.TotalRaids += rowCount
+		summary.TotalRaidViewers += sumCount
+	case "follow":
+		summary.TotalFollows += rowCount
+	case "redemption":
+		summary.TotalRedemptions += rowCount
+	}
+}
+
+func summarizeEntriesInMemory(entries []Entry) QuerySummary {
+	var summary QuerySummary
+	for i := range entries {
+		e := &entries[i]
+		kind := strings.ToLower(strings.TrimSpace(e.Kind))
+		if kind == "" || kind == "message" || kind == "moderation" {
+			continue
+		}
+		plat := strings.ToLower(strings.TrimSpace(e.Platform))
+		curr := strings.ToUpper(strings.TrimSpace(e.Currency))
+		cnt := e.Count
+		if cnt <= 0 {
+			cnt = 1
+		}
+		accumulateSummaryRow(&summary, kind, plat, curr, 1, e.Amount, cnt)
+	}
+	return summary
+}
+
+func hasFTSFilter(filter QueryFilter) bool {
+	_, uOK := ftsTrigramColumnExpr("user_id user_name display_name", strings.TrimSpace(filter.UserQuery))
+	if uOK {
+		return true
+	}
+	_, tOK := ftsTrigramColumnExpr("raw_text spoken_text item_name reward_title recipient", strings.TrimSpace(filter.TextQuery))
+	return tOK
 }
 
 // Query searches event_logs with session, date range, platform, channel, user, text, outcome, and dynamic retention filters.
@@ -1178,19 +1305,6 @@ func (s *SQLiteBackend) Query(ctx context.Context, filter QueryFilter) (*QueryRe
 
 	whereSQL, args := buildWhereClause(filter)
 
-	// Count total matching rows
-	var totalCount int
-	countSQL := "SELECT COUNT(*) FROM event_logs" + whereSQL
-	if err := s.db.QueryRowContext(ctx, countSQL, args...).Scan(&totalCount); err != nil {
-		return nil, fmt.Errorf("count event logs: %w", err)
-	}
-
-	// Compute aggregated summary across all matching rows
-	summary, err := s.computeSummaryLocked(ctx, whereSQL, args)
-	if err != nil {
-		return nil, err
-	}
-
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = defaultQueryLimit
@@ -1198,6 +1312,13 @@ func (s *SQLiteBackend) Query(ctx context.Context, filter QueryFilter) (*QueryRe
 		limit = maxQueryLimit
 	}
 	offset := max(filter.Offset, 0)
+
+	// When FTS5 is active, use +created_at DESC so SQLite's query planner drives the lookup
+	// from the FTS5 rowid set instead of scanning idx_event_logs_created_at across the whole table.
+	orderByClause := "ORDER BY created_at DESC, id DESC"
+	if hasFTSFilter(filter) {
+		orderByClause = "ORDER BY +created_at DESC, id DESC"
+	}
 
 	querySQL := `
 SELECT
@@ -1207,8 +1328,7 @@ SELECT
 	amount, unit_amount, currency, item_name, sub_tier, recipient, reward_id, reward_title,
 	months, count,
 	passed_filters, spoken, outcome, outcome_detail
-FROM event_logs` + whereSQL + `
-ORDER BY created_at DESC, id DESC
+FROM event_logs` + whereSQL + "\n" + orderByClause + `
 LIMIT ? OFFSET ?;`
 
 	queryArgs := append(append([]any{}, args...), limit, offset)
@@ -1283,8 +1403,43 @@ LIMIT ? OFFSET ?;`
 		}
 		entries = append(entries, e)
 	}
+	_ = rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate event log rows: %w", err)
+	}
+
+	var totalCount int
+	var summary QuerySummary
+
+	switch {
+	case offset == 0 && len(entries) < limit:
+		// All matching rows fit in this single page: no extra COUNT(*) or GROUP BY SQL query needed.
+		totalCount = len(entries)
+		if !filter.SkipSummary && !isSummaryEmptyForKindFilter(filter.KindFilter) && totalCount > 0 {
+			summary = summarizeEntriesInMemory(entries)
+		}
+	case offset > 0 && len(entries) > 0 && len(entries) < limit:
+		// Partial final page: exact total count is known without a COUNT(*) query.
+		totalCount = offset + len(entries)
+		if !filter.SkipSummary && !isSummaryEmptyForKindFilter(filter.KindFilter) {
+			sum, err := s.computeSummaryLocked(ctx, whereSQL, args)
+			if err != nil {
+				return nil, err
+			}
+			summary = sum
+		}
+	default:
+		countSQL := "SELECT COUNT(*) FROM event_logs" + whereSQL
+		if err := s.db.QueryRowContext(ctx, countSQL, args...).Scan(&totalCount); err != nil {
+			return nil, fmt.Errorf("count event logs: %w", err)
+		}
+		if !filter.SkipSummary && !isSummaryEmptyForKindFilter(filter.KindFilter) && totalCount > 0 {
+			sum, err := s.computeSummaryLocked(ctx, whereSQL, args)
+			if err != nil {
+				return nil, err
+			}
+			summary = sum
+		}
 	}
 
 	return &QueryResult{
