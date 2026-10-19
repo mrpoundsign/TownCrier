@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -293,7 +294,7 @@ func mapChatEvent(e gotiktoklive.ChatEvent) *chat.Event {
 		return nil
 	}
 	userID, userName, displayName := extractUserFields(e.User)
-	roles := extractRoles(e.User, e.UserIdentity)
+	roles, fanClubLevel := extractRoles(e.User, e.UserIdentity)
 
 	ts := time.Now()
 	if e.Timestamp > 0 {
@@ -306,21 +307,22 @@ func mapChatEvent(e gotiktoklive.ChatEvent) *chat.Event {
 	}
 
 	return &chat.Event{
-		ID:          msgID,
-		Platform:    "tiktok",
-		Kind:        chat.EventKindMessage,
-		Timestamp:   ts,
-		UserID:      userID,
-		UserName:    userName,
-		DisplayName: displayName,
-		Roles:       roles,
-		Text:        text,
+		ID:           msgID,
+		Platform:     "tiktok",
+		Kind:         chat.EventKindMessage,
+		Timestamp:    ts,
+		UserID:       userID,
+		UserName:     userName,
+		DisplayName:  displayName,
+		Roles:        roles,
+		FanClubLevel: fanClubLevel,
+		Text:         text,
 	}
 }
 
 func mapGiftEvent(e gotiktoklive.GiftEvent) GiftInput {
 	userID, userName, displayName := extractUserFields(e.User)
-	roles := extractRoles(e.User, e.UserIdentity)
+	roles, fanClubLevel := extractRoles(e.User, e.UserIdentity)
 
 	ts := time.Now()
 	if e.Timestamp > 0 {
@@ -338,6 +340,7 @@ func mapGiftEvent(e gotiktoklive.GiftEvent) GiftInput {
 		UserName:     userName,
 		DisplayName:  displayName,
 		Roles:        roles,
+		FanClubLevel: fanClubLevel,
 		GiftID:       e.ID,
 		GiftName:     e.Name,
 		UnitDiamonds: e.Diamonds,
@@ -353,7 +356,7 @@ func mapUserEvent(e gotiktoklive.UserEvent) *chat.Event {
 		return nil
 	}
 	userID, userName, displayName := extractUserFields(e.User)
-	roles := extractRoles(e.User, nil)
+	roles, fanClubLevel := extractRoles(e.User, nil)
 
 	ts := time.Now()
 	if e.Timestamp > 0 {
@@ -366,14 +369,15 @@ func mapUserEvent(e gotiktoklive.UserEvent) *chat.Event {
 	}
 
 	return &chat.Event{
-		ID:          msgID,
-		Platform:    "tiktok",
-		Kind:        chat.EventKindFollow,
-		Timestamp:   ts,
-		UserID:      userID,
-		UserName:    userName,
-		DisplayName: displayName,
-		Roles:       roles,
+		ID:           msgID,
+		Platform:     "tiktok",
+		Kind:         chat.EventKindFollow,
+		Timestamp:    ts,
+		UserID:       userID,
+		UserName:     userName,
+		DisplayName:  displayName,
+		Roles:        roles,
+		FanClubLevel: fanClubLevel,
 	}
 }
 
@@ -398,8 +402,14 @@ func extractUserFields(u *gotiktoklive.User) (userID, userName, displayName stri
 	return userID, userName, displayName
 }
 
-func extractRoles(u *gotiktoklive.User, ident *gotiktoklive.UserIdentity) []string {
+var (
+	reBadgeStrLevel = regexp.MustCompile(`(?i)\bstr:\s*"(?:lv\.?\s*)?(\d+)"`)
+	reBadgeNumLevel = regexp.MustCompile(`(?i)\b(?:number|level):\s*"?(\d+)"?`)
+)
+
+func extractRoles(u *gotiktoklive.User, ident *gotiktoklive.UserIdentity) ([]string, int) {
 	var roles []string
+	var fanClubLevel int
 	seen := make(map[string]struct{})
 	add := func(r string) {
 		if _, ok := seen[r]; !ok {
@@ -432,8 +442,16 @@ func extractRoles(u *gotiktoklive.User, ident *gotiktoklive.UserIdentity) []stri
 			if strings.Contains(lower, "moderator") || strings.Contains(lower, "admin") {
 				add("mod")
 			}
-			if strings.Contains(lower, "subscriber") || strings.Contains(lower, "member") {
+			if isSubscriberOrSuperFanBadge(lower) {
 				add("subscriber")
+			}
+			if isFanClubBadge(lower) {
+				add("fan_club")
+				if lvl := parseBadgeLevel(b.Name); lvl > fanClubLevel {
+					fanClubLevel = lvl
+				} else if fanClubLevel == 0 {
+					fanClubLevel = 1
+				}
 			}
 			if strings.Contains(lower, "top_gifter") || strings.Contains(lower, "gifter") {
 				add("vip")
@@ -441,7 +459,37 @@ func extractRoles(u *gotiktoklive.User, ident *gotiktoklive.UserIdentity) []stri
 		}
 	}
 
-	return roles
+	return roles, fanClubLevel
+}
+
+func isSubscriberOrSuperFanBadge(lower string) bool {
+	return strings.Contains(lower, "subscriber") ||
+		strings.Contains(lower, "subs_badge") ||
+		strings.Contains(lower, "superfan") ||
+		strings.Contains(lower, "super_fan")
+}
+
+func isFanClubBadge(lower string) bool {
+	return strings.Contains(lower, "fans_badge") ||
+		strings.Contains(lower, "fansclub") ||
+		strings.Contains(lower, "fan_club") ||
+		strings.Contains(lower, "fans_club") ||
+		strings.Contains(lower, "fans_level") ||
+		strings.Contains(lower, "team_member")
+}
+
+func parseBadgeLevel(raw string) int {
+	if m := reBadgeStrLevel.FindStringSubmatch(raw); len(m) == 2 {
+		if lvl, err := strconv.Atoi(m[1]); err == nil && lvl > 0 {
+			return lvl
+		}
+	}
+	if m := reBadgeNumLevel.FindStringSubmatch(raw); len(m) == 2 {
+		if lvl, err := strconv.Atoi(m[1]); err == nil && lvl > 0 {
+			return lvl
+		}
+	}
+	return 0
 }
 
 func parseTikTokTimestamp(ts int64) time.Time {

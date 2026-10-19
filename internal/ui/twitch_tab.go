@@ -503,7 +503,7 @@ func (v *TwitchTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 		ignorePrefixRow,
 		prefixRow,
 		v.roleGatedCheck,
-		container.NewPadded(roleBoxes),
+		indentLeft(28, roleBoxes),
 		v.paidOnlyCheck,
 	)
 

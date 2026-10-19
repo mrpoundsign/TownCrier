@@ -18,14 +18,17 @@ func EvaluateReadRules(event *Event, rules config.ReadRules) (bool, string) {
 	// 1. Role Gate check (D18)
 	if rules.RoleGated {
 		matchedRole := false
-		for _, r := range event.Roles {
-			for _, allowed := range rules.Roles {
-				if strings.EqualFold(r, allowed) {
+		minLevel := max(1, rules.MinFanClubLevel)
+		for _, allowed := range rules.Roles {
+			if strings.EqualFold(allowed, "fan_club") {
+				if event.FanClubLevel >= minLevel || (minLevel == 1 && hasRole(event.Roles, "fan_club")) {
 					matchedRole = true
 					break
 				}
+				continue
 			}
-			if matchedRole {
+			if hasRole(event.Roles, allowed) {
+				matchedRole = true
 				break
 			}
 		}
@@ -83,4 +86,13 @@ func EvaluateReadRules(event *Event, rules config.ReadRules) (bool, string) {
 	}
 
 	return false, ""
+}
+
+func hasRole(roles []string, target string) bool {
+	for _, r := range roles {
+		if strings.EqualFold(r, target) {
+			return true
+		}
+	}
+	return false
 }

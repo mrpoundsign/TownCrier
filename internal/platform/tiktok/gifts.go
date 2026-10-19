@@ -18,6 +18,7 @@ type GiftInput struct {
 	UserName     string
 	DisplayName  string
 	Roles        []string
+	FanClubLevel int
 	GiftID       int64
 	GiftName     string
 	UnitDiamonds int
@@ -167,10 +168,11 @@ func buildGiftChatEvent(in GiftInput) *chat.Event {
 		Kind:        chat.EventKindGift,
 		Timestamp:   in.Timestamp,
 		UserID:      in.UserID,
-		UserName:    in.UserName,
-		DisplayName: in.DisplayName,
-		Roles:       in.Roles,
-		Text:        in.GiftName,
+		UserName:     in.UserName,
+		DisplayName:  in.DisplayName,
+		Roles:        in.Roles,
+		FanClubLevel: in.FanClubLevel,
+		Text:         in.GiftName,
 		Count:       count,
 		Amount:      totalDiamonds,
 		Currency:    "Diamonds",

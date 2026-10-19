@@ -178,3 +178,67 @@ func TestEvaluateReadRules_IgnoredPrefixes(t *testing.T) {
 		t.Error("expected !song to be dropped when IgnorePrefixes is active")
 	}
 }
+
+func TestEvaluateReadRules_FanClubLevel(t *testing.T) {
+	rules := config.ReadRules{
+		AllChat:         true,
+		RoleGated:       true,
+		Roles:           []string{"mod", "subscriber", "fan_club"},
+		MinFanClubLevel: 10,
+	}
+
+	// 1. Fan club member below min level (level 5) without other roles -> blocked
+	lowFanEv := &Event{
+		Kind:         EventKindMessage,
+		Text:         "level 5 fan",
+		Roles:        []string{"fan_club"},
+		FanClubLevel: 5,
+	}
+	if speak, _ := EvaluateReadRules(lowFanEv, rules); speak {
+		t.Error("expected Fan Club level 5 viewer to be blocked when MinFanClubLevel is 10")
+	}
+
+	// 2. Fan club member at min level (level 10) -> allowed
+	exactFanEv := &Event{
+		Kind:         EventKindMessage,
+		Text:         "level 10 fan",
+		Roles:        []string{"fan_club"},
+		FanClubLevel: 10,
+	}
+	if speak, _ := EvaluateReadRules(exactFanEv, rules); !speak {
+		t.Error("expected Fan Club level 10 viewer to pass when MinFanClubLevel is 10")
+	}
+
+	// 3. Fan club member above min level (level 25) -> allowed
+	highFanEv := &Event{
+		Kind:         EventKindMessage,
+		Text:         "level 25 fan",
+		Roles:        []string{"fan_club"},
+		FanClubLevel: 25,
+	}
+	if speak, _ := EvaluateReadRules(highFanEv, rules); !speak {
+		t.Error("expected Fan Club level 25 viewer to pass when MinFanClubLevel is 10")
+	}
+
+	// 4. OR logic: Moderator or Super Fan / Subscriber with low/no Fan Club level -> allowed
+	modLowFanEv := &Event{
+		Kind:         EventKindMessage,
+		Text:         "mod message",
+		Roles:        []string{"mod", "fan_club"},
+		FanClubLevel: 2,
+	}
+	if speak, _ := EvaluateReadRules(modLowFanEv, rules); !speak {
+		t.Error("expected Moderator with Fan Club level 2 to pass via OR role gate")
+	}
+
+	superFanEv := &Event{
+		Kind:         EventKindMessage,
+		Text:         "superfan message",
+		Roles:        []string{"subscriber"},
+		FanClubLevel: 0,
+	}
+	if speak, _ := EvaluateReadRules(superFanEv, rules); !speak {
+		t.Error("expected Super Fan / Subscriber to pass via OR role gate")
+	}
+}
+

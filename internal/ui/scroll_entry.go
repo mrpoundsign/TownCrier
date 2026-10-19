@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"image/color"
+
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 )
@@ -134,6 +137,12 @@ func newPanelVScroll(content fyne.CanvasObject) *container.Scroll {
 	scroll := container.NewVScroll(content)
 	bindScrollPassEntries(content, scroll)
 	return scroll
+}
+
+func indentLeft(px float32, obj fyne.CanvasObject) fyne.CanvasObject {
+	spacer := canvas.NewRectangle(color.Transparent)
+	spacer.SetMinSize(fyne.NewSize(px, 1))
+	return container.NewBorder(nil, nil, spacer, nil, obj)
 }
 
 func bindScrollPassEntries(node fyne.CanvasObject, scroll fyne.Scrollable) {

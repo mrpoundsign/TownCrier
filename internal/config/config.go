@@ -120,6 +120,7 @@ type ReadRules struct {
 	IgnoredPrefixes []string `json:"ignored_prefixes"`
 	RoleGated       bool     `json:"role_gated"`
 	Roles           []string `json:"roles"`
+	MinFanClubLevel int      `json:"min_fan_club_level,omitempty"`
 	PaidOnly        bool     `json:"paid_only"`
 }
 
@@ -445,6 +446,7 @@ func DefaultConfig() *Config {
 					IgnoredPrefixes: []string{"!"},
 					RoleGated:       false,
 					Roles:           []string{"broadcaster", "mod", "vip", "subscriber"},
+					MinFanClubLevel: 1,
 					PaidOnly:        false,
 				},
 				ModCommandsEnabled: false,

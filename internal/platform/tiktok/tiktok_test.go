@@ -254,3 +254,80 @@ func TestConnector_ChatFollowAndGiftEvents(t *testing.T) {
 		t.Errorf("expected status transitions")
 	}
 }
+
+func TestExtractRoles_FanClubAndSuperFan(t *testing.T) {
+	// 1. Fan Club member (Level 18 via CombineBadge str field)
+	fanUser := &gotiktoklive.User{
+		ID:       2001,
+		Username: "fan18",
+		Nickname: "Fan Eighteen",
+		Badge: &gotiktoklive.BadgeAttributes{
+			Badges: []*gotiktoklive.UserBadge{
+				{
+					Type: "BADGEDISPLAYTYPE_COMBINE",
+					Name: `displayType:BADGEDISPLAYTYPE_COMBINE combine:{icon:{urlList:"https://p16-webcast.tiktokcdn.com/img/maliva/webcast-va/fans_badge_icon_lv18.png"} text:{key:"pm_mt_fans_club_name" defaultPattern:"Team Member"} str:"18"}`,
+				},
+			},
+		},
+	}
+	ev := mapChatEvent(gotiktoklive.ChatEvent{
+		Comment: "hello from fan club",
+		User:    fanUser,
+	})
+	if ev == nil {
+		t.Fatal("expected mapped chat event")
+	}
+	if ev.FanClubLevel != 18 {
+		t.Errorf("FanClubLevel = %d, want 18", ev.FanClubLevel)
+	}
+	if len(ev.Roles) != 1 || ev.Roles[0] != "fan_club" {
+		t.Errorf("Roles = %v, want [fan_club] (should not falsely match subscriber on 'Team Member')", ev.Roles)
+	}
+
+	// 2. Fan Club member via NumberConfig number field
+	fanNumUser := &gotiktoklive.User{
+		ID:       2002,
+		Username: "fan32",
+		Badge: &gotiktoklive.BadgeAttributes{
+			Badges: []*gotiktoklive.UserBadge{
+				{
+					Type: "BADGEDISPLAYTYPE_COMBINE",
+					Name: `combine:{icon:{uri:"webcast-va/fansclub_badge"} profileCardPanel:{profileContent:{numberConfig:{number: 32}}}}`,
+				},
+			},
+		},
+	}
+	roles, lvl := extractRoles(fanNumUser, nil)
+	if lvl != 32 {
+		t.Errorf("lvl = %d, want 32", lvl)
+	}
+	if len(roles) != 1 || roles[0] != "fan_club" {
+		t.Errorf("roles = %v, want [fan_club]", roles)
+	}
+
+	// 3. Super Fan (paid LIVE subscriber via UserIdentity.IsSubscriber + Level 10 Fan Club badge)
+	superFanUser := &gotiktoklive.User{
+		ID:       2003,
+		Username: "superfan1",
+		Badge: &gotiktoklive.BadgeAttributes{
+			Badges: []*gotiktoklive.UserBadge{
+				{
+					Type: "BADGEDISPLAYTYPE_COMBINE",
+					Name: `combine:{icon:{uri:"ttlive_superfan_badge"}}`,
+				},
+				{
+					Type: "BADGEDISPLAYTYPE_COMBINE",
+					Name: `combine:{icon:{uri:"fans_badge_lv12"} str: "12"}`,
+				},
+			},
+		},
+	}
+	sfRoles, sfLvl := extractRoles(superFanUser, &gotiktoklive.UserIdentity{IsSubscriber: true})
+	if sfLvl != 12 {
+		t.Errorf("sfLvl = %d, want 12", sfLvl)
+	}
+	if len(sfRoles) != 2 || sfRoles[0] != "subscriber" || sfRoles[1] != "fan_club" {
+		t.Errorf("sfRoles = %v, want [subscriber fan_club]", sfRoles)
+	}
+}
+

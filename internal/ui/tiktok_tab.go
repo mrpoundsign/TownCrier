@@ -29,6 +29,7 @@ type TikTokTabView struct {
 	prefixEntry       *ScrollPassEntry
 	roleGatedCheck    *widget.Check
 	roleChecks        map[string]*widget.Check
+	fanClubLevelEntry *ScrollPassEntry
 	paidOnlyCheck     *widget.Check
 	overrideCheck     *widget.Check
 	onStatus          func(msg string)
@@ -217,6 +218,18 @@ func (v *TikTokTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 	v.prefixCheck.SetChecked(rr.PrefixOnly)
 	prefixRow := container.NewBorder(nil, nil, v.prefixCheck, nil, v.prefixEntry)
 
+	updateFanClubLevelEntryState := func() {
+		if v.fanClubLevelEntry == nil {
+			return
+		}
+		fcChk := v.roleChecks["fan_club"]
+		if v.roleGatedCheck != nil && v.roleGatedCheck.Checked && fcChk != nil && fcChk.Checked {
+			v.fanClubLevelEntry.Enable()
+		} else {
+			v.fanClubLevelEntry.Disable()
+		}
+	}
+
 	v.roleGatedCheck = widget.NewCheck("Role Gated (Only read messages from checked roles):", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
 			p := c.Platforms["tiktok"]
@@ -230,6 +243,7 @@ func (v *TikTokTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 				chk.Disable()
 			}
 		}
+		updateFanClubLevelEntryState()
 	})
 	v.roleGatedCheck.SetChecked(rr.RoleGated)
 
@@ -245,7 +259,8 @@ func (v *TikTokTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 		{"broadcaster", "Host / Broadcaster"},
 		{"mod", "Moderator"},
 		{"vip", "Top Gifter / VIP"},
-		{"subscriber", "Subscriber"},
+		{"subscriber", "Super Fan / Subscriber"},
+		{"fan_club", "Fan Club"},
 	}
 	roleBoxes := container.NewHBox()
 	for _, rd := range roleDefs {
@@ -258,9 +273,30 @@ func (v *TikTokTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 		}
 		chk.OnChanged = func(b bool) {
 			v.saveRoles()
+			updateFanClubLevelEntryState()
 		}
 		roleBoxes.Add(chk)
 	}
+
+	minLvl := max(rr.MinFanClubLevel, 1)
+	v.fanClubLevelEntry = NewScrollPassEntry()
+	v.fanClubLevelEntry.SetPlaceHolder("1")
+	v.fanClubLevelEntry.SetText(strconv.Itoa(minLvl))
+	v.fanClubLevelEntry.OnChanged = func(val string) {
+		lvl, err := strconv.Atoi(strings.TrimSpace(val))
+		if err != nil || lvl < 1 {
+			lvl = 1
+		}
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["tiktok"]
+			p.ReadRules.MinFanClubLevel = lvl
+			c.Platforms["tiktok"] = p
+		})
+	}
+	updateFanClubLevelEntryState()
+
+	roleBoxes.Add(widget.NewLabel("Min Lv:"))
+	roleBoxes.Add(container.NewGridWrap(fyne.NewSize(55, v.fanClubLevelEntry.MinSize().Height), v.fanClubLevelEntry))
 
 	v.paidOnlyCheck = widget.NewCheck("Paid Only (Only read TikTok Gifts)", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
@@ -316,7 +352,7 @@ func (v *TikTokTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 		ignorePrefixRow,
 		prefixRow,
 		v.roleGatedCheck,
-		container.NewPadded(roleBoxes),
+		indentLeft(28, roleBoxes),
 		v.paidOnlyCheck,
 	)
 

@@ -61,6 +61,7 @@ type Event struct {
 	UserName      string      `json:"user_name"`
 	DisplayName   string      `json:"display_name"`
 	Roles         []string    `json:"roles,omitempty"`
+	FanClubLevel  int         `json:"fan_club_level,omitempty"`
 	IsBotSignal   bool        `json:"is_bot_signal"`
 	Text          string      `json:"text"`
 	EmoteSpans    []EmoteSpan `json:"emote_spans,omitempty"`

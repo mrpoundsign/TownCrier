@@ -316,7 +316,7 @@ func (v *KickTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.Car
 		ignorePrefixRow,
 		prefixRow,
 		v.roleGatedCheck,
-		container.NewPadded(roleBoxes),
+		indentLeft(28, roleBoxes),
 		v.paidOnlyCheck,
 	)
 
