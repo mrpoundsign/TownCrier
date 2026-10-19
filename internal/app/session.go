@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -95,6 +96,7 @@ func NewSession(cfg *config.Config, store secrets.Store) *Session {
 			}
 		},
 	)
+	s.twitchConnector.SetOAuthManager(s.twitchOAuth)
 
 	s.youtubeConnector = youtube.NewConnector(
 		func(event *chat.Event) {
@@ -579,6 +581,94 @@ func (s *Session) recordEventLog(entry *eventlog.Entry) {
 	_ = elog.Append(context.Background(), entry)
 }
 
+// RefreshTwitchOAuth notifies the Twitch connector to start or stop EventSub based on OAuth token status.
+func (s *Session) RefreshTwitchOAuth() {
+	if s.twitchConnector != nil {
+		s.twitchConnector.RefreshOAuth()
+	}
+}
+
+func formatEventLogRawText(event *chat.Event) string {
+	if event == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(event.Text)
+	switch event.Kind {
+	case chat.EventKindFollow:
+		if msg != "" {
+			return msg
+		}
+		return "Followed the channel"
+	case chat.EventKindSub:
+		if msg != "" {
+			return "Subscribed: " + msg
+		}
+		return "Subscribed"
+	case chat.EventKindResub:
+		months := event.Months
+		if months <= 0 {
+			months = 1
+		}
+		if msg != "" {
+			return fmt.Sprintf("Resubscribed (%d months): %s", months, msg)
+		}
+		return fmt.Sprintf("Resubscribed (%d months)", months)
+	case chat.EventKindGiftSub:
+		if msg != "" {
+			return msg
+		}
+		count := event.Count
+		if count <= 0 {
+			count = 1
+		}
+		return fmt.Sprintf("Gifted %d subscriptions", count)
+	case chat.EventKindCheer:
+		if msg != "" {
+			return msg
+		}
+		return fmt.Sprintf("Cheered %.0f bits", event.Amount)
+	case chat.EventKindRaid:
+		if msg != "" {
+			return msg
+		}
+		count := event.Count
+		if count <= 0 {
+			count = 1
+		}
+		return fmt.Sprintf("Raided with %d viewers", count)
+	case chat.EventKindRedemption:
+		reward := strings.TrimSpace(event.RewardTitle)
+		if reward == "" {
+			reward = strings.TrimSpace(event.RewardID)
+		}
+		if reward == "" {
+			reward = "Channel Point Reward"
+		}
+		if msg != "" {
+			return fmt.Sprintf("[%s] %s", reward, msg)
+		}
+		return "Redeemed " + reward
+	case chat.EventKindGift:
+		giftName := strings.TrimSpace(event.RewardTitle)
+		if giftName == "" {
+			giftName = "Gift"
+		}
+		count := event.Count
+		if count <= 0 {
+			count = int(event.Amount)
+		}
+		if count <= 0 {
+			count = 1
+		}
+		if msg != "" {
+			return fmt.Sprintf("Sent %d %s: %s", count, giftName, msg)
+		}
+		return fmt.Sprintf("Sent %d %s", count, giftName)
+	default:
+		return event.Text
+	}
+}
+
 // DispatchEvent routes an inbound stream event through bot matching, routing, sanitization, and queueing.
 func (s *Session) DispatchEvent(event *chat.Event) error {
 	if event == nil {
@@ -600,14 +690,14 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 			event.Channel = pCfg.AccountName
 		}
 	}
-	rawText := event.Text
+	rawText := formatEventLogRawText(event)
 	var rawEmotes []chat.EmoteSpan
 	if len(event.EmoteSpans) > 0 {
 		rawEmotes = make([]chat.EmoteSpan, len(event.EmoteSpans))
 		copy(rawEmotes, event.EmoteSpans)
 	}
 
-	log.Printf("[Session] DispatchEvent: user=%q platform=%s channel=%q text=%q roles=%v", event.UserName, event.Platform, event.Channel, event.Text, event.Roles)
+	log.Printf("[Session] DispatchEvent: user=%q platform=%s channel=%q kind=%s text=%q roles=%v", event.UserName, event.Platform, event.Channel, event.Kind, event.Text, event.Roles)
 
 	// 1. Bot Matcher (known bots, platform bot signals, viewer blocklist/allowlist)
 	if s.bots != nil && s.bots.ShouldIgnore(event, cfg) {
@@ -616,7 +706,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		return nil
 	}
 
-	// 2. Platform Read Rules & Role Gating (PRD D18)
+	// 2. Platform Notifications & Read Rules (PRD D18)
 	if pCfg, ok := cfg.Platforms[event.Platform]; ok {
 		if event.Kind != chat.EventKindMessage && pCfg.Notifications != nil {
 			if notif, hasNotif := pCfg.Notifications[string(event.Kind)]; hasNotif {
@@ -625,9 +715,19 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 					s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedDisabled, fmt.Sprintf("Notification kind %q disabled", event.Kind)))
 					return nil
 				}
+				if event.Kind == chat.EventKindRedemption {
+					if targetReward := strings.TrimSpace(pCfg.CustomRewardID); targetReward != "" {
+						if !strings.EqualFold(strings.TrimSpace(event.RewardID), targetReward) &&
+							!strings.EqualFold(strings.TrimSpace(event.RewardTitle), targetReward) {
+							log.Printf("[Session] Redemption filtered by CustomRewardID (%q != %q / %q): user=%q", targetReward, event.RewardID, event.RewardTitle, event.UserName)
+							s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedDisabled, fmt.Sprintf("Reward %q does not match designated reward filter %q", event.RewardTitle, targetReward)))
+							return nil
+						}
+					}
+				}
 				if notif.Threshold > 0 {
 					val := event.Amount
-					if event.Kind == chat.EventKindRaid {
+					if event.Kind == chat.EventKindRaid || event.Kind == chat.EventKindGiftSub || (event.Kind == chat.EventKindGift && val == 0) {
 						val = float64(event.Count)
 					}
 					if val < notif.Threshold {
@@ -642,14 +742,16 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 			}
 		}
 
-		shouldSpeak, strippedText := chat.EvaluateReadRules(event, pCfg.ReadRules)
-		if !shouldSpeak {
-			log.Printf("[Session] Event dropped by ReadRules: user=%q roles=%v rules=%+v", event.UserName, event.Roles, pCfg.ReadRules)
-			s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedReadRules, "Rejected by platform read rules"))
-			return nil
-		}
-		if strippedText != "" {
-			event.Text = strippedText
+		if event.Kind == chat.EventKindMessage {
+			shouldSpeak, strippedText := chat.EvaluateReadRules(event, pCfg.ReadRules)
+			if !shouldSpeak {
+				log.Printf("[Session] Event dropped by ReadRules: user=%q roles=%v rules=%+v", event.UserName, event.Roles, pCfg.ReadRules)
+				s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedReadRules, "Rejected by platform read rules"))
+				return nil
+			}
+			if strippedText != "" {
+				event.Text = strippedText
+			}
 		}
 	}
 

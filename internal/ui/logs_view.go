@@ -49,6 +49,18 @@ const (
 	outcomeLabelMod      = "Moderation Actions"
 )
 
+const (
+	eventTypeAll         = "All Types"
+	eventTypeChatOnly    = "Chat Only"
+	eventTypeAlertsOnly  = "Alerts Only"
+	eventTypeFollows     = "Follows"
+	eventTypeSubs        = "Subscriptions"
+	eventTypeCheers      = "Cheers / Gifts"
+	eventTypeRaids       = "Raids / Hosts"
+	eventTypeRedemptions = "Redemptions"
+	eventTypeModeration  = "Moderation"
+)
+
 // LogsView provides the Event Logs search UI, interactive date range pickers, live tail, and retention settings.
 type LogsView struct {
 	window  fyne.Window
@@ -71,6 +83,7 @@ type LogsView struct {
 	fromDateBtn     *widget.Button
 	toDateBtn       *widget.Button
 	platformSel     *widget.Select
+	eventTypeSel    *widget.Select
 	outcomeSel      *widget.Select
 	userSearchEntry *ScrollPassEntry
 	textSearchEntry *ScrollPassEntry
@@ -424,6 +437,25 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 	})
 	v.platformSel.SetSelected(platformOptionAll)
 
+	v.eventTypeSel = widget.NewSelect([]string{
+		eventTypeAll,
+		eventTypeChatOnly,
+		eventTypeAlertsOnly,
+		eventTypeFollows,
+		eventTypeSubs,
+		eventTypeCheers,
+		eventTypeRaids,
+		eventTypeRedemptions,
+		eventTypeModeration,
+	}, func(_ string) {
+		if v.initializing {
+			return
+		}
+		v.currentPage = 0
+		v.RefreshQuery()
+	})
+	v.eventTypeSel.SetSelected(eventTypeAll)
+
 	v.outcomeSel = widget.NewSelect([]string{
 		outcomeLabelAll,
 		outcomeLabelSpoken,
@@ -480,8 +512,9 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 		refreshBtn,
 	)
 
-	midRow := container.NewGridWithColumns(2,
+	midRow := container.NewGridWithColumns(3,
 		container.NewBorder(nil, nil, widget.NewLabel("Platform:"), nil, v.platformSel),
+		container.NewBorder(nil, nil, widget.NewLabel("Type:"), nil, v.eventTypeSel),
 		container.NewBorder(nil, nil, widget.NewLabel("Status:"), nil, v.outcomeSel),
 	)
 
@@ -579,6 +612,9 @@ func (v *LogsView) ResetFilters() {
 	if v.platformSel != nil {
 		v.platformSel.SetSelected(platformOptionAll)
 	}
+	if v.eventTypeSel != nil {
+		v.eventTypeSel.SetSelected(eventTypeAll)
+	}
 	if v.outcomeSel != nil {
 		v.outcomeSel.SetSelected(outcomeLabelAll)
 	}
@@ -639,6 +675,28 @@ func (v *LogsView) currentFilter() eventlog.QueryFilter {
 		plat = strings.ToLower(v.platformSel.Selected)
 	}
 
+	kindFilter := ""
+	if v.eventTypeSel != nil {
+		switch v.eventTypeSel.Selected {
+		case eventTypeChatOnly:
+			kindFilter = "chat"
+		case eventTypeAlertsOnly:
+			kindFilter = "alerts"
+		case eventTypeFollows:
+			kindFilter = "follow"
+		case eventTypeSubs:
+			kindFilter = "sub"
+		case eventTypeCheers:
+			kindFilter = "cheer"
+		case eventTypeRaids:
+			kindFilter = "raid"
+		case eventTypeRedemptions:
+			kindFilter = "redemption"
+		case eventTypeModeration:
+			kindFilter = "moderation"
+		}
+	}
+
 	mode := eventlog.FilterOutcomeAll
 	if v.outcomeSel != nil {
 		switch v.outcomeSel.Selected {
@@ -677,6 +735,7 @@ func (v *LogsView) currentFilter() eventlog.QueryFilter {
 		From:          from,
 		To:            to,
 		Platform:      plat,
+		KindFilter:    kindFilter,
 		UserQuery:     userQ,
 		TextQuery:     textQ,
 		OutcomeMode:   mode,
@@ -795,6 +854,50 @@ func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
 	}
 	if f.Channel != "" && !strings.EqualFold(f.Channel, "all") && !strings.EqualFold(e.Channel, f.Channel) {
 		return false
+	}
+	kindLower := strings.ToLower(strings.TrimSpace(e.Kind))
+	switch strings.ToLower(strings.TrimSpace(f.KindFilter)) {
+	case "", "all":
+	case "chat", "message":
+		if kindLower != "message" {
+			return false
+		}
+	case "alerts":
+		if kindLower == "message" || kindLower == "moderation" || kindLower == "" {
+			return false
+		}
+	case "follow":
+		if kindLower != "follow" {
+			return false
+		}
+	case "sub":
+		switch kindLower {
+		case "sub", "resub", "gift_sub", "membership", "gift_membership":
+		default:
+			return false
+		}
+	case "cheer":
+		switch kindLower {
+		case "cheer", "gift", "superchat", "supersticker":
+		default:
+			return false
+		}
+	case "raid":
+		if kindLower != "raid" {
+			return false
+		}
+	case "redemption":
+		if kindLower != "redemption" {
+			return false
+		}
+	case "moderation":
+		if kindLower != "moderation" {
+			return false
+		}
+	default:
+		if !strings.EqualFold(kindLower, strings.TrimSpace(f.KindFilter)) {
+			return false
+		}
 	}
 	if f.HideBots && f.Outcome != eventlog.OutcomeDroppedBot {
 		if e.Outcome == eventlog.OutcomeDroppedBot {

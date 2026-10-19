@@ -299,6 +299,31 @@ func (s *SQLiteBackend) Query(ctx context.Context, filter QueryFilter) (*QueryRe
 		args = append(args, ch)
 	}
 
+	// 3b. Event Kind filter
+	switch strings.ToLower(strings.TrimSpace(filter.KindFilter)) {
+	case "", "all":
+		// no filter
+	case "chat", "message":
+		whereClauses = append(whereClauses, "kind = 'message'")
+	case "alerts":
+		whereClauses = append(whereClauses, "kind NOT IN ('message', 'moderation')")
+	case "follow":
+		whereClauses = append(whereClauses, "kind = 'follow'")
+	case "sub":
+		whereClauses = append(whereClauses, "kind IN ('sub', 'resub', 'gift_sub', 'membership', 'gift_membership')")
+	case "cheer":
+		whereClauses = append(whereClauses, "kind IN ('cheer', 'gift', 'superchat', 'supersticker')")
+	case "raid":
+		whereClauses = append(whereClauses, "kind = 'raid'")
+	case "redemption":
+		whereClauses = append(whereClauses, "kind = 'redemption'")
+	case "moderation":
+		whereClauses = append(whereClauses, "kind = 'moderation'")
+	default:
+		whereClauses = append(whereClauses, "LOWER(kind) = LOWER(?)")
+		args = append(args, strings.TrimSpace(filter.KindFilter))
+	}
+
 	// 4. User / UserID filter
 	if uq := strings.TrimSpace(filter.UserQuery); uq != "" {
 		likePat := "%" + strings.ToLower(uq) + "%"

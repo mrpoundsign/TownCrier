@@ -423,4 +423,124 @@ func TestSessionEventLogOutcomes(t *testing.T) {
 	}
 }
 
+func TestSessionStreamEventsAndRedemptionFilter(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.DefaultConfig()
+	p := cfg.Platforms["twitch"]
+	p.AccountName = "mrpoundsign"
+	p.CustomRewardID = "TTS Message"
+	// Even with RoleGated enabled, stream alerts (sub, redemption, etc.) must bypass chat read rules
+	p.ReadRules.RoleGated = true
+	p.ReadRules.Roles = []string{"broadcaster"}
+	cfg.Platforms["twitch"] = p
+
+	sqlStore, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend failed: %v", err)
+	}
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, sqlStore)
+
+	session := NewSession(cfg, secrets.NewMemoryStore())
+	session.SetEventLogger(logMgr)
+	defer func() { _ = session.Close() }()
+	session.Queue().Pause()
+
+	// 1. Follow event (default Enabled: false) -> logged in EventLog with OutcomeDroppedDisabled
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "ev-follow-1",
+		Platform:    "twitch",
+		Kind:        chat.EventKindFollow,
+		UserID:      "10",
+		UserName:    "newfan",
+		DisplayName: "NewFan",
+	})
+
+	// 2. Redemption with non-matching reward -> logged in EventLog with OutcomeDroppedDisabled
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "ev-redemp-other",
+		Platform:    "twitch",
+		Kind:        chat.EventKindRedemption,
+		UserID:      "11",
+		UserName:    "viewer1",
+		DisplayName: "Viewer1",
+		RewardID:    "rew-hydrate",
+		RewardTitle: "Hydrate!",
+	})
+
+	// 3. Redemption with matching reward title -> passes filters and queues formatted speech
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "ev-redemp-match",
+		Platform:    "twitch",
+		Kind:        chat.EventKindRedemption,
+		UserID:      "12",
+		UserName:    "viewer2",
+		DisplayName: "Viewer2",
+		RewardID:    "rew-tts",
+		RewardTitle: "TTS Message",
+		Text:        "Hello world",
+	})
+
+	// 4. Kick Gift below threshold vs above threshold
+	kickCfg := cfg.Platforms["kick"]
+	gNotif := kickCfg.Notifications["gift"]
+	gNotif.Threshold = 100
+	kickCfg.Notifications["gift"] = gNotif
+	cfg.Platforms["kick"] = kickCfg
+	_ = session.ReloadConfig(cfg)
+
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "ev-kick-gift-low",
+		Platform:    "kick",
+		Kind:        chat.EventKindGift,
+		UserID:      "21",
+		UserName:    "kickuser1",
+		DisplayName: "KickUser1",
+		Count:       10,
+		Amount:      10,
+		RewardTitle: "Kicks",
+	})
+
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "ev-kick-gift-high",
+		Platform:    "kick",
+		Kind:        chat.EventKindGift,
+		UserID:      "22",
+		UserName:    "kickuser2",
+		DisplayName: "KickUser2",
+		Count:       200,
+		Amount:      200,
+		RewardTitle: "Sub Bomb",
+		Text:        "Hype!",
+	})
+
+	res, err := logMgr.Query(ctx, eventlog.QueryFilter{})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	byID := make(map[string]eventlog.Entry)
+	for _, e := range res.Entries {
+		byID[e.ID] = e
+	}
+
+	if f, ok := byID["ev-follow-1"]; !ok || f.Outcome != eventlog.OutcomeDroppedDisabled || f.RawText != "Followed the channel" {
+		t.Errorf("unexpected follow log entry: %+v", f)
+	}
+	if rOther, ok := byID["ev-redemp-other"]; !ok || rOther.Outcome != eventlog.OutcomeDroppedDisabled || rOther.RawText != "Redeemed Hydrate!" {
+		t.Errorf("unexpected filtered redemption log entry: %+v", rOther)
+	}
+	if rMatch, ok := byID["ev-redemp-match"]; !ok || !rMatch.PassedFilters || rMatch.Outcome != eventlog.OutcomeQueued || rMatch.SpokenText != "Viewer2 redeemed TTS Message: Hello world" {
+		t.Errorf("unexpected matched redemption log entry: %+v", rMatch)
+	}
+	if gLow, ok := byID["ev-kick-gift-low"]; !ok || gLow.Outcome != eventlog.OutcomeDroppedThreshold {
+		t.Errorf("unexpected low kick gift log entry: %+v", gLow)
+	}
+	if gHigh, ok := byID["ev-kick-gift-high"]; !ok || !gHigh.PassedFilters || gHigh.SpokenText != "KickUser2 sent 200 Sub Bomb: Hype!" {
+		t.Errorf("unexpected high kick gift log entry: %+v", gHigh)
+	}
+}
+
+
 

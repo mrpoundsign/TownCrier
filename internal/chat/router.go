@@ -157,9 +157,14 @@ func (r *Router) formatEventText(event *Event, spokenName string, pCfg config.Pl
 		case EventKindFollow:
 			template = "{user} is now following!"
 		case EventKindRedemption:
-			if event.Text != "" {
+			switch {
+			case event.RewardTitle != "" && event.Text != "":
+				template = "{user} redeemed {reward}: {message}"
+			case event.RewardTitle != "":
+				template = "{user} redeemed {reward}!"
+			case event.Text != "":
 				template = "{user} redeemed: {message}"
-			} else {
+			default:
 				template = "{user} redeemed a reward!"
 			}
 		case EventKindSuperChat:
@@ -186,20 +191,36 @@ func (r *Router) formatEventText(event *Event, spokenName string, pCfg config.Pl
 		countVal = 1
 	}
 
+	rewardName := strings.TrimSpace(event.RewardTitle)
+	if rewardName == "" {
+		rewardName = "a reward"
+	}
+
+	giftName := strings.TrimSpace(event.RewardTitle)
+	if giftName == "" {
+		giftName = strings.TrimSpace(event.Text)
+	}
+	if giftName == "" {
+		giftName = "gifts"
+	}
+
 	replacer := strings.NewReplacer(
 		"{user}", spokenName,
 		"{amount}", formatAmount(event.Amount),
 		"{bits}", formatAmount(event.Amount),
 		"{diamonds}", formatAmount(event.Amount),
 		"{currency}", event.Currency,
-		"{months}", strconv.Itoa(event.Months),
+		"{months}", strconv.Itoa(max(1, event.Months)),
 		"{count}", strconv.Itoa(countVal),
 		"{viewers}", strconv.Itoa(countVal),
-		"{gift}", event.Text,
-		"{message}", event.Text,
+		"{reward}", rewardName,
+		"{gift}", giftName,
+		"{message}", strings.TrimSpace(event.Text),
 	)
 
-	return replacer.Replace(template)
+	out := strings.TrimSpace(replacer.Replace(template))
+	out = strings.TrimRight(out, ":- ")
+	return strings.TrimSpace(out)
 }
 
 func formatAmount(amount float64) string {

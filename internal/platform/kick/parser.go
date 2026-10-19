@@ -108,8 +108,12 @@ func ParsePusherFrame(raw []byte) (*chat.Event, *chat.ModerationEvent, string, e
 		ev := parseStreamHost(payloadMap)
 		return ev, nil, env.Event, nil
 
-	case "FollowersUpdated", "ChannelFollowEvent":
+	case "FollowersUpdated", "ChannelFollowEvent", "FollowEvent":
 		ev := parseFollow(payloadMap)
+		return ev, nil, env.Event, nil
+
+	case "KicksGifted", "GiftEvent", "KicksGiftedEvent":
+		ev := parseKickGift(payloadMap)
 		return ev, nil, env.Event, nil
 
 	case "MessageDeletedEvent":
@@ -260,6 +264,10 @@ func parseSubscription(m map[string]any) *chat.Event {
 		username = strings.TrimLeft(strings.TrimSpace(asString(subMap["username"])), "@")
 	}
 	if username == "" {
+		userMap := asMap(m["user"])
+		username = strings.TrimLeft(strings.TrimSpace(asString(userMap["username"])), "@")
+	}
+	if username == "" {
 		username = "Someone"
 	}
 
@@ -273,6 +281,9 @@ func parseSubscription(m map[string]any) *chat.Event {
 		kind = chat.EventKindResub
 	}
 
+	msgText := strings.TrimSpace(asString(m["message"]))
+	cleanText, spans := ParseKickEmotes(msgText)
+
 	return &chat.Event{
 		ID:          fmt.Sprintf("kick-sub-%s-%d", strings.ToLower(username), time.Now().UnixNano()),
 		Platform:    "kick",
@@ -282,6 +293,8 @@ func parseSubscription(m map[string]any) *chat.Event {
 		UserName:    strings.ToLower(username),
 		DisplayName: username,
 		Months:      months,
+		Text:        cleanText,
+		EmoteSpans:  spans,
 	}
 }
 
@@ -351,6 +364,10 @@ func parseFollow(m map[string]any) *chat.Event {
 		username = strings.TrimLeft(strings.TrimSpace(asString(fMap["username"])), "@")
 	}
 	if username == "" {
+		uMap := asMap(m["user"])
+		username = strings.TrimLeft(strings.TrimSpace(asString(uMap["username"])), "@")
+	}
+	if username == "" {
 		return nil
 	}
 
@@ -362,6 +379,61 @@ func parseFollow(m map[string]any) *chat.Event {
 		UserID:      strings.ToLower(username),
 		UserName:    strings.ToLower(username),
 		DisplayName: username,
+	}
+}
+
+func parseKickGift(m map[string]any) *chat.Event {
+	sender := asMap(m["sender"])
+	if len(sender) == 0 {
+		sender = asMap(m["user"])
+	}
+	username := strings.TrimLeft(strings.TrimSpace(asString(sender["username"])), "@")
+	if username == "" {
+		username = strings.TrimLeft(strings.TrimSpace(asString(m["username"])), "@")
+	}
+	if username == "" {
+		username = strings.TrimLeft(strings.TrimSpace(asString(m["sender_username"])), "@")
+	}
+	if username == "" {
+		username = "Someone"
+	}
+
+	giftMap := asMap(m["gift"])
+	giftName := strings.TrimSpace(asString(giftMap["name"]))
+	if giftName == "" {
+		giftName = strings.TrimSpace(asString(m["gift_name"]))
+	}
+	if giftName == "" {
+		giftName = "Kicks"
+	}
+
+	amount := asInt(giftMap["amount"])
+	if amount <= 0 {
+		amount = asInt(m["amount"])
+	}
+	if amount <= 0 {
+		amount = asInt(m["count"])
+	}
+	if amount <= 0 {
+		amount = 1
+	}
+
+	msgText := strings.TrimSpace(asString(m["message"]))
+	cleanText, spans := ParseKickEmotes(msgText)
+
+	return &chat.Event{
+		ID:          fmt.Sprintf("kick-gift-%s-%d", strings.ToLower(username), time.Now().UnixNano()),
+		Platform:    "kick",
+		Kind:        chat.EventKindGift,
+		Timestamp:   time.Now(),
+		UserID:      strings.ToLower(username),
+		UserName:    strings.ToLower(username),
+		DisplayName: username,
+		Count:       amount,
+		Amount:      float64(amount),
+		RewardTitle: giftName,
+		Text:        cleanText,
+		EmoteSpans:  spans,
 	}
 }
 

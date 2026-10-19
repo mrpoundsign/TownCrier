@@ -69,6 +69,8 @@ type Event struct {
 	Currency      string      `json:"currency,omitempty"`
 	Months        int         `json:"months,omitempty"`
 	Count         int         `json:"count,omitempty"`
+	RewardID      string      `json:"reward_id,omitempty"`
+	RewardTitle   string      `json:"reward_title,omitempty"`
 	VoiceOverride string      `json:"voice_override,omitempty"`
 	Raw           any         `json:"raw,omitempty"`
 }

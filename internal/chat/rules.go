@@ -15,7 +15,13 @@ func EvaluateReadRules(event *Event, rules config.ReadRules) (bool, string) {
 		return false, ""
 	}
 
-	// 1. Role Gate check (D18)
+	// Stream notification events (follows, subs, cheers, raids, redemptions, gifts)
+	// are governed by their dedicated toggles in Notification Events rather than chat ReadRules.
+	if event.Kind != "" && event.Kind != EventKindMessage {
+		return true, ""
+	}
+
+	// 1. Role Gate check (D18) for chat messages
 	if rules.RoleGated {
 		matchedRole := false
 		minLevel := max(1, rules.MinFanClubLevel)
@@ -37,9 +43,9 @@ func EvaluateReadRules(event *Event, rules config.ReadRules) (bool, string) {
 		}
 	}
 
-	// 2. Stream notification and paid events (subs, cheers, raids, etc.)
+	// 2. Paid chat messages
 	if event.IsPaidOrEvent() {
-		if rules.PaidOnly || rules.AllChat || event.Kind != EventKindMessage {
+		if rules.PaidOnly || rules.AllChat {
 			return true, ""
 		}
 	}

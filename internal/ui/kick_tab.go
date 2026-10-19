@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strconv"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -330,15 +331,17 @@ func (v *KickTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widget
 	notifsList := container.NewVBox()
 
 	events := []struct {
-		key      string
-		label    string
-		fallback string
+		key          string
+		label        string
+		fallback     string
+		hasThreshold bool
 	}{
-		{"sub", "New Subscriber", "{user} just subscribed on Kick!"},
-		{"resub", "Resubscription", "{user} resubscribed for {months} months!"},
-		{"gift_sub", "Gifted Subscriptions", "{user} gifted {count} subscriptions!"},
-		{"raid", "Host / Raid", "{user} hosted with {viewers} viewers!"},
-		{"follow", "New Followers", "{user} followed on Kick!"},
+		{"sub", "New Subscriber", "{user} just subscribed on Kick!", false},
+		{"resub", "Resubscription", "{user} resubscribed for {months} months!", false},
+		{"gift_sub", "Gifted Subscriptions", "{user} gifted {count} subscriptions!", true},
+		{"gift", "Gifts / Kicks", "{user} sent {count} {reward}: {message}", true},
+		{"raid", "Host / Raid", "{user} hosted with {viewers} viewers!", true},
+		{"follow", "New Followers", "{user} followed on Kick!", false},
 	}
 
 	for _, ev := range events {
@@ -383,11 +386,40 @@ func (v *KickTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widget
 			})
 		}
 
-		row := container.NewBorder(nil, nil, enabledCheck, nil, tmplEntry)
+		var rightWidget fyne.CanvasObject
+		if ev.hasThreshold {
+			minEntry := NewScrollPassEntry()
+			minEntry.SetPlaceHolder("0")
+			if notif.Threshold > 0 {
+				minEntry.SetText(strconv.FormatFloat(notif.Threshold, 'f', -1, 64))
+			}
+			minEntry.OnChanged = func(val string) {
+				parsed, _ := strconv.ParseFloat(strings.TrimSpace(val), 64)
+				if parsed < 0 {
+					parsed = 0
+				}
+				v.updateConfig(func(c *config.Config) {
+					p := c.Platforms["kick"]
+					if p.Notifications == nil {
+						p.Notifications = make(map[string]config.NotificationEventConfig)
+					}
+					n := p.Notifications[eventKey]
+					n.Threshold = parsed
+					p.Notifications[eventKey] = n
+					c.Platforms["kick"] = p
+				})
+			}
+			rightWidget = container.NewHBox(
+				widget.NewLabel("Min:"),
+				container.NewGridWrap(fyne.NewSize(70, 36), minEntry),
+			)
+		}
+
+		row := container.NewBorder(nil, nil, enabledCheck, rightWidget, tmplEntry)
 		notifsList.Add(row)
 	}
 
-	return widget.NewCard("Notification Events", "Spoken alert templates for Kick Subscriptions, Gifted Subs, Hosts & Follows", notifsList)
+	return widget.NewCard("Notification Events", "Spoken alert templates and minimum thresholds for Kick Subscriptions, Gifted Subs, Gifts, Hosts & Follows", notifsList)
 }
 
 func (v *KickTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Card {

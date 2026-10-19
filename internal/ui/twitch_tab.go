@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,30 +24,32 @@ type TwitchTabView struct {
 	window  fyne.Window
 	session *app.Session
 
-	channelEntry       *ScrollPassEntry
-	statusBadge        *widget.Label
-	oauthStatusLabel   *widget.Label
-	connectBtn         *widget.Button
-	enableCheck        *widget.Check
-	allChatCheck       *widget.Check
-	ignorePrefixCheck  *widget.Check
-	ignorePrefixEntry  *ScrollPassEntry
-	prefixCheck        *widget.Check
-	prefixEntry        *ScrollPassEntry
-	roleGatedCheck     *widget.Check
-	roleChecks         map[string]*widget.Check
-	paidOnlyCheck      *widget.Check
-	rewardEntry        *ScrollPassEntry
-	rewardOAuthHint    *widget.Label
-	modCmdsCheck       *widget.Check
-	followCheck        *widget.Check
-	followTmplEntry    *ScrollPassEntry
-	followOAuthHint    *widget.Label
-	overrideCheck      *widget.Check
-	overridesBox       *fyne.Container
-	overrideVoiceField *VoiceSpeedField
-	onStatus           func(msg string)
-	initializing       bool
+	channelEntry        *ScrollPassEntry
+	statusBadge         *widget.Label
+	oauthStatusLabel    *widget.Label
+	connectBtn          *widget.Button
+	enableCheck         *widget.Check
+	allChatCheck        *widget.Check
+	ignorePrefixCheck   *widget.Check
+	ignorePrefixEntry   *ScrollPassEntry
+	prefixCheck         *widget.Check
+	prefixEntry         *ScrollPassEntry
+	roleGatedCheck      *widget.Check
+	roleChecks          map[string]*widget.Check
+	paidOnlyCheck       *widget.Check
+	rewardEntry         *ScrollPassEntry
+	rewardOAuthHint     *widget.Label
+	modCmdsCheck        *widget.Check
+	followCheck         *widget.Check
+	followTmplEntry     *ScrollPassEntry
+	redemptionCheck     *widget.Check
+	redemptionTmplEntry *ScrollPassEntry
+	followOAuthHint     *widget.Label
+	overrideCheck       *widget.Check
+	overridesBox        *fyne.Container
+	overrideVoiceField  *VoiceSpeedField
+	onStatus            func(msg string)
+	initializing        bool
 }
 
 // NewTwitchTabView creates a new Twitch tab view bound to the application session.
@@ -191,6 +194,22 @@ func (v *TwitchTabView) syncOAuthState() {
 			v.followTmplEntry.Disable()
 		}
 	}
+	if v.redemptionCheck != nil {
+		if authed {
+			v.redemptionCheck.SetText("Channel Point Redemption")
+			v.redemptionCheck.Enable()
+		} else {
+			v.redemptionCheck.SetText("Channel Point Redemption (🔒 Requires OAuth)")
+			v.redemptionCheck.Disable()
+		}
+	}
+	if v.redemptionTmplEntry != nil {
+		if authed {
+			v.redemptionTmplEntry.Enable()
+		} else {
+			v.redemptionTmplEntry.Disable()
+		}
+	}
 	if v.followOAuthHint != nil {
 		if authed {
 			v.followOAuthHint.Hide()
@@ -262,6 +281,9 @@ func (v *TwitchTabView) disconnectOAuth() {
 		}
 		if v.session != nil && v.session.TwitchOAuth() != nil {
 			_ = v.session.TwitchOAuth().ClearTokens()
+		}
+		if v.session != nil {
+			v.session.RefreshTwitchOAuth()
 		}
 		v.syncOAuthState()
 		if v.onStatus != nil {
@@ -361,6 +383,9 @@ func (v *TwitchTabView) startOAuthFlow() {
 						return
 					}
 
+					if v.session != nil {
+						v.session.RefreshTwitchOAuth()
+					}
 					v.syncOAuthState()
 					if v.onStatus != nil {
 						v.onStatus("✓ Twitch OAuth authorized and saved!")
@@ -522,7 +547,7 @@ func (v *TwitchTabView) buildTwitchSettingsCard(pCfg config.PlatformConfig) *wid
 	)
 
 	v.rewardEntry = NewScrollPassEntry()
-	v.rewardEntry.SetPlaceHolder("Leave blank to read all text redemptions")
+	v.rewardEntry.SetPlaceHolder("Leave blank to speak all redemptions, or enter a Reward Title / ID")
 	v.rewardEntry.SetText(pCfg.CustomRewardID)
 	v.rewardEntry.OnChanged = func(val string) {
 		v.updateConfig(func(c *config.Config) {
@@ -531,7 +556,7 @@ func (v *TwitchTabView) buildTwitchSettingsCard(pCfg config.PlatformConfig) *wid
 			c.Platforms["twitch"] = p
 		})
 	}
-	rewardRow := container.NewBorder(nil, nil, widget.NewLabel("Designated TTS Reward ID:"), nil, v.rewardEntry)
+	rewardRow := container.NewBorder(nil, nil, widget.NewLabel("Designated TTS Reward (Title or ID):"), nil, v.rewardEntry)
 
 	v.modCmdsCheck = widget.NewCheck("Allow Moderators to control TTS via chat (!tts skip, !tts pause, !tts clear)", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
@@ -555,39 +580,46 @@ func (v *TwitchTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 	notifsList := container.NewVBox()
 
 	v.followOAuthHint = widget.NewLabelWithStyle(
-		"🔒 Note: Subscriptions, Resubs, Gift Subs, Cheers, and Raids work via public IRC. Follow alerts require Twitch OAuth.",
+		"🔒 Note: Subscriptions, Resubs, Gift Subs, Cheers, and Raids work via public IRC. Follow and Channel Point Redemption alerts require Twitch OAuth.",
 		fyne.TextAlignLeading,
 		fyne.TextStyle{Italic: true},
 	)
 	notifsList.Add(v.followOAuthHint)
 
 	events := []struct {
-		key   string
-		label string
+		key          string
+		label        string
+		fallback     string
+		hasThreshold bool
 	}{
-		{"sub", "Subscription"},
-		{"resub", "Resubscription"},
-		{"gift_sub", "Gift Sub"},
-		{"cheer", "Cheer (Bits)"},
-		{"raid", "Raid"},
-		{"follow", "Follow"},
+		{"sub", "Subscription", "{user} subscribed!", false},
+		{"resub", "Resubscription", "{user} resubscribed for {months} months! {message}", false},
+		{"gift_sub", "Gift Sub", "{user} gifted {count} subscriptions!", true},
+		{"cheer", "Cheer (Bits)", "{user} cheered {amount} bits: {message}", true},
+		{"raid", "Raid", "{user} raided with {count} viewers!", true},
+		{"redemption", "Channel Point Redemption", "{user} redeemed {reward}: {message}", false},
+		{"follow", "Follow", "{user} followed the stream!", false},
 	}
 
 	for _, ev := range events {
 		eventKey := ev.key
 		label := ev.label
+		fallback := ev.fallback
 
 		notif, ok := pCfg.Notifications[eventKey]
 		if !ok {
 			notif = config.NotificationEventConfig{
-				Enabled:  true,
-				Template: "{user}: {message}",
+				Enabled:  eventKey != "follow",
+				Template: fallback,
 			}
 		}
 
 		enabledCheck := widget.NewCheck(label, func(b bool) {
 			v.updateConfig(func(c *config.Config) {
 				p := c.Platforms["twitch"]
+				if p.Notifications == nil {
+					p.Notifications = make(map[string]config.NotificationEventConfig)
+				}
 				n := p.Notifications[eventKey]
 				n.Enabled = b
 				p.Notifications[eventKey] = n
@@ -601,6 +633,9 @@ func (v *TwitchTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 		tmplEntry.OnChanged = func(val string) {
 			v.updateConfig(func(c *config.Config) {
 				p := c.Platforms["twitch"]
+				if p.Notifications == nil {
+					p.Notifications = make(map[string]config.NotificationEventConfig)
+				}
 				n := p.Notifications[eventKey]
 				n.Template = val
 				p.Notifications[eventKey] = n
@@ -608,16 +643,49 @@ func (v *TwitchTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 			})
 		}
 
-		if eventKey == "follow" {
+		switch eventKey {
+		case "follow":
 			v.followCheck = enabledCheck
 			v.followTmplEntry = tmplEntry
+		case "redemption":
+			v.redemptionCheck = enabledCheck
+			v.redemptionTmplEntry = tmplEntry
 		}
 
-		row := container.NewBorder(nil, nil, enabledCheck, nil, tmplEntry)
+		var rightWidget fyne.CanvasObject
+		if ev.hasThreshold {
+			minEntry := NewScrollPassEntry()
+			minEntry.SetPlaceHolder("0")
+			if notif.Threshold > 0 {
+				minEntry.SetText(strconv.FormatFloat(notif.Threshold, 'f', -1, 64))
+			}
+			minEntry.OnChanged = func(val string) {
+				parsed, _ := strconv.ParseFloat(strings.TrimSpace(val), 64)
+				if parsed < 0 {
+					parsed = 0
+				}
+				v.updateConfig(func(c *config.Config) {
+					p := c.Platforms["twitch"]
+					if p.Notifications == nil {
+						p.Notifications = make(map[string]config.NotificationEventConfig)
+					}
+					n := p.Notifications[eventKey]
+					n.Threshold = parsed
+					p.Notifications[eventKey] = n
+					c.Platforms["twitch"] = p
+				})
+			}
+			rightWidget = container.NewHBox(
+				widget.NewLabel("Min:"),
+				container.NewGridWrap(fyne.NewSize(70, 36), minEntry),
+			)
+		}
+
+		row := container.NewBorder(nil, nil, enabledCheck, rightWidget, tmplEntry)
 		notifsList.Add(row)
 	}
 
-	return widget.NewCard("Notification Events", "Spoken alert templates for stream events", notifsList)
+	return widget.NewCard("Notification Events", "Spoken alert templates and minimum thresholds for stream events", notifsList)
 }
 
 func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Card {
