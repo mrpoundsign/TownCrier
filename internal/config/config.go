@@ -79,8 +79,9 @@ func (t TTSConfig) EffectiveEnabledModels() []string {
 }
 
 type SafetyConfig struct {
-	PanicHotkey  string   `json:"panic_hotkey"`
-	BlockedWords []string `json:"blocked_words"`
+	PanicHotkey          string   `json:"panic_hotkey"`
+	BlockDefaultBadWords bool     `json:"block_default_bad_words"`
+	BlockedWords         []string `json:"blocked_words"`
 }
 
 type QueueConfig struct {
@@ -299,8 +300,9 @@ func DefaultConfig() *Config {
 			IdleUnloadMinutes: 0,
 		},
 		Safety: SafetyConfig{
-			PanicHotkey:  "Ctrl+Shift+M",
-			BlockedWords: []string{},
+			PanicHotkey:          "Ctrl+Shift+M",
+			BlockDefaultBadWords: true,
+			BlockedWords:         []string{},
 		},
 		Queue: QueueConfig{
 			MaxAgeSeconds:    30,

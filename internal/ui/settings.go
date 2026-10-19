@@ -1240,11 +1240,19 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 
 	addRow := container.NewBorder(nil, nil, nil, addBtn, newWordEntry)
 
+	defaultBadWordsCheck := widget.NewCheck("Block Default Bad Words (built-in stream-safe profanity & slur list)", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			c.Safety.BlockDefaultBadWords = b
+		})
+	})
+	defaultBadWordsCheck.SetChecked(v.cfg.Safety.BlockDefaultBadWords)
+
 	cardContent := container.NewVBox(
 		hotkeyDisplay,
 		hotkeyControlsRow,
 		widget.NewSeparator(),
-		widget.NewLabel("Blocked Words (masked with '***' before TTS):"),
+		defaultBadWordsCheck,
+		widget.NewLabel("Custom Blocked Words (masked with '***' before TTS):"),
 		wordListContainer,
 		addRow,
 	)

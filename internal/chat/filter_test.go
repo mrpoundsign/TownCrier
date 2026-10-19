@@ -132,3 +132,29 @@ func TestSanitizeTruncation(t *testing.T) {
 		t.Errorf("expected %q, got %q", expectedDiverse, gotDiverse)
 	}
 }
+
+func TestDefaultBadWordsAndEffectiveBlockedWords(t *testing.T) {
+	defaults := DefaultBadWords()
+	if len(defaults) < 50 {
+		t.Fatalf("expected embedded default bad words list to have >= 50 entries, got %d", len(defaults))
+	}
+
+	s := NewSanitizer(300)
+
+	// 1. With blockDefault = true, embedded words and custom words are both masked
+	effective := EffectiveBlockedWords(true, []string{"spoilerword"})
+	got := s.Sanitize("What the fuck is spoilerword in Scunthorpe class?", nil, false, effective)
+	expected := "What the *** is *** in Scunthorpe class?"
+	if got != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+
+	// 2. With blockDefault = false, only custom words are masked
+	customOnly := EffectiveBlockedWords(false, []string{"spoilerword"})
+	gotCustom := s.Sanitize("What the fuck is spoilerword?", nil, false, customOnly)
+	expectedCustom := "What the fuck is ***?"
+	if gotCustom != expectedCustom {
+		t.Errorf("expected %q, got %q", expectedCustom, gotCustom)
+	}
+}
+

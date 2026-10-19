@@ -89,21 +89,27 @@ func stripEmoteSpans(text string, spans []EmoteSpan) string {
 
 // maskBlockedWords replaces blocked words with "***" using case-insensitive whole-word matching.
 func maskBlockedWords(text string, blockedWords []string) string {
-	result := text
+	escaped := make([]string, 0, len(blockedWords))
 	for _, word := range blockedWords {
 		word = strings.TrimSpace(word)
 		if word == "" {
 			continue
 		}
-		// Use word boundaries if the word consists of alphanumeric characters
-		pattern := `(?i)\b` + regexp.QuoteMeta(word) + `\b`
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			continue
-		}
-		result = re.ReplaceAllString(result, "***")
+		escaped = append(escaped, regexp.QuoteMeta(word))
 	}
-	return result
+	if len(escaped) == 0 {
+		return text
+	}
+	// Sort longest first so longer words/phrases match before shorter prefixes
+	sort.Slice(escaped, func(i, j int) bool {
+		return len(escaped[i]) > len(escaped[j])
+	})
+	pattern := `(?i)\b(?:` + strings.Join(escaped, "|") + `)\b`
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return text
+	}
+	return re.ReplaceAllString(text, "***")
 }
 
 func isCollapsiblePunct(r rune) bool {

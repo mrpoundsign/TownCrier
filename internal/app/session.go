@@ -656,8 +656,9 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	// 3. Text & Emote Sanitizer on raw message text
 	// Emote offsets are relative to event.Text before chatter name prefixing.
 	_, speakEmotes, _, _, _ := cfg.EffectiveChatRules(event.Platform)
+	blockedWords := chat.EffectiveBlockedWords(cfg.Safety.BlockDefaultBadWords, cfg.Safety.BlockedWords)
 	if event.Text != "" {
-		event.Text = s.sanitizer.Sanitize(event.Text, event.EmoteSpans, speakEmotes, cfg.Safety.BlockedWords)
+		event.Text = s.sanitizer.Sanitize(event.Text, event.EmoteSpans, speakEmotes, blockedWords)
 		event.EmoteSpans = nil // already applied to event.Text
 		if event.Text == "" && event.Kind == chat.EventKindMessage {
 			log.Printf("[Session] Chat message sanitized to empty text: user=%q", event.UserName)
@@ -675,7 +676,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	}
 
 	// 5. Final sanitation pass on formatted text (length clamping, blocked words in templates/names)
-	sanitizedText := s.sanitizer.Sanitize(resolved.Text, nil, true, cfg.Safety.BlockedWords)
+	sanitizedText := s.sanitizer.Sanitize(resolved.Text, nil, true, blockedWords)
 	if sanitizedText == "" {
 		log.Printf("[Session] Event sanitized to empty text: user=%q original=%q", event.UserName, resolved.Text)
 		s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Formatted speech text sanitized to empty"))
