@@ -23,9 +23,10 @@ import (
 type ConnectionStatus string
 
 const (
-	StatusDisconnected ConnectionStatus = "disconnected"
-	StatusConnecting   ConnectionStatus = "connecting"
-	StatusConnected    ConnectionStatus = "connected"
+	StatusDisconnected     ConnectionStatus = "disconnected"
+	StatusConnecting       ConnectionStatus = "connecting"
+	StatusWaitingForStream ConnectionStatus = "waiting"
+	StatusConnected        ConnectionStatus = "connected"
 )
 
 const (
@@ -298,6 +299,13 @@ func (c *Connector) setStreamLive(live bool) {
 		return
 	}
 	c.isLive = live
+	if c.running && c.status != StatusDisconnected {
+		if live {
+			c.updateStatusLocked(StatusConnected, c.channel)
+		} else {
+			c.updateStatusLocked(StatusWaitingForStream, c.channel)
+		}
+	}
 	fn := c.onStreamStateChange
 	c.mu.Unlock()
 	if fn != nil {
@@ -510,9 +518,11 @@ func (c *Connector) connectAndStream(ctx context.Context, slug string, info Chan
 	}
 
 	log.Printf("[Kick] Connected to Pusher %s for %s", chatroomTopic, slug)
-	c.updateStatus(StatusConnected, slug)
 	if info.IsLive {
+		c.updateStatus(StatusConnected, slug)
 		c.setStreamLive(true)
+	} else {
+		c.updateStatus(StatusWaitingForStream, slug)
 	}
 
 	c.mu.Lock()

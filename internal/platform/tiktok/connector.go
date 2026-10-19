@@ -111,6 +111,10 @@ func (c *Connector) defaultTrackUser(username string) (<-chan gotiktoklive.Event
 	if err != nil {
 		return nil, nil, err
 	}
+	if live.Info != nil && live.Info.Status != 2 {
+		live.Close()
+		return nil, nil, errors.New("livestream is not currently live")
+	}
 	if live.GiftInfo != nil && c.catalog != nil {
 		c.catalog.PopulateFromGiftInfo(live.GiftInfo)
 	}

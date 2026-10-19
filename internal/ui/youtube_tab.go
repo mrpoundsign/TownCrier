@@ -96,10 +96,12 @@ func (v *YouTubeTabView) UpdateStatus(status string, detail string) {
 			return
 		}
 		switch status {
-		case "connected":
-			v.statusBadge.SetText("🟢 Connected (" + detail + ")")
+		case "connected", "live":
+			v.statusBadge.SetText("🟢 Live (" + detail + ")")
 		case "waiting":
 			v.statusBadge.SetText("🟡 Waiting for Stream to Go Live (" + detail + ")...")
+		case "connecting":
+			v.statusBadge.SetText("🟡 Connecting (" + detail + ")...")
 		default:
 			if v.enableCheck != nil && v.enableCheck.Checked && v.channelEntry != nil && v.channelEntry.Text != "" {
 				v.statusBadge.SetText("🟡 Waiting for Stream (" + v.channelEntry.Text + ")...")

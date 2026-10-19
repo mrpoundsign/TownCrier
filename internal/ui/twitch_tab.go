@@ -118,13 +118,15 @@ func (v *TwitchTabView) UpdateStatus(status string, detail string) {
 			return
 		}
 		switch status {
-		case "connected":
-			v.statusBadge.SetText("🟢 Connected (" + detail + ")")
+		case "connected", "live":
+			v.statusBadge.SetText("🟢 Live (" + detail + ")")
+		case "waiting":
+			v.statusBadge.SetText("🟡 Connected to Chat (Waiting for Stream)...")
 		case "connecting":
 			v.statusBadge.SetText("🟡 Connecting (" + detail + ")...")
 		default:
 			if v.enableCheck != nil && v.enableCheck.Checked && v.channelEntry != nil && v.channelEntry.Text != "" {
-				v.statusBadge.SetText("🟢 Ready (" + v.channelEntry.Text + ")")
+				v.statusBadge.SetText("🟡 Waiting for Stream (" + v.channelEntry.Text + ")...")
 			} else {
 				v.statusBadge.SetText("⚪ Disconnected")
 			}
@@ -814,7 +816,7 @@ func (v *TwitchTabView) updateConnectionStatus(enabled bool, channel string) {
 	case channel == "":
 		v.statusBadge.SetText("🟡 Needs Channel Name")
 	default:
-		v.statusBadge.SetText("🟢 Ready (" + channel + ")")
+		v.statusBadge.SetText("🟡 Waiting for Stream (" + channel + ")...")
 	}
 }
 

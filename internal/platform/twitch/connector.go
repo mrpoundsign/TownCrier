@@ -20,9 +20,10 @@ import (
 type ConnectionStatus string
 
 const (
-	StatusDisconnected ConnectionStatus = "disconnected"
-	StatusConnecting   ConnectionStatus = "connecting"
-	StatusConnected    ConnectionStatus = "connected"
+	StatusDisconnected     ConnectionStatus = "disconnected"
+	StatusConnecting       ConnectionStatus = "connecting"
+	StatusWaitingForStream ConnectionStatus = "waiting"
+	StatusConnected        ConnectionStatus = "connected"
 )
 
 // Connector manages the Twitch IRC and EventSub WebSocket connections for stream chat reading, alerts, and moderation.
@@ -226,8 +227,12 @@ func (c *Connector) connectLocked() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if c.running && c.channel == ch {
-			c.updateStatusLocked(StatusConnected, "Connected to #"+ch)
-			log.Printf("[Twitch] Connected to #%s", ch)
+			if c.isLive {
+				c.updateStatusLocked(StatusConnected, "#"+ch)
+			} else {
+				c.updateStatusLocked(StatusWaitingForStream, "#"+ch)
+			}
+			log.Printf("[Twitch] Connected to #%s (isLive=%v)", ch, c.isLive)
 		}
 	})
 
@@ -296,6 +301,13 @@ func (c *Connector) setStreamLiveLocked(live bool) {
 		return
 	}
 	c.isLive = live
+	if c.running && c.client != nil && c.status != StatusDisconnected {
+		if live {
+			c.updateStatusLocked(StatusConnected, "#"+c.channel)
+		} else {
+			c.updateStatusLocked(StatusWaitingForStream, "#"+c.channel)
+		}
+	}
 	if fn := c.onStreamLive; fn != nil {
 		go fn(live)
 	}

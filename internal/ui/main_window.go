@@ -665,8 +665,8 @@ func (mw *MainWindow) resolvePlatformStatus(platform, rawStatus, detail string) 
 	}
 
 	switch rawStatus {
-	case "connected":
-		tip := name + ": Connected"
+	case "connected", "live":
+		tip := name + ": Live"
 		if detail != "" {
 			tip += " (" + detail + ")"
 		}
@@ -692,9 +692,9 @@ func (mw *MainWindow) resolvePlatformStatus(platform, rawStatus, detail string) 
 	default:
 		switch platform {
 		case "twitch":
-			return "🟡", fmt.Sprintf("Twitch: Connecting... (#%s)", pCfg.AccountName)
+			return "🟡", fmt.Sprintf("Twitch: Waiting for stream... (#%s)", pCfg.AccountName)
 		case "kick":
-			return "🟡", fmt.Sprintf("Kick: Connecting... (%s)", pCfg.AccountName)
+			return "🟡", fmt.Sprintf("Kick: Waiting for stream... (%s)", pCfg.AccountName)
 		default:
 			return "🟡", fmt.Sprintf("%s: Waiting for stream... (%s)", name, pCfg.AccountName)
 		}

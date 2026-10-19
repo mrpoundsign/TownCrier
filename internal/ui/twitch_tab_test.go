@@ -61,8 +61,8 @@ func TestTwitchTabViewBuildPreEnabled(t *testing.T) {
 		t.Fatal("expected non-nil content from TwitchTabView.Build")
 	}
 
-	if tab.statusBadge == nil || tab.statusBadge.Text != "🟢 Ready (mrpoundsign)" {
-		t.Errorf("expected ready badge, got %v", tab.statusBadge)
+	if tab.statusBadge == nil || tab.statusBadge.Text != "🟡 Waiting for Stream (mrpoundsign)..." {
+		t.Errorf("expected waiting badge, got %v", tab.statusBadge)
 	}
 }
 
