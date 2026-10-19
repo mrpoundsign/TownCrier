@@ -40,12 +40,13 @@ type TwitchTabView struct {
 	rewardEntry       *ScrollPassEntry
 	rewardOAuthHint   *widget.Label
 	modCmdsCheck      *widget.Check
-	followCheck       *widget.Check
-	followTmplEntry   *ScrollPassEntry
-	followOAuthHint   *widget.Label
-	overrideCheck     *widget.Check
-	onStatus          func(msg string)
-	initializing      bool
+	followCheck        *widget.Check
+	followTmplEntry    *ScrollPassEntry
+	followOAuthHint    *widget.Label
+	overrideCheck      *widget.Check
+	overrideVoiceField *VoiceSpeedField
+	onStatus           func(msg string)
+	initializing       bool
 }
 
 // NewTwitchTabView creates a new Twitch tab view bound to the application session.
@@ -99,6 +100,13 @@ func (v *TwitchTabView) SyncFromConfig() {
 	v.initializing = true
 	if v.enableCheck != nil {
 		v.enableCheck.SetChecked(pCfg.Enabled)
+	}
+	if v.overrideVoiceField != nil {
+		voice := pCfg.Overrides.DefaultVoice
+		if voice == "" {
+			voice = tts.DefaultVoiceID
+		}
+		v.overrideVoiceField.SetVoiceAndSpeed(voice, pCfg.Overrides.DefaultSpeed)
 	}
 	v.initializing = false
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
@@ -637,51 +645,42 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 	})
 	emotesCheck.SetChecked(ov.SpeakEmotes)
 
-	voiceLabels := tts.VoiceDisplayLabels()
 	selectedVoice := ov.DefaultVoice
 	if selectedVoice == "" {
-		selectedVoice = "af_bella"
+		selectedVoice = tts.DefaultVoiceID
 	}
-	voiceSelect := widget.NewSelect(voiceLabels, nil)
-	voiceSelect.SetSelected(tts.VoiceDisplayName(selectedVoice))
-	voiceSelect.OnChanged = func(s string) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["twitch"]
-			p.Overrides.DefaultVoice = tts.VoiceIDFromLabel(s)
-			c.Platforms["twitch"] = p
-		})
-	}
-	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("Twitch Default Voice:"), nil, voiceSelect)
-
 	sp := ov.DefaultSpeed
 	if sp <= 0 {
 		sp = 1.0
 	}
-	speedLabel := widget.NewLabel(fmt.Sprintf("%.2fx", sp))
-	speedSlider := widget.NewSlider(0.5, 2.0)
-	speedSlider.Step = 0.05
-	speedSlider.SetValue(float64(sp))
-	speedSlider.OnChanged = func(val float64) {
-		speedLabel.SetText(fmt.Sprintf("%.2fx", val))
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["twitch"]
-			p.Overrides.DefaultSpeed = float32(val)
-			c.Platforms["twitch"] = p
-		})
-	}
-	speedRow := container.NewBorder(nil, nil, widget.NewLabel("Twitch Default Speed:"), speedLabel, speedSlider)
+
+	v.overrideVoiceField = NewVoiceSpeedField(
+		v.window,
+		v.session,
+		"Edit Twitch Default Voice & Speed",
+		selectedVoice,
+		sp,
+		func(voiceID string, speed float32) {
+			v.updateConfig(func(c *config.Config) {
+				p := c.Platforms["twitch"]
+				p.Overrides.DefaultVoice = voiceID
+				p.Overrides.DefaultSpeed = speed
+				c.Platforms["twitch"] = p
+			})
+		},
+		v.onStatus,
+	)
+	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("Twitch Default Voice & Speed:"), nil, v.overrideVoiceField.Container)
 
 	toggleOverrides := func(enabled bool) {
 		if enabled {
 			namesCheck.Enable()
 			emotesCheck.Enable()
-			voiceSelect.Enable()
-			speedSlider.Enable()
+			v.overrideVoiceField.Enable()
 		} else {
 			namesCheck.Disable()
 			emotesCheck.Disable()
-			voiceSelect.Disable()
-			speedSlider.Disable()
+			v.overrideVoiceField.Disable()
 		}
 	}
 	toggleOverrides(ov.OverrideRules)
@@ -701,7 +700,6 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 		namesCheck,
 		emotesCheck,
 		voiceRow,
-		speedRow,
 	)
 
 	return widget.NewCard("Platform Overrides", "Custom rules applied only to Twitch", cardContent)

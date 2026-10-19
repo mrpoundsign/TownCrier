@@ -3,7 +3,6 @@ package ui
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 
@@ -275,40 +274,36 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 
 	cfg := v.session.Config()
 	voiceLabels := tts.VoiceDisplayLabelsForModels(cfg.TTS.EffectiveEnabledModels())
-	if isEdit && existing.Voice != "" {
-		curLabel := tts.VoiceDisplayName(existing.Voice)
-		if !slices.Contains(voiceLabels, curLabel) {
-			voiceLabels = append([]string{curLabel}, voiceLabels...)
-		}
-	}
-	voiceSelect := widget.NewSelect(voiceLabels, nil)
+	initVoice := tts.DefaultVoiceID
 	if len(voiceLabels) > 0 {
-		voiceSelect.SetSelected(voiceLabels[0])
+		initVoice = tts.VoiceIDFromLabel(voiceLabels[0])
 	}
-
-	speedLabel := widget.NewLabel("1.00x")
-	speedSlider := widget.NewSlider(0.5, 2.0)
-	speedSlider.Step = 0.05
-	speedSlider.SetValue(1.0)
+	initSpeed := float32(1.0)
 
 	ignoredCheck := widget.NewCheck("Ignore Chatter (silence completely)", nil)
 	allowedCheck := widget.NewCheck("Always Allow (bypass bot filter)", nil)
 
 	if isEdit {
 		nickEntry.SetText(existing.Nickname)
-		curLabel := tts.VoiceDisplayName(existing.Voice)
-		voiceSelect.SetSelected(curLabel)
+		if existing.Voice != "" {
+			initVoice = existing.Voice
+		}
 		if existing.Speed > 0 {
-			speedSlider.SetValue(float64(existing.Speed))
-			speedLabel.SetText(fmt.Sprintf("%.2fx", existing.Speed))
+			initSpeed = existing.Speed
 		}
 		ignoredCheck.SetChecked(existing.Ignored)
 		allowedCheck.SetChecked(existing.Allowed)
 	}
 
-	speedSlider.OnChanged = func(val float64) {
-		speedLabel.SetText(fmt.Sprintf("%.2fx", val))
-	}
+	voiceField := NewVoiceSpeedField(
+		v.window,
+		v.session,
+		"Select Chatter Voice & Speed",
+		initVoice,
+		initSpeed,
+		nil,
+		v.setStatus,
+	)
 
 	form := container.NewVBox(
 		widget.NewLabelWithStyle("Linked Platform Accounts:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -318,9 +313,7 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 		widget.NewSeparator(),
 		widget.NewLabel("Spoken Nickname:"),
 		nickEntry,
-		widget.NewLabel("Assigned Voice:"),
-		voiceSelect,
-		container.NewBorder(nil, nil, widget.NewLabel("Speed:"), speedLabel, speedSlider),
+		container.NewBorder(nil, nil, widget.NewLabel("Assigned Voice & Speed:"), nil, voiceField.Container),
 		ignoredCheck,
 		allowedCheck,
 	)
@@ -350,8 +343,8 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 			Platform: primary.Platform,
 			UserID:   primary.UserID,
 			Accounts: accounts,
-			Voice:    tts.VoiceIDFromLabel(voiceSelect.Selected),
-			Speed:    float32(speedSlider.Value),
+			Voice:    voiceField.VoiceID(),
+			Speed:    voiceField.Speed(),
 			Nickname: strings.TrimSpace(nickEntry.Text),
 			Ignored:  ignoredCheck.Checked,
 			Allowed:  allowedCheck.Checked,

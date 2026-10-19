@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -18,20 +17,21 @@ type YouTubeTabView struct {
 	window  fyne.Window
 	session *app.Session
 
-	channelEntry      *ScrollPassEntry
-	statusBadge       *widget.Label
-	enableCheck       *widget.Check
-	allChatCheck      *widget.Check
-	ignorePrefixCheck *widget.Check
-	ignorePrefixEntry *ScrollPassEntry
-	prefixCheck       *widget.Check
-	prefixEntry       *ScrollPassEntry
-	roleGatedCheck    *widget.Check
-	roleChecks        map[string]*widget.Check
-	paidOnlyCheck     *widget.Check
-	overrideCheck     *widget.Check
-	onStatus          func(msg string)
-	initializing      bool
+	channelEntry       *ScrollPassEntry
+	statusBadge        *widget.Label
+	enableCheck        *widget.Check
+	allChatCheck       *widget.Check
+	ignorePrefixCheck  *widget.Check
+	ignorePrefixEntry  *ScrollPassEntry
+	prefixCheck        *widget.Check
+	prefixEntry        *ScrollPassEntry
+	roleGatedCheck     *widget.Check
+	roleChecks         map[string]*widget.Check
+	paidOnlyCheck      *widget.Check
+	overrideCheck      *widget.Check
+	overrideVoiceField *VoiceSpeedField
+	onStatus           func(msg string)
+	initializing       bool
 }
 
 // NewYouTubeTabView creates a new YouTube tab view bound to the application session.
@@ -81,6 +81,13 @@ func (v *YouTubeTabView) SyncFromConfig() {
 	v.initializing = true
 	if v.enableCheck != nil {
 		v.enableCheck.SetChecked(pCfg.Enabled)
+	}
+	if v.overrideVoiceField != nil {
+		voice := pCfg.Overrides.DefaultVoice
+		if voice == "" {
+			voice = tts.DefaultVoiceID
+		}
+		v.overrideVoiceField.SetVoiceAndSpeed(voice, pCfg.Overrides.DefaultSpeed)
 	}
 	v.initializing = false
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
@@ -407,51 +414,42 @@ func (v *YouTubeTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.
 	})
 	emotesCheck.SetChecked(ov.SpeakEmotes)
 
-	voiceLabels := tts.VoiceDisplayLabels()
 	selectedVoice := ov.DefaultVoice
 	if selectedVoice == "" {
-		selectedVoice = "af_bella"
+		selectedVoice = tts.DefaultVoiceID
 	}
-	voiceSelect := widget.NewSelect(voiceLabels, nil)
-	voiceSelect.SetSelected(tts.VoiceDisplayName(selectedVoice))
-	voiceSelect.OnChanged = func(s string) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.DefaultVoice = tts.VoiceIDFromLabel(s)
-			c.Platforms["youtube"] = p
-		})
-	}
-	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("YouTube Default Voice:"), nil, voiceSelect)
-
 	sp := ov.DefaultSpeed
 	if sp <= 0 {
 		sp = 1.0
 	}
-	speedLabel := widget.NewLabel(fmt.Sprintf("%.2fx", sp))
-	speedSlider := widget.NewSlider(0.5, 2.0)
-	speedSlider.Step = 0.05
-	speedSlider.SetValue(float64(sp))
-	speedSlider.OnChanged = func(val float64) {
-		speedLabel.SetText(fmt.Sprintf("%.2fx", val))
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.DefaultSpeed = float32(val)
-			c.Platforms["youtube"] = p
-		})
-	}
-	speedRow := container.NewBorder(nil, nil, widget.NewLabel("YouTube Default Speed:"), speedLabel, speedSlider)
+
+	v.overrideVoiceField = NewVoiceSpeedField(
+		v.window,
+		v.session,
+		"Edit YouTube Default Voice & Speed",
+		selectedVoice,
+		sp,
+		func(voiceID string, speed float32) {
+			v.updateConfig(func(c *config.Config) {
+				p := c.Platforms["youtube"]
+				p.Overrides.DefaultVoice = voiceID
+				p.Overrides.DefaultSpeed = speed
+				c.Platforms["youtube"] = p
+			})
+		},
+		v.onStatus,
+	)
+	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("YouTube Default Voice & Speed:"), nil, v.overrideVoiceField.Container)
 
 	toggleOverrides := func(enabled bool) {
 		if enabled {
 			namesCheck.Enable()
 			emotesCheck.Enable()
-			voiceSelect.Enable()
-			speedSlider.Enable()
+			v.overrideVoiceField.Enable()
 		} else {
 			namesCheck.Disable()
 			emotesCheck.Disable()
-			voiceSelect.Disable()
-			speedSlider.Disable()
+			v.overrideVoiceField.Disable()
 		}
 	}
 	toggleOverrides(ov.OverrideRules)
@@ -471,7 +469,6 @@ func (v *YouTubeTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.
 		namesCheck,
 		emotesCheck,
 		voiceRow,
-		speedRow,
 	)
 
 	return widget.NewCard("Platform Overrides", "Custom rules applied only to YouTube", cardContent)

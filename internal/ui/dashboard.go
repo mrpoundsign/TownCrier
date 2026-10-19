@@ -256,15 +256,20 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 		enabledModels = v.session.Config().TTS.EffectiveEnabledModels()
 	}
 	voiceLabels := tts.VoiceDisplayLabelsForModels(enabledModels)
-	voiceSelect := widget.NewSelect(voiceLabels, nil)
+	initVoice := tts.DefaultVoiceID
 	if len(voiceLabels) > 0 {
-		voiceSelect.SetSelected(voiceLabels[0])
+		initVoice = tts.VoiceIDFromLabel(voiceLabels[0])
 	}
 
-	speedSlider := widget.NewSlider(0.5, 2.0)
-	speedSlider.Step = 0.05
-	speedSlider.SetValue(1.0)
-	speedLabel := widget.NewLabel("1.00x")
+	voiceField := NewVoiceSpeedField(
+		v.window,
+		v.session,
+		"Select Chatter Voice & Speed",
+		initVoice,
+		1.0,
+		nil,
+		v.onStatus,
+	)
 
 	ignoreCheck := widget.NewCheck("Ignore this chatter (silent)", nil)
 
@@ -297,13 +302,15 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 	linkSelect.SetSelected(newProfileOption)
 
 	applyViewerToWidgets := func(vc config.ViewerConfig) {
+		voice := voiceField.VoiceID()
 		if vc.Voice != "" {
-			voiceSelect.SetSelected(tts.VoiceDisplayName(vc.Voice))
+			voice = vc.Voice
 		}
+		speed := voiceField.Speed()
 		if vc.Speed > 0 {
-			speedSlider.SetValue(float64(vc.Speed))
-			speedLabel.SetText(fmt.Sprintf("%.2fx", vc.Speed))
+			speed = vc.Speed
 		}
+		voiceField.SetVoiceAndSpeed(voice, speed)
 		ignoreCheck.SetChecked(vc.Ignored)
 	}
 
@@ -328,17 +335,11 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 		}
 	}
 
-	speedSlider.OnChanged = func(val float64) {
-		speedLabel.SetText(fmt.Sprintf("%.2fx", val))
-	}
-
 	formContent := container.NewVBox(
 		widget.NewLabel(fmt.Sprintf("Assign voice for: %s (%s)", username, platform)),
 		widget.NewLabel("Link to Existing Viewer Profile:"),
 		linkSelect,
-		widget.NewLabel("Voice:"),
-		voiceSelect,
-		container.NewBorder(nil, nil, widget.NewLabel("Speed:"), speedLabel, speedSlider),
+		container.NewBorder(nil, nil, widget.NewLabel("Voice & Speed:"), nil, voiceField.Container),
 		ignoreCheck,
 	)
 
@@ -370,8 +371,8 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 						existing.Platform = accs[0].Platform
 						existing.UserID = accs[0].UserID
 					}
-					existing.Voice = tts.VoiceIDFromLabel(voiceSelect.Selected)
-					existing.Speed = float32(speedSlider.Value)
+					existing.Voice = voiceField.VoiceID()
+					existing.Speed = voiceField.Speed()
 					existing.Ignored = ignoreCheck.Checked
 					cfg.Viewers[selectedKey] = existing
 					return
@@ -383,8 +384,8 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 				Platform: platform,
 				UserID:   username,
 				Accounts: []config.ViewerAccount{{Platform: platform, UserID: username}},
-				Voice:    tts.VoiceIDFromLabel(voiceSelect.Selected),
-				Speed:    float32(speedSlider.Value),
+				Voice:    voiceField.VoiceID(),
+				Speed:    voiceField.Speed(),
 				Ignored:  ignoreCheck.Checked,
 			}
 		})
