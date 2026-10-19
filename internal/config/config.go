@@ -686,8 +686,15 @@ func voiceFamilyFromID(voiceID string) string {
 	}
 	if prefix, _, ok := strings.Cut(id, ":"); ok {
 		switch prefix {
-		case "supertonic", "kokoro", "kitten_mini", "kitten_nano", "piper":
+		case "supertonic", "kokoro", "kokoro_intl", "kitten_mini", "kitten_nano", "piper":
 			return prefix
+		}
+	}
+	raw := strings.TrimPrefix(id, "kokoro:")
+	if len(raw) >= 3 && raw[2] == '_' {
+		switch raw[:2] {
+		case "ef", "em", "ff", "hf", "hm", "if", "im", "jf", "jm", "pf", "pm", "zf", "zm":
+			return "kokoro_intl"
 		}
 	}
 	return "kokoro"

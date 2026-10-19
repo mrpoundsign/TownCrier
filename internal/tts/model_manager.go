@@ -22,14 +22,14 @@ var (
 	ErrChecksumMismatch = errors.New("downloaded file checksum mismatch")
 
 	// KokoroFP32ArchiveURL is the upstream sherpa-onnx release archive containing model.onnx (FP32 for DirectML GPU) and shared assets.
-	KokoroFP32ArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2"
-	KokoroFP32ArchiveSHA256       = "912804855a04745fa77a30be545b3f9a5d15c4d66db00b88cbcd4921df605ac7"
-	KokoroFP32ArchiveSize   int64 = 319625534
+	KokoroFP32ArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2"
+	KokoroFP32ArchiveSHA256       = "c5f7e2d2caf082bc1d20fb70334a61d99d20b484500aad32e7cf84c128ea3298"
+	KokoroFP32ArchiveSize   int64 = 334000000
 
 	// KokoroINT8ArchiveURL is the upstream sherpa-onnx release archive containing model.int8.onnx (INT8 for CPU SIMD fallback).
-	KokoroINT8ArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-en-v0_19.tar.bz2"
-	KokoroINT8ArchiveSHA256       = "c9f0dd393615805b0bab050c340834d5e684e732aec91c0e860cd30e982c08bd"
-	KokoroINT8ArchiveSize   int64 = 103248205
+	KokoroINT8ArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_0.tar.bz2"
+	KokoroINT8ArchiveSHA256       = "4c3052abaa60943a341f193888cf6abd68787dae6ab8ae5c925a706caa247e4e"
+	KokoroINT8ArchiveSize   int64 = 126000000
 
 	// SupertonicArchiveURL is the upstream sherpa-onnx Supertonic INT8 model archive (10 voices, 44.1 kHz, ultra-fast CPU).
 	SupertonicArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-supertonic-tts-int8-2026-03-06.tar.bz2"
@@ -128,14 +128,42 @@ func IsAnyModelFamilyInstalled(kokoroDir string) bool {
 	return false
 }
 
+// isLegacyKokoroV019Dir reports whether dir contains old kokoro-en-v0_19 assets (11-speaker voices.bin ~5.75 MB).
+func isLegacyKokoroV019Dir(dir string) bool {
+	if fileExists(filepath.Join(dir, "lexicon-us-en.txt")) {
+		return false
+	}
+	voicesPath := filepath.Join(dir, "voices.bin")
+	info, err := os.Stat(voicesPath)
+	if err == nil {
+		// v0.19 voices.bin is 5,750,784 bytes (~5.75 MB).
+		// v1.0 voices.bin is 27,701,760 bytes (~27.7 MB).
+		if info.Size() >= 5*1024*1024 && info.Size() <= 7*1024*1024 {
+			return true
+		}
+	}
+	return false
+}
+
+// hasKokoroSharedAssets checks if the Kokoro v1.0 shared assets (voices.bin 53-spk, tokens.txt, espeak-ng-data) are present.
+func hasKokoroSharedAssets(dir string) bool {
+	if !hasSharedAssets(dir) {
+		return false
+	}
+	if isLegacyKokoroV019Dir(dir) {
+		return false
+	}
+	return true
+}
+
 // IsCPUModelInstalled checks if the INT8 CPU Kokoro model (model.int8.onnx) and shared assets are present.
 func IsCPUModelInstalled(dir string) bool {
-	return fileExists(filepath.Join(dir, "model.int8.onnx")) && hasSharedAssets(dir)
+	return fileExists(filepath.Join(dir, "model.int8.onnx")) && hasKokoroSharedAssets(dir)
 }
 
 // IsGPUModelInstalled checks if the FP32 DirectML GPU Kokoro model (model.onnx) and shared assets are present.
 func IsGPUModelInstalled(dir string) bool {
-	return fileExists(filepath.Join(dir, "model.onnx")) && hasSharedAssets(dir)
+	return fileExists(filepath.Join(dir, "model.onnx")) && hasKokoroSharedAssets(dir)
 }
 
 // IsKokoroInstalledForMode checks if the required Kokoro model files for the requested mode (GPU vs CPU) are installed.
@@ -310,7 +338,14 @@ func DownloadKokoroModelForMode(destDir string, useGPU bool, onProgress Download
 		return fmt.Errorf("create model directory %s: %w", destDir, err)
 	}
 
-	sharedPresent := hasSharedAssets(destDir)
+	if isLegacyKokoroV019Dir(destDir) {
+		// Clean up stale v0.19 model files so mismatched speaker count ONNX / voices.bin are never paired.
+		for _, f := range []string{"model.onnx", "model.int8.onnx", "voices.bin", "tokens.txt"} {
+			_ = os.Remove(filepath.Join(destDir, f))
+		}
+	}
+
+	sharedPresent := hasKokoroSharedAssets(destDir)
 	needFP32 := useGPU && (!fileExists(filepath.Join(destDir, "model.onnx")) || !sharedPresent)
 	needINT8 := !fileExists(filepath.Join(destDir, "model.int8.onnx")) || (!useGPU && !sharedPresent)
 
@@ -531,7 +566,7 @@ func ModelFamilyDir(kokoroDir string, family string) string {
 		kokoroDir = DefaultModelDir()
 	}
 	fam := strings.ToLower(strings.TrimSpace(family))
-	if fam == "" || fam == ModelKokoro {
+	if fam == "" || fam == ModelKokoro || fam == ModelKokoroIntl {
 		return kokoroDir
 	}
 	spec, ok := ModelSpecByID(fam)
@@ -547,7 +582,7 @@ func IsModelFamilyInstalled(kokoroDir string, family string, useGPU bool) bool {
 	fam := strings.ToLower(strings.TrimSpace(family))
 	dir := ModelFamilyDir(kokoroDir, fam)
 	switch fam {
-	case "", ModelKokoro:
+	case "", ModelKokoro, ModelKokoroIntl:
 		return IsKokoroInstalledForMode(dir, useGPU) || IsCPUModelInstalled(dir)
 	case ModelSupertonic:
 		for _, f := range []string{
@@ -582,7 +617,7 @@ func IsModelFamilyInstalled(kokoroDir string, family string, useGPU bool) bool {
 func DownloadModelFamily(kokoroDir string, family string, useGPU bool, onProgress DownloadProgressFunc) error {
 	fam := strings.ToLower(strings.TrimSpace(family))
 	dir := ModelFamilyDir(kokoroDir, fam)
-	if fam == "" || fam == ModelKokoro {
+	if fam == "" || fam == ModelKokoro || fam == ModelKokoroIntl {
 		return DownloadKokoroModelForMode(dir, useGPU, onProgress)
 	}
 	if IsModelFamilyInstalled(kokoroDir, fam, useGPU) {

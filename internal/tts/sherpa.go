@@ -150,6 +150,15 @@ func (e *SherpaEngine) ensureLoadedLocked() error {
 			}
 		}
 
+		var lexicons []string
+		for _, lexName := range []string{"lexicon-us-en.txt", "lexicon-zh.txt"} {
+			lexPath := filepath.Join(e.modelDir, lexName)
+			if fileExists(lexPath) {
+				lexicons = append(lexicons, lexPath)
+			}
+		}
+		lexiconStr := strings.Join(lexicons, ",")
+
 		config = &sherpa.OfflineTtsConfig{
 			Model: sherpa.OfflineTtsModelConfig{
 				Kokoro: sherpa.OfflineTtsKokoroModelConfig{
@@ -158,6 +167,7 @@ func (e *SherpaEngine) ensureLoadedLocked() error {
 					Tokens:      tokensFile,
 					DataDir:     dataDir,
 					LengthScale: 1.0,
+					Lexicon:     lexiconStr,
 				},
 				NumThreads: e.numThreads,
 				Debug:      0,
@@ -167,7 +177,7 @@ func (e *SherpaEngine) ensureLoadedLocked() error {
 	}
 
 	tts := sherpa.NewOfflineTts(config)
-	if tts == nil && e.useGPU && (e.family == "" || e.family == ModelKokoro) {
+	if tts == nil && e.useGPU && (e.family == "" || e.family == ModelKokoro || e.family == ModelKokoroIntl) {
 		// Fallback to CPU with INT8 model if DirectML fails on host system
 		config.Model.Provider = "cpu"
 		int8Model := filepath.Join(e.modelDir, "model.int8.onnx")
