@@ -32,6 +32,11 @@ type Connector struct {
 	channel          string
 	status           ConnectionStatus
 	running          bool
+	isLive           bool
+	livePollCancel   context.CancelFunc
+	livePollInterval time.Duration
+	gqlURL           string
+	checkLiveFn      func(ctx context.Context, channel string) (bool, error)
 	oauth            *OAuthManager
 	eventSubCancel   context.CancelFunc
 	eventSubConn     *websocket.Conn
@@ -42,6 +47,7 @@ type Connector struct {
 	onEvent          func(event *chat.Event)
 	onModeration     func(modEvent *chat.ModerationEvent)
 	onStatusChange   func(status ConnectionStatus, detail string)
+	onStreamLive     func(live bool)
 }
 
 // NewConnector creates a new Twitch connector.
@@ -52,6 +58,8 @@ func NewConnector(
 ) *Connector {
 	return &Connector{
 		status:           StatusDisconnected,
+		livePollInterval: DefaultLivePollInterval,
+		gqlURL:           DefaultTwitchGQLURL,
 		eventSubWSURL:    DefaultEventSubWSURL,
 		helixBaseURL:     DefaultHelixBaseURL,
 		oauthValidateURL: DefaultOAuthValidateURL,
@@ -60,6 +68,36 @@ func NewConnector(
 		onModeration:     onModeration,
 		onStatusChange:   onStatusChange,
 	}
+}
+
+// SetOnStreamStateChange registers a callback invoked whenever the channel's live broadcast state changes.
+func (c *Connector) SetOnStreamStateChange(fn func(live bool)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onStreamLive = fn
+}
+
+// SetCheckLiveFn overrides the live stream check function (used in tests).
+func (c *Connector) SetCheckLiveFn(fn func(ctx context.Context, channel string) (bool, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.checkLiveFn = fn
+}
+
+// SetLivePollInterval overrides the periodic live stream check interval.
+func (c *Connector) SetLivePollInterval(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if d > 0 {
+		c.livePollInterval = d
+	}
+}
+
+// IsLive reports whether the connected Twitch channel is currently broadcasting live.
+func (c *Connector) IsLive() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.isLive
 }
 
 // SetOAuthManager attaches the Twitch OAuth manager for EventSub WebSocket subscriptions.
@@ -220,6 +258,7 @@ func (c *Connector) connectLocked() {
 		if c.client == cl {
 			c.client = nil
 			if c.running {
+				c.setStreamLiveLocked(false)
 				c.updateStatusLocked(StatusDisconnected, "Disconnected from #"+targetChannel)
 			}
 		}
@@ -230,13 +269,35 @@ func (c *Connector) connectLocked() {
 	}(client, ch)
 
 	c.startEventSubLocked()
+	c.startLivePollLocked(ch)
 }
 
 func (c *Connector) disconnectLocked() {
+	c.stopLivePollLocked()
 	c.stopEventSubLocked()
+	c.setStreamLiveLocked(false)
 	if c.client != nil {
 		_ = c.client.Disconnect()
 		c.client = nil
+	}
+}
+
+func (c *Connector) setStreamLive(live bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.running && live {
+		return
+	}
+	c.setStreamLiveLocked(live)
+}
+
+func (c *Connector) setStreamLiveLocked(live bool) {
+	if c.isLive == live {
+		return
+	}
+	c.isLive = live
+	if fn := c.onStreamLive; fn != nil {
+		go fn(live)
 	}
 }
 
@@ -262,8 +323,24 @@ func (c *Connector) handlePrivateMessage(msg twitch.PrivateMessage) {
 	emotes := mapEmotes(msg.Emotes)
 
 	kind := chat.EventKindMessage
+	var amount float64
+	var unitAmount float64
+	var currency string
+	var count int
+	rewardID := strings.TrimSpace(msg.CustomRewardID)
+	if rewardID == "" && msg.Tags != nil {
+		rewardID = strings.TrimSpace(msg.Tags["custom-reward-id"])
+	}
+
 	if msg.Bits > 0 {
 		kind = chat.EventKindCheer
+		amount = float64(msg.Bits)
+		unitAmount = 1
+		count = msg.Bits
+		currency = "bits"
+	} else if rewardID != "" && (c.oauth == nil || !c.oauth.HasToken()) {
+		// Anonymous IRC fallback for Channel Point redemptions with text input when EventSub OAuth is not active
+		kind = chat.EventKindRedemption
 	}
 
 	displayName := msg.User.DisplayName
@@ -288,8 +365,11 @@ func (c *Connector) handlePrivateMessage(msg twitch.PrivateMessage) {
 		Roles:       roles,
 		Text:        msg.Message,
 		EmoteSpans:  emotes,
-		Amount:      float64(msg.Bits),
-		Currency:    "bits",
+		Amount:      amount,
+		UnitAmount:  unitAmount,
+		Currency:    currency,
+		Count:       count,
+		RewardID:    rewardID,
 		Raw:         msg,
 	}
 
@@ -367,20 +447,28 @@ func (c *Connector) handleUserNotice(msg twitch.UserNoticeMessage) {
 	var text string
 	var months int
 	var count int
+	var recipient string
+	subTier := formatTwitchSubPlan(msg.MsgParams["msg-param-sub-plan"])
 
 	switch msg.MsgID {
 	case "sub":
 		kind = chat.EventKindSub
 		text = msg.Message
+		months = 1
+		count = 1
 	case "resub":
 		kind = chat.EventKindResub
 		text = msg.Message
 		if m, err := strconv.Atoi(msg.MsgParams["msg-param-cumulative-months"]); err == nil {
 			months = m
 		}
+		if months <= 0 {
+			months = 1
+		}
+		count = 1
 	case "subgift", "anonsubgift":
 		kind = chat.EventKindGiftSub
-		recipient := msg.MsgParams["msg-param-recipient-display-name"]
+		recipient = msg.MsgParams["msg-param-recipient-display-name"]
 		if recipient == "" {
 			recipient = msg.MsgParams["msg-param-recipient-user-name"]
 		}
@@ -422,12 +510,29 @@ func (c *Connector) handleUserNotice(msg twitch.UserNoticeMessage) {
 		Roles:       roles,
 		Text:        text,
 		EmoteSpans:  emotes,
+		SubTier:     subTier,
+		Recipient:   recipient,
 		Months:      months,
 		Count:       count,
 		Raw:         msg,
 	}
 
 	c.onEvent(ev)
+}
+
+func formatTwitchSubPlan(plan string) string {
+	switch strings.TrimSpace(plan) {
+	case "Prime":
+		return "Prime"
+	case "1000":
+		return "Tier 1"
+	case "2000":
+		return "Tier 2"
+	case "3000":
+		return "Tier 3"
+	default:
+		return ""
+	}
 }
 
 func extractRoles(badges map[string]int) []string {

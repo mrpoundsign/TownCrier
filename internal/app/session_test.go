@@ -542,5 +542,90 @@ func TestSessionStreamEventsAndRedemptionFilter(t *testing.T) {
 	}
 }
 
+func TestUnifiedStreamSessionLifecycleAcrossPlatforms(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.DefaultConfig()
 
+	sqlStore, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend failed: %v", err)
+	}
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, sqlStore)
 
+	session := NewSession(cfg, secrets.NewMemoryStore())
+	session.SetEventLogger(logMgr)
+	defer func() { _ = session.Close() }()
+	session.Queue().Pause()
+
+	if session.ActiveSessionID() != 0 {
+		t.Fatalf("expected initial ActiveSessionID=0, got %d", session.ActiveSessionID())
+	}
+
+	// 1. Twitch goes live -> starts StreamSession #1
+	session.UpdatePlatformStreamState("twitch", "mrpoundsign", true)
+	sid := session.ActiveSessionID()
+	if sid <= 0 {
+		t.Fatalf("expected positive ActiveSessionID after twitch live, got %d", sid)
+	}
+
+	// 2. TikTok also goes live -> joins same StreamSession #1
+	session.UpdatePlatformStreamState("tiktok", "@mrpoundsign", true)
+	if session.ActiveSessionID() != sid {
+		t.Fatalf("expected same ActiveSessionID %d when tiktok joins, got %d", sid, session.ActiveSessionID())
+	}
+
+	// 3. Dispatch an event while live -> automatically stamped with SessionID
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "ev-in-session",
+		Platform:    "twitch",
+		Channel:     "mrpoundsign",
+		Kind:        chat.EventKindCheer,
+		UserID:      "42",
+		UserName:    "cheerer",
+		DisplayName: "Cheerer",
+		Amount:      500,
+		Count:       500,
+		Currency:    "BITS",
+		Text:        "cheer500 great stream!",
+	})
+
+	// 4. Twitch goes offline, but TikTok is still live -> session stays open
+	session.UpdatePlatformStreamState("twitch", "mrpoundsign", false)
+	if session.ActiveSessionID() != sid {
+		t.Fatalf("expected session %d to remain open while tiktok is still live, got %d", sid, session.ActiveSessionID())
+	}
+
+	// 5. TikTok goes offline -> all platforms offline -> session closes
+	session.UpdatePlatformStreamState("tiktok", "@mrpoundsign", false)
+	if session.ActiveSessionID() != 0 {
+		t.Fatalf("expected ActiveSessionID=0 after all platforms offline, got %d", session.ActiveSessionID())
+	}
+
+	sessions, err := logMgr.ListSessions(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 stream session, got %d", len(sessions))
+	}
+	if sessions[0].ID != sid || sessions[0].EndedAt.IsZero() {
+		t.Errorf("expected session %d to be closed, got %+v", sid, sessions[0])
+	}
+	if len(sessions[0].Platforms) != 2 || len(sessions[0].Channels) != 2 {
+		t.Errorf("expected 2 platforms and 2 channels on session, got platforms=%v channels=%v", sessions[0].Platforms, sessions[0].Channels)
+	}
+
+	res, err := logMgr.Query(ctx, eventlog.QueryFilter{SessionID: sid})
+	if err != nil {
+		t.Fatalf("Query by SessionID: %v", err)
+	}
+	if len(res.Entries) != 1 || res.Entries[0].ID != "ev-in-session" || res.Entries[0].SessionID != sid {
+		t.Errorf("expected ev-in-session in session %d, got %+v", sid, res.Entries)
+	}
+	if res.Summary.TotalBits != 500 {
+		t.Errorf("expected TotalBits=500 in session summary, got %+v", res.Summary)
+	}
+}

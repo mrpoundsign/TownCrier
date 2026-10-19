@@ -56,6 +56,10 @@ type Session struct {
 	kickConnector     *kick.Connector
 	onKickStatus      func(status string, detail string)
 	onEventDispatched func(event *chat.Event, voiceID string)
+
+	streamMu        sync.Mutex
+	livePlatforms   map[string]string
+	activeSessionID int64
 }
 
 // NewSession creates an application session initialized with configuration and secret store.
@@ -72,12 +76,13 @@ func NewSession(cfg *config.Config, store secrets.Store) *Session {
 	router := chat.NewRouter()
 
 	s := &Session{
-		cfg:         cfg.Clone(),
-		secrets:     store,
-		router:      router,
-		sanitizer:   sanitizer,
-		bots:        matcher,
-		twitchOAuth: twitch.NewOAuthManager("", store),
+		cfg:           cfg.Clone(),
+		secrets:       store,
+		router:        router,
+		sanitizer:     sanitizer,
+		bots:          matcher,
+		twitchOAuth:   twitch.NewOAuthManager("", store),
+		livePlatforms: make(map[string]string),
 	}
 
 	s.twitchConnector = twitch.NewConnector(
@@ -97,6 +102,13 @@ func NewSession(cfg *config.Config, store secrets.Store) *Session {
 		},
 	)
 	s.twitchConnector.SetOAuthManager(s.twitchOAuth)
+	s.twitchConnector.SetOnStreamStateChange(func(live bool) {
+		ch := ""
+		if s.twitchConnector != nil {
+			ch = s.twitchConnector.Channel()
+		}
+		s.UpdatePlatformStreamState("twitch", ch, live)
+	})
 
 	s.youtubeConnector = youtube.NewConnector(
 		func(event *chat.Event) {
@@ -106,6 +118,12 @@ func NewSession(cfg *config.Config, store secrets.Store) *Session {
 			s.DispatchModeration(modEvent)
 		},
 		func(status youtube.ConnectionStatus, detail string) {
+			target := detail
+			if s.youtubeConnector != nil && s.youtubeConnector.Target() != "" {
+				target = s.youtubeConnector.Target()
+			}
+			s.UpdatePlatformStreamState("youtube", target, status == youtube.StatusConnected)
+
 			s.mu.RLock()
 			fn := s.onYouTubeStatus
 			s.mu.RUnlock()
@@ -120,6 +138,12 @@ func NewSession(cfg *config.Config, store secrets.Store) *Session {
 			_ = s.DispatchEvent(event)
 		},
 		func(status tiktok.ConnectionStatus, detail string) {
+			user := detail
+			if s.tiktokConnector != nil && s.tiktokConnector.Username() != "" {
+				user = s.tiktokConnector.Username()
+			}
+			s.UpdatePlatformStreamState("tiktok", user, status == tiktok.StatusConnected)
+
 			s.mu.RLock()
 			fn := s.onTikTokStatus
 			s.mu.RUnlock()
@@ -145,6 +169,13 @@ func NewSession(cfg *config.Config, store secrets.Store) *Session {
 			}
 		},
 	)
+	s.kickConnector.SetOnStreamStateChange(func(live bool) {
+		ch := ""
+		if s.kickConnector != nil {
+			ch = s.kickConnector.Channel()
+		}
+		s.UpdatePlatformStreamState("kick", ch, live)
+	})
 
 	s.queue = queue.NewQueue(nil, nil, s.Config)
 	s.queue.SetOnItemOutcome(func(item *queue.Item, spoken bool, outcome string, detail string) {
@@ -183,9 +214,8 @@ func (s *Session) Start() error {
 // Stop halts all active subsystems and transitions session to stopped state.
 func (s *Session) Stop() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if !s.running {
+		s.mu.Unlock()
 		return ErrNotRunning
 	}
 
@@ -203,6 +233,9 @@ func (s *Session) Stop() error {
 	if s.kickConnector != nil {
 		_ = s.kickConnector.Stop()
 	}
+	s.mu.Unlock()
+
+	s.endActiveStreamSession()
 	return nil
 }
 
@@ -225,6 +258,11 @@ func (s *Session) Close() error {
 	if s.queue != nil {
 		s.queue.Close()
 	}
+	s.mu.Unlock()
+
+	s.endActiveStreamSession()
+
+	s.mu.Lock()
 	elog := s.eventLog
 	s.eventLog = nil
 	s.mu.Unlock()
@@ -492,6 +530,23 @@ func (s *Session) SetEventLogger(mgr *eventlog.Manager) {
 			EventRetentionDays: cfg.Logging.EventRetentionDays,
 		})
 	}
+
+	if mgr != nil {
+		s.streamMu.Lock()
+		if len(s.livePlatforms) > 0 && s.activeSessionID == 0 {
+			now := time.Now().UTC()
+			for p, ch := range s.livePlatforms {
+				if s.activeSessionID == 0 {
+					if sess, err := mgr.StartSession(context.Background(), now, p, ch); err == nil && sess != nil && sess.ID > 0 {
+						s.activeSessionID = sess.ID
+					}
+				} else {
+					_ = mgr.AddSessionPlatform(context.Background(), s.activeSessionID, p, ch)
+				}
+			}
+		}
+		s.streamMu.Unlock()
+	}
 }
 
 // EventLogger returns the active structured event log manager, if any.
@@ -499,6 +554,91 @@ func (s *Session) EventLogger() *eventlog.Manager {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.eventLog
+}
+
+// ActiveSessionID returns the currently active stream session ID, or 0 if no platform is currently live.
+func (s *Session) ActiveSessionID() int64 {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	return s.activeSessionID
+}
+
+// UpdatePlatformStreamState transitions a platform's live stream state and opens or closes the unified StreamSession accordingly.
+func (s *Session) UpdatePlatformStreamState(platform, channel string, live bool) {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	if platform == "" {
+		return
+	}
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		cfg := s.Config()
+		if pCfg, ok := cfg.Platforms[platform]; ok {
+			channel = pCfg.AccountName
+		}
+	}
+
+	elog := s.EventLogger()
+
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+
+	if s.livePlatforms == nil {
+		s.livePlatforms = make(map[string]string)
+	}
+
+	if live {
+		prevChan, alreadyLive := s.livePlatforms[platform]
+		s.livePlatforms[platform] = channel
+		if alreadyLive && prevChan == channel && s.activeSessionID > 0 {
+			return
+		}
+		if elog == nil {
+			return
+		}
+		now := time.Now().UTC()
+		if s.activeSessionID == 0 {
+			sess, err := elog.StartSession(context.Background(), now, platform, channel)
+			if err == nil && sess != nil && sess.ID > 0 {
+				s.activeSessionID = sess.ID
+				log.Printf("[Session] Started stream session #%d (%s:%s)", sess.ID, platform, channel)
+			}
+			for otherPlat, otherChan := range s.livePlatforms {
+				if otherPlat != platform && s.activeSessionID > 0 {
+					_ = elog.AddSessionPlatform(context.Background(), s.activeSessionID, otherPlat, otherChan)
+				}
+			}
+		} else {
+			_ = elog.AddSessionPlatform(context.Background(), s.activeSessionID, platform, channel)
+		}
+		return
+	}
+
+	if _, exists := s.livePlatforms[platform]; !exists {
+		return
+	}
+	delete(s.livePlatforms, platform)
+	if len(s.livePlatforms) == 0 && s.activeSessionID > 0 {
+		sid := s.activeSessionID
+		s.activeSessionID = 0
+		if elog != nil {
+			_ = elog.EndSession(context.Background(), sid, time.Now().UTC())
+			log.Printf("[Session] Ended stream session #%d (all platforms offline)", sid)
+		}
+	}
+}
+
+func (s *Session) endActiveStreamSession() {
+	elog := s.EventLogger()
+	s.streamMu.Lock()
+	sid := s.activeSessionID
+	s.activeSessionID = 0
+	clear(s.livePlatforms)
+	s.streamMu.Unlock()
+
+	if sid > 0 && elog != nil {
+		_ = elog.EndSession(context.Background(), sid, time.Now().UTC())
+		log.Printf("[Session] Ended stream session #%d on shutdown", sid)
+	}
 }
 
 // Panic immediately halts audio playback (<50ms), purges the speech queue, and latches Panic Mode (D28).
@@ -551,6 +691,7 @@ func (s *Session) buildLogEntry(event *chat.Event, rawText string, rawEmotes []c
 	}
 	return &eventlog.Entry{
 		ID:            event.ID,
+		SessionID:     s.ActiveSessionID(),
 		CreatedAt:     ts,
 		UpdatedAt:     time.Now().UTC(),
 		Platform:      event.Platform,

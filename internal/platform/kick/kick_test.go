@@ -333,3 +333,67 @@ func TestDualChannelPusherSubscription(t *testing.T) {
 		t.Fatalf("expected follow event from DualFollower, got %+v", events)
 	}
 }
+
+func TestKickLiveStreamStateTransitions(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v2/channels/livekick", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id": 555666, "chatroom": {"id": 27670567}, "livestream": {"id": 1001, "is_live": true}}`))
+	})
+	mux.Handle("/pusher", websocket.Handler(func(ws *websocket.Conn) {
+		for range 2 {
+			var subMsg string
+			if err := websocket.Message.Receive(ws, &subMsg); err != nil {
+				return
+			}
+		}
+		offlineFrame := `{"event":"App\\Events\\StopStreamBroadcast","data":"{}","channel":"channel.555666"}`
+		_ = websocket.Message.Send(ws, offlineFrame)
+		time.Sleep(50 * time.Millisecond)
+		onlineFrame := `{"event":"App\\Events\\StreamerIsLive","data":"{}","channel":"channel.555666"}`
+		_ = websocket.Message.Send(ws, onlineFrame)
+		time.Sleep(100 * time.Millisecond)
+	}))
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var stateMu sync.Mutex
+	var states []bool
+
+	conn := NewConnector(nil, nil, nil)
+	conn.apiBaseURL = srv.URL
+	conn.wsURL = "ws" + strings.TrimPrefix(srv.URL, "http") + "/pusher"
+	conn.reconnectDelay = 50 * time.Millisecond
+	conn.SetOnStreamStateChange(func(live bool) {
+		stateMu.Lock()
+		states = append(states, live)
+		stateMu.Unlock()
+	})
+
+	if err := conn.Start("livekick"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		stateMu.Lock()
+		n := len(states)
+		stateMu.Unlock()
+		if n >= 3 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_ = conn.Stop()
+
+	// Wait briefly for Stop() callback
+	time.Sleep(30 * time.Millisecond)
+
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	if len(states) < 3 || !states[0] || states[1] || !states[2] {
+		t.Fatalf("expected live transitions [true, false, true, ...], got %v", states)
+	}
+}
+
