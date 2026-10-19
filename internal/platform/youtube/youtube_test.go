@@ -129,7 +129,18 @@ func TestParseLiveChatResponse(t *testing.T) {
 									"timestampUsec": "%s",
 									"authorName": {"simpleText": "Charlie"},
 									"authorExternalChannelId": "UC_charlie",
-									"purchaseAmountText": {"simpleText": "€10.00"}
+									"purchaseAmountText": {"simpleText": "€10.00"},
+									"sticker": {
+										"thumbnails": [
+											{"url": "https://lh3.googleusercontent.com/sticker_thumb_1x.png"},
+											{"url": "https://lh3.googleusercontent.com/sticker_thumb_2x.png"}
+										],
+										"accessibility": {
+											"accessibilityData": {
+												"label": "Pear character cheering"
+											}
+										}
+									}
 								}
 							}
 						}
@@ -212,10 +223,13 @@ func TestParseLiveChatResponse(t *testing.T) {
 		t.Errorf("unexpected super chat event: %+v", e1)
 	}
 
-	// 3. Super Sticker
+	// 3. Super Sticker with inline thumbnail EmoteSpan and accessibility label
 	e2 := events[2]
 	if e2.Kind != chat.EventKindSuperSticker || e2.Amount != 10 || e2.Currency != "euros" {
 		t.Errorf("unexpected super sticker event: %+v", e2)
+	}
+	if e2.ItemName != "Pear character cheering" || len(e2.EmoteSpans) != 1 || e2.EmoteSpans[0].URL != "https://lh3.googleusercontent.com/sticker_thumb_2x.png" {
+		t.Errorf("expected sticker ItemName and high-res EmoteSpan, got ItemName=%q EmoteSpans=%+v", e2.ItemName, e2.EmoteSpans)
 	}
 
 	// 4. Membership Resub

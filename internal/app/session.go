@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mrpoundsign/TownCrier/internal/audio"
 	"github.com/mrpoundsign/TownCrier/internal/bots"
@@ -739,54 +740,92 @@ func (s *Session) RefreshTwitchOAuth() {
 	}
 }
 
-func formatEventLogRawText(event *chat.Event) string {
-	if event == nil {
-		return ""
+func shiftEmoteSpans(spans []chat.EmoteSpan, deltaRunes int) []chat.EmoteSpan {
+	if len(spans) == 0 {
+		return nil
 	}
+	out := make([]chat.EmoteSpan, len(spans))
+	for i, sp := range spans {
+		sp.Start += deltaRunes
+		sp.End += deltaRunes
+		out[i] = sp
+	}
+	return out
+}
+
+func formatLogCurrencyAmount(amount float64, currency string) string {
+	cur := strings.TrimSpace(currency)
+	var amtStr string
+	if amount == float64(int64(amount)) {
+		amtStr = fmt.Sprintf("%.0f", amount)
+	} else {
+		amtStr = fmt.Sprintf("%.2f", amount)
+	}
+	if cur != "" {
+		return amtStr + " " + cur
+	}
+	return amtStr
+}
+
+func formatEventLogRawTextAndEmotes(event *chat.Event) (string, []chat.EmoteSpan) {
+	if event == nil {
+		return "", nil
+	}
+	var rawEmotes []chat.EmoteSpan
+	if len(event.EmoteSpans) > 0 {
+		rawEmotes = make([]chat.EmoteSpan, len(event.EmoteSpans))
+		copy(rawEmotes, event.EmoteSpans)
+	}
+
 	msg := strings.TrimSpace(event.Text)
 	switch event.Kind {
 	case chat.EventKindFollow:
 		if msg != "" {
-			return msg
+			return msg, rawEmotes
 		}
-		return "Followed the channel"
+		return "Followed the channel", nil
 	case chat.EventKindSub:
 		if msg != "" {
-			return "Subscribed: " + msg
+			prefix := "Subscribed: "
+			return prefix + msg, shiftEmoteSpans(rawEmotes, utf8.RuneCountInString(prefix))
 		}
-		return "Subscribed"
+		return "Subscribed", nil
 	case chat.EventKindResub:
 		months := event.Months
 		if months <= 0 {
 			months = 1
 		}
 		if msg != "" {
-			return fmt.Sprintf("Resubscribed (%d months): %s", months, msg)
+			prefix := fmt.Sprintf("Resubscribed (%d months): ", months)
+			return prefix + msg, shiftEmoteSpans(rawEmotes, utf8.RuneCountInString(prefix))
 		}
-		return fmt.Sprintf("Resubscribed (%d months)", months)
+		return fmt.Sprintf("Resubscribed (%d months)", months), nil
 	case chat.EventKindGiftSub:
 		if msg != "" {
-			return msg
+			return msg, rawEmotes
 		}
 		count := event.Count
 		if count <= 0 {
 			count = 1
 		}
-		return fmt.Sprintf("Gifted %d subscriptions", count)
+		if recipient := strings.TrimSpace(event.Recipient); recipient != "" && count == 1 {
+			return "Gifted a subscription to " + recipient, nil
+		}
+		return fmt.Sprintf("Gifted %d subscriptions", count), nil
 	case chat.EventKindCheer:
 		if msg != "" {
-			return msg
+			return msg, rawEmotes
 		}
-		return fmt.Sprintf("Cheered %.0f bits", event.Amount)
+		return fmt.Sprintf("Cheered %.0f bits", event.Amount), nil
 	case chat.EventKindRaid:
 		if msg != "" {
-			return msg
+			return msg, rawEmotes
 		}
 		count := event.Count
 		if count <= 0 {
 			count = 1
 		}
-		return fmt.Sprintf("Raided with %d viewers", count)
+		return fmt.Sprintf("Raided with %d viewers", count), nil
 	case chat.EventKindRedemption:
 		reward := strings.TrimSpace(event.RewardTitle)
 		if reward == "" {
@@ -796,13 +835,50 @@ func formatEventLogRawText(event *chat.Event) string {
 			reward = "Channel Point Reward"
 		}
 		if msg != "" {
-			return fmt.Sprintf("[%s] %s", reward, msg)
+			prefix := fmt.Sprintf("[%s] ", reward)
+			return prefix + msg, shiftEmoteSpans(rawEmotes, utf8.RuneCountInString(prefix))
 		}
-		return "Redeemed " + reward
+		return "Redeemed " + reward, nil
+	case chat.EventKindSuperChat:
+		amtStr := formatLogCurrencyAmount(event.Amount, event.Currency)
+		if msg != "" {
+			prefix := fmt.Sprintf("Super Chat (%s): ", amtStr)
+			return prefix + msg, shiftEmoteSpans(rawEmotes, utf8.RuneCountInString(prefix))
+		}
+		return fmt.Sprintf("Super Chat (%s)", amtStr), nil
+	case chat.EventKindSuperSticker:
+		amtStr := formatLogCurrencyAmount(event.Amount, event.Currency)
+		base := fmt.Sprintf("Super Sticker (%s)", amtStr)
+		if len(rawEmotes) > 0 && strings.TrimSpace(rawEmotes[0].URL) != "" {
+			stickerName := strings.TrimSpace(event.ItemName)
+			if stickerName == "" {
+				stickerName = strings.TrimSpace(rawEmotes[0].Name)
+			}
+			if stickerName == "" {
+				stickerName = "Super Sticker"
+			}
+			token := ":" + stickerName + ":"
+			start := utf8.RuneCountInString(base) + 1
+			sp := rawEmotes[0]
+			sp.Start = start
+			sp.End = start + utf8.RuneCountInString(token)
+			sp.Name = stickerName
+			return base + " " + token, []chat.EmoteSpan{sp}
+		}
+		return base, nil
 	case chat.EventKindGift:
-		giftName := strings.TrimSpace(event.RewardTitle)
+		giftName := strings.TrimSpace(event.ItemName)
+		if giftName == "" {
+			giftName = strings.TrimSpace(event.RewardTitle)
+		}
+		if giftName == "" {
+			giftName = msg
+		}
 		if giftName == "" {
 			giftName = "Gift"
+		}
+		if strings.EqualFold(msg, giftName) {
+			msg = ""
 		}
 		count := event.Count
 		if count <= 0 {
@@ -812,11 +888,22 @@ func formatEventLogRawText(event *chat.Event) string {
 			count = 1
 		}
 		if msg != "" {
-			return fmt.Sprintf("Sent %d %s: %s", count, giftName, msg)
+			prefix := fmt.Sprintf("Sent %d %s: ", count, giftName)
+			return prefix + msg, shiftEmoteSpans(rawEmotes, utf8.RuneCountInString(prefix))
 		}
-		return fmt.Sprintf("Sent %d %s", count, giftName)
+		base := fmt.Sprintf("Sent %d %s", count, giftName)
+		if len(rawEmotes) > 0 && strings.TrimSpace(rawEmotes[0].URL) != "" {
+			token := ":" + giftName + ":"
+			start := utf8.RuneCountInString(base) + 1
+			sp := rawEmotes[0]
+			sp.Start = start
+			sp.End = start + utf8.RuneCountInString(token)
+			sp.Name = giftName
+			return base + " " + token, []chat.EmoteSpan{sp}
+		}
+		return base, nil
 	default:
-		return event.Text
+		return event.Text, rawEmotes
 	}
 }
 
@@ -841,12 +928,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 			event.Channel = pCfg.AccountName
 		}
 	}
-	rawText := formatEventLogRawText(event)
-	var rawEmotes []chat.EmoteSpan
-	if len(event.EmoteSpans) > 0 {
-		rawEmotes = make([]chat.EmoteSpan, len(event.EmoteSpans))
-		copy(rawEmotes, event.EmoteSpans)
-	}
+	rawText, rawEmotes := formatEventLogRawTextAndEmotes(event)
 
 	log.Printf("[Session] DispatchEvent: user=%q platform=%s channel=%q kind=%s text=%q roles=%v", event.UserName, event.Platform, event.Channel, event.Kind, event.Text, event.Roles)
 
@@ -911,7 +993,12 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	_, speakEmotes, _, _, _ := cfg.EffectiveChatRules(event.Platform)
 	blockedWords := chat.EffectiveBlockedWords(cfg.Safety.BlockDefaultBadWords, cfg.Safety.BlockedWords)
 	if event.Text != "" {
-		event.Text = s.sanitizer.Sanitize(event.Text, event.EmoteSpans, speakEmotes, blockedWords)
+		spansForSanitize := event.EmoteSpans
+		if event.Kind == chat.EventKindGift && (strings.EqualFold(strings.TrimSpace(event.Text), strings.TrimSpace(event.ItemName)) || strings.EqualFold(strings.TrimSpace(event.Text), strings.TrimSpace(event.RewardTitle))) {
+			// Gift icon EmoteSpans are for inline visual rendering in logs; never strip the gift name when SpeakEmotes is false.
+			spansForSanitize = nil
+		}
+		event.Text = s.sanitizer.Sanitize(event.Text, spansForSanitize, speakEmotes, blockedWords)
 		event.EmoteSpans = nil // already applied to event.Text
 		if event.Text == "" && event.Kind == chat.EventKindMessage {
 			log.Printf("[Session] Chat message sanitized to empty text: user=%q", event.UserName)
