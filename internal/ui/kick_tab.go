@@ -97,13 +97,15 @@ func (v *KickTabView) UpdateStatus(status string, detail string) {
 			return
 		}
 		switch status {
-		case "connected":
-			v.statusBadge.SetText("🟢 Connected (" + detail + ")")
+		case "connected", "live":
+			v.statusBadge.SetText("🟢 Live (" + detail + ")")
+		case "waiting":
+			v.statusBadge.SetText("🟡 Connected to Chat (Waiting for Stream)...")
 		case "connecting":
 			v.statusBadge.SetText("🟡 Connecting (" + detail + ")...")
 		default:
 			if v.enableCheck != nil && v.enableCheck.Checked && v.channelEntry != nil && v.channelEntry.Text != "" {
-				v.statusBadge.SetText("🟡 Connecting (" + v.channelEntry.Text + ")...")
+				v.statusBadge.SetText("🟡 Waiting for Stream (" + v.channelEntry.Text + ")...")
 			} else {
 				v.statusBadge.SetText("⚪ Disconnected")
 			}
@@ -548,7 +550,7 @@ func (v *KickTabView) updateConnectionStatus(enabled bool, channel string) {
 	case channel == "":
 		v.statusBadge.SetText("🟡 Needs Kick Channel or URL")
 	default:
-		v.statusBadge.SetText("🟡 Connecting (" + channel + ")...")
+		v.statusBadge.SetText("🟡 Waiting for Stream (" + channel + ")...")
 	}
 }
 

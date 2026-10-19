@@ -207,8 +207,13 @@ func TestMainWindowPlatformStatusResolution(t *testing.T) {
 	_ = session.ReloadConfig(c)
 
 	dot, tip = mw.resolvePlatformStatus("twitch", "connected", "#streamer")
-	if dot != "🟢" || tip != "Twitch: Connected (#streamer)" {
-		t.Errorf("expected 🟢 Twitch: Connected (#streamer), got %s %s", dot, tip)
+	if dot != "🟢" || tip != "Twitch: Live (#streamer)" {
+		t.Errorf("expected 🟢 Twitch: Live (#streamer), got %s %s", dot, tip)
+	}
+
+	dot, tip = mw.resolvePlatformStatus("twitch", "waiting", "")
+	if dot != "🟡" || tip != "Twitch: Waiting for stream..." {
+		t.Errorf("expected 🟡 Twitch: Waiting for stream..., got %s %s", dot, tip)
 	}
 
 	dot, tip = mw.resolvePlatformStatus("twitch", "connecting", "")
@@ -226,8 +231,8 @@ func TestMainWindowPlatformStatusResolution(t *testing.T) {
 	if mw.twitchStatusDot.StatusDot() != "🟢" {
 		t.Errorf("expected badge status dot 🟢, got %s", mw.twitchStatusDot.StatusDot())
 	}
-	if mw.twitchStatusDot.Tooltip() != "Twitch: Connected (live)" {
-		t.Errorf("expected badge tooltip 'Twitch: Connected (live)', got %s", mw.twitchStatusDot.Tooltip())
+	if mw.twitchStatusDot.Tooltip() != "Twitch: Live (live)" {
+		t.Errorf("expected badge tooltip 'Twitch: Live (live)', got %s", mw.twitchStatusDot.Tooltip())
 	}
 }
 
