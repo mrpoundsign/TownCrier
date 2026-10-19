@@ -2,6 +2,7 @@ package eventlog
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -355,3 +356,59 @@ func TestDynamicCreatedAtRetentionIncreaseAndPrune(t *testing.T) {
 		t.Errorf("expected 3 physical rows remaining after prune, got %d", resAll.TotalCount)
 	}
 }
+
+func TestSQLiteKindFilter(t *testing.T) {
+	ctx := context.Background()
+	sqlBackend, err := NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend failed: %v", err)
+	}
+	defer func() { _ = sqlBackend.Close() }()
+
+	now := time.Now().UTC()
+	kinds := []string{"message", "follow", "sub", "resub", "gift_sub", "cheer", "gift", "raid", "redemption", "moderation"}
+	for i, k := range kinds {
+		err := sqlBackend.Append(ctx, &Entry{
+			ID:            fmt.Sprintf("id-%d-%s", i, k),
+			CreatedAt:     now.Add(time.Duration(i) * time.Second),
+			Platform:      "twitch",
+			Channel:       "mrpoundsign",
+			Kind:          k,
+			IsPaidOrEvent: k != "message" && k != "moderation",
+			UserID:        "u1",
+			UserName:      "viewer",
+			DisplayName:   "Viewer",
+			RawText:       "event " + k,
+			Outcome:       OutcomeSpoken,
+		})
+		if err != nil {
+			t.Fatalf("Append(%s): %v", k, err)
+		}
+	}
+
+	cases := []struct {
+		kindFilter string
+		wantCount  int
+	}{
+		{"all", 10},
+		{"chat", 1},
+		{"alerts", 8},
+		{"follow", 1},
+		{"sub", 3},
+		{"cheer", 2},
+		{"raid", 1},
+		{"redemption", 1},
+		{"moderation", 1},
+	}
+
+	for _, tc := range cases {
+		res, err := sqlBackend.Query(ctx, QueryFilter{KindFilter: tc.kindFilter})
+		if err != nil {
+			t.Fatalf("Query(KindFilter=%q): %v", tc.kindFilter, err)
+		}
+		if res.TotalCount != tc.wantCount {
+			t.Errorf("KindFilter=%q: got %d entries, want %d", tc.kindFilter, res.TotalCount, tc.wantCount)
+		}
+	}
+}
+

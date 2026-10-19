@@ -346,6 +346,12 @@ func DefaultConfig() *Config {
 				CustomRewardID:     "",
 				ModCommandsEnabled: false,
 				Notifications: map[string]NotificationEventConfig{
+					"follow": {
+						Enabled:   false,
+						Template:  "{user} is now following!",
+						Voice:     "",
+						Threshold: 0,
+					},
 					"sub": {
 						Enabled:   true,
 						Template:  "{user} just subscribed!",
@@ -354,9 +360,15 @@ func DefaultConfig() *Config {
 					},
 					"resub": {
 						Enabled:   true,
-						Template:  "{user} resubscribed for {months} months!",
+						Template:  "{user} resubscribed for {months} months! {message}",
 						Voice:     "",
 						Threshold: 0,
+					},
+					"gift_sub": {
+						Enabled:   true,
+						Template:  "{user} gifted {count} subscriptions!",
+						Voice:     "",
+						Threshold: 1,
 					},
 					"cheer": {
 						Enabled:   true,
@@ -369,6 +381,12 @@ func DefaultConfig() *Config {
 						Template:  "{user} raided with {viewers} viewers!",
 						Voice:     "",
 						Threshold: 5,
+					},
+					"redemption": {
+						Enabled:   true,
+						Template:  "{user} redeemed {reward}: {message}",
+						Voice:     "",
+						Threshold: 0,
 					},
 				},
 				Overrides: PlatformOverrides{
@@ -491,6 +509,12 @@ func DefaultConfig() *Config {
 				},
 				ModCommandsEnabled: false,
 				Notifications: map[string]NotificationEventConfig{
+					"follow": {
+						Enabled:   false,
+						Template:  "{user} followed on Kick!",
+						Voice:     "",
+						Threshold: 0,
+					},
 					"sub": {
 						Enabled:   true,
 						Template:  "{user} just subscribed on Kick!",
@@ -507,7 +531,7 @@ func DefaultConfig() *Config {
 						Enabled:   true,
 						Template:  "{user} gifted {count} subscriptions!",
 						Voice:     "",
-						Threshold: 0,
+						Threshold: 1,
 					},
 					"raid": {
 						Enabled:   true,
@@ -515,11 +539,11 @@ func DefaultConfig() *Config {
 						Voice:     "",
 						Threshold: 1,
 					},
-					"follow": {
-						Enabled:   false,
-						Template:  "{user} followed on Kick!",
+					"gift": {
+						Enabled:   true,
+						Template:  "{user} sent {count} {gift}: {message}",
 						Voice:     "",
-						Threshold: 0,
+						Threshold: 1,
 					},
 				},
 				Overrides: PlatformOverrides{
@@ -783,6 +807,39 @@ func migrate(cfg *Config) error {
 			normalized[key] = v
 		}
 		cfg.Viewers = normalized
+	}
+
+	// Backfill any newly added notification event defaults per platform
+	defaults := DefaultConfig()
+	if cfg.Platforms == nil {
+		cfg.Platforms = defaults.Platforms
+	} else {
+		for platKey, defPlat := range defaults.Platforms {
+			p, ok := cfg.Platforms[platKey]
+			if !ok {
+				cfg.Platforms[platKey] = defPlat
+				continue
+			}
+			if p.Notifications == nil {
+				p.Notifications = make(map[string]NotificationEventConfig, len(defPlat.Notifications))
+			}
+			for evKey, defNotif := range defPlat.Notifications {
+				existing, exists := p.Notifications[evKey]
+				if !exists {
+					p.Notifications[evKey] = defNotif
+					continue
+				}
+				// Repair legacy placeholder fallback templates ("{user}: {message}") on events without messages
+				if (evKey == "follow" || evKey == "gift_sub") && existing.Template == "{user}: {message}" {
+					existing.Template = defNotif.Template
+					if evKey == "follow" {
+						existing.Enabled = defNotif.Enabled
+					}
+					p.Notifications[evKey] = existing
+				}
+			}
+			cfg.Platforms[platKey] = p
+		}
 	}
 
 	return nil

@@ -81,6 +81,37 @@ var (
 			`<rect x="11" y="8" width="2" height="8" fill="#B45309"/>`+
 			`</svg>`))
 
+	resEventFollow = fyne.NewStaticResource("event_follow.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="2" y="2" width="20" height="20" rx="4" fill="#F43F5E"/>`+
+			`<path d="M12 18.5l-1.1-1C6.8 13.8 4.5 11.7 4.5 9.1 4.5 7 6.2 5.5 8.3 5.5c1.2 0 2.4.6 3.7 1.8 1.3-1.2 2.5-1.8 3.7-1.8 2.1 0 3.8 1.5 3.8 3.6 0 2.6-2.3 4.7-6.4 8.4l-1.1 1z" fill="#FFFFFF"/>`+
+			`</svg>`))
+
+	resEventSub = fyne.NewStaticResource("event_sub.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="2" y="2" width="20" height="20" rx="4" fill="#7C3AED"/>`+
+			`<polygon points="12,4.5 14.3,9.2 19.5,10 15.7,13.6 16.6,18.8 12,16.3 7.4,18.8 8.3,13.6 4.5,10 9.7,9.2" fill="#FDE047"/>`+
+			`</svg>`))
+
+	resEventCheer = fyne.NewStaticResource("event_cheer.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="2" y="2" width="20" height="20" rx="4" fill="#F59E0B"/>`+
+			`<polygon points="12,4 19,11 12,20 5,11" fill="#FEF08A"/>`+
+			`</svg>`))
+
+	resEventRaid = fyne.NewStaticResource("event_raid.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="2" y="2" width="20" height="20" rx="4" fill="#0284C7"/>`+
+			`<polygon points="13,4 6,13 11,13 10,20 18,11 13,11" fill="#FDE047"/>`+
+			`</svg>`))
+
+	resEventRedemption = fyne.NewStaticResource("event_redemption.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="2" y="2" width="20" height="20" rx="4" fill="#10B981"/>`+
+			`<circle cx="12" cy="12" r="6" fill="#FFFFFF"/>`+
+			`<circle cx="12" cy="12" r="3" fill="#10B981"/>`+
+			`</svg>`))
+
 	// Passed Filters Icons
 	resFilterPassed = fyne.NewStaticResource("filter_passed.svg", []byte(
 		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
@@ -205,11 +236,25 @@ func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 		}
 	}
 
-	if e.IsPaidOrEvent || (e.Kind != "" && e.Kind != "chat" && e.Kind != "moderation") {
+	kindLower := strings.ToLower(strings.TrimSpace(e.Kind))
+	if e.IsPaidOrEvent || (kindLower != "" && kindLower != "message" && kindLower != "chat" && kindLower != "moderation") {
+		evIcon := resRolePaidEvent
+		switch kindLower {
+		case "follow":
+			evIcon = resEventFollow
+		case "sub", "resub", "gift_sub", "membership", "gift_membership":
+			evIcon = resEventSub
+		case "cheer", "gift", "superchat", "supersticker":
+			evIcon = resEventCheer
+		case "raid":
+			evIcon = resEventRaid
+		case "redemption":
+			evIcon = resEventRedemption
+		}
 		tip := "Stream Event: " + strings.ToUpper(e.Kind)
 		if e.Amount > 0 {
 			if e.Currency != "" {
-				tip += fmt.Sprintf(" (%.2f %s)", e.Amount, e.Currency)
+				tip += fmt.Sprintf(" (%.0f %s)", e.Amount, e.Currency)
 			} else {
 				tip += fmt.Sprintf(" (%.0f)", e.Amount)
 			}
@@ -220,7 +265,7 @@ func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 		if e.Count > 0 {
 			tip += fmt.Sprintf(" (x%d)", e.Count)
 		}
-		icons = append(icons, v.newHoverIcon(resRolePaidEvent, fyne.NewSize(16, 16), tip, nil))
+		icons = append(icons, v.newHoverIcon(evIcon, fyne.NewSize(16, 16), tip, nil))
 	}
 
 	return icons

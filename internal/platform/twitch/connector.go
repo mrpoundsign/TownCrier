@@ -1,8 +1,10 @@
 package twitch
 
 import (
+	"context"
 	"errors"
 	"log"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/gempir/go-twitch-irc/v4"
 	"github.com/mrpoundsign/TownCrier/internal/chat"
+	"golang.org/x/net/websocket"
 )
 
 // ConnectionStatus represents the live Twitch connection state.
@@ -22,16 +25,23 @@ const (
 	StatusConnected    ConnectionStatus = "connected"
 )
 
-// Connector manages the Twitch IRC connection for stream chat reading and moderation.
+// Connector manages the Twitch IRC and EventSub WebSocket connections for stream chat reading, alerts, and moderation.
 type Connector struct {
-	mu             sync.Mutex
-	client         *twitch.Client
-	channel        string
-	status         ConnectionStatus
-	running        bool
-	onEvent        func(event *chat.Event)
-	onModeration   func(modEvent *chat.ModerationEvent)
-	onStatusChange func(status ConnectionStatus, detail string)
+	mu               sync.Mutex
+	client           *twitch.Client
+	channel          string
+	status           ConnectionStatus
+	running          bool
+	oauth            *OAuthManager
+	eventSubCancel   context.CancelFunc
+	eventSubConn     *websocket.Conn
+	eventSubWSURL    string
+	helixBaseURL     string
+	oauthValidateURL string
+	httpClient       *http.Client
+	onEvent          func(event *chat.Event)
+	onModeration     func(modEvent *chat.ModerationEvent)
+	onStatusChange   func(status ConnectionStatus, detail string)
 }
 
 // NewConnector creates a new Twitch connector.
@@ -41,10 +51,54 @@ func NewConnector(
 	onStatusChange func(status ConnectionStatus, detail string),
 ) *Connector {
 	return &Connector{
-		status:         StatusDisconnected,
-		onEvent:        onEvent,
-		onModeration:   onModeration,
-		onStatusChange: onStatusChange,
+		status:           StatusDisconnected,
+		eventSubWSURL:    DefaultEventSubWSURL,
+		helixBaseURL:     DefaultHelixBaseURL,
+		oauthValidateURL: DefaultOAuthValidateURL,
+		httpClient:       &http.Client{Timeout: 10 * time.Second},
+		onEvent:          onEvent,
+		onModeration:     onModeration,
+		onStatusChange:   onStatusChange,
+	}
+}
+
+// SetOAuthManager attaches the Twitch OAuth manager for EventSub WebSocket subscriptions.
+func (c *Connector) SetOAuthManager(oauth *OAuthManager) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.oauth = oauth
+}
+
+// SetEventSubEndpoints overrides the EventSub WebSocket, Helix API, and OAuth validate URLs (used in tests).
+func (c *Connector) SetEventSubEndpoints(wsURL, helixBaseURL, validateURL string, httpClient *http.Client) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if wsURL != "" {
+		c.eventSubWSURL = wsURL
+	}
+	if helixBaseURL != "" {
+		c.helixBaseURL = helixBaseURL
+	}
+	if validateURL != "" {
+		c.oauthValidateURL = validateURL
+	}
+	if httpClient != nil {
+		c.httpClient = httpClient
+	}
+}
+
+// RefreshOAuth restarts or stops the EventSub WebSocket loop based on the current OAuth token state.
+func (c *Connector) RefreshOAuth() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.running || c.channel == "" {
+		c.stopEventSubLocked()
+		return
+	}
+	if c.oauth != nil && c.oauth.HasToken() {
+		c.startEventSubLocked()
+	} else {
+		c.stopEventSubLocked()
 	}
 }
 
@@ -174,9 +228,12 @@ func (c *Connector) connectLocked() {
 			log.Printf("[Twitch] Connection error for #%s: %v", targetChannel, err)
 		}
 	}(client, ch)
+
+	c.startEventSubLocked()
 }
 
 func (c *Connector) disconnectLocked() {
+	c.stopEventSubLocked()
 	if c.client != nil {
 		_ = c.client.Disconnect()
 		c.client = nil

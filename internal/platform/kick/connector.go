@@ -36,12 +36,18 @@ const (
 	defaultUserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
 )
 
-// NormalizeChannel parses a Kick channel input (slug, @handle, https://kick.com/<slug>,
-// numeric chatroom_id, or slug#chatroom_id) into a clean channel label and optional direct chatroom ID.
-func NormalizeChannel(raw string) (string, int64) {
+// ChannelInfo holds the resolved Kick Pusher identifiers for a channel.
+type ChannelInfo struct {
+	ChannelID  int64
+	ChatroomID int64
+}
+
+// NormalizeChannelInfo parses a Kick channel input (slug, @handle, https://kick.com/<slug>,
+// numeric chatroom_id, slug#chatroom_id, or slug#channel_id:chatroom_id) into a clean slug and ChannelInfo.
+func NormalizeChannelInfo(raw string) (string, ChannelInfo) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return "", 0
+		return "", ChannelInfo{}
 	}
 
 	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
@@ -55,29 +61,46 @@ func NormalizeChannel(raw string) (string, int64) {
 
 	trimmed = strings.TrimPrefix(trimmed, "@")
 
-	// Support explicit "slug#123456" or "slug:123456" syntax
+	// Support explicit "slug#channel_id:chatroom_id", "slug#chatroom_id", or "slug:chatroom_id"
 	for _, sep := range []string{"#", ":"} {
 		if before, after, ok := strings.Cut(trimmed, sep); ok {
-			if id, err := strconv.ParseInt(strings.TrimSpace(after), 10, 64); err == nil && id > 0 {
-				slug := strings.TrimSpace(before)
+			slug := strings.ToLower(strings.TrimSpace(before))
+			after = strings.TrimSpace(after)
+			if chStr, crStr, hasBoth := strings.Cut(after, ":"); hasBoth {
+				chID, err1 := strconv.ParseInt(strings.TrimSpace(chStr), 10, 64)
+				crID, err2 := strconv.ParseInt(strings.TrimSpace(crStr), 10, 64)
+				if err1 == nil && err2 == nil && crID > 0 {
+					if slug == "" {
+						slug = strconv.FormatInt(crID, 10)
+					}
+					return slug, ChannelInfo{ChannelID: chID, ChatroomID: crID}
+				}
+			}
+			if id, err := strconv.ParseInt(after, 10, 64); err == nil && id > 0 {
 				if slug == "" {
 					slug = strconv.FormatInt(id, 10)
 				}
-				return slug, id
+				return slug, ChannelInfo{ChatroomID: id}
 			}
 		}
 	}
 
 	// Support direct numeric chatroom ID
 	if id, err := strconv.ParseInt(trimmed, 10, 64); err == nil && id > 0 {
-		return trimmed, id
+		return trimmed, ChannelInfo{ChatroomID: id}
 	}
 
-	return strings.ToLower(trimmed), 0
+	return strings.ToLower(trimmed), ChannelInfo{}
 }
 
-// ResolveChatroomID queries Kick's public channel endpoints to resolve a channel slug into its Pusher chatroom_id.
-func ResolveChatroomID(ctx context.Context, client *http.Client, apiBaseURL, slug string) (int64, error) {
+// NormalizeChannel parses a Kick channel input into a clean channel label and optional direct chatroom ID.
+func NormalizeChannel(raw string) (string, int64) {
+	slug, info := NormalizeChannelInfo(raw)
+	return slug, info.ChatroomID
+}
+
+// ResolveChannelInfo queries Kick's public channel endpoints to resolve a channel slug into its ChannelID and ChatroomID.
+func ResolveChannelInfo(ctx context.Context, client *http.Client, apiBaseURL, slug string) (ChannelInfo, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
@@ -87,30 +110,52 @@ func ResolveChatroomID(ctx context.Context, client *http.Client, apiBaseURL, slu
 	}
 
 	endpoints := []string{
-		fmt.Sprintf("%s/api/v2/channels/%s/chatroom", base, url.PathEscape(slug)),
 		fmt.Sprintf("%s/api/v2/channels/%s", base, url.PathEscape(slug)),
 		fmt.Sprintf("%s/api/v1/channels/%s", base, url.PathEscape(slug)),
+		fmt.Sprintf("%s/api/v2/channels/%s/chatroom", base, url.PathEscape(slug)),
 	}
 
+	var combined ChannelInfo
 	var lastErr error
 	for _, ep := range endpoints {
-		id, err := fetchChatroomIDFromEndpoint(ctx, client, ep)
-		if err == nil && id > 0 {
-			return id, nil
+		info, err := fetchChannelInfoFromEndpoint(ctx, client, ep)
+		if err != nil {
+			lastErr = err
+			continue
 		}
-		lastErr = err
+		if combined.ChannelID <= 0 && info.ChannelID > 0 {
+			combined.ChannelID = info.ChannelID
+		}
+		if combined.ChatroomID <= 0 && info.ChatroomID > 0 {
+			combined.ChatroomID = info.ChatroomID
+		}
+		if combined.ChannelID > 0 && combined.ChatroomID > 0 {
+			return combined, nil
+		}
 	}
 
-	if lastErr != nil {
-		return 0, lastErr
+	if combined.ChatroomID > 0 {
+		return combined, nil
 	}
-	return 0, fmt.Errorf("could not resolve chatroom_id for Kick channel %q", slug)
+	if lastErr != nil {
+		return ChannelInfo{}, lastErr
+	}
+	return ChannelInfo{}, fmt.Errorf("could not resolve chatroom_id for Kick channel %q", slug)
 }
 
-func fetchChatroomIDFromEndpoint(ctx context.Context, client *http.Client, endpoint string) (int64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+// ResolveChatroomID queries Kick's public channel endpoints to resolve a channel slug into its Pusher chatroom_id.
+func ResolveChatroomID(ctx context.Context, client *http.Client, apiBaseURL, slug string) (int64, error) {
+	info, err := ResolveChannelInfo(ctx, client, apiBaseURL, slug)
 	if err != nil {
 		return 0, err
+	}
+	return info.ChatroomID, nil
+}
+
+func fetchChannelInfoFromEndpoint(ctx context.Context, client *http.Client, endpoint string) (ChannelInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return ChannelInfo{}, err
 	}
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
@@ -119,37 +164,43 @@ func fetchChatroomIDFromEndpoint(ctx context.Context, client *http.Client, endpo
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, err
+		return ChannelInfo{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("HTTP %d from %s", resp.StatusCode, endpoint)
+		return ChannelInfo{}, fmt.Errorf("HTTP %d from %s", resp.StatusCode, endpoint)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
-		return 0, err
+		return ChannelInfo{}, err
 	}
 
 	var m map[string]any
 	if err := json.Unmarshal(body, &m); err != nil {
-		return 0, err
+		return ChannelInfo{}, err
 	}
 
-	// 1. Nested {"chatroom": {"id": 12345}}
+	// 1. Nested {"id": <channel_id>, "chatroom": {"id": <chatroom_id>}}
 	if cr := asMap(m["chatroom"]); len(cr) > 0 {
-		if id := int64(asInt(cr["id"])); id > 0 {
-			return id, nil
+		crID := int64(asInt(cr["id"]))
+		chID := int64(asInt(m["id"]))
+		if chID <= 0 {
+			chID = int64(asInt(cr["channel_id"]))
+		}
+		if crID > 0 {
+			return ChannelInfo{ChannelID: chID, ChatroomID: crID}, nil
 		}
 	}
 
 	// 2. Direct {"id": 12345} (from /api/v2/channels/<slug>/chatroom)
 	if id := int64(asInt(m["id"])); id > 0 {
-		return id, nil
+		chID := int64(asInt(m["channel_id"]))
+		return ChannelInfo{ChannelID: chID, ChatroomID: id}, nil
 	}
 
-	return 0, errors.New("chatroom id not found in response")
+	return ChannelInfo{}, errors.New("chatroom id not found in response")
 }
 
 // Connector manages Kick live chat and event streaming via Pusher WebSocket (D14).
@@ -194,8 +245,8 @@ func (c *Connector) Start(target string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	cleanSlug, directID := NormalizeChannel(target)
-	if cleanSlug == "" && directID == 0 {
+	cleanSlug, directInfo := NormalizeChannelInfo(target)
+	if cleanSlug == "" && directInfo.ChatroomID == 0 {
 		return errors.New("empty Kick channel")
 	}
 
@@ -210,7 +261,7 @@ func (c *Connector) Start(target string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.cancelFn = cancel
 
-	go c.runLoop(ctx, cleanSlug, directID)
+	go c.runLoop(ctx, cleanSlug, directInfo)
 	return nil
 }
 
@@ -266,8 +317,8 @@ func (c *Connector) updateStatusLocked(status ConnectionStatus, detail string) {
 	}
 }
 
-func (c *Connector) runLoop(ctx context.Context, slug string, directID int64) {
-	chatroomID := directID
+func (c *Connector) runLoop(ctx context.Context, slug string, directInfo ChannelInfo) {
+	info := directInfo
 
 	for {
 		if ctx.Err() != nil {
@@ -276,8 +327,8 @@ func (c *Connector) runLoop(ctx context.Context, slug string, directID int64) {
 
 		c.updateStatus(StatusConnecting, slug)
 
-		if chatroomID <= 0 {
-			resolvedID, err := ResolveChatroomID(ctx, c.httpClient, c.apiBaseURL, slug)
+		if info.ChatroomID <= 0 {
+			resolved, err := ResolveChannelInfo(ctx, c.httpClient, c.apiBaseURL, slug)
 			if err != nil {
 				log.Printf("[Kick] Failed to resolve chatroom_id for %q: %v (tip: you can also enter slug#chatroom_id)", slug, err)
 				if !c.sleepOrCancel(ctx, c.reconnectDelay) {
@@ -285,10 +336,10 @@ func (c *Connector) runLoop(ctx context.Context, slug string, directID int64) {
 				}
 				continue
 			}
-			chatroomID = resolvedID
+			info = resolved
 		}
 
-		err := c.connectAndStream(ctx, slug, chatroomID)
+		err := c.connectAndStream(ctx, slug, info)
 		if err != nil && ctx.Err() == nil {
 			log.Printf("[Kick] WebSocket session ended for %q: %v", slug, err)
 		}
@@ -308,7 +359,7 @@ func (c *Connector) sleepOrCancel(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-func (c *Connector) connectAndStream(ctx context.Context, slug string, chatroomID int64) error {
+func (c *Connector) connectAndStream(ctx context.Context, slug string, info ChannelInfo) error {
 	wsCfg, err := websocket.NewConfig(c.wsURL, "https://kick.com")
 	if err != nil {
 		return fmt.Errorf("websocket config: %w", err)
@@ -338,21 +389,39 @@ func (c *Connector) connectAndStream(ctx context.Context, slug string, chatroomI
 		c.mu.Unlock()
 	}()
 
-	// Send Pusher subscribe command for chatrooms.<id>.v2
-	channelTopic := fmt.Sprintf("chatrooms.%d.v2", chatroomID)
+	// 1. Subscribe to chatrooms.<id>.v2 for chat messages & moderation
+	chatroomTopic := fmt.Sprintf("chatrooms.%d.v2", info.ChatroomID)
 	subPayload := map[string]any{
 		"event": "pusher:subscribe",
 		"data": map[string]string{
 			"auth":    "",
-			"channel": channelTopic,
+			"channel": chatroomTopic,
 		},
 	}
 	subBytes, _ := json.Marshal(subPayload)
 	if err := websocket.Message.Send(conn, string(subBytes)); err != nil {
-		return fmt.Errorf("send pusher:subscribe: %w", err)
+		return fmt.Errorf("send pusher:subscribe (%s): %w", chatroomTopic, err)
 	}
 
-	log.Printf("[Kick] Connected to Pusher %s for %s", channelTopic, slug)
+	// 2. Subscribe to channel.<id> for followers, subscriptions, gifted subs, hosts, and gifts
+	if info.ChannelID > 0 {
+		chTopic := fmt.Sprintf("channel.%d", info.ChannelID)
+		chSubPayload := map[string]any{
+			"event": "pusher:subscribe",
+			"data": map[string]string{
+				"auth":    "",
+				"channel": chTopic,
+			},
+		}
+		chSubBytes, _ := json.Marshal(chSubPayload)
+		if err := websocket.Message.Send(conn, string(chSubBytes)); err != nil {
+			log.Printf("[Kick] Warning: failed to subscribe to %s: %v", chTopic, err)
+		} else {
+			log.Printf("[Kick] Subscribed to Pusher channel events %s for %s", chTopic, slug)
+		}
+	}
+
+	log.Printf("[Kick] Connected to Pusher %s for %s", chatroomTopic, slug)
 	c.updateStatus(StatusConnected, slug)
 
 	// Start periodic ping goroutine

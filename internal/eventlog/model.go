@@ -166,6 +166,7 @@ type QueryFilter struct {
 	To            *time.Time        `json:"to,omitempty"`
 	Platform      string            `json:"platform,omitempty"`
 	Channel       string            `json:"channel,omitempty"`
+	KindFilter    string            `json:"kind_filter,omitempty"`
 	UserQuery     string            `json:"user_query,omitempty"`
 	TextQuery     string            `json:"text_query,omitempty"`
 	OutcomeMode   OutcomeFilterMode `json:"outcome_mode,omitempty"`

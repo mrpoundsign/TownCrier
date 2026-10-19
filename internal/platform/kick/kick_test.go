@@ -230,3 +230,106 @@ func TestConnectorEndToEndWithMockPusher(t *testing.T) {
 		t.Errorf("Text = %q", events[0].Text)
 	}
 }
+
+func TestParseKickFollowAndGiftEvents(t *testing.T) {
+	// 1. FollowEvent
+	followRaw := []byte(`{"event":"App\\Events\\FollowEvent","data":"{\"username\":\"NewKickFollower\"}","channel":"channel.111222"}`)
+	fEv, _, _, err := ParsePusherFrame(followRaw)
+	if err != nil || fEv == nil {
+		t.Fatalf("ParsePusherFrame(FollowEvent): err=%v ev=%v", err, fEv)
+	}
+	if fEv.Kind != chat.EventKindFollow || fEv.DisplayName != "NewKickFollower" {
+		t.Errorf("unexpected follow event: %+v", fEv)
+	}
+
+	// 2. KicksGifted
+	giftRaw := []byte(`{"event":"KicksGifted","data":"{\"sender\":{\"username\":\"KickSupporter\"},\"gift\":{\"name\":\"Sub Bomb\",\"amount\":250},\"message\":\"Great stream!\"}","channel":"chatrooms.27670567.v2"}`)
+	gEv, _, _, err := ParsePusherFrame(giftRaw)
+	if err != nil || gEv == nil {
+		t.Fatalf("ParsePusherFrame(KicksGifted): err=%v ev=%v", err, gEv)
+	}
+	if gEv.Kind != chat.EventKindGift || gEv.DisplayName != "KickSupporter" || gEv.RewardTitle != "Sub Bomb" || gEv.Count != 250 || gEv.Amount != 250 || gEv.Text != "Great stream!" {
+		t.Errorf("unexpected gift event: %+v", gEv)
+	}
+}
+
+func TestDualChannelPusherSubscription(t *testing.T) {
+	var subMu sync.Mutex
+	var subscribedChannels []string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v2/channels/dualkick", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id": 999888, "chatroom": {"id": 27670567}}`))
+	})
+	mux.Handle("/pusher", websocket.Handler(func(ws *websocket.Conn) {
+		for range 2 {
+			var subMsg string
+			if err := websocket.Message.Receive(ws, &subMsg); err != nil {
+				return
+			}
+			var env struct {
+				Event string `json:"event"`
+				Data  struct {
+					Channel string `json:"channel"`
+				} `json:"data"`
+			}
+			_ = json.Unmarshal([]byte(subMsg), &env)
+			subMu.Lock()
+			subscribedChannels = append(subscribedChannels, env.Data.Channel)
+			subMu.Unlock()
+		}
+		followFrame := `{"event":"App\\Events\\FollowersUpdated","data":"{\"username\":\"DualFollower\"}","channel":"channel.999888"}`
+		_ = websocket.Message.Send(ws, followFrame)
+		time.Sleep(100 * time.Millisecond)
+	}))
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var evMu sync.Mutex
+	var events []*chat.Event
+
+	conn := NewConnector(
+		func(ev *chat.Event) {
+			evMu.Lock()
+			events = append(events, ev)
+			evMu.Unlock()
+		},
+		nil,
+		nil,
+	)
+	conn.apiBaseURL = srv.URL
+	conn.wsURL = "ws" + strings.TrimPrefix(srv.URL, "http") + "/pusher"
+	conn.reconnectDelay = 50 * time.Millisecond
+
+	if err := conn.Start("dualkick"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conn.Stop() }()
+
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		evMu.Lock()
+		n := len(events)
+		evMu.Unlock()
+		if n >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	subMu.Lock()
+	gotSubs := append([]string(nil), subscribedChannels...)
+	subMu.Unlock()
+
+	if len(gotSubs) != 2 || gotSubs[0] != "chatrooms.27670567.v2" || gotSubs[1] != "channel.999888" {
+		t.Fatalf("expected [chatrooms.27670567.v2, channel.999888], got %v", gotSubs)
+	}
+
+	evMu.Lock()
+	defer evMu.Unlock()
+	if len(events) != 1 || events[0].Kind != chat.EventKindFollow || events[0].DisplayName != "DualFollower" {
+		t.Fatalf("expected follow event from DualFollower, got %+v", events)
+	}
+}
