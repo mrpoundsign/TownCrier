@@ -18,9 +18,12 @@ import (
 )
 
 const (
-	DefaultEventSubWSURL    = "wss://eventsub.wss.twitch.tv/ws"
-	DefaultHelixBaseURL     = "https://api.twitch.tv/helix"
-	DefaultOAuthValidateURL = "https://id.twitch.tv/oauth2/validate"
+	DefaultEventSubWSURL        = "wss://eventsub.wss.twitch.tv/ws"
+	DefaultHelixBaseURL         = "https://api.twitch.tv/helix"
+	DefaultOAuthValidateURL     = "https://id.twitch.tv/oauth2/validate"
+	DefaultTwitchGQLURL         = "https://gql.twitch.tv/gql"
+	DefaultTwitchPublicClientID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+	DefaultLivePollInterval     = 30 * time.Second
 )
 
 // eventSubEnvelope represents the top-level Twitch EventSub WebSocket frame.
@@ -333,6 +336,13 @@ func (c *Connector) connectAndStreamEventSub(ctx context.Context, wsURL string, 
 				} else {
 					log.Printf("[Twitch EventSub] Subscribed to channel point redemptions for #%s", channel)
 				}
+
+				_ = c.createEventSubSubscription(ctx, token, sessionID, "stream.online", "1", map[string]string{
+					"broadcaster_user_id": broadcasterID,
+				})
+				_ = c.createEventSubSubscription(ctx, token, sessionID, "stream.offline", "1", map[string]string{
+					"broadcaster_user_id": broadcasterID,
+				})
 			}
 
 		case "session_reconnect":
@@ -350,6 +360,14 @@ func (c *Connector) connectAndStreamEventSub(ctx context.Context, wsURL string, 
 			if subType == "" {
 				subType = env.Metadata.SubscriptionType
 			}
+			switch subType {
+			case "stream.online":
+				c.setStreamLive(true)
+				continue
+			case "stream.offline":
+				c.setStreamLive(false)
+				continue
+			}
 			ev, err := ParseEventSubNotification(subType, env.Metadata.MessageID, notif.Event, channel)
 			if err != nil {
 				log.Printf("[Twitch EventSub] Error parsing %s notification: %v", subType, err)
@@ -360,6 +378,136 @@ func (c *Connector) connectAndStreamEventSub(ctx context.Context, wsURL string, 
 			}
 		}
 	}
+}
+
+func (c *Connector) startLivePollLocked(channel string) {
+	c.stopLivePollLocked()
+	if !c.running || channel == "" {
+		return
+	}
+
+	interval := c.livePollInterval
+	if interval <= 0 {
+		interval = DefaultLivePollInterval
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c.livePollCancel = cancel
+
+	go func(ch string, pollEvery time.Duration) {
+		if live, err := c.checkChannelLive(ctx, ch); err == nil && ctx.Err() == nil {
+			c.setStreamLive(live)
+		}
+		ticker := time.NewTicker(pollEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if live, err := c.checkChannelLive(ctx, ch); err == nil && ctx.Err() == nil {
+					c.setStreamLive(live)
+				}
+			}
+		}
+	}(channel, interval)
+}
+
+func (c *Connector) stopLivePollLocked() {
+	if c.livePollCancel != nil {
+		c.livePollCancel()
+		c.livePollCancel = nil
+	}
+}
+
+func (c *Connector) checkChannelLive(ctx context.Context, channel string) (bool, error) {
+	c.mu.Lock()
+	customFn := c.checkLiveFn
+	httpClient := c.httpClient
+	helixBase := strings.TrimRight(c.helixBaseURL, "/")
+	gqlURL := c.gqlURL
+	oauth := c.oauth
+	c.mu.Unlock()
+
+	if customFn != nil {
+		return customFn(ctx, channel)
+	}
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 10 * time.Second}
+	}
+	if helixBase == "" {
+		helixBase = DefaultHelixBaseURL
+	}
+	if gqlURL == "" {
+		gqlURL = DefaultTwitchGQLURL
+	}
+
+	// 1. Prefer authenticated Helix /streams?user_login=<channel> when OAuth is connected
+	if oauth != nil && oauth.HasToken() {
+		if token, err := oauth.GetValidAccessToken(ctx); err == nil && token != "" {
+			streamsURL := fmt.Sprintf("%s/streams?user_login=%s", helixBase, url.QueryEscape(channel))
+			if req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, streamsURL, nil); reqErr == nil {
+				req.Header.Set("Authorization", "Bearer "+token)
+				req.Header.Set("Client-Id", oauth.ClientID())
+				if resp, doErr := httpClient.Do(req); doErr == nil {
+					var sResp struct {
+						Data []struct {
+							ID   string `json:"id"`
+							Type string `json:"type"`
+						} `json:"data"`
+					}
+					_ = json.NewDecoder(resp.Body).Decode(&sResp)
+					_ = resp.Body.Close()
+					if resp.StatusCode == http.StatusOK {
+						isLive := len(sResp.Data) > 0 && (strings.EqualFold(sResp.Data[0].Type, "live") || sResp.Data[0].ID != "")
+						return isLive, nil
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Zero-auth fallback via Twitch public GQL UseLive query
+	gqlBody := map[string]any{
+		"query":     `query($login:String!){user(login:$login){stream{id}}}`,
+		"variables": map[string]string{"login": channel},
+	}
+	rawBody, err := json.Marshal(gqlBody)
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, gqlURL, bytes.NewReader(rawBody))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Client-ID", DefaultTwitchPublicClientID)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("twitch gql status %d", resp.StatusCode)
+	}
+
+	var gqlResp struct {
+		Data struct {
+			User *struct {
+				Stream *struct {
+					ID string `json:"id"`
+				} `json:"stream"`
+			} `json:"user"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&gqlResp); err != nil {
+		return false, err
+	}
+	if gqlResp.Data.User == nil || gqlResp.Data.User.Stream == nil {
+		return false, nil
+	}
+	return strings.TrimSpace(gqlResp.Data.User.Stream.ID) != "", nil
 }
 
 func (c *Connector) resolveEventSubUserIDs(ctx context.Context, token string, channelLogin string) (moderatorID string, broadcasterID string, err error) {

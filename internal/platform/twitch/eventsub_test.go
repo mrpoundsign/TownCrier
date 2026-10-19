@@ -106,13 +106,23 @@ func TestEventSubEndToEndWebSocket(t *testing.T) {
 			subMu.Lock()
 			n := len(createdSubs)
 			subMu.Unlock()
-			if n >= 2 {
+			if n >= 4 {
 				break
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
 
-		// 2. Send follow notification
+		// 2. Send stream.online notification
+		onlineNotif := `{
+			"metadata": {"message_id":"n-0","message_type":"notification","subscription_type":"stream.online"},
+			"payload": {
+				"subscription": {"id":"sub-on","type":"stream.online","version":"1"},
+				"event": {"id":"stream-1","broadcaster_user_id":"9999","broadcaster_user_login":"mrpoundsign"}
+			}
+		}`
+		_ = websocket.Message.Send(conn, onlineNotif)
+
+		// 3. Send follow notification
 		followNotif := `{
 			"metadata": {"message_id":"n-1","message_type":"notification","subscription_type":"channel.follow"},
 			"payload": {
@@ -122,7 +132,7 @@ func TestEventSubEndToEndWebSocket(t *testing.T) {
 		}`
 		_ = websocket.Message.Send(conn, followNotif)
 
-		// 3. Send redemption notification
+		// 4. Send redemption notification
 		redempNotif := `{
 			"metadata": {"message_id":"n-2","message_type":"notification","subscription_type":"channel.channel_points_custom_reward_redemption.add"},
 			"payload": {
@@ -156,6 +166,7 @@ func TestEventSubEndToEndWebSocket(t *testing.T) {
 
 	var evMu sync.Mutex
 	var received []*chat.Event
+	var liveStates []bool
 
 	conn := NewConnector(
 		func(ev *chat.Event) {
@@ -166,9 +177,17 @@ func TestEventSubEndToEndWebSocket(t *testing.T) {
 		nil,
 		nil,
 	)
+	conn.SetOnStreamStateChange(func(live bool) {
+		evMu.Lock()
+		liveStates = append(liveStates, live)
+		evMu.Unlock()
+	})
 	conn.SetOAuthManager(oauthMgr)
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
 	conn.SetEventSubEndpoints(wsURL, srv.URL+"/helix", srv.URL+"/validate", srv.Client())
+	conn.mu.Lock()
+	conn.running = true
+	conn.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -181,8 +200,9 @@ func TestEventSubEndToEndWebSocket(t *testing.T) {
 	for time.Now().Before(deadline) {
 		evMu.Lock()
 		n := len(received)
+		ls := len(liveStates)
 		evMu.Unlock()
-		if n >= 2 {
+		if n >= 2 && ls >= 1 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -193,8 +213,8 @@ func TestEventSubEndToEndWebSocket(t *testing.T) {
 	subs := append([]string(nil), createdSubs...)
 	subMu.Unlock()
 
-	if len(subs) != 2 || subs[0] != "channel.follow:2" || subs[1] != "channel.channel_points_custom_reward_redemption.add:1" {
-		t.Fatalf("expected [channel.follow:2, channel.channel_points_custom_reward_redemption.add:1], got %v", subs)
+	if len(subs) != 4 || subs[0] != "channel.follow:2" || subs[1] != "channel.channel_points_custom_reward_redemption.add:1" || subs[2] != "stream.online:1" || subs[3] != "stream.offline:1" {
+		t.Fatalf("expected 4 subscriptions, got %v", subs)
 	}
 
 	evMu.Lock()
@@ -208,4 +228,71 @@ func TestEventSubEndToEndWebSocket(t *testing.T) {
 	if received[1].Kind != chat.EventKindRedemption || received[1].RewardTitle != "Speak Message" || received[1].Text != "Read this aloud!" {
 		t.Errorf("unexpected event[1]: %+v", received[1])
 	}
+	if len(liveStates) == 0 || !liveStates[0] || !conn.IsLive() {
+		t.Errorf("expected stream.online to mark connector live, liveStates=%v isLive=%v", liveStates, conn.IsLive())
+	}
 }
+
+func TestTwitchCheckChannelLiveHelixAndGQL(t *testing.T) {
+	ctx := context.Background()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/helix/streams", func(w http.ResponseWriter, r *http.Request) {
+		login := r.URL.Query().Get("user_login")
+		w.Header().Set("Content-Type", "application/json")
+		if login == "livechannel" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"stream-123","type":"live"}]}`))
+		} else {
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	})
+	mux.HandleFunc("/gql", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Variables struct {
+				Login string `json:"login"`
+			} `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
+		if body.Variables.Login == "gqllive" {
+			_, _ = w.Write([]byte(`{"data":{"user":{"stream":{"id":"99999"}}}}`))
+		} else {
+			_, _ = w.Write([]byte(`{"data":{"user":{"stream":null}}}`))
+		}
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// 1. Anonymous GQL fallback
+	conn := NewConnector(nil, nil, nil)
+	conn.SetEventSubEndpoints("", srv.URL+"/helix", srv.URL+"/validate", srv.Client())
+	conn.mu.Lock()
+	conn.gqlURL = srv.URL + "/gql"
+	conn.mu.Unlock()
+
+	live, err := conn.checkChannelLive(ctx, "gqllive")
+	if err != nil || !live {
+		t.Fatalf("expected gqllive=true, got live=%v err=%v", live, err)
+	}
+	live, err = conn.checkChannelLive(ctx, "gqloffline")
+	if err != nil || live {
+		t.Fatalf("expected gqloffline=false, got live=%v err=%v", live, err)
+	}
+
+	// 2. Authenticated Helix /streams check
+	memStore := secrets.NewMemoryStore()
+	oauthMgr := NewOAuthManager("test-client-id", memStore)
+	_ = oauthMgr.SaveTokens(&TokenResponse{
+		AccessToken:  "valid-access-token",
+		RefreshToken: "valid-refresh-token",
+		ExpiresIn:    3600,
+	})
+	conn.SetOAuthManager(oauthMgr)
+
+	live, err = conn.checkChannelLive(ctx, "livechannel")
+	if err != nil || !live {
+		t.Fatalf("expected Helix livechannel=true, got live=%v err=%v", live, err)
+	}
+}
+

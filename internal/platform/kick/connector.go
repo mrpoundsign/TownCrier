@@ -29,17 +29,19 @@ const (
 )
 
 const (
-	DefaultPusherWSURL = "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0-rc2&flash=false"
-	DefaultKickAPIBase = "https://kick.com"
-	defaultReconnect   = 5 * time.Second
-	defaultPingPeriod  = 50 * time.Second
-	defaultUserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+	DefaultPusherWSURL    = "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0-rc2&flash=false"
+	DefaultKickAPIBase    = "https://kick.com"
+	defaultReconnect      = 5 * time.Second
+	defaultPingPeriod     = 50 * time.Second
+	defaultLivePollPeriod = 60 * time.Second
+	defaultUserAgent      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
 )
 
-// ChannelInfo holds the resolved Kick Pusher identifiers for a channel.
+// ChannelInfo holds the resolved Kick Pusher identifiers and live status for a channel.
 type ChannelInfo struct {
 	ChannelID  int64
 	ChatroomID int64
+	IsLive     bool
 }
 
 // NormalizeChannelInfo parses a Kick channel input (slug, @handle, https://kick.com/<slug>,
@@ -129,6 +131,9 @@ func ResolveChannelInfo(ctx context.Context, client *http.Client, apiBaseURL, sl
 		if combined.ChatroomID <= 0 && info.ChatroomID > 0 {
 			combined.ChatroomID = info.ChatroomID
 		}
+		if info.IsLive {
+			combined.IsLive = true
+		}
 		if combined.ChannelID > 0 && combined.ChatroomID > 0 {
 			return combined, nil
 		}
@@ -182,6 +187,17 @@ func fetchChannelInfoFromEndpoint(ctx context.Context, client *http.Client, endp
 		return ChannelInfo{}, err
 	}
 
+	isLive := false
+	if ls := asMap(m["livestream"]); len(ls) > 0 {
+		if active, ok := ls["is_live"].(bool); ok {
+			isLive = active
+		} else {
+			isLive = true
+		}
+	} else if active, ok := m["is_live"].(bool); ok {
+		isLive = active
+	}
+
 	// 1. Nested {"id": <channel_id>, "chatroom": {"id": <chatroom_id>}}
 	if cr := asMap(m["chatroom"]); len(cr) > 0 {
 		crID := int64(asInt(cr["id"]))
@@ -190,14 +206,14 @@ func fetchChannelInfoFromEndpoint(ctx context.Context, client *http.Client, endp
 			chID = int64(asInt(cr["channel_id"]))
 		}
 		if crID > 0 {
-			return ChannelInfo{ChannelID: chID, ChatroomID: crID}, nil
+			return ChannelInfo{ChannelID: chID, ChatroomID: crID, IsLive: isLive}, nil
 		}
 	}
 
 	// 2. Direct {"id": 12345} (from /api/v2/channels/<slug>/chatroom)
 	if id := int64(asInt(m["id"])); id > 0 {
 		chID := int64(asInt(m["channel_id"]))
-		return ChannelInfo{ChannelID: chID, ChatroomID: id}, nil
+		return ChannelInfo{ChannelID: chID, ChatroomID: id, IsLive: isLive}, nil
 	}
 
 	return ChannelInfo{}, errors.New("chatroom id not found in response")
@@ -205,20 +221,24 @@ func fetchChannelInfoFromEndpoint(ctx context.Context, client *http.Client, endp
 
 // Connector manages Kick live chat and event streaming via Pusher WebSocket (D14).
 type Connector struct {
-	mu             sync.Mutex
-	httpClient     *http.Client
-	apiBaseURL     string
-	wsURL          string
-	reconnectDelay time.Duration
-	pingPeriod     time.Duration
-	channel        string
-	status         ConnectionStatus
-	running        bool
-	cancelFn       context.CancelFunc
-	activeWS       *websocket.Conn
-	onEvent        func(event *chat.Event)
-	onModeration   func(modEvent *chat.ModerationEvent)
-	onStatusChange func(status ConnectionStatus, detail string)
+	mu                  sync.Mutex
+	httpClient          *http.Client
+	apiBaseURL          string
+	wsURL               string
+	reconnectDelay      time.Duration
+	pingPeriod          time.Duration
+	livePollPeriod      time.Duration
+	channel             string
+	status              ConnectionStatus
+	running             bool
+	isLive              bool
+	cancelFn            context.CancelFunc
+	activeWS            *websocket.Conn
+	onEvent             func(event *chat.Event)
+	onModeration        func(modEvent *chat.ModerationEvent)
+	onStatusChange      func(status ConnectionStatus, detail string)
+	onStreamStateChange func(live bool)
+	checkLiveFn         func(ctx context.Context, slug string) (bool, error)
 }
 
 // NewConnector creates a new Kick Pusher WebSocket connector.
@@ -233,11 +253,73 @@ func NewConnector(
 		wsURL:          DefaultPusherWSURL,
 		reconnectDelay: defaultReconnect,
 		pingPeriod:     defaultPingPeriod,
+		livePollPeriod: defaultLivePollPeriod,
 		status:         StatusDisconnected,
 		onEvent:        onEvent,
 		onModeration:   onModeration,
 		onStatusChange: onStatusChange,
 	}
+}
+
+// SetOnStreamStateChange registers a callback invoked when the Kick channel transitions between live and offline.
+func (c *Connector) SetOnStreamStateChange(fn func(live bool)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onStreamStateChange = fn
+}
+
+// SetCheckLiveFn overrides the live stream status check function (for testing).
+func (c *Connector) SetCheckLiveFn(fn func(ctx context.Context, slug string) (bool, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.checkLiveFn = fn
+}
+
+// SetLivePollPeriod overrides the periodic live status polling interval.
+func (c *Connector) SetLivePollPeriod(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if d > 0 {
+		c.livePollPeriod = d
+	}
+}
+
+// IsLive returns whether the Kick channel is currently broadcasting live.
+func (c *Connector) IsLive() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.isLive
+}
+
+func (c *Connector) setStreamLive(live bool) {
+	c.mu.Lock()
+	if (!c.running && live) || c.isLive == live {
+		c.mu.Unlock()
+		return
+	}
+	c.isLive = live
+	fn := c.onStreamStateChange
+	c.mu.Unlock()
+	if fn != nil {
+		fn(live)
+	}
+}
+
+func (c *Connector) checkChannelLive(ctx context.Context, slug string) (bool, error) {
+	c.mu.Lock()
+	fn := c.checkLiveFn
+	client := c.httpClient
+	base := c.apiBaseURL
+	c.mu.Unlock()
+
+	if fn != nil {
+		return fn(ctx, slug)
+	}
+	info, err := ResolveChannelInfo(ctx, client, base, slug)
+	if err != nil {
+		return false, err
+	}
+	return info.IsLive, nil
 }
 
 // Start begins connecting to the given Kick channel slug, URL, or chatroom ID.
@@ -268,11 +350,17 @@ func (c *Connector) Start(target string) error {
 // Stop disconnects from Kick Pusher WebSocket and halts background loops.
 func (c *Connector) Stop() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	c.running = false
 	c.stopLoopLocked()
+	wasLive := c.isLive
+	c.isLive = false
+	streamFn := c.onStreamStateChange
 	c.updateStatusLocked(StatusDisconnected, "Stopped")
+	c.mu.Unlock()
+
+	if wasLive && streamFn != nil {
+		streamFn(false)
+	}
 	return nil
 }
 
@@ -423,21 +511,52 @@ func (c *Connector) connectAndStream(ctx context.Context, slug string, info Chan
 
 	log.Printf("[Kick] Connected to Pusher %s for %s", chatroomTopic, slug)
 	c.updateStatus(StatusConnected, slug)
+	if info.IsLive {
+		c.setStreamLive(true)
+	}
 
-	// Start periodic ping goroutine
-	pingDone := make(chan struct{})
-	defer close(pingDone)
+	c.mu.Lock()
+	pingInterval := c.pingPeriod
+	livePollInterval := c.livePollPeriod
+	hasCheckFn := c.checkLiveFn != nil
+	c.mu.Unlock()
+
+	// Start periodic ping and live status polling goroutines
+	loopDone := make(chan struct{})
+	defer close(loopDone)
 	go func() {
-		ticker := time.NewTicker(c.pingPeriod)
+		ticker := time.NewTicker(pingInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-pingDone:
+			case <-loopDone:
 				return
 			case <-ticker.C:
 				_ = websocket.Message.Send(conn, `{"event":"pusher:ping","data":{}}`)
+			}
+		}
+	}()
+
+	go func() {
+		if !info.IsLive || hasCheckFn {
+			if live, err := c.checkChannelLive(ctx, slug); err == nil {
+				c.setStreamLive(live)
+			}
+		}
+		ticker := time.NewTicker(livePollInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-loopDone:
+				return
+			case <-ticker.C:
+				if live, err := c.checkChannelLive(ctx, slug); err == nil {
+					c.setStreamLive(live)
+				}
 			}
 		}
 	}()
@@ -461,6 +580,10 @@ func (c *Connector) connectAndStream(ctx context.Context, slug string, info Chan
 		if evName == "pusher:ping" {
 			_ = websocket.Message.Send(conn, `{"event":"pusher:pong","data":{}}`)
 			continue
+		}
+
+		if live, matched := ParseStreamStateEvent(evName); matched {
+			c.setStreamLive(live)
 		}
 
 		if ev != nil {

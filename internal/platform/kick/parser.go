@@ -298,6 +298,22 @@ func parseSubscription(m map[string]any) *chat.Event {
 	}
 }
 
+// ParseStreamStateEvent returns whether a Pusher event name signals a Kick livestream starting or ending.
+func ParseStreamStateEvent(rawEvent string) (live bool, matched bool) {
+	shortEvent := rawEvent
+	if idx := strings.LastIndex(shortEvent, `\`); idx >= 0 {
+		shortEvent = shortEvent[idx+1:]
+	}
+	switch shortEvent {
+	case "StreamerIsLive", "StreamerIsLiveEvent", "LivestreamCreated":
+		return true, true
+	case "StopStreamBroadcast", "StopStreamBroadcastEvent", "LivestreamEnded":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
 func parseGiftedSubscriptions(m map[string]any) *chat.Event {
 	gifter := strings.TrimLeft(strings.TrimSpace(asString(m["gifter_username"])), "@")
 	if gifter == "" {
@@ -307,10 +323,14 @@ func parseGiftedSubscriptions(m map[string]any) *chat.Event {
 		gifter = "An anonymous gifter"
 	}
 
+	var recipient string
 	count := asInt(m["count"])
-	if count <= 0 {
-		if giftedList, ok := m["gifted_usernames"].([]any); ok {
+	if giftedList, ok := m["gifted_usernames"].([]any); ok {
+		if count <= 0 {
 			count = len(giftedList)
+		}
+		if len(giftedList) == 1 {
+			recipient = strings.TrimLeft(strings.TrimSpace(asString(giftedList[0])), "@")
 		}
 	}
 	if count <= 0 {
@@ -326,6 +346,7 @@ func parseGiftedSubscriptions(m map[string]any) *chat.Event {
 		UserName:    strings.ToLower(gifter),
 		DisplayName: gifter,
 		Count:       count,
+		Recipient:   recipient,
 	}
 }
 
@@ -430,7 +451,9 @@ func parseKickGift(m map[string]any) *chat.Event {
 		UserName:    strings.ToLower(username),
 		DisplayName: username,
 		Count:       amount,
+		UnitAmount:  1,
 		Amount:      float64(amount),
+		ItemName:    giftName,
 		RewardTitle: giftName,
 		Text:        cleanText,
 		EmoteSpans:  spans,
