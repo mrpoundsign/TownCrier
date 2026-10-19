@@ -18,6 +18,11 @@ type Backend interface {
 	Append(ctx context.Context, entry *Entry) error
 	UpdateOutcome(ctx context.Context, id string, update OutcomeUpdate) error
 	Query(ctx context.Context, filter QueryFilter) (*QueryResult, error)
+	Summarize(ctx context.Context, filter QueryFilter) (*QuerySummary, error)
+	StartSession(ctx context.Context, startedAt time.Time, platform, channel string) (*StreamSession, error)
+	AddSessionPlatform(ctx context.Context, sessionID int64, platform, channel string) error
+	EndSession(ctx context.Context, sessionID int64, endedAt time.Time) error
+	ListSessions(ctx context.Context, limit int) ([]StreamSession, error)
 	DistinctChannels(ctx context.Context, platform string) ([]string, error)
 	Prune(ctx context.Context, policy RetentionPolicy) (int64, error)
 	Close() error
@@ -35,6 +40,31 @@ func (BaseSink) UpdateOutcome(context.Context, string, OutcomeUpdate) error {
 // Query is a no-op returning an empty QueryResult and nil error for non-queryable sinks.
 func (BaseSink) Query(context.Context, QueryFilter) (*QueryResult, error) {
 	return &QueryResult{}, nil
+}
+
+// Summarize is a no-op returning an empty QuerySummary and nil error for non-queryable sinks.
+func (BaseSink) Summarize(context.Context, QueryFilter) (*QuerySummary, error) {
+	return &QuerySummary{}, nil
+}
+
+// StartSession is a no-op returning an empty StreamSession and nil error for non-session sinks.
+func (BaseSink) StartSession(context.Context, time.Time, string, string) (*StreamSession, error) {
+	return &StreamSession{}, nil
+}
+
+// AddSessionPlatform is a no-op returning nil error for non-session sinks.
+func (BaseSink) AddSessionPlatform(context.Context, int64, string, string) error {
+	return nil
+}
+
+// EndSession is a no-op returning nil error for non-session sinks.
+func (BaseSink) EndSession(context.Context, int64, time.Time) error {
+	return nil
+}
+
+// ListSessions is a no-op returning nil and nil error for non-session sinks.
+func (BaseSink) ListSessions(context.Context, int) ([]StreamSession, error) {
+	return nil, nil
 }
 
 // DistinctChannels is a no-op returning nil and nil error for non-queryable sinks.
@@ -310,6 +340,76 @@ func (m *Manager) Query(ctx context.Context, filter QueryFilter) (*QueryResult, 
 	}
 
 	return primary.Query(ctx, filter)
+}
+
+// Summarize computes aggregated stream event and monetization metrics across all rows matching filter.
+func (m *Manager) Summarize(ctx context.Context, filter QueryFilter) (*QuerySummary, error) {
+	m.mu.RLock()
+	if m.closed || len(m.backends) == 0 {
+		m.mu.RUnlock()
+		return &QuerySummary{}, nil
+	}
+	primary := m.backends[0]
+	policy := m.policy
+	m.mu.RUnlock()
+
+	if filter.Retention.ChatRetentionDays == 0 && filter.Retention.EventRetentionDays == 0 {
+		filter.Retention = policy
+	}
+
+	return primary.Summarize(ctx, filter)
+}
+
+// StartSession starts a new StreamSession in the primary backend.
+func (m *Manager) StartSession(ctx context.Context, startedAt time.Time, platform, channel string) (*StreamSession, error) {
+	m.mu.RLock()
+	if m.closed || len(m.backends) == 0 {
+		m.mu.RUnlock()
+		return &StreamSession{}, nil
+	}
+	primary := m.backends[0]
+	m.mu.RUnlock()
+
+	return primary.StartSession(ctx, startedAt, platform, channel)
+}
+
+// AddSessionPlatform merges an active platform and channel into an open StreamSession.
+func (m *Manager) AddSessionPlatform(ctx context.Context, sessionID int64, platform, channel string) error {
+	m.mu.RLock()
+	if m.closed || len(m.backends) == 0 {
+		m.mu.RUnlock()
+		return nil
+	}
+	primary := m.backends[0]
+	m.mu.RUnlock()
+
+	return primary.AddSessionPlatform(ctx, sessionID, platform, channel)
+}
+
+// EndSession marks a StreamSession as ended at endedAt.
+func (m *Manager) EndSession(ctx context.Context, sessionID int64, endedAt time.Time) error {
+	m.mu.RLock()
+	if m.closed || len(m.backends) == 0 {
+		m.mu.RUnlock()
+		return nil
+	}
+	primary := m.backends[0]
+	m.mu.RUnlock()
+
+	return primary.EndSession(ctx, sessionID, endedAt)
+}
+
+// ListSessions returns the most recent stream sessions ordered newest-first.
+func (m *Manager) ListSessions(ctx context.Context, limit int) ([]StreamSession, error) {
+	m.mu.RLock()
+	if m.closed || len(m.backends) == 0 {
+		m.mu.RUnlock()
+		return nil, nil
+	}
+	primary := m.backends[0]
+	m.mu.RUnlock()
+
+	return primary.ListSessions(ctx, limit)
 }
 
 // DistinctChannels returns the sorted list of distinct channel names recorded in the primary backend.
