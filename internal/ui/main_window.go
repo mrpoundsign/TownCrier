@@ -50,6 +50,8 @@ type MainWindow struct {
 	youtubeStatusDot *platformConnectionBadge
 	tiktokStatusDot  *platformConnectionBadge
 	kickStatusDot    *platformConnectionBadge
+	statusMu         sync.RWMutex
+	platformStatuses map[string]platformStatusState
 
 	tooltipLayer   *fyne.Container
 	tooltipBubble  *fyne.Container
@@ -68,8 +70,9 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	w := fyneApp.NewWindow("TownCrier " + AppVersion + " — Streamer Neural TTS")
 
 	mw := &MainWindow{
-		Window:  w,
-		Session: session,
+		Window:           w,
+		Session:          session,
+		platformStatuses: make(map[string]platformStatusState),
 	}
 
 	mw.initStatusBar()
@@ -215,13 +218,25 @@ func (mw *MainWindow) initViews() {
 	mw.dashboardTab = NewDashboardView(mw.Window, mw.Session)
 	mw.dashboardTab.SetStatusHandler(mw.SetStatus)
 	mw.twitchTab = NewTwitchTabView(mw.Window, mw.Session)
-	mw.twitchTab.SetStatusHandler(mw.SetStatus)
+	mw.twitchTab.SetStatusHandler(func(msg string) {
+		mw.SetStatus(msg)
+		mw.updatePlatformBadge("twitch", "", "")
+	})
 	mw.youtubeTab = NewYouTubeTabView(mw.Window, mw.Session)
-	mw.youtubeTab.SetStatusHandler(mw.SetStatus)
+	mw.youtubeTab.SetStatusHandler(func(msg string) {
+		mw.SetStatus(msg)
+		mw.updatePlatformBadge("youtube", "", "")
+	})
 	mw.tiktokTab = NewTikTokTabView(mw.Window, mw.Session)
-	mw.tiktokTab.SetStatusHandler(mw.SetStatus)
+	mw.tiktokTab.SetStatusHandler(func(msg string) {
+		mw.SetStatus(msg)
+		mw.updatePlatformBadge("tiktok", "", "")
+	})
 	mw.kickTab = NewKickTabView(mw.Window, mw.Session)
-	mw.kickTab.SetStatusHandler(mw.SetStatus)
+	mw.kickTab.SetStatusHandler(func(msg string) {
+		mw.SetStatus(msg)
+		mw.updatePlatformBadge("kick", "", "")
+	})
 	mw.viewersTab = NewViewersTabView(mw.Window, mw.Session)
 	mw.viewersTab.SetStatusHandler(mw.SetStatus)
 	mw.chatLogsTab = NewLogsView(mw.Window, mw.Session)
@@ -363,6 +378,10 @@ func (mw *MainWindow) syncServiceVisibility() {
 			mw.kickStatusDot.Hide()
 		}
 	}
+	mw.updatePlatformBadge("twitch", "", "")
+	mw.updatePlatformBadge("youtube", "", "")
+	mw.updatePlatformBadge("tiktok", "", "")
+	mw.updatePlatformBadge("kick", "", "")
 	if mw.headerBar != nil {
 		mw.headerBar.Refresh()
 	}
@@ -385,16 +404,7 @@ func (mw *MainWindow) initHeader() {
 	cfg := mw.Session.Config()
 
 	// Platform indicators
-	pCfg := cfg.Platforms["twitch"]
-	twitchDot := "⚪"
-	twitchTip := "Twitch: Inactive"
-	if pCfg.Enabled && pCfg.AccountName != "" {
-		twitchDot = "🟡"
-		twitchTip = fmt.Sprintf("Twitch: Connecting... (#%s)", pCfg.AccountName)
-	} else if pCfg.Enabled {
-		twitchDot = "🟡"
-		twitchTip = "Twitch: Enabled (No Channel Configured)"
-	}
+	twitchDot, twitchTip := mw.resolvePlatformStatus("twitch", "", "")
 	mw.twitchStatusDot = newPlatformConnectionBadge(
 		"Twitch",
 		resPlatformTwitch,
@@ -412,38 +422,10 @@ func (mw *MainWindow) initHeader() {
 		if mw.twitchTab != nil {
 			mw.twitchTab.UpdateStatus(status, detail)
 		}
-		fyne.Do(func() {
-			switch status {
-			case "connected":
-				tip := "Twitch: Connected"
-				if detail != "" {
-					tip += " (" + detail + ")"
-				}
-				mw.twitchStatusDot.SetStatus("🟢", tip)
-			case "connecting":
-				mw.twitchStatusDot.SetStatus("🟡", "Twitch: Connecting...")
-			case "disconnected":
-				tip := "Twitch: Disconnected"
-				if detail != "" {
-					tip += " (" + detail + ")"
-				}
-				mw.twitchStatusDot.SetStatus("🔴", tip)
-			default:
-				mw.twitchStatusDot.SetStatus("⚪", "Twitch: Inactive")
-			}
-		})
+		mw.updatePlatformBadge("twitch", status, detail)
 	})
 
-	ytCfg := cfg.Platforms["youtube"]
-	ytDot := "⚪"
-	ytTip := "YouTube: Inactive"
-	if ytCfg.Enabled && ytCfg.AccountName != "" {
-		ytDot = "🟡"
-		ytTip = fmt.Sprintf("YouTube: Waiting for stream... (%s)", ytCfg.AccountName)
-	} else if ytCfg.Enabled {
-		ytDot = "🟡"
-		ytTip = "YouTube: Enabled (No Channel Configured)"
-	}
+	ytDot, ytTip := mw.resolvePlatformStatus("youtube", "", "")
 	mw.youtubeStatusDot = newPlatformConnectionBadge(
 		"YouTube",
 		resPlatformYouTube,
@@ -461,38 +443,10 @@ func (mw *MainWindow) initHeader() {
 		if mw.youtubeTab != nil {
 			mw.youtubeTab.UpdateStatus(status, detail)
 		}
-		fyne.Do(func() {
-			switch status {
-			case "connected":
-				tip := "YouTube: Connected"
-				if detail != "" {
-					tip += " (" + detail + ")"
-				}
-				mw.youtubeStatusDot.SetStatus("🟢", tip)
-			case "waiting":
-				mw.youtubeStatusDot.SetStatus("🟡", "YouTube: Waiting for stream...")
-			case "disconnected":
-				tip := "YouTube: Disconnected"
-				if detail != "" {
-					tip += " (" + detail + ")"
-				}
-				mw.youtubeStatusDot.SetStatus("🔴", tip)
-			default:
-				mw.youtubeStatusDot.SetStatus("⚪", "YouTube: Inactive")
-			}
-		})
+		mw.updatePlatformBadge("youtube", status, detail)
 	})
 
-	ttCfg := cfg.Platforms["tiktok"]
-	ttDot := "⚪"
-	ttTip := "TikTok: Inactive"
-	if ttCfg.Enabled && ttCfg.AccountName != "" {
-		ttDot = "🟡"
-		ttTip = fmt.Sprintf("TikTok: Waiting for stream... (@%s)", ttCfg.AccountName)
-	} else if ttCfg.Enabled {
-		ttDot = "🟡"
-		ttTip = "TikTok: Enabled (No Channel Configured)"
-	}
+	ttDot, ttTip := mw.resolvePlatformStatus("tiktok", "", "")
 	mw.tiktokStatusDot = newPlatformConnectionBadge(
 		"TikTok",
 		resPlatformTikTok,
@@ -510,38 +464,10 @@ func (mw *MainWindow) initHeader() {
 		if mw.tiktokTab != nil {
 			mw.tiktokTab.UpdateStatus(status, detail)
 		}
-		fyne.Do(func() {
-			switch status {
-			case "connected":
-				tip := "TikTok: Connected"
-				if detail != "" {
-					tip += " (" + detail + ")"
-				}
-				mw.tiktokStatusDot.SetStatus("🟢", tip)
-			case "waiting":
-				mw.tiktokStatusDot.SetStatus("🟡", "TikTok: Waiting for stream...")
-			case "disconnected":
-				tip := "TikTok: Disconnected"
-				if detail != "" {
-					tip += " (" + detail + ")"
-				}
-				mw.tiktokStatusDot.SetStatus("🔴", tip)
-			default:
-				mw.tiktokStatusDot.SetStatus("⚪", "TikTok: Inactive")
-			}
-		})
+		mw.updatePlatformBadge("tiktok", status, detail)
 	})
 
-	kickCfg := cfg.Platforms["kick"]
-	kickDot := "⚪"
-	kickTip := "Kick: Inactive"
-	if kickCfg.Enabled && kickCfg.AccountName != "" {
-		kickDot = "🟡"
-		kickTip = fmt.Sprintf("Kick: Connecting... (%s)", kickCfg.AccountName)
-	} else if kickCfg.Enabled {
-		kickDot = "🟡"
-		kickTip = "Kick: Enabled (No Channel Configured)"
-	}
+	kickDot, kickTip := mw.resolvePlatformStatus("kick", "", "")
 	mw.kickStatusDot = newPlatformConnectionBadge(
 		"Kick",
 		resPlatformKick,
@@ -559,26 +485,7 @@ func (mw *MainWindow) initHeader() {
 		if mw.kickTab != nil {
 			mw.kickTab.UpdateStatus(status, detail)
 		}
-		fyne.Do(func() {
-			switch status {
-			case "connected":
-				tip := "Kick: Connected"
-				if detail != "" {
-					tip += " (" + detail + ")"
-				}
-				mw.kickStatusDot.SetStatus("🟢", tip)
-			case "connecting":
-				mw.kickStatusDot.SetStatus("🟡", "Kick: Connecting...")
-			case "disconnected":
-				tip := "Kick: Disconnected"
-				if detail != "" {
-					tip += " (" + detail + ")"
-				}
-				mw.kickStatusDot.SetStatus("🔴", tip)
-			default:
-				mw.kickStatusDot.SetStatus("⚪", "Kick: Inactive")
-			}
-		})
+		mw.updatePlatformBadge("kick", status, detail)
 	})
 
 	// Master volume slider
@@ -725,5 +632,109 @@ func (mw *MainWindow) ApplyPanicHotkey(hotkeyStr string) error {
 
 	return regErr
 }
+
+type platformStatusState struct {
+	status string
+	detail string
+}
+
+func (mw *MainWindow) resolvePlatformStatus(platform, rawStatus, detail string) (string, string) {
+	cfg := mw.Session.Config()
+	pCfg := cfg.Platforms[platform]
+
+	var name string
+	switch platform {
+	case "twitch":
+		name = "Twitch"
+	case "youtube":
+		name = "YouTube"
+	case "tiktok":
+		name = "TikTok"
+	case "kick":
+		name = "Kick"
+	default:
+		name = platform
+	}
+
+	if !pCfg.Enabled {
+		return "⚪", name + ": Inactive"
+	}
+
+	if pCfg.AccountName == "" {
+		return "🟡", name + ": Enabled (No Channel Configured)"
+	}
+
+	switch rawStatus {
+	case "connected":
+		tip := name + ": Connected"
+		if detail != "" {
+			tip += " (" + detail + ")"
+		}
+		return "🟢", tip
+	case "connecting":
+		tip := name + ": Connecting..."
+		if detail != "" {
+			tip += " (" + detail + ")"
+		}
+		return "🟡", tip
+	case "waiting":
+		tip := name + ": Waiting for stream..."
+		if detail != "" {
+			tip += " (" + detail + ")"
+		}
+		return "🟡", tip
+	case "disconnected":
+		tip := name + ": Disconnected"
+		if detail != "" {
+			tip += " (" + detail + ")"
+		}
+		return "🔴", tip
+	default:
+		switch platform {
+		case "twitch":
+			return "🟡", fmt.Sprintf("Twitch: Connecting... (#%s)", pCfg.AccountName)
+		case "kick":
+			return "🟡", fmt.Sprintf("Kick: Connecting... (%s)", pCfg.AccountName)
+		default:
+			return "🟡", fmt.Sprintf("%s: Waiting for stream... (%s)", name, pCfg.AccountName)
+		}
+	}
+}
+
+func (mw *MainWindow) updatePlatformBadge(platform, status, detail string) {
+	mw.statusMu.Lock()
+	if mw.platformStatuses == nil {
+		mw.platformStatuses = make(map[string]platformStatusState)
+	}
+	if status != "" || detail != "" {
+		mw.platformStatuses[platform] = platformStatusState{status: status, detail: detail}
+	}
+	current := mw.platformStatuses[platform]
+	mw.statusMu.Unlock()
+
+	dot, tip := mw.resolvePlatformStatus(platform, current.status, current.detail)
+
+	fyne.Do(func() {
+		switch platform {
+		case "twitch":
+			if mw.twitchStatusDot != nil {
+				mw.twitchStatusDot.SetStatus(dot, tip)
+			}
+		case "youtube":
+			if mw.youtubeStatusDot != nil {
+				mw.youtubeStatusDot.SetStatus(dot, tip)
+			}
+		case "tiktok":
+			if mw.tiktokStatusDot != nil {
+				mw.tiktokStatusDot.SetStatus(dot, tip)
+			}
+		case "kick":
+			if mw.kickStatusDot != nil {
+				mw.kickStatusDot.SetStatus(dot, tip)
+			}
+		}
+	})
+}
+
 
 

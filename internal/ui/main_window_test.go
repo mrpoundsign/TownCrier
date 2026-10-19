@@ -164,4 +164,72 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 	}
 }
 
+func TestMainWindowPlatformStatusResolution(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+
+	cfg := config.DefaultConfig()
+	cfg.Platforms["twitch"] = config.PlatformConfig{
+		Enabled:     false,
+		AccountName: "",
+	}
+	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	mw := NewMainWindow(appObj, session)
+	defer func() {
+		if mw.hotkeyMgr != nil {
+			mw.hotkeyMgr.Close()
+		}
+		mw.Window.Close()
+	}()
+
+	// 1. Disabled platform returns ⚪ Inactive
+	dot, tip := mw.resolvePlatformStatus("twitch", "disconnected", "")
+	if dot != "⚪" || tip != "Twitch: Inactive" {
+		t.Errorf("expected ⚪ Twitch: Inactive, got %s %s", dot, tip)
+	}
+
+	// 2. Enabled but no channel returns 🟡 Enabled (No Channel Configured)
+	c := session.Config()
+	pCfg := c.Platforms["twitch"]
+	pCfg.Enabled = true
+	pCfg.AccountName = ""
+	c.Platforms["twitch"] = pCfg
+	_ = session.ReloadConfig(c)
+
+	dot, tip = mw.resolvePlatformStatus("twitch", "disconnected", "")
+	if dot != "🟡" || tip != "Twitch: Enabled (No Channel Configured)" {
+		t.Errorf("expected 🟡 Twitch: Enabled (No Channel Configured), got %s %s", dot, tip)
+	}
+
+	// 3. Enabled with channel configured
+	pCfg.AccountName = "streamer"
+	c.Platforms["twitch"] = pCfg
+	_ = session.ReloadConfig(c)
+
+	dot, tip = mw.resolvePlatformStatus("twitch", "connected", "#streamer")
+	if dot != "🟢" || tip != "Twitch: Connected (#streamer)" {
+		t.Errorf("expected 🟢 Twitch: Connected (#streamer), got %s %s", dot, tip)
+	}
+
+	dot, tip = mw.resolvePlatformStatus("twitch", "connecting", "")
+	if dot != "🟡" || tip != "Twitch: Connecting..." {
+		t.Errorf("expected 🟡 Twitch: Connecting..., got %s %s", dot, tip)
+	}
+
+	dot, tip = mw.resolvePlatformStatus("twitch", "disconnected", "network down")
+	if dot != "🔴" || tip != "Twitch: Disconnected (network down)" {
+		t.Errorf("expected 🔴 Twitch: Disconnected (network down), got %s %s", dot, tip)
+	}
+
+	// 4. Test updatePlatformBadge propagates to status badge widget
+	mw.updatePlatformBadge("twitch", "connected", "live")
+	if mw.twitchStatusDot.StatusDot() != "🟢" {
+		t.Errorf("expected badge status dot 🟢, got %s", mw.twitchStatusDot.StatusDot())
+	}
+	if mw.twitchStatusDot.Tooltip() != "Twitch: Connected (live)" {
+		t.Errorf("expected badge tooltip 'Twitch: Connected (live)', got %s", mw.twitchStatusDot.Tooltip())
+	}
+}
+
+
 
