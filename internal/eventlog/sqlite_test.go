@@ -795,4 +795,207 @@ func TestStreamSessionLifecycleAndSummarize(t *testing.T) {
 	}
 }
 
+func TestFTS5TrigramSearchAndSkipSummary(t *testing.T) {
+	ctx := context.Background()
+	backend, err := NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend failed: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+
+	baseTime := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	entries := []*Entry{
+		{
+			ID:            "fts-1",
+			CreatedAt:     baseTime,
+			Platform:      "twitch",
+			Channel:       "mrpoundsign",
+			Kind:          "message",
+			UserID:        "uid_987654",
+			UserName:      "xX_DragonSlayer_Xx",
+			DisplayName:   "DragonSlayer",
+			RawText:       `Check out this "epic" speedrun strategy!`,
+			SpokenText:    `DragonSlayer says Check out this "epic" speedrun strategy!`,
+			PassedFilters: true,
+			Spoken:        true,
+			Outcome:       OutcomeSpoken,
+		},
+		{
+			ID:            "fts-2",
+			CreatedAt:     baseTime.Add(1 * time.Second),
+			Platform:      "youtube",
+			Channel:       "@mrpoundsign",
+			Kind:          "super_chat",
+			IsPaidOrEvent: true,
+			UserID:        "UC_SUPER_42",
+			UserName:      "generous_viewer",
+			DisplayName:   "GenerousViewer",
+			RawText:       "Keep up the awesome coding stream!",
+			ItemName:      "Celebration Sticker",
+			RewardTitle:   "Highlight My Message",
+			Recipient:     "lucky_winner_99",
+			Amount:        25.0,
+			Currency:      "USD",
+			PassedFilters: true,
+			Spoken:        true,
+			Outcome:       OutcomeSpoken,
+		},
+		{
+			ID:            "fts-3",
+			CreatedAt:     baseTime.Add(2 * time.Second),
+			Platform:      "kick",
+			Channel:       "mrpoundsign",
+			Kind:          "message",
+			UserID:        "k_77",
+			UserName:      "ab",
+			DisplayName:   "AB",
+			RawText:       "yo",
+			PassedFilters: true,
+			Spoken:        true,
+			Outcome:       OutcomeSpoken,
+		},
+	}
+
+	for _, e := range entries {
+		if err := backend.Append(ctx, e); err != nil {
+			t.Fatalf("Append(%s) failed: %v", e.ID, err)
+		}
+	}
+
+	// 1. Mid-word substring search on username (>= 3 chars -> FTS5 trigram path)
+	resUser, err := backend.Query(ctx, QueryFilter{UserQuery: "gonslay"})
+	if err != nil {
+		t.Fatalf("UserQuery 'gonslay' failed: %v", err)
+	}
+	if resUser.TotalCount != 1 || resUser.Entries[0].ID != "fts-1" {
+		t.Errorf("expected fts-1 for UserQuery 'gonslay', got %+v", resUser.Entries)
+	}
+
+	// 2. Quote-containing substring search on message text
+	resQuote, err := backend.Query(ctx, QueryFilter{TextQuery: `"epic" speed`})
+	if err != nil {
+		t.Fatalf("TextQuery with quotes failed: %v", err)
+	}
+	if resQuote.TotalCount != 1 || resQuote.Entries[0].ID != "fts-1" {
+		t.Errorf("expected fts-1 for quoted TextQuery, got %+v", resQuote.Entries)
+	}
+
+	// 3. Substring search across item_name, reward_title, and recipient
+	for _, q := range []string{"Celebration", "Highlight My", "winner_99"} {
+		resMeta, qErr := backend.Query(ctx, QueryFilter{TextQuery: q})
+		if qErr != nil {
+			t.Fatalf("TextQuery %q failed: %v", q, qErr)
+		}
+		if resMeta.TotalCount != 1 || resMeta.Entries[0].ID != "fts-2" {
+			t.Errorf("expected fts-2 for TextQuery %q, got %+v", q, resMeta.Entries)
+		}
+	}
+
+	// 4. Combined UserQuery + TextQuery (>= 3 chars on both)
+	resCombined, err := backend.Query(ctx, QueryFilter{
+		UserQuery: "generous",
+		TextQuery: "coding stream",
+	})
+	if err != nil {
+		t.Fatalf("Combined UserQuery+TextQuery failed: %v", err)
+	}
+	if resCombined.TotalCount != 1 || resCombined.Entries[0].ID != "fts-2" {
+		t.Errorf("expected fts-2 for combined query, got %+v", resCombined.Entries)
+	}
+
+	// 5. Short 1-2 rune query fallback (< 3 chars)
+	resShort, err := backend.Query(ctx, QueryFilter{
+		UserQuery: "ab",
+		TextQuery: "yo",
+	})
+	if err != nil {
+		t.Fatalf("Short 2-char query failed: %v", err)
+	}
+	if resShort.TotalCount != 1 || resShort.Entries[0].ID != "fts-3" {
+		t.Errorf("expected fts-3 for 2-char query, got %+v", resShort.Entries)
+	}
+
+	// 6. Verify SkipSummary omits summary computation while preserving TotalCount and Entries
+	resSkipSum, err := backend.Query(ctx, QueryFilter{SkipSummary: true})
+	if err != nil {
+		t.Fatalf("Query with SkipSummary failed: %v", err)
+	}
+	if resSkipSum.TotalCount != 3 {
+		t.Errorf("expected TotalCount=3 with SkipSummary, got %d", resSkipSum.TotalCount)
+	}
+	if len(resSkipSum.Summary.SuperChatByCurr) != 0 {
+		t.Errorf("expected empty Summary when SkipSummary=true, got %+v", resSkipSum.Summary)
+	}
+
+	// 7. Verify FTS sync on upsert (ON CONFLICT DO UPDATE updating spoken_text)
+	entries[2].SpokenText = "AB says unique_updated_phrase_xyz"
+	if err := backend.Append(ctx, entries[2]); err != nil {
+		t.Fatalf("Upsert fts-3 failed: %v", err)
+	}
+	resUpdated, err := backend.Query(ctx, QueryFilter{TextQuery: "updated_phrase_xyz"})
+	if err != nil {
+		t.Fatalf("Query after upsert failed: %v", err)
+	}
+	if resUpdated.TotalCount != 1 || resUpdated.Entries[0].ID != "fts-3" {
+		t.Errorf("expected fts-3 after spoken_text upsert, got %+v", resUpdated.Entries)
+	}
+}
+
+func BenchmarkSQLiteQuerySearch(b *testing.B) {
+	ctx := context.Background()
+	dbFile := filepath.Join(b.TempDir(), "bench.db")
+	backend, err := NewSQLiteBackend(dbFile)
+	if err != nil {
+		b.Fatalf("NewSQLiteBackend failed: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+
+	baseTime := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+
+	tx, err := backend.db.Begin()
+	if err != nil {
+		b.Fatalf("begin tx: %v", err)
+	}
+	stmt, err := tx.Prepare(`
+		INSERT INTO event_logs (
+			id, session_id, created_at, updated_at, platform, channel, kind, is_paid_event,
+			user_id, user_name, display_name, roles_json, raw_text, emotes_json, spoken_text,
+			voice_id, speed, passed_filters, spoken, outcome
+		) VALUES (?, 1, ?, ?, 'twitch', 'mrpoundsign', 'message', 0, ?, ?, ?, '[]', ?, '[]', ?, 'kokoro:af_heart', 1.0, 1, 1, 'spoken');
+	`)
+	if err != nil {
+		b.Fatalf("prepare insert: %v", err)
+	}
+	const totalRows = 25000
+	for i := range totalRows {
+		ts := baseTime.Add(time.Duration(i) * time.Second).UnixMilli()
+		uName := fmt.Sprintf("chatter_user_%d", i)
+		dName := fmt.Sprintf("ChatterUser%d", i)
+		text := fmt.Sprintf("Regular stream message number %d in the chat log", i)
+		if i == 12345 {
+			uName = "special_needle_username"
+			text = "This message contains the rare_needle_phrase inside it"
+		}
+		if _, err := stmt.Exec(fmt.Sprintf("row-%d", i), ts, ts, fmt.Sprintf("uid-%d", i), uName, dName, text, text); err != nil {
+			b.Fatalf("exec insert %d: %v", i, err)
+		}
+	}
+	_ = stmt.Close()
+	if err := tx.Commit(); err != nil {
+		b.Fatalf("commit tx: %v", err)
+	}
+
+	b.ResetTimer()
+	for range b.N {
+		res, qErr := backend.Query(ctx, QueryFilter{
+			UserQuery:   "needle_user",
+			TextQuery:   "rare_needle_phrase",
+			SkipSummary: true,
+		})
+		if qErr != nil || res.TotalCount != 1 {
+			b.Fatalf("unexpected benchmark result: err=%v, count=%d", qErr, res.TotalCount)
+		}
+	}
+}
+
 

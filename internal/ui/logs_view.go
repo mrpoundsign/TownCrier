@@ -23,8 +23,9 @@ import (
 )
 
 const (
-	logsPageSize    = 50
-	maxLiveTailRows = 150
+	logsPageSize           = 50
+	maxLiveTailRows        = 150
+	searchDebounceDuration = 200 * time.Millisecond
 )
 
 const (
@@ -75,6 +76,9 @@ type LogsView struct {
 	fromDate     *time.Time
 	toDate       *time.Time
 	unsubLive    func()
+	searchTimer  *time.Timer
+	queryCancel  context.CancelFunc
+	querySeq     uint64
 	initializing bool
 
 	liveTailCheck   *widget.Check
@@ -222,11 +226,20 @@ func (v *LogsView) showTooltipForObject(obj fyne.CanvasObject, tip string, hover
 	v.tooltipBubble.Refresh()
 }
 
-// Close unsubscribes any active Live Tail listener.
+// Close unsubscribes any active Live Tail listener and cancels any pending search timer or query.
 func (v *LogsView) Close() {
 	v.mu.Lock()
 	unsub := v.unsubLive
 	v.unsubLive = nil
+	if v.searchTimer != nil {
+		v.searchTimer.Stop()
+		v.searchTimer = nil
+	}
+	if v.queryCancel != nil {
+		v.queryCancel()
+		v.queryCancel = nil
+	}
+	v.querySeq++
 	v.mu.Unlock()
 	if unsub != nil {
 		unsub()
@@ -548,8 +561,10 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 		if v.initializing {
 			return
 		}
+		v.mu.Lock()
 		v.currentPage = 0
-		v.RefreshQuery()
+		v.mu.Unlock()
+		v.scheduleSearch()
 	}
 
 	v.textSearchEntry = NewScrollPassEntry()
@@ -558,8 +573,10 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 		if v.initializing {
 			return
 		}
+		v.mu.Lock()
 		v.currentPage = 0
-		v.RefreshQuery()
+		v.mu.Unlock()
+		v.scheduleSearch()
 	}
 
 	resetBtn := widget.NewButtonWithIcon("Reset Filters", theme.ContentClearIcon(), func() {
@@ -876,11 +893,85 @@ func (v *LogsView) currentFilter() eventlog.QueryFilter {
 		ExcludedUsers: excludedUsers,
 		Limit:         logsPageSize,
 		Offset:        page * logsPageSize,
+		SkipSummary:   page > 0,
 	}
+}
+
+// scheduleSearch debounces rapid keystrokes in the user and message search fields
+// before running an asynchronous database query off the UI thread.
+func (v *LogsView) scheduleSearch() {
+	v.mu.Lock()
+	if v.searchTimer != nil {
+		v.searchTimer.Stop()
+	}
+	if v.queryCancel != nil {
+		v.queryCancel()
+		v.queryCancel = nil
+	}
+	v.searchTimer = time.AfterFunc(searchDebounceDuration, func() {
+		v.runAsyncQuery()
+	})
+	v.mu.Unlock()
+}
+
+func (v *LogsView) runAsyncQuery() {
+	filter := v.currentFilter()
+
+	v.mu.Lock()
+	if v.queryCancel != nil {
+		v.queryCancel()
+	}
+	v.querySeq++
+	seq := v.querySeq
+	ctx, cancel := context.WithCancel(context.Background())
+	v.queryCancel = cancel
+	v.mu.Unlock()
+
+	defer cancel()
+
+	var res *eventlog.QueryResult
+	if v.session != nil && v.session.EventLogger() != nil {
+		r, err := v.session.EventLogger().Query(ctx, filter)
+		if err != nil {
+			return
+		}
+		res = r
+	}
+	if res == nil {
+		res = &eventlog.QueryResult{}
+	}
+
+	v.mu.Lock()
+	if ctx.Err() != nil || v.querySeq != seq {
+		v.mu.Unlock()
+		return
+	}
+	v.entries = res.Entries
+	v.totalCount = res.TotalCount
+	if !filter.SkipSummary {
+		v.summary = res.Summary
+	}
+	v.mu.Unlock()
+
+	fyne.Do(func() {
+		v.renderEntries()
+	})
 }
 
 // RefreshQuery executes the current QueryFilter against the session's EventLogger and updates the UI.
 func (v *LogsView) RefreshQuery() {
+	v.mu.Lock()
+	if v.searchTimer != nil {
+		v.searchTimer.Stop()
+		v.searchTimer = nil
+	}
+	if v.queryCancel != nil {
+		v.queryCancel()
+		v.queryCancel = nil
+	}
+	v.querySeq++
+	v.mu.Unlock()
+
 	filter := v.currentFilter()
 
 	var res *eventlog.QueryResult
@@ -897,7 +988,9 @@ func (v *LogsView) RefreshQuery() {
 	v.mu.Lock()
 	v.entries = res.Entries
 	v.totalCount = res.TotalCount
-	v.summary = res.Summary
+	if !filter.SkipSummary {
+		v.summary = res.Summary
+	}
 	v.mu.Unlock()
 
 	fyne.Do(func() {
@@ -1065,7 +1158,10 @@ func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
 	if f.TextQuery != "" {
 		tq := strings.ToLower(f.TextQuery)
 		if !strings.Contains(strings.ToLower(e.RawText), tq) &&
-			!strings.Contains(strings.ToLower(e.SpokenText), tq) {
+			!strings.Contains(strings.ToLower(e.SpokenText), tq) &&
+			!strings.Contains(strings.ToLower(e.ItemName), tq) &&
+			!strings.Contains(strings.ToLower(e.RewardTitle), tq) &&
+			!strings.Contains(strings.ToLower(e.Recipient), tq) {
 			return false
 		}
 	}
