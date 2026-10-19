@@ -545,6 +545,10 @@ func (s *Session) buildLogEntry(event *chat.Event, rawText string, rawEmotes []c
 		emotesCopy = make([]chat.EmoteSpan, len(rawEmotes))
 		copy(emotesCopy, rawEmotes)
 	}
+	itemName := strings.TrimSpace(event.ItemName)
+	if itemName == "" && event.Kind == chat.EventKindGift {
+		itemName = strings.TrimSpace(event.RewardTitle)
+	}
 	return &eventlog.Entry{
 		ID:            event.ID,
 		CreatedAt:     ts,
@@ -563,7 +567,13 @@ func (s *Session) buildLogEntry(event *chat.Event, rawText string, rawEmotes []c
 		VoiceID:       voiceID,
 		Speed:         speed,
 		Amount:        event.Amount,
+		UnitAmount:    event.UnitAmount,
 		Currency:      event.Currency,
+		ItemName:      itemName,
+		SubTier:       event.SubTier,
+		Recipient:     event.Recipient,
+		RewardID:      event.RewardID,
+		RewardTitle:   event.RewardTitle,
 		Months:        event.Months,
 		Count:         event.Count,
 		PassedFilters: passedFilters,

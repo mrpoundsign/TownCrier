@@ -66,7 +66,11 @@ type Event struct {
 	Text          string      `json:"text"`
 	EmoteSpans    []EmoteSpan `json:"emote_spans,omitempty"`
 	Amount        float64     `json:"amount,omitempty"`
+	UnitAmount    float64     `json:"unit_amount,omitempty"`
 	Currency      string      `json:"currency,omitempty"`
+	ItemName      string      `json:"item_name,omitempty"`
+	SubTier       string      `json:"sub_tier,omitempty"`
+	Recipient     string      `json:"recipient,omitempty"`
 	Months        int         `json:"months,omitempty"`
 	Count         int         `json:"count,omitempty"`
 	RewardID      string      `json:"reward_id,omitempty"`

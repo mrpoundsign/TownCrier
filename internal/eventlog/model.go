@@ -67,9 +67,19 @@ func OutcomeDisplayLabel(outcome EventOutcome) string {
 	}
 }
 
+// StreamSession represents an active or completed livestreaming session across one or more platforms.
+type StreamSession struct {
+	ID        int64     `json:"id"`
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at"` // Zero means currently active
+	Platforms []string  `json:"platforms,omitempty"`
+	Channels  []string  `json:"channels,omitempty"`
+}
+
 // Entry represents a single structured chat, alert, or moderation log document.
 type Entry struct {
 	ID            string           `json:"id"`
+	SessionID     int64            `json:"session_id,omitempty"`
 	CreatedAt     time.Time        `json:"created_at"`
 	UpdatedAt     time.Time        `json:"updated_at"`
 	Platform      string           `json:"platform"`
@@ -86,7 +96,13 @@ type Entry struct {
 	VoiceID       string           `json:"voice_id,omitempty"`
 	Speed         float32          `json:"speed,omitempty"`
 	Amount        float64          `json:"amount,omitempty"`
+	UnitAmount    float64          `json:"unit_amount,omitempty"`
 	Currency      string           `json:"currency,omitempty"`
+	ItemName      string           `json:"item_name,omitempty"`
+	SubTier       string           `json:"sub_tier,omitempty"`
+	Recipient     string           `json:"recipient,omitempty"`
+	RewardID      string           `json:"reward_id,omitempty"`
+	RewardTitle   string           `json:"reward_title,omitempty"`
 	Months        int              `json:"months,omitempty"`
 	Count         int              `json:"count,omitempty"`
 	PassedFilters bool             `json:"passed_filters"`
@@ -160,8 +176,9 @@ func (p RetentionPolicy) Cutoffs() (chatCutoff time.Time, eventCutoff time.Time)
 	return chatCutoff, eventCutoff
 }
 
-// QueryFilter specifies search, date-range, attribute, and pagination parameters.
+// QueryFilter specifies search, date-range, session, attribute, and pagination parameters.
 type QueryFilter struct {
+	SessionID     int64             `json:"session_id,omitempty"`
 	From          *time.Time        `json:"from,omitempty"`
 	To            *time.Time        `json:"to,omitempty"`
 	Platform      string            `json:"platform,omitempty"`
@@ -178,8 +195,23 @@ type QueryFilter struct {
 	Retention     RetentionPolicy   `json:"-"`
 }
 
-// QueryResult holds a page of matching log entries and the total matching row count.
+// QuerySummary holds aggregated stream event and monetization metrics for a QueryFilter.
+type QuerySummary struct {
+	TotalSubs        int                `json:"total_subs"`
+	TotalGiftSubs    int                `json:"total_gift_subs"`
+	TotalBits        float64            `json:"total_bits"`
+	TotalDiamonds    float64            `json:"total_diamonds"`
+	TotalKicks       float64            `json:"total_kicks"`
+	SuperChatByCurr  map[string]float64 `json:"super_chat_by_curr,omitempty"`
+	TotalRaids       int                `json:"total_raids"`
+	TotalRaidViewers int                `json:"total_raid_viewers"`
+	TotalFollows     int                `json:"total_follows"`
+	TotalRedemptions int                `json:"total_redemptions"`
+}
+
+// QueryResult holds a page of matching log entries, the total matching row count, and aggregated summary totals.
 type QueryResult struct {
-	Entries    []Entry `json:"entries"`
-	TotalCount int     `json:"total_count"`
+	Entries    []Entry      `json:"entries"`
+	TotalCount int          `json:"total_count"`
+	Summary    QuerySummary `json:"summary"`
 }
