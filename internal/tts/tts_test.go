@@ -488,5 +488,112 @@ func TestFindVoiceUsages(t *testing.T) {
 	}
 }
 
+func TestKokoroV10VoicesAndIntlPack(t *testing.T) {
+	if len(KokoroVoiceCatalog) != 29 {
+		t.Errorf("expected 29 voices in KokoroVoiceCatalog (28 named + 1 blend), got %d", len(KokoroVoiceCatalog))
+	}
+	if len(KokoroIntlVoiceCatalog) != 25 {
+		t.Errorf("expected 25 voices in KokoroIntlVoiceCatalog, got %d", len(KokoroIntlVoiceCatalog))
+	}
+	if len(KnownKokoroV10Voices) != 54 {
+		t.Errorf("expected 54 entries in KnownKokoroV10Voices (53 speakers + 1 blend), got %d", len(KnownKokoroV10Voices))
+	}
+
+	testCases := []struct {
+		voiceID string
+		wantSID int
+		wantFam string
+	}{
+		{"af_heart", 3, ModelKokoro},
+		{"af_alloy", 0, ModelKokoro},
+		{"af_aoede", 1, ModelKokoro},
+		{"af_bella", 2, ModelKokoro},
+		{"af_nova", 7, ModelKokoro},
+		{"am_fenrir", 14, ModelKokoro},
+		{"am_puck", 18, ModelKokoro},
+		{"bm_lewis", 27, ModelKokoro},
+		{"kokoro_intl:ef_dora", 28, ModelKokoroIntl},
+		{"kokoro_intl:em_alex", 29, ModelKokoroIntl},
+		{"kokoro_intl:ff_siwis", 31, ModelKokoroIntl},
+		{"kokoro_intl:hf_alpha", 32, ModelKokoroIntl},
+		{"kokoro_intl:if_sara", 36, ModelKokoroIntl},
+		{"kokoro_intl:jf_alpha", 38, ModelKokoroIntl},
+		{"kokoro_intl:pf_dora", 43, ModelKokoroIntl},
+		{"kokoro_intl:zf_xiaobei", 46, ModelKokoroIntl},
+		{"kokoro_intl:zm_yunyang", 52, ModelKokoroIntl},
+	}
+
+	for _, tc := range testCases {
+		if fam := VoiceFamily(tc.voiceID); fam != tc.wantFam {
+			t.Errorf("VoiceFamily(%q) = %q, want %q", tc.voiceID, fam, tc.wantFam)
+		}
+		if sid := ResolveFamilySpeakerID(tc.wantFam, tc.voiceID, 53); sid != tc.wantSID {
+			t.Errorf("ResolveFamilySpeakerID(%q, %q, 53) = %d, want %d", tc.wantFam, tc.voiceID, sid, tc.wantSID)
+		}
+	}
+
+	if fam := VoiceFamily("ef_dora"); fam != ModelKokoroIntl {
+		t.Errorf("expected kokoro_intl for raw ef_dora, got %q", fam)
+	}
+	if sid := ResolveFamilySpeakerID(ModelKokoroIntl, "ef_dora", 53); sid != 28 {
+		t.Errorf("expected sid 28 for raw ef_dora, got %d", sid)
+	}
+
+	if !IsKokoroIntlVoice("kokoro_intl:ef_dora") {
+		t.Error("expected true for kokoro_intl:ef_dora")
+	}
+	if !IsKokoroIntlVoice("ef_dora") {
+		t.Error("expected true for raw ef_dora")
+	}
+	if IsKokoroIntlVoice("af_nova") {
+		t.Error("expected false for af_nova")
+	}
+	if IsKokoroIntlVoice("supertonic:f1") {
+		t.Error("expected false for supertonic:f1")
+	}
+}
+
+func TestKokoroIntlHardwareImpactSharing(t *testing.T) {
+	singleImpact := EstimateHardwareImpact([]string{ModelKokoro}, false, 4)
+	bothImpact := EstimateHardwareImpact([]string{ModelKokoro, ModelKokoroIntl}, false, 4)
+
+	if bothImpact.ActiveRAMMB != singleImpact.ActiveRAMMB {
+		t.Errorf("expected both ActiveRAMMB (%d) == single ActiveRAMMB (%d)", bothImpact.ActiveRAMMB, singleImpact.ActiveRAMMB)
+	}
+	if bothImpact.IdleRAMMB != singleImpact.IdleRAMMB {
+		t.Errorf("expected both IdleRAMMB (%d) == single IdleRAMMB (%d)", bothImpact.IdleRAMMB, singleImpact.IdleRAMMB)
+	}
+	if !strings.Contains(bothImpact.RAMBarText, "Kokoro Intl +0 MB (shared)") {
+		t.Errorf("expected RAMBarText to mention shared +0 MB, got: %s", bothImpact.RAMBarText)
+	}
+}
+
+func TestLegacyKokoroV019Detection(t *testing.T) {
+	dir := t.TempDir()
+
+	if isLegacyKokoroV019Dir(dir) {
+		t.Error("expected false for empty dir")
+	}
+
+	_ = os.WriteFile(filepath.Join(dir, "voices.bin"), []byte("test"), 0600)
+	if isLegacyKokoroV019Dir(dir) {
+		t.Error("expected false for small test mock voices.bin")
+	}
+
+	staleData := make([]byte, 5750784)
+	_ = os.WriteFile(filepath.Join(dir, "voices.bin"), staleData, 0600)
+	if !isLegacyKokoroV019Dir(dir) {
+		t.Error("expected true for 5.75MB voices.bin without lexicon")
+	}
+	if hasKokoroSharedAssets(dir) {
+		t.Error("expected false hasKokoroSharedAssets for legacy v0.19 dir")
+	}
+
+	_ = os.WriteFile(filepath.Join(dir, "lexicon-us-en.txt"), []byte("hello"), 0600)
+	if isLegacyKokoroV019Dir(dir) {
+		t.Error("expected false once lexicon-us-en.txt exists")
+	}
+}
+
 
 

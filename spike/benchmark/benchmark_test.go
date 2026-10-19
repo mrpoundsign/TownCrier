@@ -15,6 +15,12 @@ func TestKokoroSynthesis(t *testing.T) {
 		t.Skip("model files not found in models/kokoro-en, skipping synthesis test")
 	}
 
+	lexPath := filepath.Join(modelDir, "lexicon-us-en.txt")
+	var lexicon string
+	if _, err := os.Stat(lexPath); err == nil {
+		lexicon = lexPath
+	}
+
 	config := &sherpa.OfflineTtsConfig{
 		Model: sherpa.OfflineTtsModelConfig{
 			Kokoro: sherpa.OfflineTtsKokoroModelConfig{
@@ -23,6 +29,7 @@ func TestKokoroSynthesis(t *testing.T) {
 				Tokens:      filepath.Join(modelDir, "tokens.txt"),
 				DataDir:     filepath.Join(modelDir, "espeak-ng-data"),
 				LengthScale: 1.0,
+				Lexicon:     lexicon,
 			},
 			NumThreads: 2,
 			Debug:      0,

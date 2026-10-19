@@ -8,6 +8,7 @@ import (
 
 const (
 	ModelKokoro     = "kokoro"
+	ModelKokoroIntl = "kokoro_intl"
 	ModelSupertonic = "supertonic"
 	ModelKittenMini = "kitten_mini"
 	ModelKittenNano = "kitten_nano"
@@ -90,14 +91,43 @@ var PiperVoiceCatalog = []VoiceOption{
 	{ID: "piper:spk_20", Label: "Piper LibriTTS — Storyteller Male (piper:spk_20)", SIDv019: 20},
 }
 
+// KokoroIntlVoiceCatalog lists the 25 multilingual international Kokoro voices (Spanish, French, Hindi, Italian, Japanese, Portuguese, Mandarin).
+var KokoroIntlVoiceCatalog = []VoiceOption{
+	{ID: "kokoro_intl:ef_dora", Label: "Dora — Spanish Female (kokoro_intl:ef_dora)", SIDv019: 0, SIDv10: 28},
+	{ID: "kokoro_intl:em_alex", Label: "Alex — Spanish Male (kokoro_intl:em_alex)", SIDv019: 0, SIDv10: 29},
+	{ID: "kokoro_intl:em_santa", Label: "Santa — Spanish Male (kokoro_intl:em_santa)", SIDv019: 0, SIDv10: 30},
+	{ID: "kokoro_intl:ff_siwis", Label: "Siwis — French Female (kokoro_intl:ff_siwis)", SIDv019: 0, SIDv10: 31},
+	{ID: "kokoro_intl:hf_alpha", Label: "Alpha — Hindi Female (kokoro_intl:hf_alpha)", SIDv019: 0, SIDv10: 32},
+	{ID: "kokoro_intl:hf_beta", Label: "Beta — Hindi Female (kokoro_intl:hf_beta)", SIDv019: 0, SIDv10: 33},
+	{ID: "kokoro_intl:hm_omega", Label: "Omega — Hindi Male (kokoro_intl:hm_omega)", SIDv019: 0, SIDv10: 34},
+	{ID: "kokoro_intl:hm_psi", Label: "Psi — Hindi Male (kokoro_intl:hm_psi)", SIDv019: 0, SIDv10: 35},
+	{ID: "kokoro_intl:if_sara", Label: "Sara — Italian Female (kokoro_intl:if_sara)", SIDv019: 0, SIDv10: 36},
+	{ID: "kokoro_intl:im_nicola", Label: "Nicola — Italian Male (kokoro_intl:im_nicola)", SIDv019: 0, SIDv10: 37},
+	{ID: "kokoro_intl:jf_alpha", Label: "Alpha — Japanese Female (kokoro_intl:jf_alpha)", SIDv019: 0, SIDv10: 38},
+	{ID: "kokoro_intl:jf_gongitsune", Label: "Gongitsune — Japanese Female (kokoro_intl:jf_gongitsune)", SIDv019: 0, SIDv10: 39},
+	{ID: "kokoro_intl:jf_nezumi", Label: "Nezumi — Japanese Female (kokoro_intl:jf_nezumi)", SIDv019: 0, SIDv10: 40},
+	{ID: "kokoro_intl:jf_tebukuro", Label: "Tebukuro — Japanese Female (kokoro_intl:jf_tebukuro)", SIDv019: 0, SIDv10: 41},
+	{ID: "kokoro_intl:jm_kumo", Label: "Kumo — Japanese Male (kokoro_intl:jm_kumo)", SIDv019: 0, SIDv10: 42},
+	{ID: "kokoro_intl:pf_dora", Label: "Dora — Portuguese Female (kokoro_intl:pf_dora)", SIDv019: 0, SIDv10: 43},
+	{ID: "kokoro_intl:pm_alex", Label: "Alex — Portuguese Male (kokoro_intl:pm_alex)", SIDv019: 0, SIDv10: 44},
+	{ID: "kokoro_intl:pm_santa", Label: "Santa — Portuguese Male (kokoro_intl:pm_santa)", SIDv019: 0, SIDv10: 45},
+	{ID: "kokoro_intl:zf_xiaobei", Label: "Xiaobei — Mandarin Female (kokoro_intl:zf_xiaobei)", SIDv019: 0, SIDv10: 46},
+	{ID: "kokoro_intl:zf_xiaoni", Label: "Xiaoni — Mandarin Female (kokoro_intl:zf_xiaoni)", SIDv019: 0, SIDv10: 47},
+	{ID: "kokoro_intl:zf_xiaoxiao", Label: "Xiaoxiao — Mandarin Female (kokoro_intl:zf_xiaoxiao)", SIDv019: 0, SIDv10: 48},
+	{ID: "kokoro_intl:zf_xiaoyi", Label: "Xiaoyi — Mandarin Female (kokoro_intl:zf_xiaoyi)", SIDv019: 0, SIDv10: 49},
+	{ID: "kokoro_intl:zm_yunjian", Label: "Yunjian — Mandarin Male (kokoro_intl:zm_yunjian)", SIDv019: 0, SIDv10: 50},
+	{ID: "kokoro_intl:zm_yunxi", Label: "Yunxi — Mandarin Male (kokoro_intl:zm_yunxi)", SIDv019: 0, SIDv10: 51},
+	{ID: "kokoro_intl:zm_yunyang", Label: "Yunyang — Mandarin Male (kokoro_intl:zm_yunyang)", SIDv019: 0, SIDv10: 52},
+}
+
 // AllModelFamilies lists all supported neural TTS model packs in display order.
 var AllModelFamilies = []ModelFamilySpec{
 	{
 		ID:             ModelKokoro,
-		Name:           "Kokoro-82M Neural (11 Voices — Highest Naturalness)",
+		Name:           "Kokoro-82M Neural (28 Voices — Highest Naturalness)",
 		ShortName:      "Kokoro-82M",
 		SubDir:         "kokoro-en",
-		DownloadSizeMB: 99,
+		DownloadSizeMB: 126,
 		IdleRAMMB:      211,
 		ActiveRAMMB:    285,
 		GPUIdleRAMMB:   780,
@@ -107,6 +137,22 @@ var AllModelFamilies = []ModelFamilySpec{
 		SupportsGPU:    true,
 		Summary:        "Best overall prosody (4.45 UTMOS). Fast on DirectML GPU (~0.3s start, ~950 MB RAM); slower on CPU INT8 (~2.7s start, ~285 MB RAM).",
 		Voices:         KokoroVoiceCatalog,
+	},
+	{
+		ID:             ModelKokoroIntl,
+		Name:           "Kokoro-82M International (25 Voices — ES/FR/HI/IT/JA/PT/ZH)",
+		ShortName:      "Kokoro Intl",
+		SubDir:         "kokoro-en",
+		DownloadSizeMB: 0,
+		IdleRAMMB:      211,
+		ActiveRAMMB:    285,
+		GPUIdleRAMMB:   780,
+		GPUActiveRAMMB: 980,
+		CPURTF:         0.74,
+		GPURTF:         0.09,
+		SupportsGPU:    true,
+		Summary:        "Adds 25 multilingual international voices (Spanish, French, Hindi, Italian, Japanese, Portuguese, Mandarin). Shares Kokoro-82M engine with zero extra RAM or download overhead.",
+		Voices:         KokoroIntlVoiceCatalog,
 	},
 	{
 		ID:             ModelSupertonic,
@@ -194,28 +240,47 @@ func AllVoiceOptions() []VoiceOption {
 	return all
 }
 
-// VoiceFamily returns the canonical model family ID ("kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper")
+// IsKokoroIntlVoice reports whether voiceID belongs to the Kokoro international voice catalog.
+func IsKokoroIntlVoice(voiceID string) bool {
+	id := VoiceIDFromLabel(voiceID)
+	if strings.HasPrefix(id, ModelKokoroIntl+":") {
+		return true
+	}
+	trimmed := strings.TrimPrefix(id, "kokoro:")
+	for _, v := range KokoroIntlVoiceCatalog {
+		if v.ID == id || v.ID == ModelKokoroIntl+":"+trimmed || strings.TrimPrefix(v.ID, ModelKokoroIntl+":") == trimmed {
+			return true
+		}
+	}
+	return false
+}
+
+// VoiceFamily returns the canonical model family ID ("kokoro", "kokoro_intl", "supertonic", "kitten_mini", "kitten_nano", "piper")
 // that owns the given voice ID or display label.
 func VoiceFamily(voiceID string) string {
 	id := VoiceIDFromLabel(voiceID)
 	if colonIdx := strings.IndexByte(id, ':'); colonIdx > 0 {
 		prefix := id[:colonIdx]
 		switch prefix {
-		case ModelKokoro, ModelSupertonic, ModelKittenMini, ModelKittenNano, ModelPiper:
+		case ModelKokoro, ModelKokoroIntl, ModelSupertonic, ModelKittenMini, ModelKittenNano, ModelPiper:
 			return prefix
 		case "kitten":
 			return ModelKittenMini
 		}
 	}
+	if IsKokoroIntlVoice(id) {
+		return ModelKokoroIntl
+	}
 	return ModelKokoro
 }
 
-// ResolveFamilySpeakerID resolves a voice ID (e.g. "supertonic:m2", "piper:spk_10", "af_bella")
+// ResolveFamilySpeakerID resolves a voice ID (e.g. "supertonic:m2", "piper:spk_10", "af_bella", "kokoro_intl:ef_dora")
 // to its integer speaker index within its model family.
 func ResolveFamilySpeakerID(family string, voiceID string, numSpeakers int) int {
 	id := VoiceIDFromLabel(voiceID)
-	if family == "" || family == ModelKokoro {
+	if family == "" || family == ModelKokoro || family == ModelKokoroIntl {
 		trimmed := strings.TrimPrefix(id, "kokoro:")
+		trimmed = strings.TrimPrefix(trimmed, "kokoro_intl:")
 		return ResolveSpeakerIDForModel(trimmed, numSpeakers)
 	}
 
@@ -444,16 +509,26 @@ func EstimateHardwareImpact(enabledModels []string, useGPU bool, numThreads int)
 	var ramParts, cpuParts, gpuParts, latParts []string
 	ramParts = append(ramParts, fmt.Sprintf("Base %d MB", baseRAMMB))
 
+	kokoroCounted := false
 	for _, id := range enabledModels {
 		spec, ok := ModelSpecByID(id)
 		if !ok {
 			continue
 		}
-		if spec.ID == ModelKokoro {
+		isKokoroFam := spec.ID == ModelKokoro || spec.ID == ModelKokoroIntl
+		if isKokoroFam {
 			hasKokoro = true
 		}
 		if spec.ID == ModelSupertonic || spec.ID == ModelKittenNano {
 			hasFastCPUModel = true
+		}
+
+		if isKokoroFam && kokoroCounted {
+			ramParts = append(ramParts, spec.ShortName+" +0 MB (shared)")
+			continue
+		}
+		if isKokoroFam {
+			kokoroCounted = true
 		}
 
 		var modelIdle, modelActive int
@@ -467,7 +542,7 @@ func EstimateHardwareImpact(enabledModels []string, useGPU bool, numThreads int)
 		} else {
 			modelIdle = max(spec.IdleRAMMB-baseRAMMB, 35)
 			modelActive = max(spec.ActiveRAMMB-baseRAMMB, 50)
-			if numThreads > 4 && spec.ID == ModelKokoro {
+			if numThreads > 4 && (spec.ID == ModelKokoro || spec.ID == ModelKokoroIntl) {
 				modelActive += (numThreads - 4) * 28
 			}
 			rtf = spec.CPURTF

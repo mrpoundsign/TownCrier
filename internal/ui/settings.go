@@ -532,6 +532,7 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		NewModelColorBadge("base", "Base App", false),
 		NewModelColorBadge(tts.ModelSupertonic, "Supertonic INT8", false),
 		NewModelColorBadge(tts.ModelKokoro, "Kokoro-82M", false),
+		NewModelColorBadge(tts.ModelKokoroIntl, "Kokoro Intl", false),
 		NewModelColorBadge(tts.ModelKittenMini, "Kitten Mini", false),
 		NewModelColorBadge(tts.ModelKittenNano, "Kitten Nano", false),
 		NewModelColorBadge(tts.ModelPiper, "Piper LibriTTS", false),
@@ -635,7 +636,9 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	formatPackCheckLabel := func(spec tts.ModelFamilySpec) string {
 		cfg := v.currentConfig()
 		status := fmt.Sprintf("Downloads ~%d MB on enable", spec.DownloadSizeMB)
-		if tts.IsModelFamilyInstalled(v.modelDir, spec.ID, cfg.TTS.UseGPU) {
+		if spec.ID == tts.ModelKokoroIntl && tts.IsModelFamilyInstalled(v.modelDir, tts.ModelKokoro, cfg.TTS.UseGPU) {
+			status = "Installed (Shares Kokoro)"
+		} else if tts.IsModelFamilyInstalled(v.modelDir, spec.ID, cfg.TTS.UseGPU) {
 			status = "Installed"
 		}
 		return fmt.Sprintf("%s [%s]", spec.Name, status)
@@ -681,7 +684,7 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		}
 
 		gpuCheck.SetChecked(cfg.TTS.UseGPU)
-		if enabledSet[tts.ModelKokoro] {
+		if enabledSet[tts.ModelKokoro] || enabledSet[tts.ModelKokoroIntl] {
 			gpuCheck.Enable()
 		} else {
 			gpuCheck.Disable()
@@ -751,7 +754,7 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 				return
 			}
 
-			if slices.Contains(selectedModels, tts.ModelKokoro) {
+			if slices.Contains(selectedModels, tts.ModelKokoro) || slices.Contains(selectedModels, tts.ModelKokoroIntl) {
 				gpuCheck.Enable()
 			} else {
 				gpuCheck.Disable()

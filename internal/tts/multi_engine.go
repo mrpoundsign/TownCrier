@@ -51,6 +51,17 @@ func NewMultiEngine(
 		if _, exists := m.engines[fam]; exists {
 			continue
 		}
+		if fam == ModelKokoro || fam == ModelKokoroIntl {
+			otherFam := ModelKokoro
+			if fam == ModelKokoro {
+				otherFam = ModelKokoroIntl
+			}
+			if existing, ok := m.engines[otherFam]; ok {
+				m.engines[fam] = existing
+				m.order = append(m.order, fam)
+				continue
+			}
+		}
 		dir := ModelFamilyDir(baseKokoroDir, fam)
 		eng, err := NewFamilySherpaEngine(fam, dir, numThreads, useGPU)
 		if err != nil {
@@ -199,7 +210,11 @@ func (m *MultiEngine) Voices() []string {
 	defer m.mu.RUnlock()
 	var all []string
 	for _, fam := range m.order {
-		if eng, ok := m.engines[fam]; ok {
+		if spec, ok := ModelSpecByID(fam); ok && len(spec.Voices) > 0 {
+			for _, v := range spec.Voices {
+				all = append(all, v.ID)
+			}
+		} else if eng, ok := m.engines[fam]; ok {
 			all = append(all, eng.Voices()...)
 		}
 	}
@@ -210,11 +225,17 @@ func (m *MultiEngine) Voices() []string {
 func (m *MultiEngine) NumSpeakers() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	seen := make(map[*SherpaEngine]struct{}, len(m.engines))
 	total := 0
-	for _, fam := range m.order {
-		if eng, ok := m.engines[fam]; ok {
-			total += eng.NumSpeakers()
+	for _, eng := range m.engines {
+		if eng == nil {
+			continue
 		}
+		if _, ok := seen[eng]; ok {
+			continue
+		}
+		seen[eng] = struct{}{}
+		total += eng.NumSpeakers()
 	}
 	return total
 }
@@ -229,9 +250,13 @@ func (m *MultiEngine) Close() error {
 	}
 	m.closed = true
 
+	seen := make(map[*SherpaEngine]struct{}, len(m.engines))
 	for fam, eng := range m.engines {
 		if eng != nil {
-			_ = eng.Close()
+			if _, ok := seen[eng]; !ok {
+				seen[eng] = struct{}{}
+				_ = eng.Close()
+			}
 		}
 		delete(m.engines, fam)
 	}

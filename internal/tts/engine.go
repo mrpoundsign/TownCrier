@@ -25,14 +25,32 @@ type VoiceOption struct {
 // KokoroVoiceCatalog lists the built-in English Kokoro voices with human-readable labels.
 var KokoroVoiceCatalog = []VoiceOption{
 	{ID: "af", Label: "Default Blend — US Female (af)", SIDv019: 0, SIDv10: 3},
+	{ID: "af_heart", Label: "Heart — US Female (af_heart)", SIDv019: 0, SIDv10: 3},
+	{ID: "af_alloy", Label: "Alloy — US Female (af_alloy)", SIDv019: 0, SIDv10: 0},
+	{ID: "af_aoede", Label: "Aoede — US Female (af_aoede)", SIDv019: 1, SIDv10: 1},
 	{ID: "af_bella", Label: "Bella — US Female (af_bella)", SIDv019: 1, SIDv10: 2},
+	{ID: "af_jessica", Label: "Jessica — US Female (af_jessica)", SIDv019: 2, SIDv10: 4},
+	{ID: "af_kore", Label: "Kore — US Female (af_kore)", SIDv019: 2, SIDv10: 5},
 	{ID: "af_nicole", Label: "Nicole — US Female (af_nicole)", SIDv019: 2, SIDv10: 6},
+	{ID: "af_nova", Label: "Nova — US Female (af_nova)", SIDv019: 3, SIDv10: 7},
+	{ID: "af_river", Label: "River — US Female (af_river)", SIDv019: 3, SIDv10: 8},
 	{ID: "af_sarah", Label: "Sarah — US Female (af_sarah)", SIDv019: 3, SIDv10: 9},
 	{ID: "af_sky", Label: "Sky — US Female (af_sky)", SIDv019: 4, SIDv10: 10},
 	{ID: "am_adam", Label: "Adam — US Male (am_adam)", SIDv019: 5, SIDv10: 11},
+	{ID: "am_echo", Label: "Echo — US Male (am_echo)", SIDv019: 5, SIDv10: 12},
+	{ID: "am_eric", Label: "Eric — US Male (am_eric)", SIDv019: 5, SIDv10: 13},
+	{ID: "am_fenrir", Label: "Fenrir — US Male (am_fenrir)", SIDv019: 6, SIDv10: 14},
+	{ID: "am_liam", Label: "Liam — US Male (am_liam)", SIDv019: 6, SIDv10: 15},
 	{ID: "am_michael", Label: "Michael — US Male (am_michael)", SIDv019: 6, SIDv10: 16},
+	{ID: "am_onyx", Label: "Onyx — US Male (am_onyx)", SIDv019: 6, SIDv10: 17},
+	{ID: "am_puck", Label: "Puck — US Male (am_puck)", SIDv019: 6, SIDv10: 18},
+	{ID: "am_santa", Label: "Santa — US Male (am_santa)", SIDv019: 5, SIDv10: 19},
+	{ID: "bf_alice", Label: "Alice — UK Female (bf_alice)", SIDv019: 7, SIDv10: 20},
 	{ID: "bf_emma", Label: "Emma — UK Female (bf_emma)", SIDv019: 7, SIDv10: 21},
 	{ID: "bf_isabella", Label: "Isabella — UK Female (bf_isabella)", SIDv019: 8, SIDv10: 22},
+	{ID: "bf_lily", Label: "Lily — UK Female (bf_lily)", SIDv019: 8, SIDv10: 23},
+	{ID: "bm_daniel", Label: "Daniel — UK Male (bm_daniel)", SIDv019: 9, SIDv10: 24},
+	{ID: "bm_fable", Label: "Fable — UK Male (bm_fable)", SIDv019: 9, SIDv10: 25},
 	{ID: "bm_george", Label: "George — UK Male (bm_george)", SIDv019: 9, SIDv10: 26},
 	{ID: "bm_lewis", Label: "Lewis — UK Male (bm_lewis)", SIDv019: 10, SIDv10: 27},
 }
@@ -83,19 +101,62 @@ var KnownKokoroV10Voices = map[string]int{
 	"bm_fable":    25,
 	"bm_george":   26,
 	"bm_lewis":    27,
+	"ef_dora":     28,
+	"em_alex":     29,
+	"em_santa":    30,
+	"ff_siwis":    31,
+	"hf_alpha":    32,
+	"hf_beta":     33,
+	"hm_omega":    34,
+	"hm_psi":      35,
+	"if_sara":     36,
+	"im_nicola":   37,
+	"jf_alpha":    38,
+	"jf_gongitsune": 39,
+	"jf_nezumi":   40,
+	"jf_tebukuro": 41,
+	"jm_kumo":     42,
+	"pf_dora":     43,
+	"pm_alex":     44,
+	"pm_santa":    45,
+	"zf_xiaobei":  46,
+	"zf_xiaoni":   47,
+	"zf_xiaoxiao": 48,
+	"zf_xiaoyi":   49,
+	"zm_yunjian":  50,
+	"zm_yunxi":    51,
+	"zm_yunyang":  52,
 }
 
 // KokoroVoiceNames lists all predefined voice IDs.
 var KokoroVoiceNames = []string{
 	"af",
+	"af_heart",
+	"af_alloy",
+	"af_aoede",
 	"af_bella",
+	"af_jessica",
+	"af_kore",
 	"af_nicole",
+	"af_nova",
+	"af_river",
 	"af_sarah",
 	"af_sky",
 	"am_adam",
+	"am_echo",
+	"am_eric",
+	"am_fenrir",
+	"am_liam",
 	"am_michael",
+	"am_onyx",
+	"am_puck",
+	"am_santa",
+	"bf_alice",
 	"bf_emma",
 	"bf_isabella",
+	"bf_lily",
+	"bm_daniel",
+	"bm_fable",
 	"bm_george",
 	"bm_lewis",
 }
@@ -172,9 +233,13 @@ func ResolveSpeakerID(voiceID string) int {
 // ResolveSpeakerIDForModel resolves a voice ID or display label to the speaker index matching the loaded model's speaker count.
 func ResolveSpeakerIDForModel(voiceID string, numSpeakers int) int {
 	v := VoiceIDFromLabel(voiceID)
-	if numSpeakers >= 53 {
-		if id, ok := KnownKokoroV10Voices[v]; ok && id < numSpeakers {
-			return id
+	v = strings.TrimPrefix(v, "kokoro:")
+	v = strings.TrimPrefix(v, "kokoro_intl:")
+	if numSpeakers >= 53 || numSpeakers <= 0 {
+		if id, ok := KnownKokoroV10Voices[v]; ok {
+			if numSpeakers <= 0 || id < numSpeakers {
+				return id
+			}
 		}
 	}
 	if id, ok := KnownKokoroVoices[v]; ok {

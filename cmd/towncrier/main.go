@@ -167,7 +167,7 @@ func run() error {
 			enabledModels := cfg.TTS.EffectiveEnabledModels()
 
 			for _, fam := range enabledModels {
-				if fam == tts.ModelKokoro {
+				if fam == tts.ModelKokoro || fam == tts.ModelKokoroIntl {
 					if !tts.IsKokoroInstalledForMode(modelDir, cfg.TTS.UseGPU) {
 						log.Printf("Kokoro models missing in %s (useGPU=%v); starting download...", modelDir, cfg.TTS.UseGPU)
 						tracker.SetStatus("Downloading Kokoro-82M neural TTS models...")

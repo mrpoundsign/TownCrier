@@ -21,6 +21,8 @@ func ModelFamilyColor(familyID string) color.NRGBA {
 		return color.NRGBA{R: 0x02, G: 0x84, B: 0xC7, A: 0xFF} // Sky Blue 600 (Supertonic INT8)
 	case tts.ModelKokoro:
 		return color.NRGBA{R: 0x10, G: 0xB9, B: 0x81, A: 0xFF} // Emerald 500 (Kokoro-82M)
+	case tts.ModelKokoroIntl:
+		return color.NRGBA{R: 0x14, G: 0xB8, B: 0xA6, A: 0xFF} // Teal 500 (Kokoro Intl)
 	case tts.ModelKittenMini:
 		return color.NRGBA{R: 0xD9, G: 0x77, B: 0x06, A: 0xFF} // Amber 600 (Kitten Mini)
 	case tts.ModelKittenNano:
