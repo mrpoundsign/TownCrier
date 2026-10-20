@@ -58,16 +58,45 @@ func TestNormalizeTarget(t *testing.T) {
 }
 
 func TestExtractBootstrapTokens(t *testing.T) {
-	sampleHTML := `<html><script>var ytcfg = {"INNERTUBE_API_KEY":"AIzaSyTestKey123"}; var ytInitialData = {"contents":{"liveChatRenderer":{"continuations":[{"timedContinuationData":{"continuation":"0ofMyAModTestContToken","timeoutMs":2000}}]}}};</script></html>`
-	key, cont, ok := ExtractBootstrapTokens(sampleHTML)
+	// 1. Valid active live stream with nested structures in videoDetails
+	liveHTML := `<html><script>var ytcfg = {"INNERTUBE_API_KEY":"AIzaSyTestKey123"}; var ytInitialPlayerResponse = {"videoDetails":{"videoId":"abc123xyz","title":"My Live Stream","thumbnail":{"thumbnails":[{"url":"https://example.com/thumb.jpg"}]},"isLive":true,"isLiveContent":true}}; var ytInitialData = {"contents":{"liveChatRenderer":{"continuations":[{"timedContinuationData":{"continuation":"0ofMyAModTestContToken","timeoutMs":2000}}]}}};</script></html>`
+	key, cont, ok := ExtractBootstrapTokens(liveHTML)
 	if !ok {
-		t.Fatal("expected ExtractBootstrapTokens to succeed")
+		t.Fatal("expected ExtractBootstrapTokens to succeed for active live stream")
 	}
 	if key != "AIzaSyTestKey123" {
 		t.Errorf("got key %q, want AIzaSyTestKey123", key)
 	}
 	if cont != "0ofMyAModTestContToken" {
 		t.Errorf("got continuation %q, want 0ofMyAModTestContToken", cont)
+	}
+
+	// 2. Scheduled stream / waiting room (isLiveContent: true, but isLive: false)
+	upcomingHTML := `<html><script>var ytcfg = {"INNERTUBE_API_KEY":"AIzaSyTestKey123"}; var ytInitialPlayerResponse = {"videoDetails":{"videoId":"abc123xyz","isLive":false,"isLiveContent":true}}; var ytInitialData = {"contents":{"liveChatRenderer":{"continuations":[{"timedContinuationData":{"continuation":"waitingRoomCont","timeoutMs":2000}}]}}};</script></html>`
+	_, _, ok = ExtractBootstrapTokens(upcomingHTML)
+	if ok {
+		t.Error("expected ExtractBootstrapTokens to fail for upcoming/scheduled waiting room")
+	}
+
+	// 3. Scheduled stream with isLive omitted
+	omittedLiveHTML := `<html><script>var ytcfg = {"INNERTUBE_API_KEY":"AIzaSyTestKey123"}; var ytInitialPlayerResponse = {"videoDetails":{"videoId":"abc123xyz","isLiveContent":true}}; var ytInitialData = {"contents":{"liveChatRenderer":{"continuations":[{"timedContinuationData":{"continuation":"waitingRoomCont","timeoutMs":2000}}]}}};</script></html>`
+	_, _, ok = ExtractBootstrapTokens(omittedLiveHTML)
+	if ok {
+		t.Error("expected ExtractBootstrapTokens to fail when isLive is omitted")
+	}
+
+	// 4. Ended stream / VOD replay with reloadContinuationData but isLive: false
+	endedHTML := `<html><script>var ytcfg = {"INNERTUBE_API_KEY":"AIzaSyTestKey123"}; var ytInitialPlayerResponse = {"videoDetails":{"videoId":"abc123xyz","isLive":false}}; var ytInitialData = {"contents":{"liveChatRenderer":{"continuations":[{"reloadContinuationData":{"continuation":"0ofMyAReplayCont"}}]}}};</script></html>`
+	_, _, ok = ExtractBootstrapTokens(endedHTML)
+	if ok {
+		t.Error("expected ExtractBootstrapTokens to fail for ended stream / VOD chat replay")
+	}
+
+	// 5. Offline channel page (no videoDetails at all)
+	offlineChannelHTML := `<html><script>var ytcfg = {"INNERTUBE_API_KEY":"AIzaSyTestKey123"}; var ytInitialData = {"browseEndpoint":{"browseId":"UC123"}};</script></html>`
+	_, _, ok = ExtractBootstrapTokens(offlineChannelHTML)
+	if ok {
+		t.Error("expected ExtractBootstrapTokens to fail for offline channel page without videoDetails")
 	}
 }
 
@@ -261,7 +290,7 @@ func TestConnectorLifecycleAndStream(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/testchannel/live", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprint(w, `<html><script>var ytcfg = {"INNERTUBE_API_KEY":"testKey"}; var ytInitialData = {"liveChatRenderer":{"continuations":[{"timedContinuationData":{"continuation":"cont1","timeoutMs":1000}}]}};</script></html>`)
+		_, _ = fmt.Fprint(w, `<html><script>var ytcfg = {"INNERTUBE_API_KEY":"testKey"}; var ytInitialPlayerResponse = {"videoDetails":{"videoId":"testVid","isLive":true}}; var ytInitialData = {"liveChatRenderer":{"continuations":[{"timedContinuationData":{"continuation":"cont1","timeoutMs":1000}}]}};</script></html>`)
 	})
 	mux.HandleFunc("/youtubei/v1/live_chat/get_live_chat", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, `{
