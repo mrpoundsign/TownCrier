@@ -76,6 +76,7 @@ CREATE INDEX IF NOT EXISTS idx_event_logs_created_at ON event_logs(created_at DE
 CREATE INDEX IF NOT EXISTS idx_event_logs_paid_time ON event_logs(is_paid_event, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_logs_session_id ON event_logs(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_logs_kind_time ON event_logs(kind, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_logs_platform_time ON event_logs(LOWER(TRIM(platform)), created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_logs_plat_chan_time ON event_logs(platform, channel, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_logs_user_id_time ON event_logs(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_logs_user_name_time ON event_logs(user_name, created_at DESC);
@@ -1021,8 +1022,15 @@ func buildWhereClause(filter QueryFilter) (string, []any) {
 	chatCutoff, eventCutoff := filter.Retention.Cutoffs()
 	switch {
 	case !chatCutoff.IsZero() && !eventCutoff.IsZero():
-		whereClauses = append(whereClauses, "((is_paid_event = 0 AND created_at >= ?) OR (is_paid_event = 1 AND created_at >= ?))")
-		args = append(args, chatCutoff.UnixMilli(), eventCutoff.UnixMilli())
+		if filter.Retention.ChatRetentionDays == filter.Retention.EventRetentionDays {
+			whereClauses = append(whereClauses, "created_at >= ?")
+			args = append(args, chatCutoff.UnixMilli())
+		} else {
+			whereClauses = append(whereClauses, "created_at >= ?")
+			args = append(args, min(chatCutoff.UnixMilli(), eventCutoff.UnixMilli()))
+			whereClauses = append(whereClauses, "((is_paid_event = 0 AND created_at >= ?) OR (is_paid_event = 1 AND created_at >= ?))")
+			args = append(args, chatCutoff.UnixMilli(), eventCutoff.UnixMilli())
+		}
 	case !chatCutoff.IsZero():
 		whereClauses = append(whereClauses, "(is_paid_event = 1 OR created_at >= ?)")
 		args = append(args, chatCutoff.UnixMilli())
@@ -1048,8 +1056,8 @@ func buildWhereClause(filter QueryFilter) (string, []any) {
 	}
 
 	// 4. Platform & Channel filters
-	if plat := strings.ToLower(strings.TrimSpace(filter.Platform)); plat != "" && plat != "all" {
-		whereClauses = append(whereClauses, "platform = ?")
+	if plat := strings.ToLower(strings.TrimSpace(filter.Platform)); plat != "" && plat != "all" && plat != "all platforms" {
+		whereClauses = append(whereClauses, "LOWER(TRIM(platform)) = ?")
 		args = append(args, plat)
 	}
 	if ch := strings.TrimSpace(filter.Channel); ch != "" && !strings.EqualFold(ch, "all") {
@@ -1480,8 +1488,8 @@ func (s *SQLiteBackend) DistinctChannels(ctx context.Context, platform string) (
 	plat := strings.ToLower(strings.TrimSpace(platform))
 	var rows *sql.Rows
 	var err error
-	if plat != "" && plat != "all" {
-		rows, err = s.db.QueryContext(ctx, `SELECT DISTINCT channel FROM event_logs WHERE channel != '' AND platform = ? ORDER BY channel ASC;`, plat)
+	if plat != "" && plat != "all" && plat != "all platforms" {
+		rows, err = s.db.QueryContext(ctx, `SELECT DISTINCT channel FROM event_logs WHERE channel != '' AND LOWER(TRIM(platform)) = ? ORDER BY channel ASC;`, plat)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `SELECT DISTINCT channel FROM event_logs WHERE channel != '' ORDER BY channel ASC;`)
 	}

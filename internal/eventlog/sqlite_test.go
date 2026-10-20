@@ -228,6 +228,35 @@ func TestSQLiteBackendAndManagerLifecycle(t *testing.T) {
 	if len(channels) != 2 {
 		t.Errorf("expected 2 distinct channels, got %v", channels)
 	}
+
+	// Query by Platform (case/whitespace insensitive) and equal Chat/Event RetentionDays
+	for _, platInput := range []string{"twitch", "Twitch", " TWITCH "} {
+		platRes, err := mgr.Query(ctx, QueryFilter{
+			Platform: platInput,
+			Retention: RetentionPolicy{
+				ChatRetentionDays:  90,
+				EventRetentionDays: 90,
+				Now:                baseTime.Add(time.Hour),
+			},
+		})
+		if err != nil {
+			t.Fatalf("Query by platform %q failed: %v", platInput, err)
+		}
+		if platRes.TotalCount != 2 {
+			t.Errorf("expected 2 entries for platform %q, got %d", platInput, platRes.TotalCount)
+		}
+	}
+
+	allPlatRes, err := mgr.Query(ctx, QueryFilter{
+		Platform:  "All Platforms",
+		Retention: RetentionPolicy{Now: baseTime.Add(time.Hour)},
+	})
+	if err != nil {
+		t.Fatalf("Query by platform 'All Platforms' failed: %v", err)
+	}
+	if allPlatRes.TotalCount != 3 {
+		t.Errorf("expected 3 entries for 'All Platforms', got %d", allPlatRes.TotalCount)
+	}
 }
 
 func TestDynamicCreatedAtRetentionIncreaseAndPrune(t *testing.T) {
