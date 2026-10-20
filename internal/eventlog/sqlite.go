@@ -1039,10 +1039,26 @@ func buildWhereClause(filter QueryFilter) (string, []any) {
 		args = append(args, eventCutoff.UnixMilli())
 	}
 
-	// 2. Stream session filter
+	// 2. Stream session filter (supports single SessionID or multiple SessionIDs)
+	var sessionIDs []int64
 	if filter.SessionID > 0 {
+		sessionIDs = append(sessionIDs, filter.SessionID)
+	}
+	for _, sid := range filter.SessionIDs {
+		if sid > 0 && !slices.Contains(sessionIDs, sid) {
+			sessionIDs = append(sessionIDs, sid)
+		}
+	}
+	if len(sessionIDs) == 1 {
 		whereClauses = append(whereClauses, "session_id = ?")
-		args = append(args, filter.SessionID)
+		args = append(args, sessionIDs[0])
+	} else if len(sessionIDs) > 1 {
+		placeholders := make([]string, len(sessionIDs))
+		for i, sid := range sessionIDs {
+			placeholders[i] = "?"
+			args = append(args, sid)
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("session_id IN (%s)", strings.Join(placeholders, ",")))
 	}
 
 	// 3. Date range filter

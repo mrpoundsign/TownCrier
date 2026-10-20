@@ -181,6 +181,7 @@ func (p RetentionPolicy) Cutoffs() (chatCutoff time.Time, eventCutoff time.Time)
 // QueryFilter specifies search, date-range, session, attribute, and pagination parameters.
 type QueryFilter struct {
 	SessionID     int64             `json:"session_id,omitempty"`
+	SessionIDs    []int64           `json:"session_ids,omitempty"`
 	From          *time.Time        `json:"from,omitempty"`
 	To            *time.Time        `json:"to,omitempty"`
 	Platform      string            `json:"platform,omitempty"`

@@ -160,12 +160,16 @@ var _ fyne.Theme = (*ObsidianTheme)(nil)
 
 var (
 	colorObsidianSlate = color.NRGBA{R: 0x0F, G: 0x17, B: 0x2A, A: 0xFF} // #0F172A (Window Background)
-	colorSlateSurface  = color.NRGBA{R: 0x1E, G: 0x29, B: 0x3B, A: 0xFF} // #1E293B (Card & Input Background)
+	colorSlateSurface  = color.NRGBA{R: 0x1E, G: 0x29, B: 0x3B, A: 0xFF} // #1E293B (Card & Panel Surface)
+	colorInputWell     = color.NRGBA{R: 0x0B, G: 0x11, B: 0x20, A: 0xFF} // #0B1120 (Recessed Input Field Well)
+	colorButtonSurface = color.NRGBA{R: 0x28, G: 0x35, B: 0x48, A: 0xFF} // #283548 (Elevated Button & Select Surface)
+	colorHoverSurface  = color.NRGBA{R: 0x33, G: 0x41, B: 0x55, A: 0xFF} // #334155 (Control Hover Highlight)
 	colorSlateBorder   = color.NRGBA{R: 0x33, G: 0x41, B: 0x55, A: 0xFF} // #334155 (Divider & Border)
+	colorInputBorder   = color.NRGBA{R: 0x47, G: 0x55, B: 0x69, A: 0xFF} // #475569 (Crisp Input Outline)
 	colorSkyBlue       = color.NRGBA{R: 0x38, G: 0xBD, B: 0xF8, A: 0xFF} // #38BDF8 (Primary Accent)
-	colorSkyBlueDim    = color.NRGBA{R: 0x02, G: 0x84, B: 0xC7, A: 0xFF} // #0284C7 (Active Tab / Hover)
+	colorSkyBlueDim    = color.NRGBA{R: 0x02, G: 0x84, B: 0xC7, A: 0xFF} // #0284C7 (Active Tab / Selection)
 	colorChromeWhite   = color.NRGBA{R: 0xF8, G: 0xFA, B: 0xFC, A: 0xFF} // #F8FAFC (Headings & Primary Text)
-	colorSlateMuted    = color.NRGBA{R: 0x94, G: 0xA3, B: 0xB8, A: 0xFF} // #94A3B8 (Secondary Text)
+	colorSlateMuted    = color.NRGBA{R: 0x94, G: 0xA3, B: 0xB8, A: 0xFF} // #94A3B8 (Secondary / Field Label Text)
 	colorDangerRed     = color.NRGBA{R: 0xEF, G: 0x44, B: 0x44, A: 0xFF} // #EF4444 (Panic / Error)
 	colorSuccessGreen  = color.NRGBA{R: 0x22, G: 0xC5, B: 0x5E, A: 0xFF} // #22C55E (Connected / Success)
 	colorWarningAmber  = color.NRGBA{R: 0xF5, G: 0x9E, B: 0x0B, A: 0xFF} // #F59E0B (Warning / Fallback)
@@ -181,7 +185,9 @@ func (t *ObsidianTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVarian
 	case theme.ColorNameBackground:
 		return colorObsidianSlate
 	case theme.ColorNameInputBackground:
-		return colorSlateSurface
+		return colorInputWell
+	case theme.ColorNameInputBorder:
+		return colorInputBorder
 	case theme.ColorNameForeground:
 		return colorChromeWhite
 	case theme.ColorNamePrimary:
@@ -191,6 +197,10 @@ func (t *ObsidianTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVarian
 	case theme.ColorNameSelection:
 		return colorSkyBlueDim
 	case theme.ColorNameButton:
+		return colorButtonSurface
+	case theme.ColorNameHover:
+		return colorHoverSurface
+	case theme.ColorNameHeaderBackground, theme.ColorNameMenuBackground, theme.ColorNameOverlayBackground:
 		return colorSlateSurface
 	case theme.ColorNameDisabled:
 		return colorDisabledSlate
