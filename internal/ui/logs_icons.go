@@ -74,6 +74,12 @@ var (
 			`<polygon points="12,4 14.5,9.2 20,10 16,14 17,19.5 12,16.8 7,19.5 8,14 4,10 9.5,9.2" fill="#FDE047"/>`+
 			`</svg>`))
 
+	resRoleFollower = fyne.NewStaticResource("role_follower.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="2" y="2" width="20" height="20" rx="4" fill="#0EA5E9"/>`+
+			`<path d="M12 18.5l-1.1-1C6.8 13.8 4.5 11.7 4.5 9.1 4.5 7 6.2 5.5 8.3 5.5c1.2 0 2.4.6 3.7 1.8 1.3-1.2 2.5-1.8 3.7-1.8 2.1 0 3.8 1.5 3.8 3.6 0 2.6-2.3 4.7-6.4 8.4l-1.1 1z" fill="#FFFFFF"/>`+
+			`</svg>`))
+
 	resRolePaidEvent = fyne.NewStaticResource("role_paid.svg", []byte(
 		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
 			`<rect x="2" y="2" width="20" height="20" rx="4" fill="#F59E0B"/>`+
@@ -232,6 +238,11 @@ func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 			if !seen["subscriber"] {
 				seen["subscriber"] = true
 				icons = append(icons, v.newHoverIcon(resRoleSubscriber, fyne.NewSize(16, 16), "Tag: Subscriber / Member", nil))
+			}
+		case "follower":
+			if !seen["follower"] {
+				seen["follower"] = true
+				icons = append(icons, v.newHoverIcon(resRoleFollower, fyne.NewSize(16, 16), "Tag: Follower", nil))
 			}
 		}
 	}

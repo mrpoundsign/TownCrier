@@ -250,8 +250,16 @@ func extractKickRoles(sender map[string]any) []string {
 				add("og")
 			case "subscriber", "sub_gifter":
 				add("subscriber")
+			case "follower":
+				add("follower")
 			}
 		}
+	}
+
+	if isFollowing, ok := sender["is_following"].(bool); ok && isFollowing {
+		add("follower")
+	} else if asString(sender["following_since"]) != "" || asString(sender["followed_at"]) != "" {
+		add("follower")
 	}
 
 	return roles

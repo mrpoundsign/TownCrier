@@ -296,3 +296,78 @@ func TestTwitchCheckChannelLiveHelixAndGQL(t *testing.T) {
 	}
 }
 
+func TestCheckUserFollowingAndTTLCache(t *testing.T) {
+	var apiHits int
+	var aliceFollowing = true
+	var mu sync.Mutex
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/validate", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"user_id":"1001","login":"mrpoundsign"}`))
+	})
+	mux.HandleFunc("/helix/channels/followers", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		userID := r.URL.Query().Get("user_id")
+		mu.Lock()
+		apiHits++
+		fol := aliceFollowing
+		mu.Unlock()
+		if userID == "2001" && fol {
+			_, _ = w.Write([]byte(`{
+				"data":[{"user_id":"2001","user_login":"alice","user_name":"Alice","followed_at":"2026-10-18T12:00:00Z"}],
+				"pagination":{}
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[],"pagination":{}}`))
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	memStore := secrets.NewMemoryStore()
+	oauthMgr := NewOAuthManager("test-client-id", memStore)
+	_ = oauthMgr.SaveTokens(&TokenResponse{
+		AccessToken:  "valid-access-token",
+		RefreshToken: "valid-refresh-token",
+		ExpiresIn:    3600,
+	})
+
+	conn := NewConnector(nil, nil, nil)
+	conn.SetOAuthManager(oauthMgr)
+	conn.SetEventSubEndpoints("", srv.URL+"/helix", srv.URL+"/validate", srv.Client())
+	conn.SetFollowerCacheTTL(50 * time.Millisecond)
+
+	conn.mu.Lock()
+	conn.running = true
+	conn.channel = "mrpoundsign"
+	conn.mu.Unlock()
+
+	ctx := context.Background()
+
+	// 1. First check hits Helix API -> true
+	ok, err := conn.CheckUserFollowing(ctx, "2001", "alice")
+	if err != nil || !ok {
+		t.Fatalf("expected alice to be following, got ok=%v err=%v", ok, err)
+	}
+	// 2. Second check within TTL uses cache -> 0 new API hits
+	ok, err = conn.CheckUserFollowing(ctx, "2001", "alice")
+	if err != nil || !ok {
+		t.Fatalf("expected cached alice to be following, got ok=%v err=%v", ok, err)
+	}
+	mu.Lock()
+	if apiHits != 1 {
+		t.Fatalf("expected 1 API hit within TTL, got %d", apiHits)
+	}
+	// 3. Simulate Alice unfollowing and TTL expiring -> re-queries API and returns false
+	aliceFollowing = false
+	mu.Unlock()
+
+	time.Sleep(60 * time.Millisecond)
+	ok, err = conn.CheckUserFollowing(ctx, "2001", "alice")
+	if err != nil || ok {
+		t.Fatalf("expected unfollowed alice after TTL expiry to return false, got ok=%v err=%v", ok, err)
+	}
+}
+

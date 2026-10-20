@@ -252,6 +252,7 @@ func (v *KickTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.Car
 		{"vip", "VIP"},
 		{"og", "OG / Founder"},
 		{"subscriber", "Subscriber"},
+		{"follower", "Follower"},
 	}
 	roleBoxes := container.NewHBox()
 	for _, rd := range roleDefs {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -740,6 +741,65 @@ func (s *Session) RefreshTwitchOAuth() {
 	}
 }
 
+func (s *Session) syncAndEnrichFollowerRole(event *chat.Event) {
+	if event == nil {
+		return
+	}
+	plat := strings.ToLower(strings.TrimSpace(event.Platform))
+	ch := strings.TrimSpace(event.Channel)
+	if plat == "" || ch == "" || (event.UserID == "" && event.UserName == "") {
+		return
+	}
+
+	// 1. Live follow event -> immediately mark user as following in the 30-min TTL cache and tag as follower
+	if event.Kind == chat.EventKindFollow {
+		switch plat {
+		case "twitch":
+			if s.twitchConnector != nil {
+				s.twitchConnector.MarkUserFollowing(event.UserID, event.UserName)
+			}
+		case "kick":
+			if s.kickConnector != nil {
+				s.kickConnector.MarkUserFollowing(ch, event.UserName)
+			}
+		}
+		if !slices.ContainsFunc(event.Roles, func(r string) bool { return strings.EqualFold(r, "follower") }) {
+			event.Roles = append(event.Roles, "follower")
+		}
+		return
+	}
+
+	if plat != "twitch" && plat != "kick" {
+		return
+	}
+	if slices.ContainsFunc(event.Roles, func(r string) bool { return strings.EqualFold(r, "follower") }) {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	isFol := false
+	switch plat {
+	case "twitch":
+		if s.twitchConnector != nil && s.twitchConnector.CanCheckFollowers() {
+			if ok, err := s.twitchConnector.CheckUserFollowing(ctx, event.UserID, event.UserName); err == nil && ok {
+				isFol = true
+			}
+		}
+	case "kick":
+		if s.kickConnector != nil && s.kickConnector.CanCheckFollowers() {
+			if ok, _, err := s.kickConnector.CheckUserFollowing(ctx, ch, event.UserName); err == nil && ok {
+				isFol = true
+			}
+		}
+	}
+
+	if isFol {
+		event.Roles = append(event.Roles, "follower")
+	}
+}
+
 func shiftEmoteSpans(spans []chat.EmoteSpan, deltaRunes int) []chat.EmoteSpan {
 	if len(spans) == 0 {
 		return nil
@@ -928,6 +988,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 			event.Channel = pCfg.AccountName
 		}
 	}
+	s.syncAndEnrichFollowerRole(event)
 	rawText, rawEmotes := formatEventLogRawTextAndEmotes(event)
 
 	log.Printf("[Session] DispatchEvent: user=%q platform=%s channel=%q kind=%s text=%q roles=%v", event.UserName, event.Platform, event.Channel, event.Kind, event.Text, event.Roles)

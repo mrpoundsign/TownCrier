@@ -34,4 +34,11 @@ func TestKickTabViewBuild(t *testing.T) {
 	if !kickView.overridesBox.Visible() {
 		t.Error("expected overridesBox to be visible when Override Global Defaults is checked")
 	}
+
+	folChk, ok := kickView.roleChecks["follower"]
+	if !ok || folChk == nil {
+		t.Fatal("expected 'follower' role checkbox in KickTabView")
+	}
+	kickView.roleGatedCheck.SetChecked(true)
+	folChk.SetChecked(true)
 }
