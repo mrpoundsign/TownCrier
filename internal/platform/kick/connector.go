@@ -30,13 +30,20 @@ const (
 )
 
 const (
-	DefaultPusherWSURL    = "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0-rc2&flash=false"
-	DefaultKickAPIBase    = "https://kick.com"
-	defaultReconnect      = 5 * time.Second
-	defaultPingPeriod     = 50 * time.Second
-	defaultLivePollPeriod = 60 * time.Second
-	defaultUserAgent      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+	DefaultPusherWSURL      = "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0-rc2&flash=false"
+	DefaultKickAPIBase      = "https://kick.com"
+	DefaultFollowerCacheTTL = 30 * time.Minute
+	defaultReconnect        = 5 * time.Second
+	defaultPingPeriod       = 50 * time.Second
+	defaultLivePollPeriod   = 60 * time.Second
+	defaultUserAgent        = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
 )
+
+type followerCacheEntry struct {
+	isFollowing bool
+	followedAt  time.Time
+	checkedAt   time.Time
+}
 
 // ChannelInfo holds the resolved Kick Pusher identifiers and live status for a channel.
 type ChannelInfo struct {
@@ -229,6 +236,7 @@ type Connector struct {
 	reconnectDelay      time.Duration
 	pingPeriod          time.Duration
 	livePollPeriod      time.Duration
+	followerCacheTTL    time.Duration
 	channel             string
 	status              ConnectionStatus
 	running             bool
@@ -240,6 +248,8 @@ type Connector struct {
 	onStatusChange      func(status ConnectionStatus, detail string)
 	onStreamStateChange func(live bool)
 	checkLiveFn         func(ctx context.Context, slug string) (bool, error)
+	checkFollowerFn     func(ctx context.Context, slug, username string) (bool, time.Time, error)
+	followerCache       map[string]followerCacheEntry
 }
 
 // NewConnector creates a new Kick Pusher WebSocket connector.
@@ -249,17 +259,62 @@ func NewConnector(
 	onStatusChange func(status ConnectionStatus, detail string),
 ) *Connector {
 	return &Connector{
-		httpClient:     &http.Client{Timeout: 10 * time.Second},
-		apiBaseURL:     DefaultKickAPIBase,
-		wsURL:          DefaultPusherWSURL,
-		reconnectDelay: defaultReconnect,
-		pingPeriod:     defaultPingPeriod,
-		livePollPeriod: defaultLivePollPeriod,
-		status:         StatusDisconnected,
-		onEvent:        onEvent,
-		onModeration:   onModeration,
-		onStatusChange: onStatusChange,
+		httpClient:       &http.Client{Timeout: 10 * time.Second},
+		apiBaseURL:       DefaultKickAPIBase,
+		wsURL:            DefaultPusherWSURL,
+		reconnectDelay:   defaultReconnect,
+		pingPeriod:       defaultPingPeriod,
+		livePollPeriod:   defaultLivePollPeriod,
+		followerCacheTTL: DefaultFollowerCacheTTL,
+		status:           StatusDisconnected,
+		onEvent:          onEvent,
+		onModeration:     onModeration,
+		onStatusChange:   onStatusChange,
+		followerCache:    make(map[string]followerCacheEntry),
 	}
+}
+
+// SetCheckFollowerFn overrides the Kick user-following API lookup (used in tests).
+func (c *Connector) SetCheckFollowerFn(fn func(ctx context.Context, slug, username string) (bool, time.Time, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.checkFollowerFn = fn
+}
+
+// SetFollowerCacheTTL overrides the per-user follower check cache TTL (default 30 minutes).
+func (c *Connector) SetFollowerCacheTTL(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if d > 0 {
+		c.followerCacheTTL = d
+	}
+}
+
+// MarkUserFollowing records in the in-memory TTL cache that username is currently following slug.
+func (c *Connector) MarkUserFollowing(slug, username string) {
+	cleanSlug, _ := NormalizeChannelInfo(slug)
+	cleanUser := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	if cleanSlug == "" || cleanUser == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.followerCache == nil {
+		c.followerCache = make(map[string]followerCacheEntry)
+	}
+	now := time.Now()
+	c.followerCache[cleanSlug+":"+cleanUser] = followerCacheEntry{
+		isFollowing: true,
+		followedAt:  now,
+		checkedAt:   now,
+	}
+}
+
+// CanCheckFollowers reports whether the connector is active or configured with a custom follower check function.
+func (c *Connector) CanCheckFollowers() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.running || c.checkFollowerFn != nil
 }
 
 // SetOnStreamStateChange registers a callback invoked when the Kick channel transitions between live and offline.
@@ -600,6 +655,9 @@ func (c *Connector) connectAndStream(ctx context.Context, slug string, info Chan
 			if ev.Channel == "" {
 				ev.Channel = slug
 			}
+			if ev.Kind == chat.EventKindFollow {
+				c.MarkUserFollowing(ev.Channel, ev.UserName)
+			}
 			if c.onEvent != nil {
 				c.onEvent(ev)
 			}
@@ -613,4 +671,122 @@ func (c *Connector) connectAndStream(ctx context.Context, slug string, info Chan
 			}
 		}
 	}
+}
+
+// CheckUserFollowing checks whether username follows slug on Kick, caching the result per user for 30 minutes (DefaultFollowerCacheTTL).
+func (c *Connector) CheckUserFollowing(ctx context.Context, slug, username string) (bool, time.Time, error) {
+	cleanSlug, _ := NormalizeChannelInfo(slug)
+	cleanUser := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	if cleanSlug == "" || cleanUser == "" {
+		return false, time.Time{}, nil
+	}
+	if strings.EqualFold(cleanUser, cleanSlug) {
+		return true, time.Time{}, nil
+	}
+
+	cacheKey := cleanSlug + ":" + cleanUser
+
+	c.mu.Lock()
+	ttl := c.followerCacheTTL
+	if ttl <= 0 {
+		ttl = DefaultFollowerCacheTTL
+	}
+	if entry, ok := c.followerCache[cacheKey]; ok && time.Since(entry.checkedAt) < ttl {
+		c.mu.Unlock()
+		return entry.isFollowing, entry.followedAt, nil
+	}
+	customFn := c.checkFollowerFn
+	client := c.httpClient
+	base := strings.TrimRight(c.apiBaseURL, "/")
+	c.mu.Unlock()
+
+	var (
+		isFollowing bool
+		followedAt  time.Time
+		err         error
+	)
+
+	if customFn != nil {
+		isFollowing, followedAt, err = customFn(ctx, cleanSlug, cleanUser)
+	} else {
+		isFollowing, followedAt, err = queryKickChannelUserFollowing(ctx, client, base, cleanSlug, cleanUser)
+	}
+	if err != nil {
+		return false, time.Time{}, err
+	}
+
+	c.mu.Lock()
+	if c.followerCache == nil {
+		c.followerCache = make(map[string]followerCacheEntry)
+	}
+	c.followerCache[cacheKey] = followerCacheEntry{
+		isFollowing: isFollowing,
+		followedAt:  followedAt,
+		checkedAt:   time.Now(),
+	}
+	c.mu.Unlock()
+
+	return isFollowing, followedAt, nil
+}
+
+func queryKickChannelUserFollowing(ctx context.Context, client *http.Client, apiBaseURL, slug, username string) (bool, time.Time, error) {
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	base := strings.TrimRight(apiBaseURL, "/")
+	if base == "" {
+		base = DefaultKickAPIBase
+	}
+
+	ep := fmt.Sprintf("%s/api/v2/channels/%s/users/%s", base, url.PathEscape(slug), url.PathEscape(username))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep, nil)
+	if err != nil {
+		return false, time.Time{}, err
+	}
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("User-Agent", defaultUserAgent)
+	req.Header.Set("Referer", "https://kick.com/")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, time.Time{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, time.Time{}, fmt.Errorf("HTTP %d from %s", resp.StatusCode, ep)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
+	if err != nil {
+		return false, time.Time{}, err
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return false, time.Time{}, err
+	}
+
+	if isFol, ok := m["is_following"].(bool); ok && isFol {
+		return true, parseKickFollowTime(m), nil
+	}
+	if fs := asString(m["following_since"]); fs != "" {
+		return true, parseKickFollowTime(m), nil
+	}
+	if fa := asString(m["followed_at"]); fa != "" {
+		return true, parseKickFollowTime(m), nil
+	}
+	return false, time.Time{}, nil
+}
+
+func parseKickFollowTime(m map[string]any) time.Time {
+	for _, key := range []string{"following_since", "followed_at"} {
+		if raw := strings.TrimSpace(asString(m[key])); raw != "" {
+			if t, err := time.Parse(time.RFC3339, raw); err == nil {
+				return t
+			}
+		}
+	}
+	return time.Now().UTC()
 }

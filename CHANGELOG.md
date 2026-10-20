@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+- **Stream Sessions & Automatic Live Detection**: Automatically tracks broadcast sessions for Twitch and Kick streams with session start and end times, duration, message volume, alert totals, and unique chatter counts. Existing historical events are automatically grouped into past sessions based on a 4-hour inactivity gap, backed by automated pre-migration database backups (`events.db.bak`).
+- **Chat Logs Stream Session Selector & Totals Banner**: Added a **Stream Session** selector dropdown to the **Chat Logs** tab to jump directly between past broadcasts or the current live session, an **HH:MM:SS** stream-elapsed time range filter to isolate specific moments, and a sticky summary banner displaying total events, chat messages, stream alerts, and unique chatter counts.
+- **Platform Connection Badges**: Added live platform icons in the top-right application header with crisp vector status indicator dots and hover tooltips showing real-time connection state for Twitch, YouTube, TikTok, and Kick.
+- **Expanded Twitch & Kick Stream Events**: Added full speech synthesis and event logging for Twitch Raids, Channel Points redemptions, Charity donations, and Hype Trains, as well as Kick Subscriptions, Gifted Subs, and Channel Hosts.
+- **TikTok & YouTube Gift and Sticker Rendering**: Displays YouTube Super Stickers and TikTok gifts (including Heart Me and Barrage gifts) as inline graphics in the **Dashboard** and **Chat Logs**, powered by automatic TikTok gift catalog synchronization and disk caching.
+- **Kokoro v1.0 Voices & International Pack**: Added all Kokoro v1.0 English voices (34 voices across American and British accents) and an optional Kokoro International voice pack supporting Japanese, Mandarin, Spanish, French, Hindi, Italian, and Brazilian Portuguese.
+- **Built-in Profanity Filter**: Added a built-in bad words list in **Settings → Rules & Safety** with a single toggle checkbox ("Block common profanity & slurs") to easily suppress inappropriate language without manual entry.
+- **TikTok Fan Club Filter & Super Fan Support**: Added a configurable minimum Fan Club level threshold and Super Fan role option in the **TikTok** tab to allow streamers to restrict TTS to loyal community members.
+- **Twitch & Kick Follower Role Gating**: Added a **Follower** role checkbox under **Role Gated** on the **Twitch** and **Kick** tabs, backed by an on-demand per-chatter follower status check with a 30-minute TTL cache and instant live follow event promotion.
+
+### Changed
+- **Modal Voice & Speed Picker**: Replaced wide inline voice dropdowns and speed sliders across the Viewers, Dashboard, and Platform tabs with a compact button (e.g. `Bella · 1.00x`) that opens a dedicated dialog featuring voice search, speed control, and preview audio testing.
+- **Streamlined Platform Settings**: Moved the Global Default Voice to **Settings → Rules & Safety** and tucked platform-specific override settings behind their toggle checkboxes across all platform tabs, keeping tabs clean and focused.
+- **Sub-Role Visual Hierarchy**: Indented subscriber, moderator, and fan club role options under their parent settings in platform tabs for clearer visual grouping.
+
+### Performance
+- **Instant Chat Log Search (FTS5 Trigram)**: Upgraded chat log search with an SQLite FTS5 trigram full-text search index, query fast-paths, and debounced asynchronous background execution for instantaneous filtering across tens of thousands of archived messages.
+
 ---
 
 ## v0.0.3 — 2026-10-18

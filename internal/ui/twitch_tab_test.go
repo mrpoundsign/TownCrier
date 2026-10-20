@@ -41,6 +41,13 @@ func TestTwitchTabViewBuild(t *testing.T) {
 	if len(ignRules.IgnoredPrefixes) != 3 || ignRules.IgnoredPrefixes[1] != "?" {
 		t.Errorf("expected 3 prefixes with ?, got %v", ignRules.IgnoredPrefixes)
 	}
+
+	folChk, ok := tab.roleChecks["follower"]
+	if !ok || folChk == nil {
+		t.Fatal("expected 'follower' role checkbox in TwitchTabView")
+	}
+	tab.roleGatedCheck.SetChecked(true)
+	folChk.SetChecked(true)
 }
 
 func TestTwitchTabViewBuildPreEnabled(t *testing.T) {

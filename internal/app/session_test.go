@@ -750,3 +750,129 @@ func TestSession_InlineGiftAndStickerLogFormatting(t *testing.T) {
 	}
 }
 
+func TestSessionFollowerRoleGatingTwitchAndKick(t *testing.T) {
+	ctx := context.Background()
+	sqlBackend, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, sqlBackend)
+	defer func() { _ = logMgr.Close() }()
+
+	cfg := config.DefaultConfig()
+	twCfg := cfg.Platforms["twitch"]
+	twCfg.AccountName = "mrpoundsign"
+	twCfg.ReadRules.AllChat = true
+	twCfg.ReadRules.RoleGated = true
+	twCfg.ReadRules.Roles = []string{"follower"}
+	cfg.Platforms["twitch"] = twCfg
+
+	kickCfg := cfg.Platforms["kick"]
+	kickCfg.AccountName = "mrpoundsign"
+	kickCfg.ReadRules.AllChat = true
+	kickCfg.ReadRules.RoleGated = true
+	kickCfg.ReadRules.Roles = []string{"follower"}
+	cfg.Platforms["kick"] = kickCfg
+
+	session := NewSession(cfg, secrets.NewMemoryStore())
+	session.SetEventLogger(logMgr)
+	defer func() { _ = session.Close() }()
+	session.Queue().Pause()
+
+	// Configure Twitch custom follower checker (requires channel set on connector)
+	_ = session.TwitchConnector().SetChannel("mrpoundsign")
+	session.TwitchConnector().SetCheckFollowerFn(func(_ context.Context, channel string, userID string, userLogin string) (bool, error) {
+		return channel == "mrpoundsign" && (userID == "tw-fol-1" || userLogin == "loyalfollower"), nil
+	})
+
+	// Configure Kick custom follower checker
+	session.KickConnector().SetCheckFollowerFn(func(_ context.Context, slug, username string) (bool, time.Time, error) {
+		if slug == "mrpoundsign" && username == "kickfollower" {
+			return true, time.Now().UTC(), nil
+		}
+		return false, time.Time{}, nil
+	})
+
+	// 1. Twitch non-follower should be rejected by RoleGated=["follower"]
+	_ = session.DispatchEvent(&chat.Event{
+		ID:        "tw-nonfol-msg",
+		Platform:  "twitch",
+		Channel:   "mrpoundsign",
+		Kind:      chat.EventKindMessage,
+		UserID:    "tw-stranger-1",
+		UserName:  "stranger",
+		Text:      "Hello from stranger",
+		Timestamp: time.Now(),
+	})
+
+	// 2. Twitch follower checked via CheckUserFollowing (30-min TTL) should get "follower" role and pass RoleGated=["follower"]
+	_ = session.DispatchEvent(&chat.Event{
+		ID:        "tw-fol-msg",
+		Platform:  "twitch",
+		Channel:   "mrpoundsign",
+		Kind:      chat.EventKindMessage,
+		UserID:    "tw-fol-1",
+		UserName:  "loyalfollower",
+		Text:      "Hello from loyal follower",
+		Timestamp: time.Now(),
+	})
+
+	// 3. Live EventKindFollow from "stranger" should immediately promote them in the TTL cache so their next chat passes
+	_ = session.DispatchEvent(&chat.Event{
+		ID:        "tw-stranger-follow",
+		Platform:  "twitch",
+		Channel:   "mrpoundsign",
+		Kind:      chat.EventKindFollow,
+		UserID:    "tw-stranger-1",
+		UserName:  "stranger",
+		Timestamp: time.Now(),
+	})
+	_ = session.DispatchEvent(&chat.Event{
+		ID:        "tw-stranger-after-follow",
+		Platform:  "twitch",
+		Channel:   "mrpoundsign",
+		Kind:      chat.EventKindMessage,
+		UserID:    "tw-stranger-1",
+		UserName:  "stranger",
+		Text:      "I just followed!",
+		Timestamp: time.Now(),
+	})
+
+	// 4. Kick follower checked via CheckUserFollowing should pass RoleGated=["follower"]
+	_ = session.DispatchEvent(&chat.Event{
+		ID:        "kick-fol-msg",
+		Platform:  "kick",
+		Channel:   "mrpoundsign",
+		Kind:      chat.EventKindMessage,
+		UserID:    "k-101",
+		UserName:  "kickfollower",
+		Text:      "Hello from Kick follower",
+		Timestamp: time.Now(),
+	})
+
+	res, err := logMgr.Query(ctx, eventlog.QueryFilter{})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	byID := make(map[string]eventlog.Entry)
+	for _, e := range res.Entries {
+		byID[e.ID] = e
+	}
+
+	if byID["tw-nonfol-msg"].PassedFilters {
+		t.Error("expected tw-nonfol-msg to be rejected by RoleGated=['follower']")
+	}
+	if !byID["tw-fol-msg"].PassedFilters {
+		t.Error("expected tw-fol-msg to pass RoleGated=['follower']")
+	}
+	if !byID["tw-stranger-after-follow"].PassedFilters {
+		t.Error("expected tw-stranger-after-follow to pass RoleGated=['follower'] after live follow event")
+	}
+	if !byID["kick-fol-msg"].PassedFilters {
+		t.Error("expected kick-fol-msg to pass RoleGated=['follower']")
+	}
+}
+

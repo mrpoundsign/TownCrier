@@ -24,6 +24,7 @@ const (
 	DefaultTwitchGQLURL         = "https://gql.twitch.tv/gql"
 	DefaultTwitchPublicClientID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
 	DefaultLivePollInterval     = 30 * time.Second
+	DefaultFollowerCacheTTL     = 30 * time.Minute
 )
 
 // eventSubEnvelope represents the top-level Twitch EventSub WebSocket frame.
@@ -123,6 +124,7 @@ func ParseEventSubNotification(subType string, msgID string, eventRaw json.RawMe
 			UserID:      fe.UserID,
 			UserName:    userLogin,
 			DisplayName: displayName,
+			Roles:       []string{"follower"},
 		}, nil
 
 	case "channel.channel_points_custom_reward_redemption.add":
@@ -198,6 +200,157 @@ func (c *Connector) stopEventSubLocked() {
 		_ = c.eventSubConn.Close()
 		c.eventSubConn = nil
 	}
+}
+
+// CheckUserFollowing checks whether a Twitch user follows the currently configured channel,
+// caching the result per user for 30 minutes (DefaultFollowerCacheTTL).
+func (c *Connector) CheckUserFollowing(ctx context.Context, userID string, userLogin string) (bool, error) {
+	cleanID := strings.TrimSpace(userID)
+	cleanLogin := strings.ToLower(strings.TrimSpace(userLogin))
+	if cleanID == "" && cleanLogin == "" {
+		return false, nil
+	}
+
+	c.mu.Lock()
+	channel := c.channel
+	ttl := c.followerCacheTTL
+	if ttl <= 0 {
+		ttl = DefaultFollowerCacheTTL
+	}
+	if cleanID != "" {
+		if entry, ok := c.followerCache["id:"+cleanID]; ok && time.Since(entry.checkedAt) < ttl {
+			c.mu.Unlock()
+			return entry.following, nil
+		}
+	}
+	if cleanLogin != "" {
+		if entry, ok := c.followerCache["login:"+cleanLogin]; ok && time.Since(entry.checkedAt) < ttl {
+			c.mu.Unlock()
+			return entry.following, nil
+		}
+	}
+	customFn := c.checkFollowerFn
+	oauth := c.oauth
+	httpClient := c.httpClient
+	helixBase := strings.TrimRight(c.helixBaseURL, "/")
+	broadcasterID := c.broadcasterID
+	c.mu.Unlock()
+
+	if channel == "" {
+		return false, nil
+	}
+	if cleanLogin != "" && strings.EqualFold(cleanLogin, channel) {
+		return true, nil
+	}
+
+	var following bool
+	if customFn != nil {
+		var err error
+		following, err = customFn(ctx, channel, cleanID, cleanLogin)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		if oauth == nil || !oauth.HasToken() {
+			return false, nil
+		}
+		token, err := oauth.GetValidAccessToken(ctx)
+		if err != nil || token == "" {
+			return false, err
+		}
+		if httpClient == nil {
+			httpClient = &http.Client{Timeout: 10 * time.Second}
+		}
+		if helixBase == "" {
+			helixBase = DefaultHelixBaseURL
+		}
+		clientID := DefaultTwitchPublicClientID
+		if oauth.ClientID() != "" {
+			clientID = oauth.ClientID()
+		}
+
+		if broadcasterID == "" {
+			_, resolvedBroadcasterID, resErr := c.resolveEventSubUserIDs(ctx, token, channel)
+			if resErr != nil || resolvedBroadcasterID == "" {
+				return false, resErr
+			}
+			broadcasterID = resolvedBroadcasterID
+			c.mu.Lock()
+			if c.channel == channel {
+				c.broadcasterID = broadcasterID
+			}
+			c.mu.Unlock()
+		}
+
+		if cleanID == "" && cleanLogin != "" {
+			uURL := fmt.Sprintf("%s/users?login=%s", helixBase, url.QueryEscape(cleanLogin))
+			if req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, uURL, nil); reqErr == nil {
+				req.Header.Set("Authorization", "Bearer "+token)
+				req.Header.Set("Client-Id", clientID)
+				if resp, doErr := httpClient.Do(req); doErr == nil {
+					var uResp struct {
+						Data []struct {
+							ID string `json:"id"`
+						} `json:"data"`
+					}
+					_ = json.NewDecoder(resp.Body).Decode(&uResp)
+					_ = resp.Body.Close()
+					if resp.StatusCode == http.StatusOK && len(uResp.Data) > 0 {
+						cleanID = strings.TrimSpace(uResp.Data[0].ID)
+					}
+				}
+			}
+		}
+		if cleanID == "" {
+			return false, nil
+		}
+
+		reqURL := fmt.Sprintf("%s/channels/followers?broadcaster_id=%s&user_id=%s",
+			helixBase, url.QueryEscape(broadcasterID), url.QueryEscape(cleanID))
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+		if err != nil {
+			return false, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Client-Id", clientID)
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return false, err
+		}
+		var page struct {
+			Data []struct {
+				UserID string `json:"user_id"`
+			} `json:"data"`
+		}
+		decErr := json.NewDecoder(resp.Body).Decode(&page)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return false, fmt.Errorf("helix /channels/followers status %d", resp.StatusCode)
+		}
+		if decErr != nil {
+			return false, decErr
+		}
+		following = len(page.Data) > 0
+	}
+
+	c.mu.Lock()
+	if c.followerCache == nil {
+		c.followerCache = make(map[string]followerCacheEntry)
+	}
+	entry := followerCacheEntry{
+		following: following,
+		checkedAt: time.Now(),
+	}
+	if cleanID != "" {
+		c.followerCache["id:"+cleanID] = entry
+	}
+	if cleanLogin != "" {
+		c.followerCache["login:"+cleanLogin] = entry
+	}
+	c.mu.Unlock()
+
+	return following, nil
 }
 
 func (c *Connector) runEventSubLoop(ctx context.Context, channel string) {
@@ -373,8 +526,13 @@ func (c *Connector) connectAndStreamEventSub(ctx context.Context, wsURL string, 
 				log.Printf("[Twitch EventSub] Error parsing %s notification: %v", subType, err)
 				continue
 			}
-			if ev != nil && c.onEvent != nil {
-				c.onEvent(ev)
+			if ev != nil {
+				if ev.Kind == chat.EventKindFollow {
+					c.MarkUserFollowing(ev.UserID, ev.UserName)
+				}
+				if c.onEvent != nil {
+					c.onEvent(ev)
+				}
 			}
 		}
 	}

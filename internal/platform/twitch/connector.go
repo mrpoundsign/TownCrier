@@ -26,16 +26,26 @@ const (
 	StatusConnected        ConnectionStatus = "connected"
 )
 
+// followerCacheEntry caches whether a Twitch user follows the active channel with a 30-minute TTL.
+type followerCacheEntry struct {
+	following bool
+	checkedAt time.Time
+}
+
 // Connector manages the Twitch IRC and EventSub WebSocket connections for stream chat reading, alerts, and moderation.
 type Connector struct {
 	mu               sync.Mutex
 	client           *twitch.Client
 	channel          string
+	broadcasterID    string
 	status           ConnectionStatus
 	running          bool
 	isLive           bool
 	livePollCancel   context.CancelFunc
 	livePollInterval time.Duration
+	followerCache    map[string]followerCacheEntry
+	followerCacheTTL time.Duration
+	checkFollowerFn  func(ctx context.Context, channel string, userID string, userLogin string) (bool, error)
 	gqlURL           string
 	checkLiveFn      func(ctx context.Context, channel string) (bool, error)
 	oauth            *OAuthManager
@@ -60,6 +70,8 @@ func NewConnector(
 	return &Connector{
 		status:           StatusDisconnected,
 		livePollInterval: DefaultLivePollInterval,
+		followerCache:    make(map[string]followerCacheEntry),
+		followerCacheTTL: DefaultFollowerCacheTTL,
 		gqlURL:           DefaultTwitchGQLURL,
 		eventSubWSURL:    DefaultEventSubWSURL,
 		helixBaseURL:     DefaultHelixBaseURL,
@@ -68,6 +80,54 @@ func NewConnector(
 		onEvent:          onEvent,
 		onModeration:     onModeration,
 		onStatusChange:   onStatusChange,
+	}
+}
+
+// SetCheckFollowerFn overrides the follower status check function (used in tests).
+func (c *Connector) SetCheckFollowerFn(fn func(ctx context.Context, channel string, userID string, userLogin string) (bool, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.checkFollowerFn = fn
+}
+
+// SetFollowerCacheTTL overrides the per-user follower check cache TTL (default 30 minutes).
+func (c *Connector) SetFollowerCacheTTL(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if d > 0 {
+		c.followerCacheTTL = d
+	}
+}
+
+// CanCheckFollowers reports whether the Twitch connector can perform on-demand follower checks (OAuth token or test hook configured).
+func (c *Connector) CanCheckFollowers() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.channel == "" {
+		return false
+	}
+	if c.checkFollowerFn != nil {
+		return true
+	}
+	return c.oauth != nil && c.oauth.HasToken()
+}
+
+// MarkUserFollowing records in the in-memory TTL cache that the user is currently following the channel.
+func (c *Connector) MarkUserFollowing(userID string, userLogin string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.followerCache == nil {
+		c.followerCache = make(map[string]followerCacheEntry)
+	}
+	entry := followerCacheEntry{
+		following: true,
+		checkedAt: time.Now(),
+	}
+	if id := strings.TrimSpace(userID); id != "" {
+		c.followerCache["id:"+id] = entry
+	}
+	if login := strings.ToLower(strings.TrimSpace(userLogin)); login != "" {
+		c.followerCache["login:"+login] = entry
 	}
 }
 
@@ -281,6 +341,8 @@ func (c *Connector) disconnectLocked() {
 	c.stopLivePollLocked()
 	c.stopEventSubLocked()
 	c.setStreamLiveLocked(false)
+	c.broadcasterID = ""
+	c.followerCache = make(map[string]followerCacheEntry)
 	if c.client != nil {
 		_ = c.client.Disconnect()
 		c.client = nil

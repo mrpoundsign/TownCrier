@@ -464,7 +464,7 @@ func (v *TwitchTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 		activeRoles[strings.ToLower(r)] = true
 	}
 
-	roles := []string{"broadcaster", "mod", "vip", "subscriber"}
+	roles := []string{"broadcaster", "mod", "vip", "subscriber", "follower"}
 	roleBoxes := container.NewHBox()
 	for _, role := range roles {
 		rName := role
