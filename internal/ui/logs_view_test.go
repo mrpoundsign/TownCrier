@@ -849,6 +849,131 @@ func TestLogsViewLatestSessionAutoSwitchAndThemeContrast(t *testing.T) {
 	}
 }
 
+func TestLiveLogPresetsAndZeroChromePopOutWindow(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestLiveLogPopOut")
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "popout_events.db")
+	backend, err := eventlog.NewSQLiteBackend(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open sqlite backend: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	if len(cfg.Logging.LiveLogs) != 2 || cfg.Logging.LiveLogs[0].Name != "Latest Session" || cfg.Logging.LiveLogs[1].Name != "All Events" {
+		t.Fatalf("expected 2 default LiveLogPresets ('Latest Session' and 'All Events'), got %+v", cfg.Logging.LiveLogs)
+	}
+
+	mgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, backend)
+	defer func() { _ = mgr.Close() }()
+
+	ctx := context.Background()
+	t1 := time.Date(2026, 10, 20, 14, 0, 0, 0, time.UTC)
+	s1, err := backend.StartSession(ctx, t1, "twitch", "streamer")
+	if err != nil {
+		t.Fatalf("StartSession 1: %v", err)
+	}
+	_ = mgr.Append(ctx, &eventlog.Entry{
+		ID:        "pop-s1-ev1",
+		SessionID: s1.ID,
+		CreatedAt: t1.Add(1 * time.Minute),
+		Platform:  "twitch",
+		Kind:      "message",
+		UserName:  "alice",
+		RawText:   "Hello in s1",
+		Outcome:   eventlog.OutcomeSpoken,
+	})
+
+	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess.SetEventLogger(mgr)
+
+	lv := NewLogsView(w, sess)
+	defer lv.Close()
+	_ = lv.Build()
+
+	if len(lv.liveLogsCardsBox.Objects) != 2 {
+		t.Fatalf("expected 2 Live Log cards rendered initially, got %d", len(lv.liveLogsCardsBox.Objects))
+	}
+
+	// Open the default "Latest Session" card as a pop-out window
+	latestPreset := cfg.Logging.LiveLogs[0]
+	popWin := lv.OpenLiveLogWindow(latestPreset)
+	if popWin == nil {
+		t.Fatal("expected non-nil pop-out fyne.Window")
+	}
+	if popWin.Title() != "TownCrier — Latest Session" {
+		t.Errorf("expected pop-out title 'TownCrier — Latest Session', got %q", popWin.Title())
+	}
+
+	lv.mu.Lock()
+	openLW := lv.openLiveWindows[latestPreset.ID]
+	lv.mu.Unlock()
+	if openLW == nil || openLW.view == nil {
+		t.Fatal("expected openLiveWindows to track active liveLogWindow")
+	}
+
+	openLW.view.mu.Lock()
+	popCount1 := len(openLW.view.entries)
+	openLW.view.mu.Unlock()
+	if popCount1 != 1 {
+		t.Fatalf("expected 1 entry in pop-out Latest Session window initially, got %d", popCount1)
+	}
+
+	// Start Session #2 and append a YouTube event -> pop-out Latest Session window should auto-switch to Session #2
+	t2 := t1.Add(1 * time.Hour)
+	s2, err := backend.StartSession(ctx, t2, "youtube", "streamer")
+	if err != nil {
+		t.Fatalf("StartSession 2: %v", err)
+	}
+	_ = mgr.Append(ctx, &eventlog.Entry{
+		ID:        "pop-s2-ev1",
+		SessionID: s2.ID,
+		CreatedAt: t2.Add(1 * time.Minute),
+		Platform:  "youtube",
+		Kind:      "message",
+		UserName:  "bob",
+		RawText:   "Hello in s2",
+		Outcome:   eventlog.OutcomeSpoken,
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	openLW.view.mu.Lock()
+	popCount2 := len(openLW.view.entries)
+	var popFirstID string
+	if popCount2 > 0 {
+		popFirstID = openLW.view.entries[0].ID
+	}
+	openLW.view.mu.Unlock()
+	if popCount2 != 1 || popFirstID != "pop-s2-ev1" {
+		t.Fatalf("expected pop-out Latest Session window to auto-switch to pop-s2-ev1, got count=%d firstID=%q", popCount2, popFirstID)
+	}
+
+	// Add a new custom Live Log card and verify card count increases to 3, then delete it
+	customPreset := config.LiveLogPreset{
+		ID:          "custom-twitch-only",
+		Name:        "Twitch Chat",
+		SessionMode: "all",
+		HideBots:    true,
+		ShowSummary: false,
+		Platform:    "Twitch",
+	}
+	lv.saveLiveLogPreset(customPreset)
+	if len(lv.liveLogsCardsBox.Objects) != 3 {
+		t.Fatalf("expected 3 Live Log cards after adding custom preset, got %d", len(lv.liveLogsCardsBox.Objects))
+	}
+
+	lv.deleteLiveLogPreset(customPreset.ID)
+	if len(lv.liveLogsCardsBox.Objects) != 2 {
+		t.Fatalf("expected 2 Live Log cards after deleting custom preset, got %d", len(lv.liveLogsCardsBox.Objects))
+	}
+}
+
 
 
 

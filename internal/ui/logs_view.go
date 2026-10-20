@@ -121,11 +121,13 @@ type LogsView struct {
 	hoverInfoLabel  *hoverCellLabel
 	prevPageBtn     *widget.Button
 	nextPageBtn     *widget.Button
-	filterToggleBtn *widget.Button
-	filterDrawer    *fyne.Container
-	filtersExpanded bool
-	listBox         *fyne.Container
-	subTabs         *container.AppTabs
+	filterToggleBtn  *widget.Button
+	filterDrawer     *fyne.Container
+	filtersExpanded  bool
+	listBox          *fyne.Container
+	subTabs          *container.AppTabs
+	liveLogsCardsBox *fyne.Container
+	openLiveWindows  map[string]*liveLogWindow
 
 	tooltipLayer  *fyne.Container
 	tooltipBubble *fyne.Container
@@ -242,7 +244,7 @@ func (v *LogsView) showTooltipForObject(obj fyne.CanvasObject, tip string, hover
 	v.tooltipBubble.Refresh()
 }
 
-// Close unsubscribes any active Live Tail listener and cancels any pending search timer or query.
+// Close unsubscribes any active Live Tail listener, closes any open pop-out windows, and cancels any pending search timer or query.
 func (v *LogsView) Close() {
 	v.mu.Lock()
 	unsub := v.unsubLive
@@ -256,9 +258,19 @@ func (v *LogsView) Close() {
 		v.queryCancel = nil
 	}
 	v.querySeq++
+	var toClose []*liveLogWindow
+	for _, lw := range v.openLiveWindows {
+		if lw != nil {
+			toClose = append(toClose, lw)
+		}
+	}
+	v.openLiveWindows = nil
 	v.mu.Unlock()
 	if unsub != nil {
 		unsub()
+	}
+	for _, lw := range toClose {
+		lw.Close()
 	}
 }
 
@@ -324,48 +336,6 @@ func (v *LogsView) Build() fyne.CanvasObject {
 	)
 
 	return container.NewStack(v.subTabs, v.tooltipLayer)
-}
-
-func (v *LogsView) buildLiveLogsTab() fyne.CanvasObject {
-	headerTitle := widget.NewLabelWithStyle("Saved Live Log Views", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	headerSub := widget.NewLabel("Click a card to open a live filter view. Default presets include Latest Session (auto-switches as new sessions start) and All Events.")
-	headerSub.Wrapping = fyne.TextWrapWord
-
-	latestCard := widget.NewCard(
-		"Latest Session",
-		"Session: Latest Session (Auto-Switching)  •  Platform: All  •  Hide Bots: On  •  Alerts Summary: On",
-		widget.NewButtonWithIcon("Open Latest Session", theme.VisibilityIcon(), func() {
-			if v.sessionSel != nil {
-				v.sessionSel.SetSelected(sessionOptionLatest)
-			}
-			if v.liveTailCheck != nil {
-				v.liveTailCheck.SetChecked(true)
-			}
-			if v.subTabs != nil && len(v.subTabs.Items) > 1 {
-				v.subTabs.SelectIndex(1)
-			}
-		}),
-	)
-
-	allEventsCard := widget.NewCard(
-		"All Events",
-		"Session: All Sessions  •  Platform: All  •  Hide Bots: On  •  Alerts Summary: On",
-		widget.NewButtonWithIcon("Open All Events", theme.VisibilityIcon(), func() {
-			v.ResetFilters()
-			if v.subTabs != nil && len(v.subTabs.Items) > 1 {
-				v.subTabs.SelectIndex(1)
-			}
-		}),
-	)
-
-	cardsGrid := container.NewGridWithColumns(2, latestCard, allEventsCard)
-	content := container.NewVBox(
-		headerTitle,
-		headerSub,
-		widget.NewSeparator(),
-		cardsGrid,
-	)
-	return newPanelVScroll(container.NewPadded(content))
 }
 
 func newFilterFieldLabel(text string) fyne.CanvasObject {

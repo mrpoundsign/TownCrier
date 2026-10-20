@@ -28,11 +28,52 @@ type Config struct {
 }
 
 type LoggingConfig struct {
-	Enabled            bool   `json:"enabled"`
-	Backend            string `json:"backend"`
-	DBPath             string `json:"db_path,omitempty"`
-	ChatRetentionDays  int    `json:"chat_retention_days"`
-	EventRetentionDays int    `json:"event_retention_days"`
+	Enabled            bool            `json:"enabled"`
+	Backend            string          `json:"backend"`
+	DBPath             string          `json:"db_path,omitempty"`
+	ChatRetentionDays  int             `json:"chat_retention_days"`
+	EventRetentionDays int             `json:"event_retention_days"`
+	LiveLogs           []LiveLogPreset `json:"live_logs,omitempty"`
+}
+
+// LiveLogPreset represents a saved Live Log filter card that can be opened as a zero-chrome pop-out window.
+type LiveLogPreset struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	SessionMode string `json:"session_mode"` // "latest" or "all"
+	HideBots    bool   `json:"hide_bots"`
+	ShowSummary bool   `json:"show_summary"`
+	Platform    string `json:"platform,omitempty"`
+	EventType   string `json:"event_type,omitempty"`
+	Outcome     string `json:"outcome,omitempty"`
+	UserQuery   string `json:"user_query,omitempty"`
+	TextQuery   string `json:"text_query,omitempty"`
+}
+
+// DefaultLiveLogPresets returns the two default saved Live Log cards: "Latest Session" and "All Events".
+func DefaultLiveLogPresets() []LiveLogPreset {
+	return []LiveLogPreset{
+		{
+			ID:          "default-latest-session",
+			Name:        "Latest Session",
+			SessionMode: "latest",
+			HideBots:    true,
+			ShowSummary: true,
+			Platform:    "All Platforms",
+			EventType:   "All Types",
+			Outcome:     "All Events",
+		},
+		{
+			ID:          "default-all-events",
+			Name:        "All Events",
+			SessionMode: "all",
+			HideBots:    true,
+			ShowSummary: true,
+			Platform:    "All Platforms",
+			EventType:   "All Types",
+			Outcome:     "All Events",
+		},
+	}
 }
 
 type AudioConfig struct {
@@ -319,6 +360,7 @@ func DefaultConfig() *Config {
 			DBPath:             "",
 			ChatRetentionDays:  30,
 			EventRetentionDays: 90,
+			LiveLogs:           DefaultLiveLogPresets(),
 		},
 		GlobalChatRules: GlobalChatRules{
 			SpeakNames:        true,
@@ -788,6 +830,9 @@ func migrate(cfg *Config) error {
 	}
 	if cfg.Logging.EventRetentionDays < 0 {
 		cfg.Logging.EventRetentionDays = 0
+	}
+	if len(cfg.Logging.LiveLogs) == 0 {
+		cfg.Logging.LiveLogs = DefaultLiveLogPresets()
 	}
 
 	// Normalize viewer keys and populate multi-platform Accounts slice
