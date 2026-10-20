@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+---
+
+## v0.0.4 — 2026-10-20
+
 ### Added
 - **Saved Live Logs & Zero-Chrome Pop-Out Windows**: Added a **Live Logs** sub-tab under **Logs** with savable filter cards (pre-seeded with **Latest Session** and **All Events** defaults) that launch dedicated zero-chrome floating windows with real-time live tail updates and optional per-view Alerts Summary banners.
 - **Latest Session Auto-Switching & Multi-Session Search**: Added a **Latest Session** filter option that automatically switches to newly started broadcast sessions as messages arrive, plus multi-session selection (`☑`) in **Search History** to filter across any combination of recorded streams.
