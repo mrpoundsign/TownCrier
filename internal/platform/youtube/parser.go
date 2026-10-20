@@ -58,8 +58,79 @@ func NormalizeTarget(input string) (liveURL string, display string) {
 	return "https://www.youtube.com/@" + clean + "/live", clean
 }
 
+// ExtractVideoDetails parses the videoDetails JSON object from YouTube HTML if present,
+// returning whether the stream is actively live and whether videoDetails was found.
+func ExtractVideoDetails(html string) (isLive bool, found bool) {
+	search := html
+	for {
+		idx := strings.Index(search, `"videoDetails"`)
+		if idx == -1 {
+			return false, false
+		}
+
+		rest := search[idx+len(`"videoDetails"`):]
+		braceIdx := strings.IndexByte(rest, '{')
+		if braceIdx == -1 {
+			search = rest
+			continue
+		}
+
+		start := braceIdx
+		depth := 0
+		inString := false
+		escape := false
+		end := -1
+
+		for i := start; i < len(rest); i++ {
+			b := rest[i]
+			if escape {
+				escape = false
+				continue
+			}
+			if b == '\\' {
+				escape = true
+				continue
+			}
+			if b == '"' {
+				inString = !inString
+				continue
+			}
+			if inString {
+				continue
+			}
+			if b == '{' {
+				depth++
+			} else if b == '}' {
+				depth--
+				if depth == 0 {
+					end = i + 1
+					break
+				}
+			}
+		}
+
+		if end != -1 {
+			var details struct {
+				IsLive        bool `json:"isLive"`
+				IsLiveContent bool `json:"isLiveContent"`
+			}
+			if err := json.Unmarshal([]byte(rest[start:end]), &details); err == nil {
+				return details.IsLive, true
+			}
+		}
+
+		search = rest
+	}
+}
+
 // ExtractBootstrapTokens extracts the INNERTUBE_API_KEY and initial liveChat continuation token from a YouTube HTML page.
+// It verifies that the target video is actively transmitting live (videoDetails.isLive == true).
 func ExtractBootstrapTokens(html string) (apiKey string, continuation string, ok bool) {
+	isLive, found := ExtractVideoDetails(html)
+	if !found || !isLive {
+		return "", "", false
+	}
+
 	if m := reInnertubeKey.FindStringSubmatch(html); len(m) > 1 {
 		apiKey = m[1]
 	}
