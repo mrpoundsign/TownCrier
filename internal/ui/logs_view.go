@@ -403,17 +403,16 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 		v.setStatus(fmt.Sprintf("✓ Pruned %d expired log entries.", deleted))
 	})
 
-	row := container.NewHBox(
-		v.enableLogCheck,
-		widget.NewSeparator(),
+	topRow := container.NewBorder(nil, nil, v.enableLogCheck, pruneBtn)
+	ttlRow := container.NewHBox(
 		widget.NewLabel("Chat TTL:"),
 		v.chatRetSel,
+		widget.NewSeparator(),
 		widget.NewLabel("Alert/Paid TTL:"),
 		v.eventRetSel,
-		pruneBtn,
 	)
 
-	return widget.NewCard("Log Retention & Storage", "Dynamic created_at retention preserves existing logs if you increase TTL", row)
+	return widget.NewCard("Log Retention & Storage", "Configure automatic log expiration and storage cleanup", container.NewVBox(topRow, ttlRow))
 }
 
 func (v *LogsView) buildFilterDrawer() *fyne.Container {

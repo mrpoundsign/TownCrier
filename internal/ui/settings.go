@@ -37,6 +37,17 @@ type SettingsView struct {
 	onModelsChanged   func()
 	onAssignVoice     func(platform, username string)
 	subTabs           *container.AppTabs
+	generalTabItem    *container.TabItem
+	ttsTabItem        *container.TabItem
+	rulesTabItem      *container.TabItem
+	twitchTab         *TwitchTabView
+	youtubeTab        *YouTubeTabView
+	tiktokTab         *TikTokTabView
+	kickTab           *KickTabView
+	twitchSettingsItem  *container.TabItem
+	youtubeSettingsItem *container.TabItem
+	tiktokSettingsItem  *container.TabItem
+	kickSettingsItem    *container.TabItem
 	logsView          *LogsView
 	twitchCheck       *widget.Check
 	youtubeCheck      *widget.Check
@@ -99,6 +110,72 @@ func (v *SettingsView) SetOnAssignVoice(fn func(platform, username string)) {
 	if v.logsView != nil {
 		v.logsView.SetOnAssignVoice(fn)
 	}
+}
+
+// SetPlatformTabs provides the platform configuration views to be hosted inside Settings sub-tabs.
+func (v *SettingsView) SetPlatformTabs(twitch *TwitchTabView, yt *YouTubeTabView, tt *TikTokTabView, kick *KickTabView) {
+	v.twitchTab = twitch
+	v.youtubeTab = yt
+	v.tiktokTab = tt
+	v.kickTab = kick
+}
+
+// SelectPlatformTab switches the active Settings sub-tab to the specified platform.
+func (v *SettingsView) SelectPlatformTab(platform string) {
+	if v.subTabs == nil {
+		return
+	}
+	v.SyncPlatformTabVisibility()
+	var target *container.TabItem
+	switch strings.ToLower(platform) {
+	case "twitch":
+		target = v.twitchSettingsItem
+	case "youtube":
+		target = v.youtubeSettingsItem
+	case "tiktok":
+		target = v.tiktokSettingsItem
+	case "kick":
+		target = v.kickSettingsItem
+	}
+	if target != nil {
+		found := slices.Contains(v.subTabs.Items, target)
+		if !found {
+			v.subTabs.Append(target)
+		}
+		v.subTabs.Select(target)
+	}
+}
+
+// SyncPlatformTabVisibility shows or hides platform sub-tabs in Settings based on enabled status.
+func (v *SettingsView) SyncPlatformTabVisibility() {
+	if v.subTabs == nil {
+		return
+	}
+	cfg := v.currentConfig()
+	items := []*container.TabItem{
+		v.generalTabItem,
+		v.ttsTabItem,
+	}
+
+	addIfVisible := func(platform string, item *container.TabItem) {
+		if item == nil {
+			return
+		}
+		p, ok := cfg.Platforms[platform]
+		if !ok || p.EverEnabled || p.Enabled {
+			items = append(items, item)
+		}
+	}
+
+	addIfVisible("twitch", v.twitchSettingsItem)
+	addIfVisible("youtube", v.youtubeSettingsItem)
+	addIfVisible("tiktok", v.tiktokSettingsItem)
+	addIfVisible("kick", v.kickSettingsItem)
+
+	if v.rulesTabItem != nil {
+		items = append(items, v.rulesTabItem)
+	}
+	v.subTabs.SetItems(items)
 }
 
 // LogsView returns the embedded Event Logs sub-tab view.
@@ -229,30 +306,36 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	ttsTabContent := newPanelVScroll(container.NewVBox(
 		ttsCard,
 	))
+	v.logsView = NewLogsView(v.window, v.session)
+	v.logsView.SetStatusHandler(v.setStatus)
+	v.logsView.SetOnAssignVoice(v.onAssignVoice)
+
 	rulesTabContent := newPanelVScroll(container.NewVBox(
 		rulesCard,
 		safetyCard,
 		botsCard,
-	))
-
-	v.logsView = NewLogsView(v.window, v.session)
-	v.logsView.SetStatusHandler(v.setStatus)
-	v.logsView.SetOnAssignVoice(v.onAssignVoice)
-	logsTabContent := newPanelVScroll(container.NewVBox(
 		v.logsView.BuildRetentionCard(),
 	))
 
-	generalTabItem := container.NewTabItemWithIcon("General & Audio", theme.VolumeUpIcon(), generalTabContent)
-	ttsTabItem := container.NewTabItemWithIcon("TTS & Hardware", theme.ComputerIcon(), ttsTabContent)
-	rulesTabItem := container.NewTabItemWithIcon("Rules & Safety", theme.ConfirmIcon(), rulesTabContent)
-	logsTabItem := container.NewTabItemWithIcon("Event Logs", theme.DocumentIcon(), logsTabContent)
+	v.generalTabItem = container.NewTabItemWithIcon("General & Audio", theme.VolumeUpIcon(), generalTabContent)
+	v.ttsTabItem = container.NewTabItemWithIcon("TTS & Hardware", theme.ComputerIcon(), ttsTabContent)
+	v.rulesTabItem = container.NewTabItemWithIcon("Rules & Safety", theme.ConfirmIcon(), rulesTabContent)
 
-	v.subTabs = container.NewAppTabs(
-		generalTabItem,
-		ttsTabItem,
-		rulesTabItem,
-		logsTabItem,
-	)
+	if v.twitchTab != nil {
+		v.twitchSettingsItem = container.NewTabItemWithIcon("Twitch", theme.MediaPlayIcon(), v.twitchTab.Build())
+	}
+	if v.youtubeTab != nil {
+		v.youtubeSettingsItem = container.NewTabItemWithIcon("YouTube", theme.MediaVideoIcon(), v.youtubeTab.Build())
+	}
+	if v.tiktokTab != nil {
+		v.tiktokSettingsItem = container.NewTabItemWithIcon("TikTok", theme.MediaRecordIcon(), v.tiktokTab.Build())
+	}
+	if v.kickTab != nil {
+		v.kickSettingsItem = container.NewTabItemWithIcon("Kick", theme.MediaFastForwardIcon(), v.kickTab.Build())
+	}
+
+	v.subTabs = container.NewAppTabs(v.generalTabItem, v.ttsTabItem, v.rulesTabItem)
+	v.SyncPlatformTabVisibility()
 
 	return v.subTabs
 }
@@ -365,7 +448,7 @@ func (v *SettingsView) buildServicesCard() *widget.Card {
 		v.kickCheck,
 	)
 
-	return widget.NewCard("Streaming Services", "Enable or disable streaming platforms to show/hide their tabs and load/unload their connectors", cardContent)
+	return widget.NewCard("Streaming Services", "Show/hide platform tabs and load or unload their connectors", cardContent)
 }
 
 func (v *SettingsView) buildGlobalVoiceCard() *widget.Card {
@@ -398,10 +481,10 @@ func (v *SettingsView) buildGlobalVoiceCard() *widget.Card {
 	)
 
 	cardContent := container.NewVBox(
-		container.NewBorder(nil, nil, widget.NewLabel("Global Default Voice & Speed:"), nil, v.globalVoiceField.Container),
+		container.NewBorder(nil, nil, widget.NewLabel("Current:"), nil, v.globalVoiceField.Container),
 	)
 
-	return widget.NewCard("Global Default Voice", "Default voice and speed for chat and alerts", cardContent)
+	return widget.NewCard("Global Default Voice", "", cardContent)
 }
 
 func (v *SettingsView) buildAudioCard() *widget.Card {
@@ -501,27 +584,32 @@ func (v *SettingsView) buildDisplayCard() *widget.Card {
 	})
 	v.uiScaleSelect.SetSelected(FormatUIScaleLabel(v.cfg.UIScale))
 
-	scaleRow := container.NewBorder(nil, nil, widget.NewLabel("UI Scale:"), nil, v.uiScaleSelect)
+	scaleRow := container.NewHBox(widget.NewLabel("UI Scale:"), v.uiScaleSelect)
 	cardContent := container.NewVBox(
 		scaleRow,
 	)
 
-	return widget.NewCard("Display & Scaling", "Lock DPI scaling to prevent multi-monitor zoom jumps, or customize interface size", cardContent)
+	return widget.NewCard("Display & Scaling", "Lock DPI scaling or customize interface zoom", cardContent)
 }
 
 func (v *SettingsView) buildTTSCard() *widget.Card {
 	v.modelStatus = widget.NewLabel(v.formatModelStatusText())
+	v.modelStatus.Wrapping = fyne.TextWrapWord
 
 	var syncingControls bool
 
 	// --- Hardware Impact Stacked Graphs & Tradeoff Notice ---
 	ramDetail := widget.NewLabel("")
+	ramDetail.Wrapping = fyne.TextWrapWord
 	ramBar := NewStackedImpactBar()
 	cpuDetail := widget.NewLabel("")
+	cpuDetail.Wrapping = fyne.TextWrapWord
 	cpuBar := NewStackedImpactBar()
 	gpuDetail := widget.NewLabel("")
+	gpuDetail.Wrapping = fyne.TextWrapWord
 	gpuBar := NewStackedImpactBar()
 	latencyDetail := widget.NewLabel("")
+	latencyDetail.Wrapping = fyne.TextWrapWord
 	latencyBar := NewStackedImpactBar()
 
 	tradeoffLabel := widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
@@ -567,6 +655,7 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 			nil,
 			nil,
 			widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			nil,
 			detail,
 		)
 		return container.NewVBox(header, bar)
@@ -581,7 +670,7 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	presetDescLabel := widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 	presetDescLabel.Wrapping = fyne.TextWrapWord
 
-	gpuCheck := widget.NewCheck("Use GPU Acceleration for Kokoro-82M (DirectML — fast ~0.3s start, uses ~700 MB extra RAM)", nil)
+	gpuCheck := widget.NewCheck("Use DirectML GPU for Kokoro-82M (fast ~0.3s start, +700 MB RAM)", nil)
 
 	initThreads := v.cfg.TTS.NumThreads
 	if initThreads <= 0 {
@@ -893,7 +982,7 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	threadsRow := container.NewBorder(
 		nil,
 		nil,
-		widget.NewLabel("CPU Inference Threads (4 recommended for INT8 SIMD):"),
+		widget.NewLabel("CPU Inference Threads (4 recommended):"),
 		threadsValLabel,
 		threadsSlider,
 	)
@@ -1113,6 +1202,7 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 		fyne.TextAlignLeading,
 		fyne.TextStyle{Bold: true},
 	)
+	hotkeyDisplay.Wrapping = fyne.TextWrapWord
 
 	var syncingHotkeyUI bool
 

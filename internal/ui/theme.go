@@ -17,7 +17,7 @@ const (
 	UIScale150  = "1.5"
 	UIScaleAuto = "auto"
 
-	uiScaleLabel100  = "100% (Default — Lock Multi-Monitor DPI)"
+	uiScaleLabel100  = "100% (Default — Lock DPI)"
 	uiScaleLabel115  = "115%"
 	uiScaleLabel125  = "125%"
 	uiScaleLabel150  = "150%"
@@ -89,6 +89,8 @@ func ParseUIScaleLabel(label string) string {
 // and triggers a live scale reload across all open windows if appObj is non-nil.
 // By default ("1.0"), Fyne's EDID-based per-monitor DPI detection is disabled so Windows DWM
 // handles multi-monitor scaling without zoom jumps when dragging between laptop and desktop screens.
+// Physical window pixel dimensions are preserved across live scale changes so changing UI Scale
+// zooms the interface contents cleanly without ballooning or shrinking the OS window.
 func ApplyUIScale(appObj fyne.App, scaleMode string) {
 	mode := NormalizeUIScale(scaleMode)
 	if mode == UIScaleAuto {
@@ -98,8 +100,55 @@ func ApplyUIScale(appObj fyne.App, scaleMode string) {
 		_ = os.Setenv("FYNE_DISABLE_DPI_DETECTION", "true")
 		_ = os.Setenv("FYNE_SCALE", mode)
 	}
-	if appObj != nil {
-		appObj.Settings().SetTheme(NewObsidianTheme())
+	if appObj == nil {
+		return
+	}
+
+	type winSnapshot struct {
+		win          fyne.Window
+		physW        float32
+		physH        float32
+		wasMaximized bool
+	}
+	var snaps []winSnapshot
+
+	if drv := appObj.Driver(); drv != nil {
+		for _, w := range drv.AllWindows() {
+			if w == nil || w.Canvas() == nil {
+				continue
+			}
+			sc := w.Canvas().Scale()
+			sz := w.Canvas().Size()
+			if sc > 0 && sz.Width > 0 && sz.Height > 0 {
+				snaps = append(snaps, winSnapshot{
+					win:          w,
+					physW:        sz.Width * sc,
+					physH:        sz.Height * sc,
+					wasMaximized: isWindowMaximized(w),
+				})
+			}
+		}
+	}
+
+	appObj.Settings().SetTheme(NewObsidianTheme())
+
+	for _, snap := range snaps {
+		if snap.wasMaximized {
+			restoreMaximizedWindow(snap.win)
+			if content := snap.win.Canvas().Content(); content != nil {
+				content.Refresh()
+			}
+			continue
+		}
+		newScale := snap.win.Canvas().Scale()
+		if newScale <= 0 {
+			continue
+		}
+		targetDIP := fyne.NewSize(snap.physW/newScale, snap.physH/newScale)
+		snap.win.Resize(targetDIP)
+		if content := snap.win.Canvas().Content(); content != nil {
+			content.Refresh()
+		}
 	}
 }
 

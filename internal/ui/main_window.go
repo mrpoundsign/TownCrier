@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"image/color"
 	"log"
-	"slices"
 	"sync"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -18,15 +18,34 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
+// Tab index constants for the top-level main window views.
+const (
+	TabIndexDashboard = 0
+	TabIndexViewers   = 1
+	TabIndexLogs      = 2
+	TabIndexSettings  = 3
+)
+
 // MainWindow coordinates the primary Fyne desktop window, tabs, header bar, and global panic hotkeys.
 type MainWindow struct {
 	Window  fyne.Window
 	Session *app.Session
 
-	headerBar     *fyne.Container
-	tabsContainer *container.AppTabs
-	statusBar     *fyne.Container
-	statusLabel   *widget.Label
+	headerBar        *fyne.Container
+	contentContainer *fyne.Container
+	statusBar        *fyne.Container
+	statusLabel      *widget.Label
+
+	currentTab   int
+	dashboardBtn *widget.Button
+	viewersBtn   *widget.Button
+	logsBtn      *widget.Button
+	settingsBtn  *widget.Button
+
+	dashboardObj fyne.CanvasObject
+	viewersObj   fyne.CanvasObject
+	chatLogsObj  fyne.CanvasObject
+	settingsObj  fyne.CanvasObject
 
 	dashboardTab *DashboardView
 	twitchTab    *TwitchTabView
@@ -36,15 +55,6 @@ type MainWindow struct {
 	viewersTab   *ViewersTabView
 	chatLogsTab  *LogsView
 	settingsTab  *SettingsView
-
-	dashboardTabItem *container.TabItem
-	twitchTabItem    *container.TabItem
-	youtubeTabItem   *container.TabItem
-	tiktokTabItem    *container.TabItem
-	kickTabItem      *container.TabItem
-	viewersTabItem   *container.TabItem
-	chatLogsTabItem  *container.TabItem
-	settingsTabItem  *container.TabItem
 
 	twitchStatusDot  *platformConnectionBadge
 	youtubeStatusDot *platformConnectionBadge
@@ -90,7 +100,7 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 		mw.statusBar,
 		nil,
 		nil,
-		mw.tabsContainer,
+		mw.contentContainer,
 	)
 
 	mw.tooltipText = canvas.NewText("", color.NRGBA{R: 248, G: 250, B: 252, A: 255})
@@ -140,9 +150,26 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 
 func (mw *MainWindow) initStatusBar() {
 	mw.statusLabel = widget.NewLabelWithStyle("Ready.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
+	mw.statusLabel.Truncation = fyne.TextTruncateEllipsis
+
+	hk := mw.currentHotkeyLabel()
+	mw.panicBtn = widget.NewButtonWithIcon(fmt.Sprintf("PANIC MUTE (Esc / %s)", hk), theme.MediaStopIcon(), func() {
+		mw.triggerTogglePanic()
+	})
+	mw.panicBtn.Importance = widget.DangerImportance
+
+	if q := mw.Session.Queue(); q != nil {
+		q.SetOnStateChanged(func(paused, panicked bool) {
+			fyne.Do(func() {
+				mw.syncPanicUI(paused, panicked)
+			})
+		})
+	}
+
+	statusRow := container.NewBorder(nil, nil, nil, mw.panicBtn, mw.statusLabel)
 	mw.statusBar = container.NewVBox(
 		widget.NewSeparator(),
-		container.NewPadded(mw.statusLabel),
+		container.NewPadded(statusRow),
 	)
 }
 
@@ -280,36 +307,112 @@ func (mw *MainWindow) initViews() {
 		}
 	})
 
-	mw.dashboardTabItem = container.NewTabItemWithIcon("Dashboard", theme.HomeIcon(), mw.dashboardTab.Build())
-	mw.twitchTabItem = container.NewTabItemWithIcon("Twitch", theme.MediaPlayIcon(), mw.twitchTab.Build())
-	mw.youtubeTabItem = container.NewTabItemWithIcon("YouTube", theme.MediaVideoIcon(), mw.youtubeTab.Build())
-	mw.tiktokTabItem = container.NewTabItemWithIcon("TikTok", theme.MediaRecordIcon(), mw.tiktokTab.Build())
-	mw.kickTabItem = container.NewTabItemWithIcon("Kick", theme.MediaFastForwardIcon(), mw.kickTab.Build())
-	mw.viewersTabItem = container.NewTabItemWithIcon("Viewers", theme.AccountIcon(), mw.viewersTab.Build())
-	mw.chatLogsTabItem = container.NewTabItemWithIcon("Chat Logs", theme.DocumentIcon(), mw.chatLogsTab.Build())
-	mw.settingsTabItem = container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), mw.settingsTab.Build())
+	mw.settingsTab.SetPlatformTabs(mw.twitchTab, mw.youtubeTab, mw.tiktokTab, mw.kickTab)
 
-	mw.tabsContainer = container.NewAppTabs(
-		mw.dashboardTabItem,
-		mw.twitchTabItem,
-		mw.youtubeTabItem,
-		mw.tiktokTabItem,
-		mw.kickTabItem,
-		mw.viewersTabItem,
-		mw.chatLogsTabItem,
-		mw.settingsTabItem,
+	mw.dashboardObj = mw.dashboardTab.Build()
+	mw.viewersObj = newWidthClampContainer(mw.viewersTab.Build())
+	mw.chatLogsObj = newWidthClampContainer(mw.chatLogsTab.Build())
+	mw.settingsObj = mw.settingsTab.Build()
+
+	mw.contentContainer = container.NewStack(
+		mw.dashboardObj,
+		mw.viewersObj,
+		mw.chatLogsObj,
+		mw.settingsObj,
 	)
-	mw.tabsContainer.OnSelected = func(item *container.TabItem) {
-		switch item {
-		case mw.chatLogsTabItem:
-			if mw.chatLogsTab != nil {
-				mw.chatLogsTab.RefreshQuery()
-			}
-		case mw.settingsTabItem:
-			if mw.settingsTab != nil {
-				mw.settingsTab.SyncFromConfig()
-			}
+
+	mw.dashboardBtn = widget.NewButtonWithIcon("Dashboard", theme.HomeIcon(), func() { mw.SelectTab(TabIndexDashboard) })
+	mw.viewersBtn = widget.NewButtonWithIcon("Viewers", theme.AccountIcon(), func() { mw.SelectTab(TabIndexViewers) })
+	mw.logsBtn = widget.NewButtonWithIcon("Logs", theme.DocumentIcon(), func() { mw.SelectTab(TabIndexLogs) })
+	mw.settingsBtn = widget.NewButtonWithIcon("", theme.SettingsIcon(), func() { mw.SelectTab(TabIndexSettings) })
+
+	mw.SelectTab(TabIndexDashboard)
+}
+
+// SelectTab activates the specified main view (Dashboard, Viewers, Logs, or Settings).
+func (mw *MainWindow) SelectTab(index int) {
+	mw.currentTab = index
+
+	if mw.dashboardObj != nil {
+		mw.dashboardObj.Hide()
+	}
+	if mw.viewersObj != nil {
+		mw.viewersObj.Hide()
+	}
+	if mw.chatLogsObj != nil {
+		mw.chatLogsObj.Hide()
+	}
+	if mw.settingsObj != nil {
+		mw.settingsObj.Hide()
+	}
+
+	if mw.dashboardBtn != nil {
+		mw.dashboardBtn.Importance = widget.MediumImportance
+	}
+	if mw.viewersBtn != nil {
+		mw.viewersBtn.Importance = widget.MediumImportance
+	}
+	if mw.logsBtn != nil {
+		mw.logsBtn.Importance = widget.MediumImportance
+	}
+	if mw.settingsBtn != nil {
+		mw.settingsBtn.Importance = widget.MediumImportance
+	}
+
+	switch index {
+	case TabIndexDashboard:
+		if mw.dashboardObj != nil {
+			mw.dashboardObj.Show()
 		}
+		if mw.dashboardBtn != nil {
+			mw.dashboardBtn.Importance = widget.HighImportance
+		}
+	case TabIndexViewers:
+		if mw.viewersObj != nil {
+			mw.viewersObj.Show()
+		}
+		if mw.viewersBtn != nil {
+			mw.viewersBtn.Importance = widget.HighImportance
+		}
+		if mw.viewersTab != nil {
+			mw.viewersTab.Refresh()
+		}
+	case TabIndexLogs:
+		if mw.chatLogsObj != nil {
+			mw.chatLogsObj.Show()
+		}
+		if mw.logsBtn != nil {
+			mw.logsBtn.Importance = widget.HighImportance
+		}
+		if mw.chatLogsTab != nil {
+			mw.chatLogsTab.RefreshQuery()
+		}
+	case TabIndexSettings:
+		if mw.settingsObj != nil {
+			mw.settingsObj.Show()
+		}
+		if mw.settingsBtn != nil {
+			mw.settingsBtn.Importance = widget.HighImportance
+		}
+		if mw.settingsTab != nil {
+			mw.settingsTab.SyncFromConfig()
+		}
+	}
+
+	if mw.dashboardBtn != nil {
+		mw.dashboardBtn.Refresh()
+	}
+	if mw.viewersBtn != nil {
+		mw.viewersBtn.Refresh()
+	}
+	if mw.logsBtn != nil {
+		mw.logsBtn.Refresh()
+	}
+	if mw.settingsBtn != nil {
+		mw.settingsBtn.Refresh()
+	}
+	if mw.contentContainer != nil {
+		mw.contentContainer.Refresh()
 	}
 }
 
@@ -328,26 +431,8 @@ func (mw *MainWindow) syncServiceVisibility() {
 	kickCfg, hasKick := cfg.Platforms["kick"]
 	kickVisible := !hasKick || kickCfg.EverEnabled || kickCfg.Enabled
 
-	if mw.tabsContainer != nil {
-		selected := mw.tabsContainer.Selected()
-		items := []*container.TabItem{mw.dashboardTabItem}
-		if twitchVisible {
-			items = append(items, mw.twitchTabItem)
-		}
-		if ytVisible {
-			items = append(items, mw.youtubeTabItem)
-		}
-		if ttVisible {
-			items = append(items, mw.tiktokTabItem)
-		}
-		if kickVisible {
-			items = append(items, mw.kickTabItem)
-		}
-		items = append(items, mw.viewersTabItem, mw.chatLogsTabItem, mw.settingsTabItem)
-		mw.tabsContainer.SetItems(items)
-		if slices.Contains(items, selected) {
-			mw.tabsContainer.Select(selected)
-		}
+	if mw.settingsTab != nil {
+		mw.settingsTab.SyncPlatformTabVisibility()
 	}
 
 	if mw.twitchStatusDot != nil {
@@ -412,8 +497,9 @@ func (mw *MainWindow) initHeader() {
 		twitchTip,
 		mw.showTooltipForObject,
 		func() {
-			if mw.tabsContainer != nil && mw.twitchTabItem != nil {
-				mw.tabsContainer.Select(mw.twitchTabItem)
+			mw.SelectTab(TabIndexSettings)
+			if mw.settingsTab != nil {
+				mw.settingsTab.SelectPlatformTab("twitch")
 			}
 		},
 	)
@@ -433,8 +519,9 @@ func (mw *MainWindow) initHeader() {
 		ytTip,
 		mw.showTooltipForObject,
 		func() {
-			if mw.tabsContainer != nil && mw.youtubeTabItem != nil {
-				mw.tabsContainer.Select(mw.youtubeTabItem)
+			mw.SelectTab(TabIndexSettings)
+			if mw.settingsTab != nil {
+				mw.settingsTab.SelectPlatformTab("youtube")
 			}
 		},
 	)
@@ -454,8 +541,9 @@ func (mw *MainWindow) initHeader() {
 		ttTip,
 		mw.showTooltipForObject,
 		func() {
-			if mw.tabsContainer != nil && mw.tiktokTabItem != nil {
-				mw.tabsContainer.Select(mw.tiktokTabItem)
+			mw.SelectTab(TabIndexSettings)
+			if mw.settingsTab != nil {
+				mw.settingsTab.SelectPlatformTab("tiktok")
 			}
 		},
 	)
@@ -475,8 +563,9 @@ func (mw *MainWindow) initHeader() {
 		kickTip,
 		mw.showTooltipForObject,
 		func() {
-			if mw.tabsContainer != nil && mw.kickTabItem != nil {
-				mw.tabsContainer.Select(mw.kickTabItem)
+			mw.SelectTab(TabIndexSettings)
+			if mw.settingsTab != nil {
+				mw.settingsTab.SelectPlatformTab("kick")
 			}
 		},
 	)
@@ -508,34 +597,32 @@ func (mw *MainWindow) initHeader() {
 		_ = config.Save("", c)
 	}
 
-	volContainer := container.NewBorder(nil, nil, volLabel, nil, mw.volumeSlider)
-
-	// Panic Button
-	hk := mw.currentHotkeyLabel()
-	mw.panicBtn = widget.NewButtonWithIcon(fmt.Sprintf("PANIC MUTE (Esc / %s)", hk), theme.MediaStopIcon(), func() {
-		mw.triggerTogglePanic()
-	})
-	mw.panicBtn.Importance = widget.DangerImportance
-
-	if q := mw.Session.Queue(); q != nil {
-		q.SetOnStateChanged(func(paused, panicked bool) {
-			fyne.Do(func() {
-				mw.syncPanicUI(paused, panicked)
-			})
-		})
-	}
-
-	brandTitle := widget.NewLabelWithStyle("⚡ TownCrier "+AppVersion, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	volSliderSpacer := canvas.NewRectangle(color.Transparent)
+	volSliderSpacer.SetMinSize(fyne.NewSize(90, 1))
+	volContainer := container.NewBorder(nil, nil, volLabel, nil, container.NewStack(volSliderSpacer, mw.volumeSlider))
 
 	aboutBtn := widget.NewButtonWithIcon("About", theme.InfoIcon(), func() {
 		ShowAboutDialog(mw.Window)
 	})
 
-	leftSide := container.NewHBox(brandTitle, widget.NewSeparator(), mw.twitchStatusDot, mw.youtubeStatusDot, mw.tiktokStatusDot, mw.kickStatusDot)
-	rightSide := container.NewHBox(volContainer, aboutBtn, mw.panicBtn)
+	navButtons := container.NewHBox(
+		mw.dashboardBtn,
+		mw.viewersBtn,
+		mw.logsBtn,
+		mw.settingsBtn,
+	)
+	leftSide := container.NewHBox(
+		mw.twitchStatusDot,
+		mw.youtubeStatusDot,
+		mw.tiktokStatusDot,
+		mw.kickStatusDot,
+		widget.NewSeparator(),
+		navButtons,
+	)
+	rightSide := container.NewHBox(volContainer, aboutBtn)
 
 	mw.headerBar = container.NewVBox(
-		container.NewBorder(nil, nil, leftSide, rightSide),
+		container.NewHBox(leftSide, layout.NewSpacer(), rightSide),
 		widget.NewSeparator(),
 	)
 }

@@ -350,7 +350,7 @@ type PresetSpec struct {
 var HardwarePresets = []PresetSpec{
 	{
 		ID:                PresetUltraLow,
-		Label:             "Ultra-Low Resource — Kitten Nano INT8 (~145 MB RAM, Fast CPU)",
+		Label:             "Ultra-Low Resource — Kitten Nano INT8 (~145 MB)",
 		EnabledModels:     []string{ModelKittenNano},
 		UseGPU:            false,
 		NumThreads:        2,
@@ -361,7 +361,7 @@ var HardwarePresets = []PresetSpec{
 	},
 	{
 		ID:                PresetFastLean,
-		Label:             "Fast & Lean CPU (Default) — Supertonic INT8 (~195 MB RAM, Instant ~0.2s CPU Start)",
+		Label:             "Fast & Lean CPU (Default) — Supertonic INT8 (~195 MB)",
 		EnabledModels:     []string{ModelSupertonic},
 		UseGPU:            false,
 		NumThreads:        4,
@@ -372,7 +372,7 @@ var HardwarePresets = []PresetSpec{
 	},
 	{
 		ID:                PresetBalanced,
-		Label:             "Studio Quality CPU — Kokoro-82M INT8 (~285 MB RAM, ~3s CPU Start)",
+		Label:             "Studio Quality CPU — Kokoro-82M INT8 (~285 MB)",
 		EnabledModels:     []string{ModelKokoro},
 		UseGPU:            false,
 		NumThreads:        4,
@@ -383,7 +383,7 @@ var HardwarePresets = []PresetSpec{
 	},
 	{
 		ID:                PresetBeefy,
-		Label:             "Beefy Stream Rig — DirectML GPU + Multi-Model Pack (~1.1 GB RAM, Instant Start)",
+		Label:             "Beefy Stream Rig — DirectML GPU + Multi-Pack (~1.1 GB)",
 		EnabledModels:     []string{ModelKokoro, ModelSupertonic, ModelKittenMini, ModelPiper},
 		UseGPU:            true,
 		NumThreads:        6,
@@ -394,7 +394,7 @@ var HardwarePresets = []PresetSpec{
 	},
 	{
 		ID:          PresetCustom,
-		Label:       "Custom Configuration (Manual Hardware & Voice Pack Selection)",
+		Label:       "Custom Configuration (Manual Selection)",
 		Description: "Customize GPU acceleration, CPU threads, clause chunking, and voice model packs below.",
 	},
 }
