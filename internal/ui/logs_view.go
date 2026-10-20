@@ -40,7 +40,13 @@ const (
 )
 
 const (
-	platformOptionAll = "All Platforms"
+	platformOptionAll   = "All Platforms"
+	sessionOptionAll    = "All Sessions"
+	sessionOptionLatest = "Latest Session"
+	sessionOptionMulti  = "Select Multiple..."
+	sessionIDAll        = int64(0)
+	sessionIDLatest     = int64(-1)
+	sessionIDMulti      = int64(-2)
 )
 
 const (
@@ -75,6 +81,7 @@ type LogsView struct {
 	currentPage  int
 	liveTail     bool
 	hideBots     bool
+	showSummary  bool
 	fromDate     *time.Time
 	toDate       *time.Time
 	unsubLive    func()
@@ -83,25 +90,29 @@ type LogsView struct {
 	querySeq     uint64
 	initializing bool
 
-	liveTailCheck   *widget.Check
-	hideBotsCheck   *widget.Check
-	datePresetSel   *widget.Select
-	fromDateBtn     *widget.Button
-	toDateBtn       *widget.Button
-	platformSel     *widget.Select
-	eventTypeSel    *widget.Select
-	outcomeSel      *widget.Select
-	userSearchEntry *ScrollPassEntry
-	textSearchEntry *ScrollPassEntry
+	liveTailCheck    *widget.Check
+	hideBotsCheck    *widget.Check
+	showSummaryCheck *widget.Check
+	datePresetSel    *widget.Select
+	fromDateBtn      *widget.Button
+	toDateBtn        *widget.Button
+	platformSel      *widget.Select
+	eventTypeSel     *widget.Select
+	outcomeSel       *widget.Select
+	userSearchEntry  *ScrollPassEntry
+	textSearchEntry  *ScrollPassEntry
 
 	enableLogCheck *widget.Check
 	chatRetSel     *widget.Select
 	eventRetSel    *widget.Select
 
 	selectedSessionID      int64
+	selectedSessionIDs     []int64
+	latestSessionID        int64
 	selectedPlatform       string
 	sessionMap             map[string]int64
 	sessionSel             *widget.Select
+	multiSessionBtn        *widget.Button
 	summary                eventlog.QuerySummary
 	summaryTotalsLabel     *widget.Label
 	summaryTotalsContainer *fyne.Container
@@ -114,6 +125,7 @@ type LogsView struct {
 	filterDrawer    *fyne.Container
 	filtersExpanded bool
 	listBox         *fyne.Container
+	subTabs         *container.AppTabs
 
 	tooltipLayer  *fyne.Container
 	tooltipBubble *fyne.Container
@@ -127,11 +139,12 @@ type LogsView struct {
 // NewLogsView constructs a new LogsView bound to the active Session.
 func NewLogsView(w fyne.Window, session *app.Session) *LogsView {
 	return &LogsView{
-		window:   w,
-		session:  session,
-		liveTail: true,
-		hideBots: true,
-		listBox:  container.NewVBox(),
+		window:      w,
+		session:     session,
+		liveTail:    true,
+		hideBots:    true,
+		showSummary: true,
+		listBox:     container.NewVBox(),
 	}
 }
 
@@ -249,7 +262,7 @@ func (v *LogsView) Close() {
 	}
 }
 
-// Build constructs the Chat Logs UI canvas object with a collapsed-by-default filter drawer.
+// Build constructs the Chat Logs UI canvas object with Live Logs and Search History sub-tabs.
 func (v *LogsView) Build() fyne.CanvasObject {
 	v.initializing = true
 	defer func() { v.initializing = false }()
@@ -271,8 +284,8 @@ func (v *LogsView) Build() fyne.CanvasObject {
 	v.summaryTotalsContainer.Hide()
 
 	v.filterDrawer = v.buildFilterDrawer()
-	v.filterDrawer.Hide()
-	v.filtersExpanded = false
+	v.filterDrawer.Show()
+	v.filtersExpanded = true
 
 	compactTopBar := v.buildPaginationBar()
 	tableHeader := v.buildTableHeader()
@@ -297,7 +310,7 @@ func (v *LogsView) Build() fyne.CanvasObject {
 		tableHeader,
 	)
 
-	mainLayout := container.NewBorder(
+	searchLayout := container.NewBorder(
 		topSection,
 		nil,
 		nil,
@@ -305,7 +318,69 @@ func (v *LogsView) Build() fyne.CanvasObject {
 		listScroll,
 	)
 
-	return container.NewStack(mainLayout, v.tooltipLayer)
+	v.subTabs = container.NewAppTabs(
+		container.NewTabItemWithIcon("Live Logs", theme.VisibilityIcon(), v.buildLiveLogsTab()),
+		container.NewTabItemWithIcon("Search History", theme.SearchIcon(), searchLayout),
+	)
+
+	return container.NewStack(v.subTabs, v.tooltipLayer)
+}
+
+func (v *LogsView) buildLiveLogsTab() fyne.CanvasObject {
+	headerTitle := widget.NewLabelWithStyle("Saved Live Log Views", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	headerSub := widget.NewLabel("Click a card to open a live filter view. Default presets include Latest Session (auto-switches as new sessions start) and All Events.")
+	headerSub.Wrapping = fyne.TextWrapWord
+
+	latestCard := widget.NewCard(
+		"Latest Session",
+		"Session: Latest Session (Auto-Switching)  •  Platform: All  •  Hide Bots: On  •  Alerts Summary: On",
+		widget.NewButtonWithIcon("Open Latest Session", theme.VisibilityIcon(), func() {
+			if v.sessionSel != nil {
+				v.sessionSel.SetSelected(sessionOptionLatest)
+			}
+			if v.liveTailCheck != nil {
+				v.liveTailCheck.SetChecked(true)
+			}
+			if v.subTabs != nil && len(v.subTabs.Items) > 1 {
+				v.subTabs.SelectIndex(1)
+			}
+		}),
+	)
+
+	allEventsCard := widget.NewCard(
+		"All Events",
+		"Session: All Sessions  •  Platform: All  •  Hide Bots: On  •  Alerts Summary: On",
+		widget.NewButtonWithIcon("Open All Events", theme.VisibilityIcon(), func() {
+			v.ResetFilters()
+			if v.subTabs != nil && len(v.subTabs.Items) > 1 {
+				v.subTabs.SelectIndex(1)
+			}
+		}),
+	)
+
+	cardsGrid := container.NewGridWithColumns(2, latestCard, allEventsCard)
+	content := container.NewVBox(
+		headerTitle,
+		headerSub,
+		widget.NewSeparator(),
+		cardsGrid,
+	)
+	return newPanelVScroll(container.NewPadded(content))
+}
+
+func newFilterFieldLabel(text string) fyne.CanvasObject {
+	lbl := canvas.NewText(text, colorSlateMuted)
+	lbl.TextStyle = fyne.TextStyle{Bold: true}
+	lbl.TextSize = theme.TextSize()
+	return container.NewCenter(container.NewPadded(lbl))
+}
+
+func newBorderedControl(ctrl fyne.CanvasObject) fyne.CanvasObject {
+	box := canvas.NewRectangle(colorInputWell)
+	box.StrokeColor = colorInputBorder
+	box.StrokeWidth = 1
+	box.CornerRadius = 4
+	return container.NewStack(box, ctrl)
 }
 
 func formatSummaryTotals(s eventlog.QuerySummary) string {
@@ -450,6 +525,17 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 	})
 	v.hideBotsCheck.SetChecked(v.hideBots)
 
+	v.showSummaryCheck = widget.NewCheck("📊 Show Summary", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.mu.Lock()
+		v.showSummary = checked
+		v.mu.Unlock()
+		v.renderEntries()
+	})
+	v.showSummaryCheck.SetChecked(v.showSummary)
+
 	presets := []string{
 		datePresetAllTime,
 		datePresetToday,
@@ -507,19 +593,35 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 		})
 	})
 
-	v.sessionMap = map[string]int64{"All Sessions": 0}
-	v.sessionSel = widget.NewSelect([]string{"All Sessions"}, func(selected string) {
+	v.sessionMap = map[string]int64{
+		sessionOptionAll:    sessionIDAll,
+		sessionOptionLatest: sessionIDLatest,
+		sessionOptionMulti:  sessionIDMulti,
+	}
+	v.sessionSel = widget.NewSelect([]string{sessionOptionAll, sessionOptionLatest, sessionOptionMulti}, func(selected string) {
 		if v.initializing {
 			return
 		}
 		sid := v.sessionMap[selected]
+		if sid == sessionIDMulti {
+			v.showMultiSessionDialog()
+			return
+		}
 		v.mu.Lock()
 		v.selectedSessionID = sid
+		v.selectedSessionIDs = nil
 		v.currentPage = 0
 		v.mu.Unlock()
+		if v.multiSessionBtn != nil {
+			v.multiSessionBtn.SetText("☑")
+		}
 		v.RefreshQuery()
 	})
-	v.sessionSel.SetSelected("All Sessions")
+	v.sessionSel.SetSelected(sessionOptionAll)
+
+	v.multiSessionBtn = widget.NewButton("☑", func() {
+		v.showMultiSessionDialog()
+	})
 
 	v.platformSel = widget.NewSelect([]string{platformOptionAll, "Twitch", "YouTube", "TikTok", "Kick"}, func(selected string) {
 		if v.initializing {
@@ -596,7 +698,7 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 		v.scheduleSearch()
 	}
 
-	resetBtn := widget.NewButtonWithIcon("Reset Filters", theme.ContentClearIcon(), func() {
+	clearAllBtn := widget.NewButtonWithIcon("Clear All", theme.ContentClearIcon(), func() {
 		v.ResetFilters()
 	})
 
@@ -608,31 +710,36 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 	topRow := container.NewHBox(
 		v.liveTailCheck,
 		v.hideBotsCheck,
+		v.showSummaryCheck,
 		widget.NewSeparator(),
-		widget.NewLabel("Date Range:"),
-		v.datePresetSel,
-		v.fromDateBtn,
-		v.toDateBtn,
-		resetBtn,
+		newFilterFieldLabel("Date Range:"),
+		newBorderedControl(v.datePresetSel),
+		newBorderedControl(v.fromDateBtn),
+		newBorderedControl(v.toDateBtn),
+		clearAllBtn,
 		refreshBtn,
 	)
 
+	sessionControls := container.NewBorder(nil, nil, nil, newBorderedControl(v.multiSessionBtn), newBorderedControl(v.sessionSel))
+
 	midRow := container.NewGridWithColumns(4,
-		container.NewBorder(nil, nil, widget.NewLabel("Session:"), nil, v.sessionSel),
-		container.NewBorder(nil, nil, widget.NewLabel("Platform:"), nil, v.platformSel),
-		container.NewBorder(nil, nil, widget.NewLabel("Type:"), nil, v.eventTypeSel),
-		container.NewBorder(nil, nil, widget.NewLabel("Status:"), nil, v.outcomeSel),
+		container.NewBorder(nil, nil, newFilterFieldLabel("Session:"), nil, sessionControls),
+		container.NewBorder(nil, nil, newFilterFieldLabel("Platform:"), nil, newBorderedControl(v.platformSel)),
+		container.NewBorder(nil, nil, newFilterFieldLabel("Type:"), nil, newBorderedControl(v.eventTypeSel)),
+		container.NewBorder(nil, nil, newFilterFieldLabel("Status:"), nil, newBorderedControl(v.outcomeSel)),
 	)
 
 	searchRow := container.NewGridWithColumns(2,
-		container.NewBorder(nil, nil, widget.NewLabel("User / ID:"), nil, v.userSearchEntry),
-		container.NewBorder(nil, nil, widget.NewLabel("Message:"), nil, v.textSearchEntry),
+		container.NewBorder(nil, nil, newFilterFieldLabel("User / ID:"), nil, v.userSearchEntry),
+		container.NewBorder(nil, nil, newFilterFieldLabel("Message:"), nil, v.textSearchEntry),
 	)
 
 	drawerBg := canvas.NewRectangle(colorSlateSurface)
+	bottomBorder := canvas.NewRectangle(colorSlateBorder)
+	bottomBorder.SetMinSize(fyne.NewSize(1, 1))
 	return container.NewStack(
 		drawerBg,
-		container.NewPadded(container.NewVBox(topRow, midRow, searchRow)),
+		container.NewBorder(nil, bottomBorder, nil, nil, container.NewPadded(container.NewVBox(topRow, midRow, searchRow))),
 	)
 }
 
@@ -648,13 +755,26 @@ func (v *LogsView) refreshSessionDropdown() {
 		}
 	}
 
-	options := []string{"All Sessions"}
-	newMap := map[string]int64{"All Sessions": 0}
+	options := []string{sessionOptionAll, sessionOptionLatest, sessionOptionMulti}
+	newMap := map[string]int64{
+		sessionOptionAll:    sessionIDAll,
+		sessionOptionLatest: sessionIDLatest,
+		sessionOptionMulti:  sessionIDMulti,
+	}
 
 	activeSID := int64(0)
 	if v.session != nil {
 		activeSID = v.session.ActiveSessionID()
 	}
+
+	latestSID := activeSID
+	if latestSID <= 0 && len(sessions) > 0 {
+		latestSID = sessions[0].ID
+	}
+	v.mu.Lock()
+	v.latestSessionID = latestSID
+	multiCount := len(v.selectedSessionIDs)
+	v.mu.Unlock()
 
 	for _, s := range sessions {
 		durStr := ""
@@ -680,19 +800,168 @@ func (v *LogsView) refreshSessionDropdown() {
 
 	v.sessionMap = newMap
 	v.sessionSel.Options = options
-	selectedLabel := "All Sessions"
-	for lbl, id := range v.sessionMap {
-		if id == v.selectedSessionID {
-			selectedLabel = lbl
-			break
+	selectedLabel := sessionOptionAll
+	if multiCount > 0 {
+		selectedLabel = sessionOptionMulti
+	} else {
+		for lbl, id := range v.sessionMap {
+			if id == v.selectedSessionID {
+				selectedLabel = lbl
+				break
+			}
 		}
 	}
+	v.initializing = true
 	v.sessionSel.SetSelected(selectedLabel)
+	v.initializing = false
 	v.sessionSel.Refresh()
 }
 
+// SetSelectedSessions configures the search filter to match one or more specific session IDs.
+func (v *LogsView) SetSelectedSessions(ids []int64) {
+	var clean []int64
+	for _, id := range ids {
+		if id > 0 && !slices.Contains(clean, id) {
+			clean = append(clean, id)
+		}
+	}
+	v.mu.Lock()
+	switch len(clean) {
+	case 0:
+		v.selectedSessionIDs = nil
+		v.selectedSessionID = sessionIDAll
+	case 1:
+		v.selectedSessionIDs = nil
+		v.selectedSessionID = clean[0]
+	default:
+		v.selectedSessionIDs = clean
+		v.selectedSessionID = sessionIDMulti
+	}
+	v.currentPage = 0
+	v.mu.Unlock()
+
+	if v.multiSessionBtn != nil {
+		if len(clean) > 1 {
+			v.multiSessionBtn.SetText(fmt.Sprintf("☑ (%d)", len(clean)))
+		} else {
+			v.multiSessionBtn.SetText("☑")
+		}
+	}
+	v.refreshSessionDropdown()
+	v.RefreshQuery()
+}
+
+func (v *LogsView) showMultiSessionDialog() {
+	var sessions []eventlog.StreamSession
+	if v.session != nil && v.session.EventLogger() != nil {
+		if sList, err := v.session.EventLogger().ListSessions(context.Background(), 50); err == nil {
+			sessions = sList
+		}
+	}
+
+	activeSID := int64(0)
+	if v.session != nil {
+		activeSID = v.session.ActiveSessionID()
+	}
+
+	optLabels := make([]string, 0, len(sessions))
+	labelToID := make(map[string]int64, len(sessions))
+	var preSelected []string
+
+	v.mu.Lock()
+	currentMulti := slices.Clone(v.selectedSessionIDs)
+	currentSingle := v.selectedSessionID
+	v.mu.Unlock()
+
+	for _, s := range sessions {
+		endStr := "LIVE"
+		durStr := ""
+		if !s.EndedAt.IsZero() {
+			endStr = s.EndedAt.Local().Format("15:04")
+			dur := s.EndedAt.Sub(s.StartedAt).Round(time.Minute)
+			durStr = fmt.Sprintf(" (%s)", dur)
+		} else if s.ID == activeSID {
+			endStr = "LIVE NOW"
+		}
+		platStr := strings.Join(s.Platforms, "/")
+		if platStr == "" {
+			platStr = "Stream"
+		}
+		label := fmt.Sprintf("#%d: %s %s–%s%s", s.ID, platStr, s.StartedAt.Local().Format("01/02 15:04"), endStr, durStr)
+		if s.ID == activeSID {
+			label = "🟢 " + label
+		}
+		optLabels = append(optLabels, label)
+		labelToID[label] = s.ID
+		if slices.Contains(currentMulti, s.ID) || (len(currentMulti) == 0 && currentSingle == s.ID) {
+			preSelected = append(preSelected, label)
+		}
+	}
+
+	checkGroup := widget.NewCheckGroup(optLabels, nil)
+	checkGroup.SetSelected(preSelected)
+
+	selectAllBtn := widget.NewButton("Select All", func() {
+		checkGroup.SetSelected(optLabels)
+	})
+	clearBtn := widget.NewButton("Clear", func() {
+		checkGroup.SetSelected(nil)
+	})
+
+	scrollBox := container.NewVScroll(checkGroup)
+	scrollBox.SetMinSize(fyne.NewSize(420, 260))
+
+	content := container.NewBorder(
+		container.NewHBox(widget.NewLabel("Choose one or more stream sessions:"), selectAllBtn, clearBtn),
+		nil,
+		nil,
+		nil,
+		scrollBox,
+	)
+
+	dialog.ShowCustomConfirm("Select Stream Sessions", "Apply", "Cancel", content, func(ok bool) {
+		if !ok {
+			v.refreshSessionDropdown()
+			return
+		}
+		var chosen []int64
+		for _, lbl := range checkGroup.Selected {
+			if id, exists := labelToID[lbl]; exists && id > 0 {
+				chosen = append(chosen, id)
+			}
+		}
+		v.SetSelectedSessions(chosen)
+	}, v.window)
+}
+
+func (v *LogsView) resolveSessionID(selectedID int64) int64 {
+	if selectedID != sessionIDLatest {
+		return selectedID
+	}
+	if v.session != nil {
+		if active := v.session.ActiveSessionID(); active > 0 {
+			return active
+		}
+	}
+	v.mu.Lock()
+	latest := v.latestSessionID
+	v.mu.Unlock()
+	if latest > 0 {
+		return latest
+	}
+	if v.session != nil && v.session.EventLogger() != nil {
+		if sList, err := v.session.EventLogger().ListSessions(context.Background(), 1); err == nil && len(sList) > 0 {
+			v.mu.Lock()
+			v.latestSessionID = sList[0].ID
+			v.mu.Unlock()
+			return sList[0].ID
+		}
+	}
+	return 0
+}
+
 func (v *LogsView) buildPaginationBar() *fyne.Container {
-	v.filterToggleBtn = widget.NewButton("▸ Filters & Live Tail", func() {
+	v.filterToggleBtn = widget.NewButton("▾ Filters & Live Tail", func() {
 		v.filtersExpanded = !v.filtersExpanded
 		if v.filtersExpanded {
 			v.filterToggleBtn.SetText("▾ Filters & Live Tail")
@@ -766,9 +1035,13 @@ func (v *LogsView) buildTableHeader() fyne.CanvasObject {
 // ResetFilters clears all active search filters and restores Live Tail mode.
 func (v *LogsView) ResetFilters() {
 	v.initializing = true
-	v.selectedSessionID = 0
+	v.selectedSessionID = sessionIDAll
+	v.selectedSessionIDs = nil
 	if v.sessionSel != nil {
-		v.sessionSel.SetSelected("All Sessions")
+		v.sessionSel.SetSelected(sessionOptionAll)
+	}
+	if v.multiSessionBtn != nil {
+		v.multiSessionBtn.SetText("☑")
 	}
 	v.setDateRange(nil, nil)
 	if v.datePresetSel != nil {
@@ -795,10 +1068,14 @@ func (v *LogsView) ResetFilters() {
 	if v.hideBotsCheck != nil {
 		v.hideBotsCheck.SetChecked(true)
 	}
+	if v.showSummaryCheck != nil {
+		v.showSummaryCheck.SetChecked(true)
+	}
 	v.mu.Lock()
 	v.selectedPlatform = ""
 	v.liveTail = true
 	v.hideBots = true
+	v.showSummary = true
 	v.currentPage = 0
 	v.mu.Unlock()
 	v.initializing = false
@@ -844,9 +1121,15 @@ func (v *LogsView) currentFilter() eventlog.QueryFilter {
 	to := v.toDate
 	page := v.currentPage
 	hideBots := v.hideBots
-	sessionID := v.selectedSessionID
+	selectedSession := v.selectedSessionID
+	multiSessions := slices.Clone(v.selectedSessionIDs)
 	plat := v.selectedPlatform
 	v.mu.Unlock()
+
+	sessionID := int64(0)
+	if len(multiSessions) == 0 {
+		sessionID = v.resolveSessionID(selectedSession)
+	}
 
 	if v.platformSel != nil {
 		plat = normalizePlatformOption(v.platformSel.Selected)
@@ -910,6 +1193,7 @@ func (v *LogsView) currentFilter() eventlog.QueryFilter {
 
 	return eventlog.QueryFilter{
 		SessionID:     sessionID,
+		SessionIDs:    multiSessions,
 		From:          from,
 		To:            to,
 		Platform:      plat,
@@ -1038,6 +1322,27 @@ func (v *LogsView) subscribeLiveTail() {
 	}
 
 	unsub := v.session.EventLogger().Subscribe(func(ev eventlog.LiveUpdate) {
+		if ev.Kind == eventlog.LiveUpdateAppend && ev.Entry != nil && ev.Entry.SessionID > 0 {
+			v.mu.Lock()
+			prevLatest := v.latestSessionID
+			selectedMode := v.selectedSessionID
+			if ev.Entry.SessionID > v.latestSessionID {
+				v.latestSessionID = ev.Entry.SessionID
+			}
+			newLatest := v.latestSessionID
+			v.mu.Unlock()
+
+			if newLatest != prevLatest {
+				fyne.Do(func() {
+					v.refreshSessionDropdown()
+				})
+				if selectedMode == sessionIDLatest {
+					v.RefreshQuery()
+					return
+				}
+			}
+		}
+
 		v.mu.Lock()
 		isLive := v.liveTail && v.currentPage == 0
 		v.mu.Unlock()
@@ -1106,7 +1411,11 @@ func (v *LogsView) subscribeLiveTail() {
 }
 
 func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
-	if f.SessionID > 0 && e.SessionID != f.SessionID {
+	if len(f.SessionIDs) > 0 {
+		if !slices.Contains(f.SessionIDs, e.SessionID) {
+			return false
+		}
+	} else if f.SessionID > 0 && e.SessionID != f.SessionID {
 		return false
 	}
 	if f.From != nil && !f.From.IsZero() && e.CreatedAt.Before(*f.From) {
@@ -1226,6 +1535,7 @@ func (v *LogsView) renderEntries() {
 	copy(entries, v.entries)
 	total := v.totalCount
 	page := v.currentPage
+	showSum := v.showSummary
 	summary := v.summary.Clone()
 	v.mu.Unlock()
 
@@ -1241,7 +1551,7 @@ func (v *LogsView) renderEntries() {
 
 	if v.summaryTotalsLabel != nil {
 		txt := formatSummaryTotals(summary)
-		if txt != "" {
+		if showSum && txt != "" {
 			v.summaryTotalsLabel.SetText(txt)
 			if v.summaryTotalsContainer != nil {
 				v.summaryTotalsContainer.Show()

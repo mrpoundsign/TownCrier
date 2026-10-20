@@ -711,6 +711,142 @@ func TestLogsViewLiveTailSummaryTotalsUpdate(t *testing.T) {
 	if sumAfterMsg.TotalBits != 250 || sumAfterMsg.TotalSubs != 1 || sumAfterMsg.SuperChatByCurr["USD"] != 15 {
 		t.Errorf("regular chat message modified alert summary: %+v", sumAfterMsg)
 	}
+
+	// 5. Toggling Show Summary hides/shows summaryTotalsContainer
+	lv.showSummaryCheck.SetChecked(false)
+	if lv.summaryTotalsContainer.Visible() {
+		t.Error("expected summaryTotalsContainer to hide when showSummaryCheck is unchecked")
+	}
+	lv.showSummaryCheck.SetChecked(true)
+	if !lv.summaryTotalsContainer.Visible() {
+		t.Error("expected summaryTotalsContainer to show when showSummaryCheck is re-checked")
+	}
+}
+
+func TestLogsViewLatestSessionAutoSwitchAndThemeContrast(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestLatestSession")
+
+	// Verify ObsidianTheme provides distinct input background, input border, and button colors vs card surface
+	th := NewObsidianTheme()
+	inputBg := th.Color("inputBackground", 0)
+	inputBorder := th.Color("inputBorder", 0)
+	btnBg := th.Color("button", 0)
+	if inputBg == colorSlateSurface {
+		t.Errorf("expected inputBackground (%v) to differ from colorSlateSurface (%v)", inputBg, colorSlateSurface)
+	}
+	if btnBg == colorSlateSurface {
+		t.Errorf("expected button surface (%v) to differ from colorSlateSurface (%v)", btnBg, colorSlateSurface)
+	}
+	if inputBorder != colorInputBorder {
+		t.Errorf("expected inputBorder (%v) to match colorInputBorder (%v)", inputBorder, colorInputBorder)
+	}
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "latest_session_events.db")
+	backend, err := eventlog.NewSQLiteBackend(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open sqlite backend: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	mgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, backend)
+	defer func() { _ = mgr.Close() }()
+
+	ctx := context.Background()
+	t1 := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	s1, err := backend.StartSession(ctx, t1, "twitch", "streamer")
+	if err != nil {
+		t.Fatalf("StartSession 1: %v", err)
+	}
+	_ = mgr.Append(ctx, &eventlog.Entry{
+		ID:        "s1-ev1",
+		SessionID: s1.ID,
+		CreatedAt: t1.Add(1 * time.Minute),
+		Platform:  "twitch",
+		Kind:      "message",
+		UserName:  "alice",
+		RawText:   "In session 1",
+		Outcome:   eventlog.OutcomeSpoken,
+	})
+
+	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess.SetEventLogger(mgr)
+
+	lv := NewLogsView(w, sess)
+	defer lv.Close()
+	_ = lv.Build()
+
+	// Select "Latest Session" -> should resolve to Session #1
+	lv.sessionSel.SetSelected(sessionOptionLatest)
+	lv.mu.Lock()
+	c1 := len(lv.entries)
+	lv.mu.Unlock()
+	if c1 != 1 || lv.entries[0].ID != "s1-ev1" {
+		t.Fatalf("expected Latest Session to resolve to s1-ev1, got count=%d", c1)
+	}
+
+	// Start Session #2 and append an event in Session #2 -> Latest Session should auto-switch to Session #2
+	t2 := t1.Add(2 * time.Hour)
+	s2, err := backend.StartSession(ctx, t2, "twitch", "streamer")
+	if err != nil {
+		t.Fatalf("StartSession 2: %v", err)
+	}
+	_ = mgr.Append(ctx, &eventlog.Entry{
+		ID:        "s2-ev1",
+		SessionID: s2.ID,
+		CreatedAt: t2.Add(1 * time.Minute),
+		Platform:  "twitch",
+		Kind:      "message",
+		UserName:  "bob",
+		RawText:   "In session 2",
+		Outcome:   eventlog.OutcomeSpoken,
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	lv.mu.Lock()
+	c2 := len(lv.entries)
+	var firstID string
+	if c2 > 0 {
+		firstID = lv.entries[0].ID
+	}
+	lv.mu.Unlock()
+	if c2 != 1 || firstID != "s2-ev1" {
+		t.Fatalf("expected Latest Session to automatically switch to Session #2 (s2-ev1), got count=%d firstID=%q", c2, firstID)
+	}
+
+	// Create Session #3 with an event, then select multiple sessions (Session #1 + Session #2)
+	t3 := t2.Add(2 * time.Hour)
+	s3, err := backend.StartSession(ctx, t3, "twitch", "streamer")
+	if err != nil {
+		t.Fatalf("StartSession 3: %v", err)
+	}
+	_ = mgr.Append(ctx, &eventlog.Entry{
+		ID:        "s3-ev1",
+		SessionID: s3.ID,
+		CreatedAt: t3.Add(1 * time.Minute),
+		Platform:  "twitch",
+		Kind:      "message",
+		UserName:  "charlie",
+		RawText:   "In session 3",
+		Outcome:   eventlog.OutcomeSpoken,
+	})
+
+	lv.SetSelectedSessions([]int64{s1.ID, s2.ID})
+	lv.mu.Lock()
+	cMulti := len(lv.entries)
+	lv.mu.Unlock()
+	if cMulti != 2 {
+		t.Fatalf("expected 2 entries when filtering by multiple sessions [s1, s2], got %d", cMulti)
+	}
+	if lv.multiSessionBtn.Text != "☑ (2)" {
+		t.Errorf("expected multiSessionBtn label '☑ (2)', got %q", lv.multiSessionBtn.Text)
+	}
 }
 
 
