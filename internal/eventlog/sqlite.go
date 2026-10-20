@@ -1257,57 +1257,15 @@ GROUP BY LOWER(kind), LOWER(platform), UPPER(TRIM(currency));`
 }
 
 func accumulateSummaryRow(summary *QuerySummary, kind, platform, currency string, rowCount int, sumAmount float64, sumCount int) {
-	switch kind {
-	case "sub", "resub", "membership":
-		summary.TotalSubs += rowCount
-	case "gift_sub", "gift_membership":
-		summary.TotalGiftSubs += sumCount
-	case "cheer":
-		summary.TotalBits += sumAmount
-	case "gift":
-		val := sumAmount
-		if val <= 0 {
-			val = float64(sumCount)
-		}
-		if platform == "kick" || currency == "KICKS" {
-			summary.TotalKicks += val
-		} else {
-			summary.TotalDiamonds += val
-		}
-	case "super_chat", "super_sticker", "superchat", "supersticker":
-		curr := currency
-		if curr == "" {
-			curr = "USD"
-		}
-		if summary.SuperChatByCurr == nil {
-			summary.SuperChatByCurr = make(map[string]float64)
-		}
-		summary.SuperChatByCurr[curr] += sumAmount
-	case "raid":
-		summary.TotalRaids += rowCount
-		summary.TotalRaidViewers += sumCount
-	case "follow":
-		summary.TotalFollows += rowCount
-	case "redemption":
-		summary.TotalRedemptions += rowCount
+	if summary != nil {
+		summary.AccumulateRow(kind, platform, currency, rowCount, sumAmount, sumCount)
 	}
 }
 
 func summarizeEntriesInMemory(entries []Entry) QuerySummary {
 	var summary QuerySummary
 	for i := range entries {
-		e := &entries[i]
-		kind := strings.ToLower(strings.TrimSpace(e.Kind))
-		if kind == "" || kind == "message" || kind == "moderation" {
-			continue
-		}
-		plat := strings.ToLower(strings.TrimSpace(e.Platform))
-		curr := strings.ToUpper(strings.TrimSpace(e.Currency))
-		cnt := e.Count
-		if cnt <= 0 {
-			cnt = 1
-		}
-		accumulateSummaryRow(&summary, kind, plat, curr, 1, e.Amount, cnt)
+		summary.AddEntry(entries[i])
 	}
 	return summary
 }

@@ -1,6 +1,8 @@
 package eventlog
 
 import (
+	"maps"
+	"strings"
 	"time"
 
 	"github.com/mrpoundsign/TownCrier/internal/chat"
@@ -208,6 +210,69 @@ type QuerySummary struct {
 	TotalRaidViewers int                `json:"total_raid_viewers"`
 	TotalFollows     int                `json:"total_follows"`
 	TotalRedemptions int                `json:"total_redemptions"`
+}
+
+// Clone returns a deep copy of QuerySummary.
+func (s QuerySummary) Clone() QuerySummary {
+	clone := s
+	if s.SuperChatByCurr != nil {
+		clone.SuperChatByCurr = make(map[string]float64, len(s.SuperChatByCurr))
+		maps.Copy(clone.SuperChatByCurr, s.SuperChatByCurr)
+	}
+	return clone
+}
+
+// AddEntry accumulates a single Entry into QuerySummary if it is an alert or monetization event.
+func (s *QuerySummary) AddEntry(e Entry) {
+	kind := strings.ToLower(strings.TrimSpace(e.Kind))
+	if kind == "" || kind == "message" || kind == "moderation" {
+		return
+	}
+	plat := strings.ToLower(strings.TrimSpace(e.Platform))
+	curr := strings.ToUpper(strings.TrimSpace(e.Currency))
+	cnt := e.Count
+	if cnt <= 0 {
+		cnt = 1
+	}
+	s.AccumulateRow(kind, plat, curr, 1, e.Amount, cnt)
+}
+
+// AccumulateRow adds aggregated metrics for a kind/platform/currency group to QuerySummary.
+func (s *QuerySummary) AccumulateRow(kind, platform, currency string, rowCount int, sumAmount float64, sumCount int) {
+	switch kind {
+	case "sub", "resub", "membership":
+		s.TotalSubs += rowCount
+	case "gift_sub", "gift_membership":
+		s.TotalGiftSubs += sumCount
+	case "cheer":
+		s.TotalBits += sumAmount
+	case "gift":
+		val := sumAmount
+		if val <= 0 {
+			val = float64(sumCount)
+		}
+		if platform == "kick" || currency == "KICKS" {
+			s.TotalKicks += val
+		} else {
+			s.TotalDiamonds += val
+		}
+	case "super_chat", "super_sticker", "superchat", "supersticker":
+		curr := currency
+		if curr == "" {
+			curr = "USD"
+		}
+		if s.SuperChatByCurr == nil {
+			s.SuperChatByCurr = make(map[string]float64)
+		}
+		s.SuperChatByCurr[curr] += sumAmount
+	case "raid":
+		s.TotalRaids += rowCount
+		s.TotalRaidViewers += sumCount
+	case "follow":
+		s.TotalFollows += rowCount
+	case "redemption":
+		s.TotalRedemptions += rowCount
+	}
 }
 
 // QueryResult holds a page of matching log entries, the total matching row count, and aggregated summary totals.

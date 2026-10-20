@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -315,9 +316,17 @@ func formatSummaryTotals(s eventlog.QuerySummary) string {
 	if s.TotalDiamonds > 0 {
 		parts = append(parts, fmt.Sprintf("💎 %.0f Diamonds", s.TotalDiamonds))
 	}
-	for curr, amt := range s.SuperChatByCurr {
-		if amt > 0 {
-			parts = append(parts, fmt.Sprintf("💬 %.0f %s", amt, curr))
+	if len(s.SuperChatByCurr) > 0 {
+		currs := make([]string, 0, len(s.SuperChatByCurr))
+		for curr := range s.SuperChatByCurr {
+			currs = append(currs, curr)
+		}
+		slices.Sort(currs)
+		for _, curr := range currs {
+			amt := s.SuperChatByCurr[curr]
+			if amt > 0 {
+				parts = append(parts, fmt.Sprintf("💬 %.0f %s", amt, curr))
+			}
 		}
 	}
 	if s.TotalSubs > 0 {
@@ -1049,6 +1058,9 @@ func (v *LogsView) subscribeLiveTail() {
 				v.entries = v.entries[:maxLiveTailRows]
 			}
 			v.totalCount++
+			if !filter.SkipSummary {
+				v.summary.AddEntry(*ev.Entry)
+			}
 			v.mu.Unlock()
 
 			fyne.Do(func() {
@@ -1214,6 +1226,7 @@ func (v *LogsView) renderEntries() {
 	copy(entries, v.entries)
 	total := v.totalCount
 	page := v.currentPage
+	summary := v.summary.Clone()
 	v.mu.Unlock()
 
 	if v.summaryLabel != nil {
@@ -1227,16 +1240,18 @@ func (v *LogsView) renderEntries() {
 	}
 
 	if v.summaryTotalsLabel != nil {
-		txt := formatSummaryTotals(v.summary)
+		txt := formatSummaryTotals(summary)
 		if txt != "" {
 			v.summaryTotalsLabel.SetText(txt)
 			if v.summaryTotalsContainer != nil {
 				v.summaryTotalsContainer.Show()
+				v.summaryTotalsContainer.Refresh()
 			}
 		} else {
 			v.summaryTotalsLabel.SetText("")
 			if v.summaryTotalsContainer != nil {
 				v.summaryTotalsContainer.Hide()
+				v.summaryTotalsContainer.Refresh()
 			}
 		}
 	}

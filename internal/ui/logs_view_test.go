@@ -577,5 +577,142 @@ func TestLogsViewStreamSessionAndTotalsSummary(t *testing.T) {
 	}
 }
 
+func TestLogsViewLiveTailSummaryTotalsUpdate(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestLiveTailSummaryTotals")
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "live_summary_events.db")
+	backend, err := eventlog.NewSQLiteBackend(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open sqlite backend: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	mgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, backend)
+	defer func() { _ = mgr.Close() }()
+
+	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess.SetEventLogger(mgr)
+
+	lv := NewLogsView(w, sess)
+	defer lv.Close()
+	_ = lv.Build()
+
+	// Initial state: 0 events, summary banner should be empty
+	if lv.summaryTotalsLabel.Text != "" {
+		t.Errorf("expected empty initial summaryTotalsLabel, got %q", lv.summaryTotalsLabel.Text)
+	}
+
+	ctx := context.Background()
+
+	// 1. Live stream alert arrives: Twitch Cheer
+	err = mgr.Append(ctx, &eventlog.Entry{
+		ID:        "live-ev-cheer",
+		CreatedAt: time.Now().UTC(),
+		Platform:  "twitch",
+		Kind:      string(chat.EventKindCheer),
+		Amount:    250,
+		UserName:  "cheerer",
+		Spoken:    true,
+		Outcome:   eventlog.OutcomeSpoken,
+	})
+	if err != nil {
+		t.Fatalf("Append cheer: %v", err)
+	}
+
+	// 2. Live stream alert arrives: Twitch Sub
+	err = mgr.Append(ctx, &eventlog.Entry{
+		ID:        "live-ev-sub",
+		CreatedAt: time.Now().UTC(),
+		Platform:  "twitch",
+		Kind:      string(chat.EventKindSub),
+		UserName:  "subscriber",
+		Spoken:    true,
+		Outcome:   eventlog.OutcomeSpoken,
+	})
+	if err != nil {
+		t.Fatalf("Append sub: %v", err)
+	}
+
+	// 3. Live stream alert arrives: YouTube Superchat
+	err = mgr.Append(ctx, &eventlog.Entry{
+		ID:        "live-ev-superchat",
+		CreatedAt: time.Now().UTC(),
+		Platform:  "youtube",
+		Kind:      string(chat.EventKindSuperChat),
+		Amount:    15,
+		Currency:  "USD",
+		UserName:  "ytfan",
+		Spoken:    true,
+		Outcome:   eventlog.OutcomeSpoken,
+	})
+	if err != nil {
+		t.Fatalf("Append superchat: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	lv.mu.Lock()
+	sum := lv.summary.Clone()
+	count := len(lv.entries)
+	lv.mu.Unlock()
+
+	if count != 3 {
+		t.Fatalf("expected 3 entries in live tail, got %d", count)
+	}
+	if sum.TotalBits != 250 {
+		t.Errorf("expected 250 bits in live summary, got %v", sum.TotalBits)
+	}
+	if sum.TotalSubs != 1 {
+		t.Errorf("expected 1 sub in live summary, got %d", sum.TotalSubs)
+	}
+	if sum.SuperChatByCurr["USD"] != 15 {
+		t.Errorf("expected 15 USD in live summary, got %v", sum.SuperChatByCurr["USD"])
+	}
+
+	totalsText := lv.summaryTotalsLabel.Text
+	if !strings.Contains(totalsText, "250 Bits") || !strings.Contains(totalsText, "1 Subs") || !strings.Contains(totalsText, "15 USD") {
+		t.Errorf("summaryTotalsLabel does not reflect live updates: %q", totalsText)
+	}
+	if !lv.summaryTotalsContainer.Visible() {
+		t.Errorf("expected summaryTotalsContainer to be visible after alerts arrived")
+	}
+
+	// 4. Regular chat message arrives: should be added to entries but NOT increment alert counts
+	err = mgr.Append(ctx, &eventlog.Entry{
+		ID:        "live-ev-msg",
+		CreatedAt: time.Now().UTC(),
+		Platform:  "twitch",
+		Kind:      string(chat.EventKindMessage),
+		UserName:  "chatter",
+		RawText:   "hello stream",
+		Spoken:    true,
+		Outcome:   eventlog.OutcomeSpoken,
+	})
+	if err != nil {
+		t.Fatalf("Append message: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	lv.mu.Lock()
+	sumAfterMsg := lv.summary.Clone()
+	countAfterMsg := len(lv.entries)
+	lv.mu.Unlock()
+
+	if countAfterMsg != 4 {
+		t.Fatalf("expected 4 entries in live tail after message, got %d", countAfterMsg)
+	}
+	if sumAfterMsg.TotalBits != 250 || sumAfterMsg.TotalSubs != 1 || sumAfterMsg.SuperChatByCurr["USD"] != 15 {
+		t.Errorf("regular chat message modified alert summary: %+v", sumAfterMsg)
+	}
+}
+
+
 
 
