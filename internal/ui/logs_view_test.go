@@ -192,6 +192,42 @@ func TestLogsViewLiveTailAndSearch(t *testing.T) {
 		t.Fatalf("expected 2 entries after ResetFilters(), got %d", afterResetCount)
 	}
 
+	// Filter by Platform: Twitch -> should return only Alice (1 entry)
+	lv.platformSel.SetSelected("Twitch")
+	lv.mu.Lock()
+	twitchCount := len(lv.entries)
+	lv.mu.Unlock()
+	if twitchCount != 1 {
+		t.Fatalf("expected 1 entry for Platform=Twitch, got %d", twitchCount)
+	}
+
+	// Filter by Platform: YouTube -> should return only Bob (1 entry)
+	lv.platformSel.SetSelected("YouTube")
+	lv.mu.Lock()
+	ytCount := len(lv.entries)
+	lv.mu.Unlock()
+	if ytCount != 1 {
+		t.Fatalf("expected 1 entry for Platform=YouTube, got %d", ytCount)
+	}
+
+	// Filter by Platform: Kick -> should return 0 entries
+	lv.platformSel.SetSelected("Kick")
+	lv.mu.Lock()
+	kickCount := len(lv.entries)
+	lv.mu.Unlock()
+	if kickCount != 0 {
+		t.Fatalf("expected 0 entries for Platform=Kick, got %d", kickCount)
+	}
+
+	// Filter by Platform: All Platforms -> should return both Alice and Bob (2 entries)
+	lv.platformSel.SetSelected(platformOptionAll)
+	lv.mu.Lock()
+	allPlatCount := len(lv.entries)
+	lv.mu.Unlock()
+	if allPlatCount != 2 {
+		t.Fatalf("expected 2 entries for Platform=All Platforms, got %d", allPlatCount)
+	}
+
 	// Test retention update via dropdown
 	lv.chatRetSel.SetSelected("90 Days")
 	if sess.Config().Logging.ChatRetentionDays != 90 {

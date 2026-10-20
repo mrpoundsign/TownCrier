@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,6 +98,7 @@ type LogsView struct {
 	eventRetSel    *widget.Select
 
 	selectedSessionID      int64
+	selectedPlatform       string
 	sessionMap             map[string]int64
 	sessionSel             *widget.Select
 	summary                eventlog.QuerySummary
@@ -511,11 +513,14 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 	})
 	v.sessionSel.SetSelected("All Sessions")
 
-	v.platformSel = widget.NewSelect([]string{platformOptionAll, "Twitch", "YouTube", "TikTok", "Kick"}, func(_ string) {
+	v.platformSel = widget.NewSelect([]string{platformOptionAll, "Twitch", "YouTube", "TikTok", "Kick"}, func(selected string) {
 		if v.initializing {
 			return
 		}
+		v.mu.Lock()
+		v.selectedPlatform = normalizePlatformOption(selected)
 		v.currentPage = 0
+		v.mu.Unlock()
 		v.RefreshQuery()
 	})
 	v.platformSel.SetSelected(platformOptionAll)
@@ -534,7 +539,9 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 		if v.initializing {
 			return
 		}
+		v.mu.Lock()
 		v.currentPage = 0
+		v.mu.Unlock()
 		v.RefreshQuery()
 	})
 	v.eventTypeSel.SetSelected(eventTypeAll)
@@ -550,7 +557,9 @@ func (v *LogsView) buildFilterDrawer() *fyne.Container {
 		if v.initializing {
 			return
 		}
+		v.mu.Lock()
 		v.currentPage = 0
+		v.mu.Unlock()
 		v.RefreshQuery()
 	})
 	v.outcomeSel.SetSelected(outcomeLabelAll)
@@ -779,6 +788,7 @@ func (v *LogsView) ResetFilters() {
 		v.hideBotsCheck.SetChecked(true)
 	}
 	v.mu.Lock()
+	v.selectedPlatform = ""
 	v.liveTail = true
 	v.hideBots = true
 	v.currentPage = 0
@@ -786,6 +796,16 @@ func (v *LogsView) ResetFilters() {
 	v.initializing = false
 
 	v.RefreshQuery()
+}
+
+func normalizePlatformOption(opt string) string {
+	clean := strings.ToLower(strings.TrimSpace(opt))
+	switch clean {
+	case "", "all", strings.ToLower(platformOptionAll):
+		return ""
+	default:
+		return clean
+	}
 }
 
 func (v *LogsView) setDateRange(from, to *time.Time) {
@@ -817,11 +837,11 @@ func (v *LogsView) currentFilter() eventlog.QueryFilter {
 	page := v.currentPage
 	hideBots := v.hideBots
 	sessionID := v.selectedSessionID
+	plat := v.selectedPlatform
 	v.mu.Unlock()
 
-	plat := ""
-	if v.platformSel != nil && v.platformSel.Selected != "" && v.platformSel.Selected != platformOptionAll {
-		plat = strings.ToLower(v.platformSel.Selected)
+	if v.platformSel != nil {
+		plat = normalizePlatformOption(v.platformSel.Selected)
 	}
 
 	kindFilter := ""
@@ -933,6 +953,9 @@ func (v *LogsView) runAsyncQuery() {
 	if v.session != nil && v.session.EventLogger() != nil {
 		r, err := v.session.EventLogger().Query(ctx, filter)
 		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("LogsView async query failed (platform=%q, session=%d): %v", filter.Platform, filter.SessionID, err)
+			}
 			return
 		}
 		res = r
@@ -977,7 +1000,9 @@ func (v *LogsView) RefreshQuery() {
 	var res *eventlog.QueryResult
 	if v.session != nil && v.session.EventLogger() != nil {
 		r, err := v.session.EventLogger().Query(context.Background(), filter)
-		if err == nil && r != nil {
+		if err != nil {
+			log.Printf("LogsView query failed (platform=%q, session=%d): %v", filter.Platform, filter.SessionID, err)
+		} else if r != nil {
 			res = r
 		}
 	}
