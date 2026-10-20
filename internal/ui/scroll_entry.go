@@ -131,10 +131,66 @@ func findEnclosingScroll(node, target fyne.CanvasObject, currentScroll fyne.Scro
 	return nil
 }
 
-// newPanelVScroll wraps content in a vertical scroll container and binds all
-// descendant ScrollPassEntry widgets to forward unfocused wheel events to it.
+const defaultPanelMinWidth float32 = 480
+
+// panelWidthClampLayout clamps the horizontal MinSize reported to an enclosing
+// vertical Scroll container so wide child widgets (long labels, selects, or cards)
+// never inflate the OS window's minimum width limit, while still stretching the
+// child across 100% of the available scroll viewport width during Layout.
+type panelWidthClampLayout struct {
+	minWidth float32
+}
+
+func (l *panelWidthClampLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	for _, obj := range objects {
+		if obj == nil || !obj.Visible() {
+			continue
+		}
+		h := max(size.Height, obj.MinSize().Height)
+		obj.Move(fyne.NewPos(0, 0))
+		obj.Resize(fyne.NewSize(size.Width, h))
+		if newH := max(size.Height, obj.MinSize().Height); newH != h {
+			obj.Resize(fyne.NewSize(size.Width, newH))
+		}
+	}
+}
+
+func (l *panelWidthClampLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	var maxW, maxH float32
+	for _, obj := range objects {
+		if obj == nil || !obj.Visible() {
+			continue
+		}
+		ms := obj.MinSize()
+		if ms.Width > maxW {
+			maxW = ms.Width
+		}
+		if ms.Height > maxH {
+			maxH = ms.Height
+		}
+	}
+	clampW := l.minWidth
+	if clampW <= 0 {
+		clampW = defaultPanelMinWidth
+	}
+	if maxW > clampW {
+		maxW = clampW
+	}
+	return fyne.NewSize(maxW, maxH)
+}
+
+// newWidthClampContainer wraps content in a container that clamps its reported
+// horizontal MinSize to defaultPanelMinWidth while stretching content to 100%
+// of the available width during Layout.
+func newWidthClampContainer(content fyne.CanvasObject) *fyne.Container {
+	return container.New(&panelWidthClampLayout{minWidth: defaultPanelMinWidth}, content)
+}
+
+// newPanelVScroll wraps content in a width-clamped vertical scroll container and
+// binds all descendant ScrollPassEntry widgets to forward unfocused wheel events to it.
 func newPanelVScroll(content fyne.CanvasObject) *container.Scroll {
-	scroll := container.NewVScroll(content)
+	clamped := newWidthClampContainer(content)
+	scroll := container.NewVScroll(clamped)
 	bindScrollPassEntries(content, scroll)
 	return scroll
 }

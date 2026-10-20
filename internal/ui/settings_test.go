@@ -44,8 +44,8 @@ func TestSettingsViewBuild(t *testing.T) {
 	if view.subTabs == nil {
 		t.Fatal("expected subTabs to be initialized")
 	}
-	if len(view.subTabs.Items) != 4 {
-		t.Errorf("expected 4 settings sub-tabs, got %d", len(view.subTabs.Items))
+	if len(view.subTabs.Items) != 3 {
+		t.Errorf("expected 3 default settings sub-tabs (General & Audio, TTS & Hardware, Rules & Safety), got %d", len(view.subTabs.Items))
 	}
 	if view.logsView == nil {
 		t.Error("expected logsView to be initialized")
@@ -55,6 +55,9 @@ func TestSettingsViewBuild(t *testing.T) {
 	}
 	if view.uiScaleSelect.Selected != FormatUIScaleLabel("1.0") {
 		t.Errorf("expected default UI scale %q, got %q", FormatUIScaleLabel("1.0"), view.uiScaleSelect.Selected)
+	}
+	if minW := obj.MinSize().Width; minW > 550 {
+		t.Errorf("expected SettingsView MinSize().Width <= 550 DIPs so it never forces wide OS windows, got %v", minW)
 	}
 }
 

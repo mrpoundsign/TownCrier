@@ -20,20 +20,31 @@ func TestMainWindowCreation(t *testing.T) {
 		t.Fatal("expected non-nil MainWindow and Window")
 	}
 
-	if mw.tabsContainer == nil {
-		t.Fatal("expected non-nil tabsContainer")
+	if mw.dashboardBtn == nil || mw.viewersBtn == nil || mw.logsBtn == nil || mw.settingsBtn == nil {
+		t.Fatal("expected non-nil navigation buttons")
 	}
 
-	// Should have 8 tabs: Dashboard, Twitch, YouTube, TikTok, Kick, Viewers, Chat Logs, Settings
-	if len(mw.tabsContainer.Items) != 8 {
-		t.Errorf("expected 8 tabs, got %d", len(mw.tabsContainer.Items))
+	if mw.dashboardBtn.Text != "Dashboard" {
+		t.Errorf("expected 'Dashboard', got %q", mw.dashboardBtn.Text)
+	}
+	if mw.viewersBtn.Text != "Viewers" {
+		t.Errorf("expected 'Viewers', got %q", mw.viewersBtn.Text)
+	}
+	if mw.logsBtn.Text != "Logs" {
+		t.Errorf("expected 'Logs', got %q", mw.logsBtn.Text)
+	}
+	if mw.settingsBtn.Text != "" {
+		t.Errorf("expected empty text for settings gear button, got %q", mw.settingsBtn.Text)
 	}
 
-	expectedTabs := []string{"Dashboard", "Twitch", "YouTube", "TikTok", "Kick", "Viewers", "Chat Logs", "Settings"}
-	for i, name := range expectedTabs {
-		if mw.tabsContainer.Items[i].Text != name {
-			t.Errorf("tab %d: expected %q, got %q", i, name, mw.tabsContainer.Items[i].Text)
-		}
+	if mw.currentTab != TabIndexDashboard {
+		t.Errorf("expected initial tab Dashboard (%d), got %d", TabIndexDashboard, mw.currentTab)
+	}
+
+	// Test switching tabs
+	mw.SelectTab(TabIndexLogs)
+	if mw.currentTab != TabIndexLogs {
+		t.Errorf("expected current tab Logs (%d), got %d", TabIndexLogs, mw.currentTab)
 	}
 }
 
@@ -116,15 +127,15 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 		}
 	}()
 
-	// Initially 8 tabs (Dashboard, Twitch, YouTube, TikTok, Kick, Viewers, Chat Logs, Settings)
-	if len(mw.tabsContainer.Items) != 8 {
-		t.Fatalf("expected 8 tabs initially, got %d", len(mw.tabsContainer.Items))
+	// Settings sub-tabs initially have 7 items: General & Audio, TTS & Hardware, Twitch, YouTube, TikTok, Kick, Rules & Safety
+	if len(mw.settingsTab.subTabs.Items) != 7 {
+		t.Fatalf("expected 7 settings sub-tabs initially, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 
 	// Disable YouTube in Settings
 	mw.settingsTab.youtubeCheck.SetChecked(false)
-	if len(mw.tabsContainer.Items) != 7 {
-		t.Fatalf("expected 7 tabs after disabling YouTube, got %d", len(mw.tabsContainer.Items))
+	if len(mw.settingsTab.subTabs.Items) != 6 {
+		t.Fatalf("expected 6 settings sub-tabs after disabling YouTube, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 	if mw.youtubeStatusDot.Visible() {
 		t.Error("expected youtubeStatusDot to be hidden when YouTube service is disabled")
@@ -135,8 +146,8 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 
 	// Re-enable YouTube in Settings
 	mw.settingsTab.youtubeCheck.SetChecked(true)
-	if len(mw.tabsContainer.Items) != 8 {
-		t.Fatalf("expected 8 tabs after re-enabling YouTube, got %d", len(mw.tabsContainer.Items))
+	if len(mw.settingsTab.subTabs.Items) != 7 {
+		t.Fatalf("expected 7 settings sub-tabs after re-enabling YouTube, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 	if !mw.youtubeStatusDot.Visible() {
 		t.Error("expected youtubeStatusDot to be visible when YouTube service is enabled")
@@ -147,8 +158,8 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 
 	// Disable TikTok in Settings
 	mw.settingsTab.tiktokCheck.SetChecked(false)
-	if len(mw.tabsContainer.Items) != 7 {
-		t.Fatalf("expected 7 tabs after disabling TikTok, got %d", len(mw.tabsContainer.Items))
+	if len(mw.settingsTab.subTabs.Items) != 6 {
+		t.Fatalf("expected 6 settings sub-tabs after disabling TikTok, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 	if mw.tiktokStatusDot.Visible() {
 		t.Error("expected tiktokStatusDot to be hidden when TikTok service is disabled")
@@ -156,8 +167,8 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 
 	// Disable Kick in Settings
 	mw.settingsTab.kickCheck.SetChecked(false)
-	if len(mw.tabsContainer.Items) != 6 {
-		t.Fatalf("expected 6 tabs after disabling Kick, got %d", len(mw.tabsContainer.Items))
+	if len(mw.settingsTab.subTabs.Items) != 5 {
+		t.Fatalf("expected 5 settings sub-tabs after disabling Kick, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 	if mw.kickStatusDot.Visible() {
 		t.Error("expected kickStatusDot to be hidden when Kick service is disabled")
@@ -233,6 +244,15 @@ func TestMainWindowPlatformStatusResolution(t *testing.T) {
 	}
 	if mw.twitchStatusDot.Tooltip() != "Twitch: Live (live)" {
 		t.Errorf("expected badge tooltip 'Twitch: Live (live)', got %s", mw.twitchStatusDot.Tooltip())
+	}
+
+	// 5. Test clicking platform badge routes to Settings -> platform sub-tab
+	test.Tap(mw.twitchStatusDot)
+	if mw.currentTab != TabIndexSettings {
+		t.Errorf("expected currentTab to be Settings (%d), got %d", TabIndexSettings, mw.currentTab)
+	}
+	if sel := mw.settingsTab.subTabs.Selected(); sel == nil || sel.Text != "Twitch" {
+		t.Errorf("expected selected Settings sub-tab to be 'Twitch', got %+v", sel)
 	}
 }
 

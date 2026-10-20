@@ -200,7 +200,7 @@ func (v *DashboardView) buildActivityCard() *widget.Card {
 		v.refreshFeedLocked()
 	}
 
-	return widget.NewCard("Live Activity Feed", "Recent chatter messages and stream alerts", container.NewVScroll(v.feedContainer))
+	return widget.NewCard("Live Activity Feed", "Recent chatter messages and stream alerts", newPanelVScroll(v.feedContainer))
 }
 
 // AddActivity appends a new event to the live activity feed (thread-safe).
