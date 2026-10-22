@@ -24,10 +24,11 @@ type LaunchStateTracker struct {
 	retryBtn     *widget.Button
 	quitBtn      *widget.Button
 
-	mu         sync.Mutex
-	lastUpdate time.Time
-	onRetryFn  func()
-	onQuitFn   func()
+	mu            sync.Mutex
+	lastUpdate    time.Time
+	downloadModel string
+	onRetryFn     func()
+	onQuitFn      func()
 }
 
 // NewLaunchWindow creates a centered launch status window.
@@ -48,7 +49,7 @@ func NewLaunchWindow(a fyne.App) (*LaunchStateTracker, fyne.Window) {
 		statusLabel:  widget.NewLabelWithStyle("Starting up subsystems...", fyne.TextAlignCenter, fyne.TextStyle{}),
 		stepConfig:   widget.NewLabel("⏳ Reading configuration..."),
 		stepAudio:    widget.NewLabel("⏳ Enumerating WASAPI playback devices..."),
-		stepTTS:      widget.NewLabel("⏳ Loading Kokoro neural TTS engine..."),
+		stepTTS:      widget.NewLabel("⏳ Loading neural TTS engine..."),
 		progress:     widget.NewProgressBarInfinite(),
 		downloadProg: dlProg,
 	}
@@ -63,7 +64,7 @@ func NewLaunchWindow(a fyne.App) (*LaunchStateTracker, fyne.Window) {
 				tracker.downloadProg.Hide()
 				tracker.progress.Show()
 				tracker.progress.Start()
-				tracker.stepTTS.SetText("⏳ Loading Kokoro neural TTS engine...")
+				tracker.stepTTS.SetText("⏳ Loading neural TTS engine...")
 			})
 			go retry()
 		}
@@ -121,6 +122,13 @@ func (t *LaunchStateTracker) SetAudioStatus(done bool, detail string) {
 	})
 }
 
+// SetDownloadModel sets the display name of the model currently being downloaded.
+func (t *LaunchStateTracker) SetDownloadModel(name string) {
+	t.mu.Lock()
+	t.downloadModel = name
+	t.mu.Unlock()
+}
+
 // SetTTSStatus updates the neural TTS engine step message.
 func (t *LaunchStateTracker) SetTTSStatus(done bool, detail string) {
 	fyne.Do(func() {
@@ -129,9 +137,9 @@ func (t *LaunchStateTracker) SetTTSStatus(done bool, detail string) {
 			t.progress.Show()
 		}
 		if done {
-			t.stepTTS.SetText("✓ Kokoro TTS: " + detail)
+			t.stepTTS.SetText("✓ Neural TTS: " + detail)
 		} else {
-			t.stepTTS.SetText("❌ Kokoro TTS: " + detail)
+			t.stepTTS.SetText("❌ Neural TTS: " + detail)
 		}
 	})
 }
@@ -145,6 +153,10 @@ func (t *LaunchStateTracker) SetDownloadProgress(current, total int64) {
 		return
 	}
 	t.lastUpdate = now
+	modelName := t.downloadModel
+	if modelName == "" {
+		modelName = "Voice"
+	}
 	t.mu.Unlock()
 
 	curMB := float64(current) / (1024 * 1024)
@@ -163,9 +175,9 @@ func (t *LaunchStateTracker) SetDownloadProgress(current, total int64) {
 			t.downloadProg.Show()
 		}
 		t.downloadProg.SetValue(ratio)
-		msg := fmt.Sprintf("Downloading & extracting Kokoro TTS models... %.1f / %.1f MB", curMB, totMB)
+		msg := fmt.Sprintf("Downloading & extracting %s models... %.1f / %.1f MB", modelName, curMB, totMB)
 		t.statusLabel.SetText(msg)
-		t.stepTTS.SetText(fmt.Sprintf("⏳ Kokoro TTS: Downloading (%.0f%%)...", ratio*100))
+		t.stepTTS.SetText(fmt.Sprintf("⏳ TTS (%s): Downloading (%.0f%%)...", modelName, ratio*100))
 	})
 }
 
@@ -181,7 +193,7 @@ func (t *LaunchStateTracker) ShowFatalError(statusMsg string, ttsDetail string, 
 		t.progress.Hide()
 		t.downloadProg.Hide()
 		t.statusLabel.SetText(statusMsg)
-		t.stepTTS.SetText("❌ Kokoro TTS: " + ttsDetail)
+		t.stepTTS.SetText("❌ Neural TTS: " + ttsDetail)
 		t.actionBox.Show()
 	})
 }

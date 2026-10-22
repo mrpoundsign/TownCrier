@@ -127,7 +127,7 @@ var AllModelFamilies = []ModelFamilySpec{
 		Name:           "Kokoro-82M Neural (28 Voices — Highest Naturalness)",
 		ShortName:      "Kokoro-82M",
 		SubDir:         "kokoro-en",
-		DownloadSizeMB: 126,
+		DownloadSizeMB: 408,
 		IdleRAMMB:      211,
 		ActiveRAMMB:    285,
 		GPUIdleRAMMB:   780,

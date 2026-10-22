@@ -1,6 +1,7 @@
 package tts
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -251,10 +252,30 @@ func TestDownloadKokoroModelParallel(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(badDir, "model.int8.onnx")); !os.IsNotExist(statErr) {
 		t.Error("expected model.int8.onnx not to exist after checksum mismatch")
 	}
+
+	// Verify context cancellation aborts download cleanly
+	cancelCtx, cancelFn := context.WithCancel(context.Background())
+	cancelFn() // cancel immediately
+	cancelDir := t.TempDir()
+	err = DownloadKokoroModelForModeWithContext(cancelCtx, cancelDir, false, nil)
+	if err == nil {
+		t.Fatal("expected error on cancelled context, got nil")
+	}
+	if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("expected context cancellation error, got %v", err)
+	}
 }
 
 func TestSherpaEngineSynthesis(t *testing.T) {
 	modelDir := DefaultModelDir()
+	if !IsModelInstalled(modelDir) {
+		for _, candidate := range []string{"models/kokoro-en", "../../models/kokoro-en"} {
+			if IsModelInstalled(candidate) {
+				modelDir = candidate
+				break
+			}
+		}
+	}
 	if !IsModelInstalled(modelDir) {
 		t.Skip("local Kokoro model not installed, skipping live synthesis test")
 	}
@@ -341,19 +362,25 @@ func splitWordsTest(s string) []string {
 	return out
 }
 
-func TestDownloadKokoroModelCPUOnly(t *testing.T) {
+func TestDownloadKokoroModelUnified(t *testing.T) {
+	const fp32B64 = "QlpoOTFBWSZTWYefy4YAAVl/gsKgACBAA/+wIQBAAP/v38BAADAIMAE4FBpQ0AGgAAAAAGMhkNBoNGgDQANDBFEmk0aBR+SBM0aGjTao2mp1+R53/M/dNZgQWjmDLeSCRoQFtxxupukGAksHZFIndUcwOAwIEjCyOQyOk28TIfoxHZbzj9eUQmkPHAHYCG/0eHD9iFQe3XQaC03f4Yv8qwREFRi0YR9hp4ZtY1sGh4xSgSwM2DnEsXaWUsPYGo2jJEToDUNaA0NEjI3D2SPgnIgeSccg+E34dMTpdaPHgZEmY4ZwaC4PxeDDb1j5BAwJVqIFyCbMRPBREH2Be4CYRD3wNQenMxG8c4N198RB1Hv6Rcmcd2PXb1HAa1nTq7BA/4u5IpwoSEPP5cMA"
 	const int8B64 = "QlpoOTFBWSZTWZDFmCAAAWN/gsKgACBAA//kIAgAAP7v38BAADAIMAE4a0GkgAGgAAABoAaIygRiYJoaMRk0MTARSKYQ1HqZpqMjTTR6jDUNPUy5D1/bOc5d5cQUjUGPAkCRoQFpv2VznIGAkXjbBE76qRhS4YECQwshxGQ2FvyeY4j0Ngzp6ylr4RCWBbrBtBCOJx941CFAMDAP4OzfOHOMigYVwHdhYNdQwRhASlIJpEwEDY0ARBGoFAJ9wEgJGIDVFAdBKaoYHMUbQJjNNA3yHMnQgeifWIck36u2B2rpHS8ICQOG8XAwDoaBOnvC449V+MZQEy9IC6BHUInAtImB4dB/vg3HiOuBoB5lw6RrBq06IiDIdvaMwFaZx2XZW5DcNFEq+68QP8XckU4UJCQxZggA"
 
+	fp32Archive, err := base64.StdEncoding.DecodeString(fp32B64)
+	if err != nil {
+		t.Fatalf("decode fp32B64: %v", err)
+	}
 	int8Archive, err := base64.StdEncoding.DecodeString(int8B64)
 	if err != nil {
 		t.Fatalf("decode int8B64: %v", err)
 	}
+	fp32Sum := sha256.Sum256(fp32Archive)
 	int8Sum := sha256.Sum256(int8Archive)
 
-	origFP32URL := KokoroFP32ArchiveURL
+	origFP32URL, origFP32SHA, origFP32Size := KokoroFP32ArchiveURL, KokoroFP32ArchiveSHA256, KokoroFP32ArchiveSize
 	origINT8URL, origINT8SHA, origINT8Size := KokoroINT8ArchiveURL, KokoroINT8ArchiveSHA256, KokoroINT8ArchiveSize
 	defer func() {
-		KokoroFP32ArchiveURL = origFP32URL
+		KokoroFP32ArchiveURL, KokoroFP32ArchiveSHA256, KokoroFP32ArchiveSize = origFP32URL, origFP32SHA, origFP32Size
 		KokoroINT8ArchiveURL, KokoroINT8ArchiveSHA256, KokoroINT8ArchiveSize = origINT8URL, origINT8SHA, origINT8Size
 	}()
 
@@ -362,7 +389,7 @@ func TestDownloadKokoroModelCPUOnly(t *testing.T) {
 		switch r.URL.Path {
 		case "/fp32.tar.bz2":
 			fp32Hits.Add(1)
-			http.Error(w, "should not request fp32 in CPU mode", http.StatusInternalServerError)
+			_, _ = w.Write(fp32Archive)
 		case "/int8.tar.bz2":
 			int8Hits.Add(1)
 			_, _ = w.Write(int8Archive)
@@ -373,6 +400,9 @@ func TestDownloadKokoroModelCPUOnly(t *testing.T) {
 	defer server.Close()
 
 	KokoroFP32ArchiveURL = server.URL + "/fp32.tar.bz2"
+	KokoroFP32ArchiveSHA256 = hex.EncodeToString(fp32Sum[:])
+	KokoroFP32ArchiveSize = int64(len(fp32Archive))
+
 	KokoroINT8ArchiveURL = server.URL + "/int8.tar.bz2"
 	KokoroINT8ArchiveSHA256 = hex.EncodeToString(int8Sum[:])
 	KokoroINT8ArchiveSize = int64(len(int8Archive))
@@ -381,14 +411,11 @@ func TestDownloadKokoroModelCPUOnly(t *testing.T) {
 	if err := DownloadKokoroModelForMode(destDir, false, nil); err != nil {
 		t.Fatalf("DownloadKokoroModelForMode(useGPU=false) failed: %v", err)
 	}
-	if !IsCPUModelInstalled(destDir) {
-		t.Fatal("expected CPU model to be installed")
+	if !IsModelInstalled(destDir) {
+		t.Fatal("expected both CPU and GPU model assets to be installed in unified pack")
 	}
-	if IsGPUModelInstalled(destDir) {
-		t.Fatal("expected GPU model not to be installed in CPU-only download")
-	}
-	if fp32Hits.Load() != 0 || int8Hits.Load() != 1 {
-		t.Errorf("expected fp32Hits=0, int8Hits=1; got fp32=%d, int8=%d", fp32Hits.Load(), int8Hits.Load())
+	if fp32Hits.Load() != 1 || int8Hits.Load() != 1 {
+		t.Errorf("expected fp32Hits=1, int8Hits=1; got fp32=%d, int8=%d", fp32Hits.Load(), int8Hits.Load())
 	}
 }
 
@@ -592,6 +619,47 @@ func TestLegacyKokoroV019Detection(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "lexicon-us-en.txt"), []byte("hello"), 0600)
 	if isLegacyKokoroV019Dir(dir) {
 		t.Error("expected false once lexicon-us-en.txt exists")
+	}
+}
+
+func TestDefaultModelDir(t *testing.T) {
+	dir := DefaultModelDir()
+	if dir == "" {
+		t.Fatal("expected non-empty DefaultModelDir")
+	}
+	if !filepath.IsAbs(dir) {
+		t.Errorf("expected absolute path for DefaultModelDir, got %s", dir)
+	}
+	if !strings.Contains(dir, "com.github.mrpoundsign.towncrier") {
+		t.Errorf("expected path to contain application ID com.github.mrpoundsign.towncrier, got %s", dir)
+	}
+}
+
+func TestMigrateModelsDir(t *testing.T) {
+	baseTmp := t.TempDir()
+	legacyModels := filepath.Join(baseTmp, "roaming", "models")
+	legacyKokoro := filepath.Join(legacyModels, "kokoro-en")
+	_ = os.MkdirAll(legacyKokoro, 0755)
+
+	_ = os.WriteFile(filepath.Join(legacyKokoro, "model.int8.onnx"), []byte("int8"), 0600)
+	_ = os.WriteFile(filepath.Join(legacyKokoro, "model.onnx"), []byte("fp32"), 0600)
+	_ = os.WriteFile(filepath.Join(legacyKokoro, "voices.bin"), []byte("voices"), 0600)
+	_ = os.WriteFile(filepath.Join(legacyKokoro, "tokens.txt"), []byte("tokens"), 0600)
+	_ = os.MkdirAll(filepath.Join(legacyKokoro, "espeak-ng-data"), 0755)
+
+	targetModels := filepath.Join(baseTmp, "local", "models")
+	targetKokoro := filepath.Join(targetModels, "kokoro-en")
+
+	if !migrateModelsDir(legacyModels, targetModels) {
+		t.Fatal("migrateModelsDir returned false")
+	}
+
+	if !IsModelInstalled(targetKokoro) {
+		t.Errorf("expected model to be installed at target %s", targetKokoro)
+	}
+
+	if _, err := os.Stat(legacyModels); !os.IsNotExist(err) {
+		t.Errorf("expected legacy models dir to be removed after migration")
 	}
 }
 
