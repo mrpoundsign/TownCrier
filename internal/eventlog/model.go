@@ -241,7 +241,7 @@ func (s *QuerySummary) AddEntry(e Entry) {
 // AccumulateRow adds aggregated metrics for a kind/platform/currency group to QuerySummary.
 func (s *QuerySummary) AccumulateRow(kind, platform, currency string, rowCount int, sumAmount float64, sumCount int) {
 	switch kind {
-	case "sub", "resub", "membership":
+	case "sub", "resub", "sub_upgrade", "membership":
 		s.TotalSubs += rowCount
 	case "gift_sub", "gift_membership":
 		s.TotalGiftSubs += sumCount
@@ -257,7 +257,7 @@ func (s *QuerySummary) AccumulateRow(kind, platform, currency string, rowCount i
 		} else {
 			s.TotalDiamonds += val
 		}
-	case "super_chat", "super_sticker", "superchat", "supersticker":
+	case "super_chat", "super_sticker", "superchat", "supersticker", "charity_donation":
 		curr := currency
 		if curr == "" {
 			curr = "USD"

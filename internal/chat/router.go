@@ -146,16 +146,40 @@ func (r *Router) formatEventText(event *Event, spokenName string, pCfg config.Pl
 			template = "{user} resubscribed for {months} months!"
 		case EventKindGiftSub:
 			template = "{user} gifted {count} subscriptions!"
+		case EventKindGiftRedemption:
+			if strings.TrimSpace(event.Recipient) != "" {
+				template = "{user} received a gift membership from {recipient}!"
+			} else {
+				template = "{user} received a gift membership!"
+			}
+		case EventKindSubUpgrade:
+			if event.Text != "" {
+				template = "{user} upgraded their subscription! {message}"
+			} else {
+				template = "{user} upgraded their subscription!"
+			}
 		case EventKindCheer:
 			if event.Text != "" {
 				template = "{user} cheered {amount} bits! {message}"
 			} else {
 				template = "{user} cheered {amount} bits!"
 			}
+		case EventKindBitsBadgeTier:
+			if event.Text != "" {
+				template = "{user} unlocked the {amount} bits badge! {message}"
+			} else {
+				template = "{user} unlocked the {amount} bits badge!"
+			}
 		case EventKindRaid:
 			template = "{user} is raiding with {count} viewers!"
 		case EventKindFollow:
 			template = "{user} is now following!"
+		case EventKindWatchStreak:
+			if event.Text != "" {
+				template = "{user} is on a {count} stream watch streak! {message}"
+			} else {
+				template = "{user} is on a {count} stream watch streak!"
+			}
 		case EventKindRedemption:
 			switch {
 			case event.RewardTitle != "" && event.Text != "":
@@ -177,6 +201,20 @@ func (r *Router) formatEventText(event *Event, spokenName string, pCfg config.Pl
 			template = "{user} sent a super sticker!"
 		case EventKindGift:
 			template = "{user} sent {count} {gift}!"
+		case EventKindCharityDonation:
+			if event.Text != "" {
+				template = "{user} donated {amount} {currency}! {message}"
+			} else {
+				template = "{user} donated {amount} {currency}!"
+			}
+		case EventKindAnnouncement:
+			if event.Text != "" {
+				template = "Announcement from {user}: {message}"
+			} else {
+				template = "Announcement from {user}!"
+			}
+		case EventKindShare:
+			template = "{user} shared the stream!"
 		default:
 			if event.Text != "" {
 				template = "{user}: {message}"
@@ -207,6 +245,11 @@ func (r *Router) formatEventText(event *Event, spokenName string, pCfg config.Pl
 		giftName = "gifts"
 	}
 
+	recipientName := strings.TrimSpace(event.Recipient)
+	if recipientName == "" {
+		recipientName = "someone"
+	}
+
 	replacer := strings.NewReplacer(
 		"{user}", spokenName,
 		"{amount}", formatAmount(event.Amount),
@@ -215,9 +258,11 @@ func (r *Router) formatEventText(event *Event, spokenName string, pCfg config.Pl
 		"{currency}", event.Currency,
 		"{months}", strconv.Itoa(max(1, event.Months)),
 		"{count}", strconv.Itoa(countVal),
+		"{streak}", strconv.Itoa(countVal),
 		"{viewers}", strconv.Itoa(countVal),
 		"{reward}", rewardName,
 		"{gift}", giftName,
+		"{recipient}", recipientName,
 		"{message}", strings.TrimSpace(event.Text),
 	)
 

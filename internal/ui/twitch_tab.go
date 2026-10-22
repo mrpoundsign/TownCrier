@@ -593,14 +593,20 @@ func (v *TwitchTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 		label        string
 		fallback     string
 		hasThreshold bool
+		defaultOn    bool
 	}{
-		{"sub", "Subscription", "{user} subscribed!", false},
-		{"resub", "Resubscription", "{user} resubscribed for {months} months! {message}", false},
-		{"gift_sub", "Gift Sub", "{user} gifted {count} subscriptions!", true},
-		{"cheer", "Cheer (Bits)", "{user} cheered {amount} bits: {message}", true},
-		{"raid", "Raid", "{user} raided with {count} viewers!", true},
-		{"redemption", "Channel Point Redemption", "{user} redeemed {reward}: {message}", false},
-		{"follow", "Follow", "{user} followed the stream!", false},
+		{"sub", "Subscription", "{user} subscribed!", false, true},
+		{"resub", "Resubscription", "{user} resubscribed for {months} months! {message}", false, true},
+		{"gift_sub", "Gift Sub", "{user} gifted {count} subscriptions!", true, true},
+		{"sub_upgrade", "Sub Upgrade / Pay-It-Forward", "{user} upgraded their subscription! {message}", false, true},
+		{"watch_streak", "Watch Streak", "{user} is on a {count} stream watch streak! {message}", true, true},
+		{"cheer", "Cheer (Bits)", "{user} cheered {amount} bits: {message}", true, true},
+		{"bits_badge_tier", "Bits Badge Tier", "{user} unlocked the {amount} bits badge! {message}", true, true},
+		{"raid", "Raid", "{user} raided with {count} viewers!", true, true},
+		{"redemption", "Channel Point Redemption", "{user} redeemed {reward}: {message}", false, true},
+		{"charity_donation", "Charity Donation", "{user} donated {amount} {currency} to {reward}! {message}", true, true},
+		{"announcement", "Chat Announcement (/announce)", "Announcement from {user}: {message}", false, false},
+		{"follow", "Follow", "{user} followed the stream!", false, false},
 	}
 
 	for _, ev := range events {
@@ -611,7 +617,7 @@ func (v *TwitchTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 		notif, ok := pCfg.Notifications[eventKey]
 		if !ok {
 			notif = config.NotificationEventConfig{
-				Enabled:  eventKey != "follow",
+				Enabled:  ev.defaultOn,
 				Template: fallback,
 			}
 		}
@@ -655,6 +661,9 @@ func (v *TwitchTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 		}
 
 		var rightWidget fyne.CanvasObject
+		vars := EventTemplateVars("twitch", eventKey)
+		helpMarker := newTemplateHelpMarker(v.window, eventKey, label, vars, v.onStatus, &tmplEntry.Entry)
+
 		if ev.hasThreshold {
 			minEntry := NewScrollPassEntry()
 			minEntry.SetPlaceHolder("0")
@@ -678,8 +687,14 @@ func (v *TwitchTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 				})
 			}
 			rightWidget = container.NewHBox(
+				container.NewCenter(helpMarker),
 				widget.NewLabel("Min:"),
 				container.NewGridWrap(fyne.NewSize(70, 36), minEntry),
+			)
+		} else {
+			rightWidget = container.NewHBox(
+				container.NewCenter(helpMarker),
+				container.NewGridWrap(fyne.NewSize(108, 36), widget.NewLabel("")),
 			)
 		}
 

@@ -219,4 +219,28 @@ func TestRouterNotificationEvents(t *testing.T) {
 	if res.Text != "dan cheered 500 bits: hype train!" {
 		t.Errorf("expected 'dan cheered 500 bits: hype train!', got %q", res.Text)
 	}
+
+	eventStreak := &Event{
+		Platform: "twitch",
+		UserName: "wifestreamer",
+		Kind:     EventKindWatchStreak,
+		Count:    5,
+		Amount:   450,
+		Text:     "Five in a row!",
+	}
+	res = router.Resolve(eventStreak, cfg)
+	if res.Text != "wifestreamer is on a 5 stream watch streak! Five in a row!" {
+		t.Errorf("unexpected watch streak speech: %q", res.Text)
+	}
+
+	eventGiftRedemp := &Event{
+		Platform:  "youtube",
+		UserName:  "lucky",
+		Kind:      EventKindGiftRedemption,
+		Recipient: "gifter123",
+	}
+	res = router.Resolve(eventGiftRedemp, cfg)
+	if res.Text != "lucky received a gift membership from gifter123!" {
+		t.Errorf("unexpected gift redemption speech: %q", res.Text)
+	}
 }

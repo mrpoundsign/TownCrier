@@ -251,6 +251,26 @@ func TestParseKickFollowAndGiftEvents(t *testing.T) {
 	if gEv.Kind != chat.EventKindGift || gEv.DisplayName != "KickSupporter" || gEv.RewardTitle != "Sub Bomb" || gEv.Count != 250 || gEv.Amount != 250 || gEv.Text != "Great stream!" {
 		t.Errorf("unexpected gift event: %+v", gEv)
 	}
+
+	// 3. RewardRedeemedEvent
+	redempRaw := []byte(`{"event":"RewardRedeemedEvent","data":"{\"id\":\"kr-1\",\"username\":\"KickRedeemer\",\"reward_title\":\"Hydrate\",\"cost\":500,\"user_input\":\"Drink water!\"}","channel":"chatrooms.27670567.v2"}`)
+	rEv, _, _, err := ParsePusherFrame(redempRaw)
+	if err != nil || rEv == nil {
+		t.Fatalf("ParsePusherFrame(RewardRedeemedEvent): err=%v ev=%v", err, rEv)
+	}
+	if rEv.Kind != chat.EventKindRedemption || rEv.DisplayName != "KickRedeemer" || rEv.RewardTitle != "Hydrate" || rEv.Amount != 500 || rEv.Text != "Drink water!" {
+		t.Errorf("unexpected redemption event: %+v", rEv)
+	}
+
+	// 4. Multi-recipient GiftedSubscriptionsEvent
+	giftSubRaw := []byte(`{"event":"GiftedSubscriptionsEvent","data":"{\"gifter_username\":\"BigGifter\",\"gifted_usernames\":[\"Alice\",\"Bob\",\"Charlie\"]}","channel":"chatrooms.27670567.v2"}`)
+	gsEv, _, _, err := ParsePusherFrame(giftSubRaw)
+	if err != nil || gsEv == nil {
+		t.Fatalf("ParsePusherFrame(GiftedSubscriptionsEvent): err=%v ev=%v", err, gsEv)
+	}
+	if gsEv.Kind != chat.EventKindGiftSub || gsEv.Count != 3 || gsEv.Recipient != "Alice, Bob, Charlie" {
+		t.Errorf("unexpected multi-recipient gift sub event: %+v", gsEv)
+	}
 }
 
 func TestDualChannelPusherSubscription(t *testing.T) {

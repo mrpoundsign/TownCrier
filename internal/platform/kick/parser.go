@@ -116,6 +116,10 @@ func ParsePusherFrame(raw []byte) (*chat.Event, *chat.ModerationEvent, string, e
 		ev := parseKickGift(payloadMap)
 		return ev, nil, env.Event, nil
 
+	case "RewardRedeemedEvent", "ChannelPointRedemptionEvent", "RewardRedeemed":
+		ev := parseKickRedemption(payloadMap)
+		return ev, nil, env.Event, nil
+
 	case "MessageDeletedEvent":
 		mod := parseMessageDeleted(payloadMap)
 		return nil, mod, env.Event, nil
@@ -337,8 +341,14 @@ func parseGiftedSubscriptions(m map[string]any) *chat.Event {
 		if count <= 0 {
 			count = len(giftedList)
 		}
-		if len(giftedList) == 1 {
-			recipient = strings.TrimLeft(strings.TrimSpace(asString(giftedList[0])), "@")
+		var names []string
+		for _, rawName := range giftedList {
+			if n := strings.TrimLeft(strings.TrimSpace(asString(rawName)), "@"); n != "" {
+				names = append(names, n)
+			}
+		}
+		if len(names) > 0 {
+			recipient = strings.Join(names, ", ")
 		}
 	}
 	if count <= 0 {
@@ -465,6 +475,66 @@ func parseKickGift(m map[string]any) *chat.Event {
 		RewardTitle: giftName,
 		Text:        cleanText,
 		EmoteSpans:  spans,
+	}
+}
+
+func parseKickRedemption(m map[string]any) *chat.Event {
+	userMap := asMap(m["user"])
+	username := strings.TrimLeft(strings.TrimSpace(asString(userMap["username"])), "@")
+	if username == "" {
+		username = strings.TrimLeft(strings.TrimSpace(asString(m["username"])), "@")
+	}
+	if username == "" {
+		return nil
+	}
+
+	rewardMap := asMap(m["reward"])
+	rewardTitle := strings.TrimSpace(asString(rewardMap["title"]))
+	if rewardTitle == "" {
+		rewardTitle = strings.TrimSpace(asString(m["reward_title"]))
+	}
+	if rewardTitle == "" {
+		rewardTitle = strings.TrimSpace(asString(m["title"]))
+	}
+	if rewardTitle == "" {
+		rewardTitle = "Channel Reward"
+	}
+
+	rewardID := strings.TrimSpace(asString(rewardMap["id"]))
+	if rewardID == "" {
+		rewardID = strings.TrimSpace(asString(m["reward_id"]))
+	}
+
+	cost := asInt(rewardMap["cost"])
+	if cost <= 0 {
+		cost = asInt(m["cost"])
+	}
+
+	userInput := strings.TrimSpace(asString(m["user_input"]))
+	if userInput == "" {
+		userInput = strings.TrimSpace(asString(m["message"]))
+	}
+	cleanText, spans := ParseKickEmotes(userInput)
+
+	id := strings.TrimSpace(asString(m["id"]))
+	if id == "" {
+		id = fmt.Sprintf("kick-redemption-%s-%d", strings.ToLower(username), time.Now().UnixNano())
+	}
+
+	return &chat.Event{
+		ID:          id,
+		Platform:    "kick",
+		Kind:        chat.EventKindRedemption,
+		Timestamp:   time.Now(),
+		UserID:      strings.ToLower(username),
+		UserName:    strings.ToLower(username),
+		DisplayName: username,
+		Text:        cleanText,
+		EmoteSpans:  spans,
+		Amount:      float64(cost),
+		Currency:    "points",
+		RewardID:    rewardID,
+		RewardTitle: rewardTitle,
 	}
 }
 

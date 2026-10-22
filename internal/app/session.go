@@ -868,15 +868,67 @@ func formatEventLogRawTextAndEmotes(event *chat.Event) (string, []chat.EmoteSpan
 		if count <= 0 {
 			count = 1
 		}
-		if recipient := strings.TrimSpace(event.Recipient); recipient != "" && count == 1 {
-			return "Gifted a subscription to " + recipient, nil
+		if recipient := strings.TrimSpace(event.Recipient); recipient != "" {
+			if count == 1 {
+				return "Gifted a subscription to " + recipient, nil
+			}
+			return fmt.Sprintf("Gifted %d subscriptions to %s", count, recipient), nil
 		}
 		return fmt.Sprintf("Gifted %d subscriptions", count), nil
+	case chat.EventKindGiftRedemption:
+		if msg != "" {
+			return msg, rawEmotes
+		}
+		if gifter := strings.TrimSpace(event.Recipient); gifter != "" {
+			return "Received a gift membership from " + gifter, nil
+		}
+		return "Received a gift membership", nil
+	case chat.EventKindSubUpgrade:
+		base := strings.TrimSpace(event.ItemName)
+		if base == "" {
+			if recipient := strings.TrimSpace(event.Recipient); recipient != "" {
+				base = "Paid forward a gift subscription to " + recipient
+			} else if tier := strings.TrimSpace(event.SubTier); tier != "" {
+				base = fmt.Sprintf("Upgraded to a %s subscription", tier)
+			} else {
+				base = "Upgraded subscription"
+			}
+		}
+		if msg != "" && !strings.EqualFold(msg, base) {
+			prefix := base + ": "
+			return prefix + msg, shiftEmoteSpans(rawEmotes, utf8.RuneCountInString(prefix))
+		}
+		return base, nil
+	case chat.EventKindWatchStreak:
+		streak := event.Count
+		if streak <= 0 {
+			streak = 1
+		}
+		base := fmt.Sprintf("Shared a %d-stream watch streak", streak)
+		if event.Amount > 0 {
+			base = fmt.Sprintf("Shared a %d-stream watch streak (+%.0f pts)", streak, event.Amount)
+		}
+		if msg != "" {
+			prefix := base + ": "
+			return prefix + msg, shiftEmoteSpans(rawEmotes, utf8.RuneCountInString(prefix))
+		}
+		return base, nil
 	case chat.EventKindCheer:
 		if msg != "" {
 			return msg, rawEmotes
 		}
 		return fmt.Sprintf("Cheered %.0f bits", event.Amount), nil
+	case chat.EventKindBitsBadgeTier:
+		bits := event.Amount
+		if bits <= 0 && event.Count > 0 {
+			bits = float64(event.Count)
+		}
+		base := fmt.Sprintf("Unlocked the %.0f bits badge", bits)
+		if msg != "" {
+			prefix := base + ": "
+			return prefix + msg, shiftEmoteSpans(rawEmotes, utf8.RuneCountInString(prefix))
+		}
+		return base, nil
 	case chat.EventKindRaid:
 		if msg != "" {
 			return msg, rawEmotes
@@ -962,6 +1014,32 @@ func formatEventLogRawTextAndEmotes(event *chat.Event) (string, []chat.EmoteSpan
 			return base + " " + token, []chat.EmoteSpan{sp}
 		}
 		return base, nil
+	case chat.EventKindCharityDonation:
+		amtStr := formatLogCurrencyAmount(event.Amount, event.Currency)
+		charity := strings.TrimSpace(event.RewardTitle)
+		if charity == "" {
+			charity = strings.TrimSpace(event.ItemName)
+		}
+		base := "Donated " + amtStr
+		if charity != "" {
+			base = "Donated " + amtStr + " to " + charity
+		}
+		if msg != "" {
+			prefix := base + ": "
+			return prefix + msg, shiftEmoteSpans(rawEmotes, utf8.RuneCountInString(prefix))
+		}
+		return base, nil
+	case chat.EventKindAnnouncement:
+		if msg != "" {
+			prefix := "[Announcement] "
+			return prefix + msg, shiftEmoteSpans(rawEmotes, utf8.RuneCountInString(prefix))
+		}
+		return "Announcement", nil
+	case chat.EventKindShare:
+		if msg != "" {
+			return msg, rawEmotes
+		}
+		return "Shared the stream", nil
 	default:
 		return event.Text, rawEmotes
 	}
@@ -1021,7 +1099,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 				}
 				if notif.Threshold > 0 {
 					val := event.Amount
-					if event.Kind == chat.EventKindRaid || event.Kind == chat.EventKindGiftSub || (event.Kind == chat.EventKindGift && val == 0) {
+					if event.Kind == chat.EventKindRaid || event.Kind == chat.EventKindGiftSub || event.Kind == chat.EventKindWatchStreak || (event.Kind == chat.EventKindGift && val == 0) || (event.Kind == chat.EventKindBitsBadgeTier && val == 0) {
 						val = float64(event.Count)
 					}
 					if val < notif.Threshold {

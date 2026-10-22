@@ -412,11 +412,29 @@ func DefaultConfig() *Config {
 						Voice:     "",
 						Threshold: 1,
 					},
+					"sub_upgrade": {
+						Enabled:   true,
+						Template:  "{user} upgraded their subscription! {message}",
+						Voice:     "",
+						Threshold: 0,
+					},
+					"watch_streak": {
+						Enabled:   true,
+						Template:  "{user} is on a {count} stream watch streak! {message}",
+						Voice:     "",
+						Threshold: 0,
+					},
 					"cheer": {
 						Enabled:   true,
 						Template:  "{user} cheered {bits} bits: {message}",
 						Voice:     "",
 						Threshold: 100,
+					},
+					"bits_badge_tier": {
+						Enabled:   true,
+						Template:  "{user} unlocked the {amount} bits badge! {message}",
+						Voice:     "",
+						Threshold: 0,
 					},
 					"raid": {
 						Enabled:   true,
@@ -427,6 +445,18 @@ func DefaultConfig() *Config {
 					"redemption": {
 						Enabled:   true,
 						Template:  "{user} redeemed {reward}: {message}",
+						Voice:     "",
+						Threshold: 0,
+					},
+					"charity_donation": {
+						Enabled:   true,
+						Template:  "{user} donated {amount} {currency} to {reward}! {message}",
+						Voice:     "",
+						Threshold: 0,
+					},
+					"announcement": {
+						Enabled:   false,
+						Template:  "Announcement from {user}: {message}",
 						Voice:     "",
 						Threshold: 0,
 					},
@@ -486,6 +516,24 @@ func DefaultConfig() *Config {
 						Voice:     "",
 						Threshold: 0,
 					},
+					"gift_redemption": {
+						Enabled:   false,
+						Template:  "{user} received a gift membership from {recipient}!",
+						Voice:     "",
+						Threshold: 0,
+					},
+					"raid": {
+						Enabled:   true,
+						Template:  "{user} raided with a live redirect!",
+						Voice:     "",
+						Threshold: 0,
+					},
+					"charity_donation": {
+						Enabled:   true,
+						Template:  "{user} donated {amount} {currency}! {message}",
+						Voice:     "",
+						Threshold: 0,
+					},
 				},
 				Overrides: PlatformOverrides{
 					OverrideRules:     false,
@@ -519,9 +567,33 @@ func DefaultConfig() *Config {
 						Voice:     "",
 						Threshold: 0,
 					},
+					"sub": {
+						Enabled:   true,
+						Template:  "{user} became a Super Fan!",
+						Voice:     "",
+						Threshold: 0,
+					},
+					"resub": {
+						Enabled:   true,
+						Template:  "{user} has been a Super Fan for {months} months!",
+						Voice:     "",
+						Threshold: 0,
+					},
+					"gift_sub": {
+						Enabled:   true,
+						Template:  "{user} gifted {count} Super Fan memberships!",
+						Voice:     "",
+						Threshold: 1,
+					},
 					"follow": {
 						Enabled:   false,
 						Template:  "{user} followed on TikTok!",
+						Voice:     "",
+						Threshold: 0,
+					},
+					"share": {
+						Enabled:   false,
+						Template:  "{user} shared the stream!",
 						Voice:     "",
 						Threshold: 0,
 					},
@@ -586,6 +658,12 @@ func DefaultConfig() *Config {
 						Template:  "{user} sent {count} {gift}: {message}",
 						Voice:     "",
 						Threshold: 1,
+					},
+					"redemption": {
+						Enabled:   true,
+						Template:  "{user} redeemed {reward}: {message}",
+						Voice:     "",
+						Threshold: 0,
 					},
 				},
 				Overrides: PlatformOverrides{

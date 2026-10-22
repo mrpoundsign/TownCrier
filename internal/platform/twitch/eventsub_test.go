@@ -213,8 +213,8 @@ func TestEventSubEndToEndWebSocket(t *testing.T) {
 	subs := append([]string(nil), createdSubs...)
 	subMu.Unlock()
 
-	if len(subs) != 4 || subs[0] != "channel.follow:2" || subs[1] != "channel.channel_points_custom_reward_redemption.add:1" || subs[2] != "stream.online:1" || subs[3] != "stream.offline:1" {
-		t.Fatalf("expected 4 subscriptions, got %v", subs)
+	if len(subs) != 5 || subs[0] != "channel.follow:2" || subs[1] != "channel.channel_points_custom_reward_redemption.add:1" || subs[2] != "channel.chat.notification:1" || subs[3] != "stream.online:1" || subs[4] != "stream.offline:1" {
+		t.Fatalf("expected 5 subscriptions, got %v", subs)
 	}
 
 	evMu.Lock()
@@ -370,4 +370,57 @@ func TestCheckUserFollowingAndTTLCache(t *testing.T) {
 		t.Fatalf("expected unfollowed alice after TTL expiry to return false, got ok=%v err=%v", ok, err)
 	}
 }
+
+func TestParseEventSubChatNotifications(t *testing.T) {
+	// 1. Watch Streak via channel.chat.notification
+	streakRaw := json.RawMessage(`{
+		"broadcaster_user_id": "1001",
+		"broadcaster_user_login": "mrpoundsign",
+		"BroadcasterUserName": "MrPoundSign",
+		"chatter_user_id": "2002",
+		"chatter_user_login": "wifestreamer",
+		"chatter_user_name": "WifeStreamer",
+		"message_id": "notif-streak-99",
+		"notice_type": "watch_streak",
+		"message": {"text": "Never missed a stream!"},
+		"watch_streak": {
+			"streak_count": 7,
+			"channel_points_awarded": 500
+		}
+	}`)
+	ev, err := ParseEventSubNotification("channel.chat.notification", "env-1", streakRaw, "mrpoundsign")
+	if err != nil || ev == nil {
+		t.Fatalf("ParseEventSubNotification(watch_streak) err=%v ev=%v", err, ev)
+	}
+	if ev.Kind != chat.EventKindWatchStreak || ev.ID != "notif-streak-99" || ev.Count != 7 || ev.Amount != 500 || ev.Text != "Never missed a stream!" {
+		t.Errorf("unexpected watch_streak event: %+v", ev)
+	}
+
+	// 2. Charity Donation via channel.chat.notification
+	charityRaw := json.RawMessage(`{
+		"broadcaster_user_login": "mrpoundsign",
+		"chatter_user_id": "3003",
+		"chatter_user_login": "kindviewer",
+		"chatter_user_name": "KindViewer",
+		"message_id": "notif-charity-1",
+		"notice_type": "charity_donation",
+		"message": {"text": "Great cause!"},
+		"charity_donation": {
+			"charity_name": "Direct Relief",
+			"amount": {
+				"value": 5000,
+				"decimal_places": 2,
+				"currency": "USD"
+			}
+		}
+	}`)
+	cEv, err := ParseEventSubNotification("channel.chat.notification", "env-2", charityRaw, "mrpoundsign")
+	if err != nil || cEv == nil {
+		t.Fatalf("ParseEventSubNotification(charity_donation) err=%v ev=%v", err, cEv)
+	}
+	if cEv.Kind != chat.EventKindCharityDonation || cEv.Amount != 50 || cEv.Currency != "USD" || cEv.RewardTitle != "Direct Relief" {
+		t.Errorf("unexpected charity_donation event: %+v", cEv)
+	}
+}
+
 

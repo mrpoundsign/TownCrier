@@ -55,10 +55,39 @@ type Connector struct {
 	helixBaseURL     string
 	oauthValidateURL string
 	httpClient       *http.Client
+	seenEventIDs     map[string]struct{}
+	seenEventOrder   []string
 	onEvent          func(event *chat.Event)
 	onModeration     func(modEvent *chat.ModerationEvent)
 	onStatusChange   func(status ConnectionStatus, detail string)
 	onStreamLive     func(live bool)
+}
+
+const maxSeenEventIDs = 256
+
+func (c *Connector) emitEvent(ev *chat.Event) {
+	if ev == nil || c.onEvent == nil {
+		return
+	}
+	if id := strings.TrimSpace(ev.ID); id != "" {
+		c.mu.Lock()
+		if c.seenEventIDs == nil {
+			c.seenEventIDs = make(map[string]struct{}, maxSeenEventIDs)
+		}
+		if _, dup := c.seenEventIDs[id]; dup {
+			c.mu.Unlock()
+			return
+		}
+		if len(c.seenEventOrder) >= maxSeenEventIDs {
+			evict := c.seenEventOrder[0]
+			c.seenEventOrder = c.seenEventOrder[1:]
+			delete(c.seenEventIDs, evict)
+		}
+		c.seenEventIDs[id] = struct{}{}
+		c.seenEventOrder = append(c.seenEventOrder, id)
+		c.mu.Unlock()
+	}
+	c.onEvent(ev)
 }
 
 // NewConnector creates a new Twitch connector.
@@ -401,9 +430,14 @@ func (c *Connector) handlePrivateMessage(msg twitch.PrivateMessage) {
 	var unitAmount float64
 	var currency string
 	var count int
+	var rewardTitle string
 	rewardID := strings.TrimSpace(msg.CustomRewardID)
-	if rewardID == "" && msg.Tags != nil {
-		rewardID = strings.TrimSpace(msg.Tags["custom-reward-id"])
+	var msgIDTag string
+	if msg.Tags != nil {
+		if rewardID == "" {
+			rewardID = strings.TrimSpace(msg.Tags["custom-reward-id"])
+		}
+		msgIDTag = strings.TrimSpace(msg.Tags["msg-id"])
 	}
 
 	if msg.Bits > 0 {
@@ -412,9 +446,23 @@ func (c *Connector) handlePrivateMessage(msg twitch.PrivateMessage) {
 		unitAmount = 1
 		count = msg.Bits
 		currency = "bits"
-	} else if rewardID != "" && (c.oauth == nil || !c.oauth.HasToken()) {
-		// Anonymous IRC fallback for Channel Point redemptions with text input when EventSub OAuth is not active
-		kind = chat.EventKindRedemption
+	} else {
+		switch msgIDTag {
+		case "highlighted-message":
+			kind = chat.EventKindRedemption
+			rewardTitle = "Highlight My Message"
+		case "gigantified-emote-message":
+			kind = chat.EventKindRedemption
+			rewardTitle = "Gigantified Emote"
+		case "animated-message":
+			kind = chat.EventKindRedemption
+			rewardTitle = "Message Effects"
+		default:
+			if rewardID != "" && (c.oauth == nil || !c.oauth.HasToken()) {
+				// Anonymous IRC fallback for Channel Point redemptions with text input when EventSub OAuth is not active
+				kind = chat.EventKindRedemption
+			}
+		}
 	}
 
 	displayName := msg.User.DisplayName
@@ -444,10 +492,11 @@ func (c *Connector) handlePrivateMessage(msg twitch.PrivateMessage) {
 		Currency:    currency,
 		Count:       count,
 		RewardID:    rewardID,
+		RewardTitle: rewardTitle,
 		Raw:         msg,
 	}
 
-	c.onEvent(ev)
+	c.emitEvent(ev)
 }
 
 func (c *Connector) handleClearMessage(msg twitch.ClearMessage) {
@@ -521,6 +570,10 @@ func (c *Connector) handleUserNotice(msg twitch.UserNoticeMessage) {
 	var text string
 	var months int
 	var count int
+	var amount float64
+	var currency string
+	var itemName string
+	var rewardTitle string
 	var recipient string
 	subTier := formatTwitchSubPlan(msg.MsgParams["msg-param-sub-plan"])
 
@@ -557,6 +610,90 @@ func (c *Connector) handleUserNotice(msg twitch.UserNoticeMessage) {
 			count = 1
 		}
 		text = "gifted " + strconv.Itoa(count) + " community subscriptions!"
+	case "primepaidupgrade":
+		kind = chat.EventKindSubUpgrade
+		text = msg.Message
+		count = 1
+		if subTier != "" {
+			itemName = "Upgraded from a Prime subscription to " + subTier
+		} else {
+			itemName = "Upgraded from a Prime subscription"
+		}
+	case "giftpaidupgrade", "anongiftpaidupgrade":
+		kind = chat.EventKindSubUpgrade
+		text = msg.Message
+		count = 1
+		sender := strings.TrimSpace(msg.MsgParams["msg-param-sender-name"])
+		if sender == "" {
+			sender = strings.TrimSpace(msg.MsgParams["msg-param-sender-login"])
+		}
+		if sender != "" && msg.MsgID != "anongiftpaidupgrade" {
+			recipient = sender
+			itemName = "Upgraded a gift subscription from " + sender
+		} else {
+			itemName = "Upgraded a gift subscription"
+		}
+	case "standardpayforward", "communitypayforward":
+		kind = chat.EventKindSubUpgrade
+		text = msg.Message
+		count = 1
+		recipient = strings.TrimSpace(msg.MsgParams["msg-param-recipient-display-name"])
+		if recipient == "" {
+			recipient = strings.TrimSpace(msg.MsgParams["msg-param-recipient-user-name"])
+		}
+		if recipient != "" {
+			itemName = "Paid forward a gift subscription to " + recipient
+		} else {
+			itemName = "Paid forward a gift subscription to the community"
+		}
+	case "extendsub":
+		kind = chat.EventKindSubUpgrade
+		text = msg.Message
+		count = 1
+		if m, err := strconv.Atoi(msg.MsgParams["msg-param-cumulative-months"]); err == nil && m > 0 {
+			months = m
+		}
+		itemName = "Extended subscription"
+	case "viewermilestone":
+		category := strings.ToLower(strings.TrimSpace(msg.MsgParams["msg-param-category"]))
+		if category != "" && category != "watch-streak" && category != "watch_streak" {
+			return
+		}
+		kind = chat.EventKindWatchStreak
+		text = msg.Message
+		if vStr, ok := msg.MsgParams["msg-param-value"]; ok {
+			count, _ = strconv.Atoi(strings.TrimSpace(vStr))
+		}
+		if count <= 0 {
+			count = 1
+		}
+		if rStr, ok := msg.MsgParams["msg-param-copoReward"]; ok {
+			if pts, err := strconv.Atoi(strings.TrimSpace(rStr)); err == nil && pts > 0 {
+				amount = float64(pts)
+				currency = "points"
+			}
+		}
+	case "bitsbadgetier":
+		kind = chat.EventKindBitsBadgeTier
+		text = msg.Message
+		if tStr, ok := msg.MsgParams["msg-param-threshold"]; ok {
+			count, _ = strconv.Atoi(strings.TrimSpace(tStr))
+			amount = float64(count)
+		}
+		currency = "bits"
+	case "announcement":
+		kind = chat.EventKindAnnouncement
+		text = msg.Message
+	case "charitydonation", "charity_donation":
+		kind = chat.EventKindCharityDonation
+		text = msg.Message
+		amount, currency = parseTwitchCharityAmount(
+			msg.MsgParams["msg-param-donation-amount"],
+			msg.MsgParams["msg-param-donation-currency"],
+			msg.MsgParams["msg-param-exponent"],
+		)
+		rewardTitle = strings.TrimSpace(msg.MsgParams["msg-param-charity-name"])
+		itemName = rewardTitle
 	case "raid":
 		kind = chat.EventKindRaid
 		if cStr, ok := msg.MsgParams["msg-param-viewerCount"]; ok {
@@ -584,6 +721,10 @@ func (c *Connector) handleUserNotice(msg twitch.UserNoticeMessage) {
 		Roles:       roles,
 		Text:        text,
 		EmoteSpans:  emotes,
+		Amount:      amount,
+		Currency:    currency,
+		ItemName:    itemName,
+		RewardTitle: rewardTitle,
 		SubTier:     subTier,
 		Recipient:   recipient,
 		Months:      months,
@@ -591,7 +732,24 @@ func (c *Connector) handleUserNotice(msg twitch.UserNoticeMessage) {
 		Raw:         msg,
 	}
 
-	c.onEvent(ev)
+	c.emitEvent(ev)
+}
+
+func parseTwitchCharityAmount(rawVal, rawCurrency, rawExponent string) (float64, string) {
+	val, _ := strconv.ParseFloat(strings.TrimSpace(rawVal), 64)
+	exp, err := strconv.Atoi(strings.TrimSpace(rawExponent))
+	if err != nil {
+		// Default exponent of 2 (cents) if rawVal looks like integer minor units and exponent is specified
+		exp = 0
+	}
+	for range exp {
+		val /= 10
+	}
+	curr := strings.ToUpper(strings.TrimSpace(rawCurrency))
+	if curr == "" {
+		curr = "USD"
+	}
+	return val, curr
 }
 
 func formatTwitchSubPlan(plan string) string {
