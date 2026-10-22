@@ -70,49 +70,85 @@ func NewModelManager(baseDir string) *ModelManager {
 }
 
 // DefaultModelDir resolves the target directory for Kokoro model files.
-// It checks local ./models/kokoro-en first, then falls back to user local data dir.
+// It places models in the user's local cache/app data directory (%LOCALAPPDATA% on Windows,
+// ~/.cache on Linux) to prevent multi-hundred-megabyte binary weights from bloating roaming profiles.
+// If models already exist in roaming (%APPDATA%) or legacy paths, it automatically migrates them to local cache.
 func DefaultModelDir() string {
-	candidates := []string{
-		"models/kokoro-en",
-		"../models/kokoro-en",
-		"../../models/kokoro-en",
+	var targetDir string
+	if cacheDir, err := os.UserCacheDir(); err == nil {
+		targetDir = filepath.Join(cacheDir, "com.github.mrpoundsign.towncrier", "models", "kokoro-en")
+	} else if configDir, err := os.UserConfigDir(); err == nil {
+		targetDir = filepath.Join(configDir, "com.github.mrpoundsign.towncrier", "models", "kokoro-en")
+	} else {
+		targetDir = filepath.Join("models", "kokoro-en")
 	}
 
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		candidates = append(candidates,
-			filepath.Join(exeDir, "models", "kokoro-en"),
-			filepath.Join(exeDir, "..", "models", "kokoro-en"),
-			filepath.Join(exeDir, "..", "..", "models", "kokoro-en"),
-		)
+	if IsAnyModelFamilyInstalled(targetDir) {
+		return targetDir
 	}
 
-	for _, c := range candidates {
-		if IsAnyModelFamilyInstalled(c) {
-			return c
-		}
-	}
-
-	// Host OS data directory
-	configDir, err := os.UserConfigDir()
-	if err == nil {
-		newPath := filepath.Join(configDir, "com.github.mrpoundsign.towncrier", "models", "kokoro-en")
-		if IsAnyModelFamilyInstalled(newPath) {
-			return newPath
-		}
-		for _, legacy := range []string{
+	// Host OS roaming data directory: check for existing installs or legacy paths and migrate to local cache
+	if configDir, err := os.UserConfigDir(); err == nil {
+		for _, legacyKokoro := range []string{
+			filepath.Join(configDir, "com.github.mrpoundsign.towncrier", "models", "kokoro-en"),
 			filepath.Join(configDir, "TownCrier", "models", "kokoro-en"),
 			filepath.Join(configDir, "com.github.mrpoundsign.octochorpebot", "models", "kokoro-en"),
 			filepath.Join(configDir, "OctochorpeBot", "models", "kokoro-en"),
 		} {
-			if IsAnyModelFamilyInstalled(legacy) {
-				return legacy
+			if legacyKokoro != targetDir && IsAnyModelFamilyInstalled(legacyKokoro) {
+				if migrateModelsDir(filepath.Dir(legacyKokoro), filepath.Dir(targetDir)) {
+					return targetDir
+				}
+				// If directory-level migration failed (e.g. across volumes), return legacy path as fallback
+				return legacyKokoro
 			}
 		}
-		return newPath
 	}
 
-	return "models/kokoro-en"
+	return targetDir
+}
+
+// migrateModelsDir moves the contents of legacyModelsDir into targetModelsDir.
+func migrateModelsDir(legacyModelsDir, targetModelsDir string) bool {
+	if legacyModelsDir == targetModelsDir {
+		return true
+	}
+	if err := os.MkdirAll(targetModelsDir, 0755); err != nil {
+		return false
+	}
+
+	// First attempt atomic rename of the entire models directory if target is empty
+	targetEntries, err := os.ReadDir(targetModelsDir)
+	if err == nil && len(targetEntries) == 0 {
+		_ = os.Remove(targetModelsDir) // Remove newly created empty dir so os.Rename can place legacyModelsDir
+		if err := os.Rename(legacyModelsDir, targetModelsDir); err == nil {
+			return true
+		}
+		// Re-create targetModelsDir if rename failed
+		_ = os.MkdirAll(targetModelsDir, 0755)
+	}
+
+	// Move individual model family directories
+	entries, err := os.ReadDir(legacyModelsDir)
+	if err != nil {
+		return false
+	}
+
+	success := true
+	for _, entry := range entries {
+		src := filepath.Join(legacyModelsDir, entry.Name())
+		dst := filepath.Join(targetModelsDir, entry.Name())
+		if err := os.Rename(src, dst); err != nil {
+			success = false
+		}
+	}
+
+	// If all entries were moved successfully, remove the empty legacy models dir
+	if success {
+		_ = os.Remove(legacyModelsDir)
+	}
+
+	return success
 }
 
 // IsAnyModelFamilyInstalled reports whether Kokoro or any sibling model family directory is installed relative to kokoroDir.
@@ -166,12 +202,9 @@ func IsGPUModelInstalled(dir string) bool {
 	return fileExists(filepath.Join(dir, "model.onnx")) && hasKokoroSharedAssets(dir)
 }
 
-// IsKokoroInstalledForMode checks if the required Kokoro model files for the requested mode (GPU vs CPU) are installed.
-func IsKokoroInstalledForMode(dir string, useGPU bool) bool {
-	if useGPU {
-		return IsGPUModelInstalled(dir)
-	}
-	return IsCPUModelInstalled(dir)
+// IsKokoroInstalledForMode checks if Kokoro model assets (both FP32 GPU and INT8 CPU fallback models + shared assets) are installed.
+func IsKokoroInstalledForMode(dir string, _ bool) bool {
+	return IsModelInstalled(dir)
 }
 
 // IsModelInstalled checks if all required Kokoro model assets (both FP32 GPU and INT8 CPU models + shared assets) are present in the directory.
@@ -324,14 +357,14 @@ func DownloadKokoroModel(destDir string, onProgress DownloadProgressFunc) error 
 // When useGPU is false, only the 98.5 MB INT8 archive (model.int8.onnx + shared assets) is downloaded.
 // When useGPU is true, the FP32 archive (model.onnx + shared assets) and INT8 fallback are downloaded.
 func DownloadKokoroModelForMode(destDir string, useGPU bool, onProgress DownloadProgressFunc) error {
-	if useGPU {
-		if IsModelInstalled(destDir) {
-			return nil
-		}
-	} else {
-		if IsCPUModelInstalled(destDir) {
-			return nil
-		}
+	return DownloadKokoroModelForModeWithContext(context.Background(), destDir, useGPU, onProgress)
+}
+
+// DownloadKokoroModelForModeWithContext downloads Kokoro archives with context cancellation support.
+// It ensures both the FP32 GPU model and INT8 CPU fallback model are installed in a unified download.
+func DownloadKokoroModelForModeWithContext(parentCtx context.Context, destDir string, _ bool, onProgress DownloadProgressFunc) error {
+	if IsModelInstalled(destDir) {
+		return nil
 	}
 
 	if err := os.MkdirAll(destDir, 0755); err != nil {
@@ -346,8 +379,8 @@ func DownloadKokoroModelForMode(destDir string, useGPU bool, onProgress Download
 	}
 
 	sharedPresent := hasKokoroSharedAssets(destDir)
-	needFP32 := useGPU && (!fileExists(filepath.Join(destDir, "model.onnx")) || !sharedPresent)
-	needINT8 := !fileExists(filepath.Join(destDir, "model.int8.onnx")) || (!useGPU && !sharedPresent)
+	needFP32 := !fileExists(filepath.Join(destDir, "model.onnx")) || !sharedPresent
+	needINT8 := !fileExists(filepath.Join(destDir, "model.int8.onnx")) || !sharedPresent
 
 	var tasks []archiveTask
 	var totalBytes int64
@@ -381,7 +414,10 @@ func DownloadKokoroModelForMode(destDir string, useGPU bool, onProgress Download
 		return nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
 	var (
@@ -422,7 +458,7 @@ func DownloadKokoroModelForMode(destDir string, useGPU bool, onProgress Download
 		return firstErr
 	}
 
-	if !IsKokoroInstalledForMode(destDir, useGPU) {
+	if !IsModelInstalled(destDir) {
 		return fmt.Errorf("kokoro model extraction finished but required files are still missing in %s", destDir)
 	}
 
@@ -583,7 +619,7 @@ func IsModelFamilyInstalled(kokoroDir string, family string, useGPU bool) bool {
 	dir := ModelFamilyDir(kokoroDir, fam)
 	switch fam {
 	case "", ModelKokoro, ModelKokoroIntl:
-		return IsKokoroInstalledForMode(dir, useGPU) || IsCPUModelInstalled(dir)
+		return IsKokoroInstalledForMode(dir, useGPU)
 	case ModelSupertonic:
 		for _, f := range []string{
 			"duration_predictor.int8.onnx",
@@ -615,10 +651,15 @@ func IsModelFamilyInstalled(kokoroDir string, family string, useGPU bool) bool {
 
 // DownloadModelFamily downloads and extracts the archive for the requested model family if not already installed.
 func DownloadModelFamily(kokoroDir string, family string, useGPU bool, onProgress DownloadProgressFunc) error {
+	return DownloadModelFamilyWithContext(context.Background(), kokoroDir, family, useGPU, onProgress)
+}
+
+// DownloadModelFamilyWithContext downloads and extracts the archive with context cancellation support.
+func DownloadModelFamilyWithContext(ctx context.Context, kokoroDir string, family string, useGPU bool, onProgress DownloadProgressFunc) error {
 	fam := strings.ToLower(strings.TrimSpace(family))
 	dir := ModelFamilyDir(kokoroDir, fam)
 	if fam == "" || fam == ModelKokoro || fam == ModelKokoroIntl {
-		return DownloadKokoroModelForMode(dir, useGPU, onProgress)
+		return DownloadKokoroModelForModeWithContext(ctx, dir, useGPU, onProgress)
 	}
 	if IsModelFamilyInstalled(kokoroDir, fam, useGPU) {
 		return nil
@@ -666,7 +707,10 @@ func DownloadModelFamily(kokoroDir string, family string, useGPU bool, onProgres
 	var totalAtomic atomic.Int64
 	totalAtomic.Store(task.expectedSize)
 
-	err := downloadAndExtractTarBz2(context.Background(), task, dir, &totalAtomic, func(delta int64) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	err := downloadAndExtractTarBz2(ctx, task, dir, &totalAtomic, func(delta int64) {
 		cur := downloadedBytes.Add(delta)
 		tot := max(cur, totalAtomic.Load())
 		if onProgress != nil {

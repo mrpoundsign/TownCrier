@@ -169,7 +169,8 @@ func run() error {
 			for _, fam := range enabledModels {
 				if fam == tts.ModelKokoro || fam == tts.ModelKokoroIntl {
 					if !tts.IsKokoroInstalledForMode(modelDir, cfg.TTS.UseGPU) {
-						log.Printf("Kokoro models missing in %s (useGPU=%v); starting download...", modelDir, cfg.TTS.UseGPU)
+						log.Printf("Kokoro models missing in %s; starting download...", modelDir)
+						tracker.SetDownloadModel("Kokoro-82M")
 						tracker.SetStatus("Downloading Kokoro-82M neural TTS models...")
 						dlErr := tts.DownloadKokoroModelForMode(modelDir, cfg.TTS.UseGPU, tracker.SetDownloadProgress)
 						if dlErr != nil {
@@ -190,6 +191,7 @@ func run() error {
 				if !tts.IsModelFamilyInstalled(modelDir, fam, cfg.TTS.UseGPU) {
 					spec, _ := tts.ModelSpecByID(fam)
 					log.Printf("Model pack %q missing in %s; starting download...", fam, modelDir)
+					tracker.SetDownloadModel(spec.ShortName)
 					tracker.SetStatus("Downloading " + spec.ShortName + " neural TTS models...")
 					dlErr := tts.DownloadModelFamily(modelDir, fam, cfg.TTS.UseGPU, tracker.SetDownloadProgress)
 					if dlErr != nil {

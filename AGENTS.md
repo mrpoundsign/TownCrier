@@ -16,6 +16,7 @@
 > 7. **Build Output Location**: All temporary binaries, DLLs, and build artifacts belong in `build/` (e.g., `build/bin/`), which is gitignored. Never commit binaries or model weights.
 > 8. **Planning Repository Independence**: `planning/` is its own local-only git repository (no remote) ignored by the main repo. Planning commits happen independently inside `planning/` referencing ticket numbers.
 > 9. **Always Link PRs, Issues, and CI Runs**: Whenever creating or referencing GitHub Pull Requests, Issues, or Actions CI runs, always include clickable Markdown links so the user can watch or inspect them directly.
+> 10. **GitHub CLI Issue & PR Bodies via Files**: PowerShell mangles markdown backticks and escapes (e.g., `\t`, `\f`) when passing strings inline to `gh`. NEVER pass multiline issue or PR descriptions inline via `--body`. ALWAYS write markdown content to a temporary file in `build/` and pass `--body-file`, then clean up the temporary file.
 
 ---
 

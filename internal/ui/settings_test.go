@@ -2,13 +2,17 @@ package ui
 
 import (
 	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2/test"
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/internal/audio"
 	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
+	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
 func TestSettingsViewBuild(t *testing.T) {
@@ -158,5 +162,107 @@ func TestLaunchWindowProgressAndError(t *testing.T) {
 		t.Error("expected onQuit callback to be invoked when Quit button is tapped")
 	}
 }
+
+func waitForCondition(fn func() bool, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return fn()
+}
+
+func TestModelDownloadModal_ProgressAndStep(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestModal")
+
+	var cancelled atomic.Bool
+	modal := NewModelDownloadModal(w, "Piper", 65, func() {
+		cancelled.Store(true)
+	})
+
+	if modal == nil {
+		t.Fatal("expected non-nil ModelDownloadModal")
+	}
+	if !strings.Contains(modal.stepLbl.Text, "Piper") {
+		t.Errorf("expected step label to mention Piper, got %q", modal.stepLbl.Text)
+	}
+
+	modal.SetStep(2, 3, "Matcha", 40)
+	if !waitForCondition(func() bool {
+		return strings.Contains(modal.stepLbl.Text, "Model 2 of 3") && strings.Contains(modal.stepLbl.Text, "Matcha")
+	}, time.Second) {
+		t.Errorf("step text did not update, got %q", modal.stepLbl.Text)
+	}
+
+	modal.UpdateProgress(20*1024*1024, 40*1024*1024)
+	if !waitForCondition(func() bool {
+		return modal.progress.Value == 0.5 && strings.Contains(modal.progressLbl.Text, "50%")
+	}, time.Second) {
+		t.Errorf("progress did not update, got val=%v text=%q", modal.progress.Value, modal.progressLbl.Text)
+	}
+
+	test.Tap(modal.cancelBtn)
+	if !waitForCondition(func() bool {
+		return cancelled.Load() && modal.IsCancelling()
+	}, time.Second) {
+		t.Error("expected cancel callback and cancelling state after tap")
+	}
+
+	modal.Dismiss()
+	if !modal.IsDismissed() {
+		t.Error("expected modal to report dismissed after Dismiss()")
+	}
+}
+
+func TestSettingsView_MissingModels(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestMissingModels")
+
+	cfg := config.DefaultConfig()
+	view := NewSettingsView(w, cfg, nil, nil)
+	tmpDir := t.TempDir()
+	view.modelDir = tmpDir
+
+	missing := view.missingModelFamilies([]string{tts.ModelKokoro, tts.ModelPiper}, false)
+	if len(missing) != 2 {
+		t.Fatalf("expected 2 missing models, got %v", missing)
+	}
+}
+
+func TestSettingsView_RollbackTTSConfig(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestRollback")
+
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.modelDir = t.TempDir()
+	_ = view.Build()
+
+	// Mutate to an invalid setting
+	view.updateConfig(func(c *config.Config) {
+		c.TTS.EnabledModels = []string{tts.ModelPiper}
+		c.TTS.Preset = tts.PresetCustom
+	})
+
+	// Rollback to kokoro
+	view.rollbackTTSConfig([]string{tts.ModelKokoro}, tts.PresetFastLean, false, 4, 12, 0)
+
+	curCfg := sess.Config()
+	if len(curCfg.TTS.EnabledModels) != 1 || curCfg.TTS.EnabledModels[0] != tts.ModelKokoro {
+		t.Errorf("expected rolled back models to be [%s], got %v", tts.ModelKokoro, curCfg.TTS.EnabledModels)
+	}
+	if curCfg.TTS.Preset != tts.PresetFastLean {
+		t.Errorf("expected rolled back preset to be %s, got %s", tts.PresetFastLean, curCfg.TTS.Preset)
+	}
+}
+
 
 

@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -58,6 +60,10 @@ type SettingsView struct {
 	deviceMap         map[string]string // device name -> hex ID
 	uiScaleSelect     *widget.Select
 	globalVoiceField  *VoiceSpeedField
+	syncTTSControls   func()
+	prevModels        []string
+	prevPreset        string
+	prevUseGPU        bool
 	initializing      bool
 }
 
@@ -71,6 +77,9 @@ func NewSettingsView(w fyne.Window, cfg *config.Config, player audio.Player, eng
 		modelDir:   tts.DefaultModelDir(),
 		deviceMap:  make(map[string]string),
 		deviceEnum: audio.EnumeratePlaybackDevices,
+		prevModels: slices.Clone(cfg.TTS.EffectiveEnabledModels()),
+		prevPreset: cfg.TTS.Preset,
+		prevUseGPU: cfg.TTS.UseGPU,
 	}
 }
 
@@ -789,7 +798,16 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		idleSelect.SetSelected(idleLabelFromMinutes(cfg.TTS.IdleUnloadMinutes))
 		refreshPackLabels()
 		updateImpactUI()
+
+		v.mu.Lock()
+		if len(v.prevModels) == 0 {
+			v.prevModels = slices.Clone(cfg.TTS.EffectiveEnabledModels())
+			v.prevPreset = cfg.TTS.Preset
+			v.prevUseGPU = cfg.TTS.UseGPU
+		}
+		v.mu.Unlock()
 	}
+	v.syncTTSControls = syncWidgetsFromConfig
 
 	markCustomPreset := func() {
 		syncingControls = true
@@ -1030,6 +1048,66 @@ func (v *SettingsView) formatModelStatusText() string {
 	return fmt.Sprintf("Active Packs: %s  •  Mode: %s", strings.Join(names, ", "), mode)
 }
 
+func (v *SettingsView) missingModelFamilies(enabledModels []string, useGPU bool) []string {
+	var missing []string
+	for _, fam := range enabledModels {
+		if fam == tts.ModelKokoro || fam == tts.ModelKokoroIntl {
+			if !tts.IsKokoroInstalledForMode(v.modelDir, useGPU) {
+				if !slices.Contains(missing, tts.ModelKokoro) {
+					missing = append(missing, tts.ModelKokoro)
+				}
+			}
+			continue
+		}
+		if !tts.IsModelFamilyInstalled(v.modelDir, fam, useGPU) {
+			if !slices.Contains(missing, fam) {
+				missing = append(missing, fam)
+			}
+		}
+	}
+	return missing
+}
+
+func (v *SettingsView) rollbackTTSConfig(prevModels []string, prevPreset string, prevUseGPU bool, threads, maxClause, idleMin int) {
+	if len(prevModels) == 0 {
+		prevModels = []string{tts.ModelKokoro}
+	}
+	v.updateConfig(func(c *config.Config) {
+		c.TTS.EnabledModels = slices.Clone(prevModels)
+		if prevPreset != "" {
+			c.TTS.Preset = prevPreset
+		}
+		c.TTS.UseGPU = prevUseGPU
+	})
+
+	fyne.Do(func() {
+		v.mu.Lock()
+		syncFn := v.syncTTSControls
+		v.mu.Unlock()
+		if syncFn != nil {
+			syncFn()
+		}
+		if v.onModelsChanged != nil {
+			v.onModelsChanged()
+		}
+	})
+
+	eng, err := tts.NewMultiEngine(v.modelDir, prevModels, threads, prevUseGPU, maxClause, idleMin)
+	fyne.Do(func() {
+		v.mu.Lock()
+		if err == nil && eng != nil {
+			v.engine = eng
+			v.prevModels = slices.Clone(prevModels)
+			v.prevPreset = prevPreset
+			v.prevUseGPU = prevUseGPU
+		}
+		v.mu.Unlock()
+		if v.session != nil && eng != nil {
+			v.session.SetEngine(eng)
+		}
+	})
+}
+
 func (v *SettingsView) reloadTTSEngine(onDoneUI func()) {
 	// Skip background model downloads/reloads in headless unit tests where base modelDir is not populated
 	if !tts.IsAnyModelFamilyInstalled(v.modelDir) {
@@ -1050,13 +1128,34 @@ func (v *SettingsView) reloadTTSEngine(onDoneUI func()) {
 		maxClause = tts.DefaultMaxClauseWords
 	}
 	idleMin := v.cfg.TTS.IdleUnloadMinutes
+
+	prevModels := slices.Clone(v.prevModels)
+	prevPreset := v.prevPreset
+	prevUseGPU := v.prevUseGPU
 	v.mu.Unlock()
 
+	missing := v.missingModelFamilies(enabledModels, useGPU)
+
+	cancelCtx, cancelFn := context.WithCancel(context.Background())
+
+	var modal *ModelDownloadModal
+	if len(missing) > 0 && v.window != nil {
+		firstSpec, _ := tts.ModelSpecByID(missing[0])
+		modal = NewModelDownloadModal(v.window, firstSpec.ShortName, firstSpec.DownloadSizeMB, func() {
+			cancelFn()
+		})
+	}
+
 	go func() {
+		defer cancelFn()
+
 		// 1. Detach and close the existing engine FIRST so old and new models are never held in RAM simultaneously
 		v.mu.Lock()
 		if v.reloadSeq != mySeq {
 			v.mu.Unlock()
+			if modal != nil {
+				modal.Dismiss()
+			}
 			return
 		}
 		oldEng := v.engine
@@ -1072,45 +1171,63 @@ func (v *SettingsView) reloadTTSEngine(onDoneUI func()) {
 		tts.ReclaimOSMemory()
 
 		// 2. Download any missing enabled model families
-		for _, fam := range enabledModels {
-			v.mu.Lock()
-			canceled := v.reloadSeq != mySeq
-			v.mu.Unlock()
-			if canceled {
-				return
-			}
-
-			if fam == tts.ModelKokoro {
-				if !tts.IsKokoroInstalledForMode(v.modelDir, useGPU) {
-					v.setStatus("Downloading Kokoro-82M model files...")
-					if dlErr := tts.DownloadKokoroModelForMode(v.modelDir, useGPU, func(cur, tot int64) {
-						if tot > 0 {
-							v.setStatus(fmt.Sprintf("Downloading Kokoro-82M (%d%%)...", cur*100/tot))
-						}
-					}); dlErr != nil {
-						v.setStatus(fmt.Sprintf("Kokoro download failed (%v); falling back to installed files", dlErr))
-						if useGPU && tts.IsCPUModelInstalled(v.modelDir) {
-							useGPU = false
-							v.updateConfig(func(c *config.Config) {
-								c.TTS.UseGPU = false
-							})
-						}
+		if len(missing) > 0 {
+			for idx, fam := range missing {
+				v.mu.Lock()
+				canceled := v.reloadSeq != mySeq
+				v.mu.Unlock()
+				if canceled || cancelCtx.Err() != nil {
+					if modal != nil {
+						modal.Dismiss()
 					}
+					v.rollbackTTSConfig(prevModels, prevPreset, prevUseGPU, threads, maxClause, idleMin)
+					return
 				}
-				continue
-			}
 
-			if !tts.IsModelFamilyInstalled(v.modelDir, fam, useGPU) {
 				spec, _ := tts.ModelSpecByID(fam)
-				v.setStatus(fmt.Sprintf("Downloading %s (~%d MB)...", spec.ShortName, spec.DownloadSizeMB))
-				if dlErr := tts.DownloadModelFamily(v.modelDir, fam, useGPU, func(cur, tot int64) {
-					if tot > 0 {
+				if modal != nil {
+					modal.SetStep(idx+1, len(missing), spec.ShortName, spec.DownloadSizeMB)
+				}
+
+				onProg := func(cur, tot int64) {
+					if modal != nil {
+						modal.UpdateProgress(cur, tot)
+					} else if tot > 0 {
 						v.setStatus(fmt.Sprintf("Downloading %s (%d%%)...", spec.ShortName, cur*100/tot))
 					}
-				}); dlErr != nil {
-					v.setStatus(fmt.Sprintf("⚠️ Failed to download %s: %v", spec.ShortName, dlErr))
+				}
+
+				var dlErr error
+				if fam == tts.ModelKokoro || fam == tts.ModelKokoroIntl {
+					v.setStatus("Downloading Kokoro-82M model files...")
+					dlErr = tts.DownloadKokoroModelForModeWithContext(cancelCtx, v.modelDir, useGPU, onProg)
+				} else {
+					v.setStatus(fmt.Sprintf("Downloading %s (~%d MB)...", spec.ShortName, spec.DownloadSizeMB))
+					dlErr = tts.DownloadModelFamilyWithContext(cancelCtx, v.modelDir, fam, useGPU, onProg)
+				}
+
+				if dlErr != nil {
+					if modal != nil {
+						modal.Dismiss()
+					}
+					if errors.Is(dlErr, context.Canceled) || cancelCtx.Err() != nil {
+						v.setStatus("Voice model download cancelled.")
+					} else {
+						v.setStatus(fmt.Sprintf("⚠️ Failed to download %s: %v", spec.ShortName, dlErr))
+						fyne.Do(func() {
+							if v.window != nil {
+								dialog.ShowError(fmt.Errorf("failed to download %s: %w", spec.ShortName, dlErr), v.window)
+							}
+						})
+					}
+					v.rollbackTTSConfig(prevModels, prevPreset, prevUseGPU, threads, maxClause, idleMin)
+					return
 				}
 			}
+		}
+
+		if modal != nil {
+			modal.Dismiss()
 		}
 
 		v.mu.Lock()
@@ -1134,6 +1251,9 @@ func (v *SettingsView) reloadTTSEngine(onDoneUI func()) {
 			}
 			if err == nil && eng != nil {
 				v.engine = eng
+				v.prevModels = slices.Clone(enabledModels)
+				v.prevPreset = v.cfg.TTS.Preset
+				v.prevUseGPU = useGPU
 			}
 			v.mu.Unlock()
 
