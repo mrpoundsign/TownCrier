@@ -20,6 +20,7 @@ const (
 	OutcomeDroppedModeration EventOutcome = "dropped_moderation"
 	OutcomeSkipped           EventOutcome = "skipped"
 	OutcomeErrorTTS          EventOutcome = "error_tts"
+	OutcomeTTSDisabled       EventOutcome = "tts_disabled"
 
 	// Rejected by pre-queue filters
 	OutcomeDroppedBot       EventOutcome = "dropped_bot"
@@ -49,6 +50,8 @@ func OutcomeDisplayLabel(outcome EventOutcome) string {
 		return "⏭️ Skipped / Cleared"
 	case OutcomeErrorTTS:
 		return "⚠️ TTS / Audio Error"
+	case OutcomeTTSDisabled:
+		return "🔇 TTS Disabled"
 	case OutcomeDroppedBot:
 		return "🤖 Ignored (Bot / Muted)"
 	case OutcomeDroppedReadRules:

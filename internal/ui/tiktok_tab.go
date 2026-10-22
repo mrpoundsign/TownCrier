@@ -32,16 +32,32 @@ type TikTokTabView struct {
 	overrideCheck      *widget.Check
 	overridesBox       *fyne.Container
 	overrideVoiceField *VoiceSpeedField
+	namesCheck         *widget.Check
+	emotesCheck        *widget.Check
+	connCard           *widget.Card
+	rulesCard          *widget.Card
+	notifsCard         *widget.Card
+	overridesCard      *widget.Card
+	notifChecks        []*widget.Check
+	notifEntries       []*ScrollPassEntry
+	notifHelpMarkers   []*templateHelpMarker
+	notifMinEntries    []*ScrollPassEntry
+	ttsEnabled         bool
 	onStatus           func(msg string)
 	initializing       bool
 }
 
 // NewTikTokTabView creates a new TikTok tab view bound to the application session.
 func NewTikTokTabView(w fyne.Window, session *app.Session) *TikTokTabView {
+	ttsOn := true
+	if session != nil {
+		ttsOn = session.Config().TTS.Enabled
+	}
 	return &TikTokTabView{
 		window:     w,
 		session:    session,
 		roleChecks: make(map[string]*widget.Check),
+		ttsEnabled: ttsOn,
 	}
 }
 
@@ -56,16 +72,24 @@ func (v *TikTokTabView) Build() fyne.CanvasObject {
 		pCfg = config.DefaultConfig().Platforms["tiktok"]
 	}
 
-	connCard := v.buildConnectionCard(pCfg)
-	rulesCard := v.buildReadRulesCard(pCfg)
-	notifsCard := v.buildNotificationsCard(pCfg)
-	overridesCard := v.buildOverridesCard(pCfg)
+	v.connCard = v.buildConnectionCard(pCfg)
+	v.rulesCard = v.buildReadRulesCard(pCfg)
+	v.notifsCard = v.buildNotificationsCard(pCfg)
+	v.overridesCard = v.buildOverridesCard(pCfg)
+
+	if !v.ttsEnabled {
+		v.rulesCard.Hide()
+		v.notifsCard.Hide()
+		v.overridesCard.Hide()
+	}
+
+	v.SyncTTSState(v.ttsEnabled)
 
 	content := container.NewVBox(
-		connCard,
-		rulesCard,
-		notifsCard,
-		overridesCard,
+		v.connCard,
+		v.rulesCard,
+		v.notifsCard,
+		v.overridesCard,
 	)
 
 	return newPanelVScroll(content)
@@ -89,6 +113,35 @@ func (v *TikTokTabView) SyncFromConfig() {
 	}
 	v.initializing = false
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
+	v.SyncTTSState(v.session.Config().TTS.Enabled)
+}
+
+// SyncTTSState updates all TikTok TTS-dependent controls to reflect whether TTS is enabled or disabled.
+func (v *TikTokTabView) SyncTTSState(enabled bool) {
+	v.ttsEnabled = enabled
+	fyne.Do(func() {
+		if v.rulesCard != nil {
+			if enabled {
+				v.rulesCard.Show()
+			} else {
+				v.rulesCard.Hide()
+			}
+		}
+		if v.notifsCard != nil {
+			if enabled {
+				v.notifsCard.Show()
+			} else {
+				v.notifsCard.Hide()
+			}
+		}
+		if v.overridesCard != nil {
+			if enabled {
+				v.overridesCard.Show()
+			} else {
+				v.overridesCard.Hide()
+			}
+		}
+	})
 }
 
 // UpdateStatus updates the connection status badge on the TikTok tab.
@@ -365,6 +418,11 @@ func (v *TikTokTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.C
 }
 
 func (v *TikTokTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widget.Card {
+	v.notifChecks = nil
+	v.notifEntries = nil
+	v.notifHelpMarkers = nil
+	v.notifMinEntries = nil
+
 	notifsList := container.NewVBox()
 
 	giftNotif, ok := pCfg.Notifications["gift"]
@@ -432,6 +490,11 @@ func (v *TikTokTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 	giftRow := container.NewBorder(nil, nil, giftCheck, minBox, giftTmplEntry)
 	notifsList.Add(giftRow)
 
+	v.notifChecks = append(v.notifChecks, giftCheck)
+	v.notifEntries = append(v.notifEntries, giftTmplEntry)
+	v.notifHelpMarkers = append(v.notifHelpMarkers, giftHelp)
+	v.notifMinEntries = append(v.notifMinEntries, minDiamondsEntry)
+
 	followNotif, ok := pCfg.Notifications["follow"]
 	if !ok {
 		followNotif = config.NotificationEventConfig{
@@ -475,6 +538,10 @@ func (v *TikTokTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 	followRight := container.NewHBox(container.NewCenter(followHelp), container.NewGridWrap(fyne.NewSize(155, 36), widget.NewLabel("")))
 	followRow := container.NewBorder(nil, nil, followCheck, followRight, followTmplEntry)
 	notifsList.Add(followRow)
+
+	v.notifChecks = append(v.notifChecks, followCheck)
+	v.notifEntries = append(v.notifEntries, followTmplEntry)
+	v.notifHelpMarkers = append(v.notifHelpMarkers, followHelp)
 
 	extraEvents := []struct {
 		key       string
@@ -535,6 +602,10 @@ func (v *TikTokTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 		helpMarker := newTemplateHelpMarker(v.window, eventKey, label, vars, v.onStatus, &tmplEntry.Entry)
 		rightWidget := container.NewHBox(container.NewCenter(helpMarker), container.NewGridWrap(fyne.NewSize(155, 36), widget.NewLabel("")))
 
+		v.notifChecks = append(v.notifChecks, chk)
+		v.notifEntries = append(v.notifEntries, tmplEntry)
+		v.notifHelpMarkers = append(v.notifHelpMarkers, helpMarker)
+
 		notifsList.Add(container.NewBorder(nil, nil, chk, rightWidget, tmplEntry))
 	}
 
@@ -552,6 +623,7 @@ func (v *TikTokTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 		})
 	})
 	namesCheck.SetChecked(ov.SpeakNames)
+	v.namesCheck = namesCheck
 
 	emotesCheck := widget.NewCheck("Speak Emotes for TikTok Chat", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
@@ -561,6 +633,7 @@ func (v *TikTokTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 		})
 	})
 	emotesCheck.SetChecked(ov.SpeakEmotes)
+	v.emotesCheck = emotesCheck
 
 	selectedVoice := ov.DefaultVoice
 	sp := ov.DefaultSpeed

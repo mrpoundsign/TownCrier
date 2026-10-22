@@ -31,16 +31,32 @@ type KickTabView struct {
 	overrideCheck      *widget.Check
 	overridesBox       *fyne.Container
 	overrideVoiceField *VoiceSpeedField
+	namesCheck         *widget.Check
+	emotesCheck        *widget.Check
+	connCard           *widget.Card
+	rulesCard          *widget.Card
+	notifsCard         *widget.Card
+	overridesCard      *widget.Card
+	notifChecks        []*widget.Check
+	notifEntries       []*ScrollPassEntry
+	notifHelpMarkers   []*templateHelpMarker
+	notifMinEntries    []*ScrollPassEntry
+	ttsEnabled         bool
 	onStatus           func(msg string)
 	initializing       bool
 }
 
 // NewKickTabView creates a new Kick tab view bound to the application session.
 func NewKickTabView(w fyne.Window, session *app.Session) *KickTabView {
+	ttsOn := true
+	if session != nil {
+		ttsOn = session.Config().TTS.Enabled
+	}
 	return &KickTabView{
 		window:     w,
 		session:    session,
 		roleChecks: make(map[string]*widget.Check),
+		ttsEnabled: ttsOn,
 	}
 }
 
@@ -55,16 +71,24 @@ func (v *KickTabView) Build() fyne.CanvasObject {
 		pCfg = config.DefaultConfig().Platforms["kick"]
 	}
 
-	connCard := v.buildConnectionCard(pCfg)
-	rulesCard := v.buildReadRulesCard(pCfg)
-	notifsCard := v.buildNotificationsCard(pCfg)
-	overridesCard := v.buildOverridesCard(pCfg)
+	v.connCard = v.buildConnectionCard(pCfg)
+	v.rulesCard = v.buildReadRulesCard(pCfg)
+	v.notifsCard = v.buildNotificationsCard(pCfg)
+	v.overridesCard = v.buildOverridesCard(pCfg)
+
+	if !v.ttsEnabled {
+		v.rulesCard.Hide()
+		v.notifsCard.Hide()
+		v.overridesCard.Hide()
+	}
+
+	v.SyncTTSState(v.ttsEnabled)
 
 	content := container.NewVBox(
-		connCard,
-		rulesCard,
-		notifsCard,
-		overridesCard,
+		v.connCard,
+		v.rulesCard,
+		v.notifsCard,
+		v.overridesCard,
 	)
 
 	return newPanelVScroll(content)
@@ -88,6 +112,35 @@ func (v *KickTabView) SyncFromConfig() {
 	}
 	v.initializing = false
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
+	v.SyncTTSState(v.session.Config().TTS.Enabled)
+}
+
+// SyncTTSState updates all Kick TTS-dependent controls to reflect whether TTS is enabled or disabled.
+func (v *KickTabView) SyncTTSState(enabled bool) {
+	v.ttsEnabled = enabled
+	fyne.Do(func() {
+		if v.rulesCard != nil {
+			if enabled {
+				v.rulesCard.Show()
+			} else {
+				v.rulesCard.Hide()
+			}
+		}
+		if v.notifsCard != nil {
+			if enabled {
+				v.notifsCard.Show()
+			} else {
+				v.notifsCard.Hide()
+			}
+		}
+		if v.overridesCard != nil {
+			if enabled {
+				v.overridesCard.Show()
+			} else {
+				v.overridesCard.Hide()
+			}
+		}
+	})
 }
 
 // UpdateStatus updates the connection status badge on the Kick tab.
@@ -331,6 +384,11 @@ func (v *KickTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.Car
 }
 
 func (v *KickTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widget.Card {
+	v.notifChecks = nil
+	v.notifEntries = nil
+	v.notifHelpMarkers = nil
+	v.notifMinEntries = nil
+
 	notifsList := container.NewVBox()
 
 	events := []struct {
@@ -394,6 +452,10 @@ func (v *KickTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widget
 		vars := EventTemplateVars("kick", eventKey)
 		helpMarker := newTemplateHelpMarker(v.window, eventKey, label, vars, v.onStatus, &tmplEntry.Entry)
 
+		v.notifChecks = append(v.notifChecks, enabledCheck)
+		v.notifEntries = append(v.notifEntries, tmplEntry)
+		v.notifHelpMarkers = append(v.notifHelpMarkers, helpMarker)
+
 		if ev.hasThreshold {
 			minEntry := NewScrollPassEntry()
 			minEntry.SetPlaceHolder("0")
@@ -416,6 +478,7 @@ func (v *KickTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widget
 					c.Platforms["kick"] = p
 				})
 			}
+			v.notifMinEntries = append(v.notifMinEntries, minEntry)
 			rightWidget = container.NewHBox(
 				container.NewCenter(helpMarker),
 				widget.NewLabel("Min:"),
@@ -446,6 +509,7 @@ func (v *KickTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Car
 		})
 	})
 	namesCheck.SetChecked(ov.SpeakNames)
+	v.namesCheck = namesCheck
 
 	emotesCheck := widget.NewCheck("Speak Emotes for Kick Chat", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
@@ -455,6 +519,7 @@ func (v *KickTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Car
 		})
 	})
 	emotesCheck.SetChecked(ov.SpeakEmotes)
+	v.emotesCheck = emotesCheck
 
 	selectedVoice := ov.DefaultVoice
 	sp := ov.DefaultSpeed

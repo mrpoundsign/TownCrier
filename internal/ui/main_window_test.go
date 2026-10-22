@@ -127,15 +127,15 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 		}
 	}()
 
-	// Settings sub-tabs initially have 7 items: General & Audio, TTS & Hardware, Twitch, YouTube, TikTok, Kick, Rules & Safety
-	if len(mw.settingsTab.subTabs.Items) != 7 {
-		t.Fatalf("expected 7 settings sub-tabs initially, got %d", len(mw.settingsTab.subTabs.Items))
+	// Settings sub-tabs initially have 8 items: General & Audio, TTS & Hardware, Twitch, YouTube, TikTok, Kick, Rules & Safety, Event Logs
+	if len(mw.settingsTab.subTabs.Items) != 8 {
+		t.Fatalf("expected 8 settings sub-tabs initially, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 
 	// Disable YouTube in Settings
 	mw.settingsTab.youtubeCheck.SetChecked(false)
-	if len(mw.settingsTab.subTabs.Items) != 6 {
-		t.Fatalf("expected 6 settings sub-tabs after disabling YouTube, got %d", len(mw.settingsTab.subTabs.Items))
+	if len(mw.settingsTab.subTabs.Items) != 7 {
+		t.Fatalf("expected 7 settings sub-tabs after disabling YouTube, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 	if mw.youtubeStatusDot.Visible() {
 		t.Error("expected youtubeStatusDot to be hidden when YouTube service is disabled")
@@ -146,8 +146,8 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 
 	// Re-enable YouTube in Settings
 	mw.settingsTab.youtubeCheck.SetChecked(true)
-	if len(mw.settingsTab.subTabs.Items) != 7 {
-		t.Fatalf("expected 7 settings sub-tabs after re-enabling YouTube, got %d", len(mw.settingsTab.subTabs.Items))
+	if len(mw.settingsTab.subTabs.Items) != 8 {
+		t.Fatalf("expected 8 settings sub-tabs after re-enabling YouTube, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 	if !mw.youtubeStatusDot.Visible() {
 		t.Error("expected youtubeStatusDot to be visible when YouTube service is enabled")
@@ -158,8 +158,8 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 
 	// Disable TikTok in Settings
 	mw.settingsTab.tiktokCheck.SetChecked(false)
-	if len(mw.settingsTab.subTabs.Items) != 6 {
-		t.Fatalf("expected 6 settings sub-tabs after disabling TikTok, got %d", len(mw.settingsTab.subTabs.Items))
+	if len(mw.settingsTab.subTabs.Items) != 7 {
+		t.Fatalf("expected 7 settings sub-tabs after disabling TikTok, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 	if mw.tiktokStatusDot.Visible() {
 		t.Error("expected tiktokStatusDot to be hidden when TikTok service is disabled")
@@ -167,8 +167,8 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 
 	// Disable Kick in Settings
 	mw.settingsTab.kickCheck.SetChecked(false)
-	if len(mw.settingsTab.subTabs.Items) != 5 {
-		t.Fatalf("expected 5 settings sub-tabs after disabling Kick, got %d", len(mw.settingsTab.subTabs.Items))
+	if len(mw.settingsTab.subTabs.Items) != 6 {
+		t.Fatalf("expected 6 settings sub-tabs after disabling Kick, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 	if mw.kickStatusDot.Visible() {
 		t.Error("expected kickStatusDot to be hidden when Kick service is disabled")

@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Added
+- **Stream Event Notifications & Watch Streaks across Platforms (#81)**:
+  - **Twitch**: Added event capture and speech synthesis for Watch Streaks (`viewermilestone`), Automatic Channel Point Rewards (`highlighted-message`, `gigantified-emote-message`, `animated-message`), Sub Upgrades & Pay-It-Forward (`primepaidupgrade`, `giftpaidupgrade`, `anongiftpaidupgrade`, `standardpayforward`, `communitypayforward`, `extendsub`), Bits Badge Tier milestones (`bitsbadgetier`), Charity Donations (`charity_donation`), and Chat Announcements (`/announce`).
+  - **Twitch EventSub v1 Notifications**: Integrated EventSub `channel.chat.notification` v1 alongside IRC with automatic message ID deduplication to ensure zero duplicated alerts.
+  - **YouTube**: Added incoming Raids / Live Redirects (`liveChatBannerRedirectRenderer`), Gift Membership Recipient notices (`liveChatSponsorshipsGiftRedemptionAnnouncementRenderer`), and YouTube Giving Charity Donations (`liveChatDonationAnnouncementRenderer`).
+  - **TikTok**: Added Subscription, Resubscription, and Gifted Subscription notification rows in the TikTok tab UI, and captured Stream Shares (`USER_SHARE`).
+  - **Kick**: Added Channel Reward Redemptions (`RewardRedeemedEvent` / `ChannelPointRedemptionEvent`) and expanded multi-recipient usernames in `GiftedSubscriptionsEvent`.
+  - **Template Help Reference Dialog**: Added `(?)` interactive help buttons next to all notification speech template fields opening a full template variables reference and example preview modal.
+- **Blocking Modal Dialog for Voice Model Downloads (#83)**:
+  - Added a full-window modal blocking dialog that disables user clicks and keyboard navigation across the entire application while downloading and unpacking voice model packs or switching hardware presets.
+  - Features real-time multi-model step tracking (e.g. `Model 1 of 2`), determinate progress bar with downloaded MB / total MB and percentage, clean cancellation/abort handling, automatic dialog dismissal, and seamless TTS multi-engine reload.
+- **Optional Text-to-Speech (TTS) & Fast Launch (#84)**:
+  - Made neural TTS an optional, independently toggleable subsystem (`config.TTSConfig.Enabled`). When disabled at launch, Kokoro download checks and ONNX neural model RAM allocation are completely skipped (<100ms startup, near-zero baseline RAM footprint).
+- **Optional Event Logging (#84)**:
+  - Made Event Logging an optional, independently toggleable subsystem (`config.LoggingConfig.Enabled`). When disabled, SQLite event logging and broadcast stream session tracking are bypassed while fully preserving retention policies and database history.
+- **TTS-Disabled Outcome Status (#84)**:
+  - Inbound chat and alerts arriving while TTS is disabled are logged with outcome `OutcomeTTSDisabled` (`🔇 TTS Disabled`) and surfaced in the live activity feed without entering the speech synthesis queue.
+- **Application Features Card & Dynamic UI Removal (#84)**:
+  - Added master toggles for TTS and Event Logging in **Settings → General & Audio** that cleanly remove (rather than grey out) non-applicable UI components:
+    - Disabling TTS dynamically removes the *TTS & Hardware* and *Rules & Safety* sub-tabs, hides *Global Default Voice* and *Audio Output Device* cards, hides header volume controls and the emergency panic mute button, hides Dashboard playback controls, and hides platform read rules and notification speech templates.
+    - Disabling Event Logging dynamically removes the *Event Logs* settings sub-tab and hides the top-level *Logs* header navigation button.
+
+### Changed
+- **Memory Impact Graph & Realistic Base App Calibration**:
+  - Calibrated the base application memory baseline to 450 MB (accounting for Go runtime, Fyne/OpenGL windowing, Miniaudio WASAPI contexts, and SQLite cache).
+  - Recalibrated additive per-model RAM numbers (Kokoro GPU ~850 MB active, Supertonic ~150 MB, Kitten Mini ~170 MB, Kitten Nano ~95 MB, Piper ~115 MB) so stacked memory breakdown graphs and preset labels accurately represent real-world Windows process working set.
+- **Relocated Bot Filters to General & Audio (#84)**:
+  - Moved the **Bot Filters** card (Ignore Known Stream Bots + Custom Bot Usernames) into **Settings → General & Audio** so bot management remains accessible even when TTS is disabled, ensuring full support for the **🤖 Hide Bots** filter in Event Logs.
+
 ---
 
 ## v0.0.4 — 2026-10-20

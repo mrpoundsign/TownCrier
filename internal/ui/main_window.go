@@ -67,6 +67,7 @@ type MainWindow struct {
 	tooltipBubble  *fyne.Container
 	tooltipText    *canvas.Text
 	volumeSlider   *widget.Slider
+	volContainer   *fyne.Container
 	panicBtn       *widget.Button
 	hotkeyMgr      *GlobalHotkeyManager
 	activeShortcut *desktop.CustomShortcut
@@ -93,6 +94,8 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	mw.syncServiceVisibility()
 	log.Println("[MainWindow] Initializing shortcuts...")
 	mw.initShortcuts()
+	mw.syncTTSState(session.Config().TTS.Enabled)
+	mw.syncLoggingState(session.Config().Logging.Enabled)
 	log.Println("[MainWindow] Setting window content...")
 
 	mainContent := container.NewBorder(
@@ -285,6 +288,12 @@ func (mw *MainWindow) initViews() {
 	})
 	mw.settingsTab.SetServicesChangedHandler(func() {
 		mw.syncServiceVisibility()
+	})
+	mw.settingsTab.SetTTSChangedHandler(func(enabled bool) {
+		mw.syncTTSState(enabled)
+	})
+	mw.settingsTab.SetLoggingChangedHandler(func(enabled bool) {
+		mw.syncLoggingState(enabled)
 	})
 	mw.settingsTab.SetModelsChangedHandler(func() {
 		if mw.settingsTab != nil {
@@ -600,6 +609,7 @@ func (mw *MainWindow) initHeader() {
 	volSliderSpacer := canvas.NewRectangle(color.Transparent)
 	volSliderSpacer.SetMinSize(fyne.NewSize(90, 1))
 	volContainer := container.NewBorder(nil, nil, volLabel, nil, container.NewStack(volSliderSpacer, mw.volumeSlider))
+	mw.volContainer = volContainer
 
 	aboutBtn := widget.NewButtonWithIcon("About", theme.InfoIcon(), func() {
 		ShowAboutDialog(mw.Window)
@@ -628,6 +638,9 @@ func (mw *MainWindow) initHeader() {
 }
 
 func (mw *MainWindow) triggerTogglePanic() {
+	if mw.Session != nil && !mw.Session.Config().TTS.Enabled {
+		return
+	}
 	panicked := mw.Session.TogglePanic()
 	q := mw.Session.Queue()
 	paused := false
@@ -641,6 +654,67 @@ func (mw *MainWindow) triggerTogglePanic() {
 	} else {
 		mw.SetStatus("✓ Panic Mute cleared. Speech queue resumed.")
 	}
+}
+
+func (mw *MainWindow) syncTTSState(enabled bool) {
+	fyne.Do(func() {
+		if mw.volContainer != nil {
+			if enabled {
+				mw.volContainer.Show()
+			} else {
+				mw.volContainer.Hide()
+			}
+		}
+		if mw.panicBtn != nil {
+			if enabled {
+				mw.panicBtn.Show()
+			} else {
+				mw.panicBtn.Hide()
+			}
+		}
+		if mw.dashboardTab != nil {
+			mw.dashboardTab.SyncTTSState(enabled)
+		}
+		if mw.viewersTab != nil {
+			mw.viewersTab.SyncTTSState(enabled)
+		}
+		if mw.settingsTab != nil {
+			mw.settingsTab.SyncTTSState(enabled)
+		}
+		if mw.twitchTab != nil {
+			mw.twitchTab.SyncTTSState(enabled)
+		}
+		if mw.youtubeTab != nil {
+			mw.youtubeTab.SyncTTSState(enabled)
+		}
+		if mw.tiktokTab != nil {
+			mw.tiktokTab.SyncTTSState(enabled)
+		}
+		if mw.kickTab != nil {
+			mw.kickTab.SyncTTSState(enabled)
+		}
+	})
+}
+
+func (mw *MainWindow) syncLoggingState(enabled bool) {
+	fyne.Do(func() {
+		if mw.logsBtn != nil {
+			if enabled {
+				mw.logsBtn.Show()
+			} else {
+				mw.logsBtn.Hide()
+			}
+		}
+		if !enabled && mw.currentTab == TabIndexLogs {
+			mw.SelectTab(TabIndexDashboard)
+		}
+		if mw.chatLogsTab != nil {
+			mw.chatLogsTab.SyncLoggingState(enabled)
+		}
+		if mw.settingsTab != nil {
+			mw.settingsTab.SyncLoggingState(enabled)
+		}
+	})
 }
 
 func (mw *MainWindow) syncPanicUI(paused, panicked bool) {

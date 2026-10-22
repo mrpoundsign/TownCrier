@@ -348,6 +348,12 @@ func spokenStatusIconAndTip(e eventlog.Entry) (fyne.Resource, string) {
 			tip += " (" + e.OutcomeDetail + ")"
 		}
 		return resSpokenSkipped, tip
+	case eventlog.OutcomeTTSDisabled:
+		tip := "Spoken: No — Text-to-Speech (TTS) Disabled in Settings"
+		if e.OutcomeDetail != "" {
+			tip += ": " + e.OutcomeDetail
+		}
+		return resSpokenNo, tip
 	default:
 		return resSpokenNo, "Spoken: No (Filtered before reaching queue)"
 	}

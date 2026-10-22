@@ -25,14 +25,20 @@ type ViewersTabView struct {
 	searchEntry *ScrollPassEntry
 	tableList   *fyne.Container
 	onStatus    func(msg string)
+	ttsEnabled  bool
 }
 
 // NewViewersTabView constructs a ViewersTabView.
 func NewViewersTabView(w fyne.Window, session *app.Session) *ViewersTabView {
+	ttsOn := true
+	if session != nil {
+		ttsOn = session.Config().TTS.Enabled
+	}
 	return &ViewersTabView{
-		window:    w,
-		session:   session,
-		tableList: container.NewVBox(),
+		window:     w,
+		session:    session,
+		tableList:  container.NewVBox(),
+		ttsEnabled: ttsOn,
 	}
 }
 
@@ -85,6 +91,12 @@ func (v *ViewersTabView) Refresh() {
 	fyne.Do(func() {
 		v.refreshTable()
 	})
+}
+
+// SyncTTSState synchronizes the Viewers tab with TTS enabled state.
+func (v *ViewersTabView) SyncTTSState(enabled bool) {
+	v.ttsEnabled = enabled
+	v.Refresh()
 }
 
 func viewerMatchesQuery(key string, vc config.ViewerConfig, query string) bool {
@@ -165,7 +177,12 @@ func (v *ViewersTabView) buildViewerRow(key string, vc config.ViewerConfig) fyne
 		statusText = "⭐ Allowed"
 	}
 
-	subtitle := fmt.Sprintf("Voice: %s | Speed: %.2fx %s", tts.VoiceDisplayName(vc.Voice), vc.Speed, statusText)
+	subtitle := ""
+	if v.ttsEnabled {
+		subtitle = fmt.Sprintf("Voice: %s | Speed: %.2fx %s", tts.VoiceDisplayName(vc.Voice), vc.Speed, statusText)
+	} else if statusText != "" {
+		subtitle = statusText
+	}
 
 	label := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	sub := widget.NewLabel(subtitle)
@@ -304,8 +321,7 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 		nil,
 		v.setStatus,
 	)
-
-	form := container.NewVBox(
+	formElements := []fyne.CanvasObject{
 		widget.NewLabelWithStyle("Linked Platform Accounts:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		accountsList,
 		widget.NewLabel("Add Platform Username / Handle:"),
@@ -313,10 +329,12 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 		widget.NewSeparator(),
 		widget.NewLabel("Spoken Nickname:"),
 		nickEntry,
-		container.NewBorder(nil, nil, widget.NewLabel("Assigned Voice & Speed:"), nil, voiceField.Container),
-		ignoredCheck,
-		allowedCheck,
-	)
+	}
+	if v.ttsEnabled {
+		formElements = append(formElements, container.NewBorder(nil, nil, widget.NewLabel("Assigned Voice & Speed:"), nil, voiceField.Container))
+	}
+	formElements = append(formElements, ignoredCheck, allowedCheck)
+	form := container.NewVBox(formElements...)
 
 	title := "Add Chatter Override"
 	if isEdit {

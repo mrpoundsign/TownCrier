@@ -1162,16 +1162,35 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		return nil
 	}
 
-	// 6. Priority tier assignment
+	// 6. Check if TTS is disabled
+	if !cfg.TTS.Enabled {
+		log.Printf("[Session] Event passed filters but TTS is disabled: user=%q", event.UserName)
+		s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, sanitizedText, resolved.VoiceID, resolved.Speed, true, eventlog.OutcomeTTSDisabled, "TTS disabled in settings"))
+
+		s.mu.RLock()
+		onDispatched := s.onEventDispatched
+		s.mu.RUnlock()
+		if onDispatched != nil {
+			evCopy := *event
+			if rawText != "" {
+				evCopy.Text = rawText
+			}
+			evCopy.EmoteSpans = rawEmotes
+			go onDispatched(&evCopy, resolved.VoiceID)
+		}
+		return nil
+	}
+
+	// 7. Priority tier assignment
 	priority := 1
 	if event.IsPaidOrEvent() {
 		priority = 0
 	}
 
-	// 7. Record initial PassedFilters=true / Queued log entry before enqueueing so fast queue callbacks find the row
+	// 8. Record initial PassedFilters=true / Queued log entry before enqueueing so fast queue callbacks find the row
 	s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, sanitizedText, resolved.VoiceID, resolved.Speed, true, eventlog.OutcomeQueued, ""))
 
-	// 8. Enqueue for speech synthesis
+	// 9. Enqueue for speech synthesis
 	item := &queue.Item{
 		ID:       event.ID,
 		Event:    event,

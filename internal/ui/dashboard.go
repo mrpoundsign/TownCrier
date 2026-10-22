@@ -36,10 +36,14 @@ type DashboardView struct {
 
 	mu         sync.Mutex
 	activities []ActivityEntry
+	ttsEnabled bool
 
 	nowPlayingLabel *wrappedCellLabel
 	queueDepthLabel *widget.Label
 	pauseResumeBtn  *widget.Button
+	skipBtn         *widget.Button
+	clearBtn        *widget.Button
+	topSection      *fyne.Container
 	feedContainer   *fyne.Container
 	onAssignVoice   func(platform, username string)
 	onStatus        func(msg string)
@@ -47,10 +51,15 @@ type DashboardView struct {
 
 // NewDashboardView constructs a DashboardView linked to the active session.
 func NewDashboardView(w fyne.Window, session *app.Session) *DashboardView {
+	ttsOn := true
+	if session != nil {
+		ttsOn = session.Config().TTS.Enabled
+	}
 	v := &DashboardView{
 		window:        w,
 		session:       session,
 		feedContainer: container.NewVBox(),
+		ttsEnabled:    ttsOn,
 	}
 
 	// Register queue event listeners
@@ -115,13 +124,16 @@ func (v *DashboardView) Build() fyne.CanvasObject {
 	controlsCard := v.buildControlsCard()
 	activityCard := v.buildActivityCard()
 
-	topSection := container.NewVBox(
+	v.topSection = container.NewVBox(
 		speakingCard,
 		controlsCard,
 	)
+	if !v.ttsEnabled {
+		v.topSection.Hide()
+	}
 
 	return container.NewBorder(
-		topSection,
+		v.topSection,
 		nil,
 		nil,
 		nil,
@@ -130,7 +142,11 @@ func (v *DashboardView) Build() fyne.CanvasObject {
 }
 
 func (v *DashboardView) buildSpeakingCard() *widget.Card {
-	v.nowPlayingLabel = newClampedWrapLabel("Idle (No speech active)", fyne.TextStyle{Bold: true})
+	initialText := "Idle (No speech active)"
+	if !v.ttsEnabled {
+		initialText = "TTS Disabled"
+	}
+	v.nowPlayingLabel = newClampedWrapLabel(initialText, fyne.TextStyle{Bold: true})
 
 	cardContent := container.NewVBox(
 		v.nowPlayingLabel,
@@ -148,7 +164,11 @@ func (v *DashboardView) buildControlsCard() *widget.Card {
 		isPaused = q.IsPaused()
 	}
 
-	v.queueDepthLabel = widget.NewLabel(fmt.Sprintf("Queue: %d pending items", initialDepth))
+	queueText := fmt.Sprintf("Queue: %d pending items", initialDepth)
+	if !v.ttsEnabled {
+		queueText = "TTS Disabled"
+	}
+	v.queueDepthLabel = widget.NewLabel(queueText)
 
 	pauseText := "Pause Queue"
 	pauseIcon := theme.MediaPauseIcon()
@@ -169,19 +189,25 @@ func (v *DashboardView) buildControlsCard() *widget.Card {
 		v.SyncQueueState(q.IsPaused(), q.IsPanicked())
 	})
 
-	skipBtn := widget.NewButtonWithIcon("Skip Current", theme.MediaFastForwardIcon(), func() {
+	v.skipBtn = widget.NewButtonWithIcon("Skip Current", theme.MediaFastForwardIcon(), func() {
 		if q != nil {
 			q.Skip()
 		}
 	})
 
-	clearBtn := widget.NewButtonWithIcon("Clear Pending Queue", theme.ContentClearIcon(), func() {
+	v.clearBtn = widget.NewButtonWithIcon("Clear Pending Queue", theme.ContentClearIcon(), func() {
 		if q != nil {
 			q.Clear()
 		}
 	})
 
-	buttonsRow := container.NewGridWithColumns(3, v.pauseResumeBtn, skipBtn, clearBtn)
+	if !v.ttsEnabled {
+		v.pauseResumeBtn.Disable()
+		v.skipBtn.Disable()
+		v.clearBtn.Disable()
+	}
+
+	buttonsRow := container.NewGridWithColumns(3, v.pauseResumeBtn, v.skipBtn, v.clearBtn)
 
 	cardContent := container.NewVBox(
 		container.NewBorder(nil, nil, v.queueDepthLabel, nil),
@@ -242,11 +268,14 @@ func (v *DashboardView) buildActivityRow(entry ActivityEntry) fyne.CanvasObject 
 		msgContent = newClampedWrapLabel(entry.Text, fyne.TextStyle{})
 	}
 
-	assignBtn := widget.NewButtonWithIcon("Assign Voice", theme.AccountIcon(), func() {
-		v.showQuickAssignDialog(entry.Platform, entry.UserName)
-	})
+	var rightCol fyne.CanvasObject
+	if v.ttsEnabled {
+		rightCol = widget.NewButtonWithIcon("Assign Voice", theme.AccountIcon(), func() {
+			v.showQuickAssignDialog(entry.Platform, entry.UserName)
+		})
+	}
 
-	topRow := container.NewBorder(nil, nil, nameLabel, assignBtn)
+	topRow := container.NewBorder(nil, nil, nameLabel, rightCol)
 	return container.NewVBox(topRow, msgContent, widget.NewSeparator())
 }
 
@@ -398,8 +427,58 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 	}, v.window)
 }
 
+// SyncTTSState updates the Dashboard controls to reflect whether TTS is enabled or disabled.
+func (v *DashboardView) SyncTTSState(enabled bool) {
+	v.mu.Lock()
+	v.ttsEnabled = enabled
+	v.mu.Unlock()
+
+	fyne.Do(func() {
+		if v.topSection != nil {
+			if enabled {
+				v.topSection.Show()
+			} else {
+				v.topSection.Hide()
+			}
+		}
+		if enabled {
+			if v.nowPlayingLabel != nil {
+				v.nowPlayingLabel.SetText("Idle (No speech active)")
+			}
+			if v.queueDepthLabel != nil {
+				depth := 0
+				if v.session != nil && v.session.Queue() != nil {
+					depth = v.session.Queue().Depth()
+				}
+				v.queueDepthLabel.SetText(fmt.Sprintf("Queue: %d pending items", depth))
+			}
+			if v.pauseResumeBtn != nil {
+				v.pauseResumeBtn.Enable()
+			}
+			if v.skipBtn != nil {
+				v.skipBtn.Enable()
+			}
+			if v.clearBtn != nil {
+				v.clearBtn.Enable()
+			}
+		}
+		v.mu.Lock()
+		v.refreshFeedLocked()
+		v.mu.Unlock()
+	})
+}
+
 // SyncQueueState updates the Dashboard's speaking label and pause/resume button to reflect queue/panic state.
 func (v *DashboardView) SyncQueueState(paused, panicked bool) {
+	if !v.ttsEnabled {
+		if v.nowPlayingLabel != nil {
+			v.nowPlayingLabel.SetText("TTS Disabled")
+		}
+		if v.pauseResumeBtn != nil {
+			v.pauseResumeBtn.Disable()
+		}
+		return
+	}
 	if v.pauseResumeBtn != nil {
 		switch {
 		case panicked:
@@ -427,7 +506,7 @@ func (v *DashboardView) SyncQueueState(paused, panicked bool) {
 }
 
 func (v *DashboardView) updateCurrentlySpeaking(item *queue.Item) {
-	if v.nowPlayingLabel == nil || item == nil {
+	if !v.ttsEnabled || v.nowPlayingLabel == nil || item == nil {
 		return
 	}
 	if v.session != nil && v.session.IsPanicked() {
@@ -442,7 +521,7 @@ func (v *DashboardView) updateCurrentlySpeaking(item *queue.Item) {
 }
 
 func (v *DashboardView) updateFinishedSpeaking(item *queue.Item) {
-	if v.nowPlayingLabel == nil {
+	if !v.ttsEnabled || v.nowPlayingLabel == nil {
 		return
 	}
 	if v.session != nil && v.session.IsPanicked() {
@@ -457,7 +536,7 @@ func (v *DashboardView) updateFinishedSpeaking(item *queue.Item) {
 }
 
 func (v *DashboardView) updateQueueDepth(depth int) {
-	if v.queueDepthLabel == nil {
+	if !v.ttsEnabled || v.queueDepthLabel == nil {
 		return
 	}
 	v.queueDepthLabel.SetText(fmt.Sprintf("Queue: %d pending items", depth))

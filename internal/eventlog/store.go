@@ -363,7 +363,7 @@ func (m *Manager) Summarize(ctx context.Context, filter QueryFilter) (*QuerySumm
 // StartSession starts a new StreamSession in the primary backend.
 func (m *Manager) StartSession(ctx context.Context, startedAt time.Time, platform, channel string) (*StreamSession, error) {
 	m.mu.RLock()
-	if m.closed || len(m.backends) == 0 {
+	if m.closed || !m.enabled || len(m.backends) == 0 {
 		m.mu.RUnlock()
 		return &StreamSession{}, nil
 	}
@@ -376,7 +376,7 @@ func (m *Manager) StartSession(ctx context.Context, startedAt time.Time, platfor
 // AddSessionPlatform merges an active platform and channel into an open StreamSession.
 func (m *Manager) AddSessionPlatform(ctx context.Context, sessionID int64, platform, channel string) error {
 	m.mu.RLock()
-	if m.closed || len(m.backends) == 0 {
+	if m.closed || !m.enabled || len(m.backends) == 0 {
 		m.mu.RUnlock()
 		return nil
 	}
@@ -389,7 +389,7 @@ func (m *Manager) AddSessionPlatform(ctx context.Context, sessionID int64, platf
 // EndSession marks a StreamSession as ended at endedAt.
 func (m *Manager) EndSession(ctx context.Context, sessionID int64, endedAt time.Time) error {
 	m.mu.RLock()
-	if m.closed || len(m.backends) == 0 {
+	if m.closed || !m.enabled || len(m.backends) == 0 {
 		m.mu.RUnlock()
 		return nil
 	}

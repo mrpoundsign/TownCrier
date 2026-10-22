@@ -48,16 +48,33 @@ type TwitchTabView struct {
 	overrideCheck       *widget.Check
 	overridesBox        *fyne.Container
 	overrideVoiceField  *VoiceSpeedField
+	namesCheck          *widget.Check
+	emotesCheck         *widget.Check
+	connCard            *widget.Card
+	rulesCard           *widget.Card
+	settingsCard        *widget.Card
+	notifsCard          *widget.Card
+	overridesCard       *widget.Card
+	notifChecks         []*widget.Check
+	notifEntries        []*ScrollPassEntry
+	notifHelpMarkers    []*templateHelpMarker
+	notifMinEntries     []*ScrollPassEntry
+	ttsEnabled          bool
 	onStatus            func(msg string)
 	initializing        bool
 }
 
 // NewTwitchTabView creates a new Twitch tab view bound to the application session.
 func NewTwitchTabView(w fyne.Window, session *app.Session) *TwitchTabView {
+	ttsOn := true
+	if session != nil {
+		ttsOn = session.Config().TTS.Enabled
+	}
 	return &TwitchTabView{
 		window:     w,
 		session:    session,
 		roleChecks: make(map[string]*widget.Check),
+		ttsEnabled: ttsOn,
 	}
 }
 
@@ -72,20 +89,28 @@ func (v *TwitchTabView) Build() fyne.CanvasObject {
 		pCfg = config.DefaultConfig().Platforms["twitch"]
 	}
 
-	connCard := v.buildConnectionCard(pCfg)
-	rulesCard := v.buildReadRulesCard(pCfg)
-	settingsCard := v.buildTwitchSettingsCard(pCfg)
-	notifsCard := v.buildNotificationsCard(pCfg)
-	overridesCard := v.buildOverridesCard(pCfg)
+	v.connCard = v.buildConnectionCard(pCfg)
+	v.rulesCard = v.buildReadRulesCard(pCfg)
+	v.settingsCard = v.buildTwitchSettingsCard(pCfg)
+	v.notifsCard = v.buildNotificationsCard(pCfg)
+	v.overridesCard = v.buildOverridesCard(pCfg)
+
+	if !v.ttsEnabled {
+		v.rulesCard.Hide()
+		v.settingsCard.Hide()
+		v.notifsCard.Hide()
+		v.overridesCard.Hide()
+	}
 
 	v.syncOAuthState()
+	v.SyncTTSState(v.ttsEnabled)
 
 	content := container.NewVBox(
-		connCard,
-		rulesCard,
-		settingsCard,
-		notifsCard,
-		overridesCard,
+		v.connCard,
+		v.rulesCard,
+		v.settingsCard,
+		v.notifsCard,
+		v.overridesCard,
 	)
 
 	return newPanelVScroll(content)
@@ -109,6 +134,42 @@ func (v *TwitchTabView) SyncFromConfig() {
 	}
 	v.initializing = false
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
+	v.SyncTTSState(v.session.Config().TTS.Enabled)
+}
+
+// SyncTTSState updates all Twitch TTS-dependent controls to reflect whether TTS is enabled or disabled.
+func (v *TwitchTabView) SyncTTSState(enabled bool) {
+	v.ttsEnabled = enabled
+	fyne.Do(func() {
+		if v.rulesCard != nil {
+			if enabled {
+				v.rulesCard.Show()
+			} else {
+				v.rulesCard.Hide()
+			}
+		}
+		if v.settingsCard != nil {
+			if enabled {
+				v.settingsCard.Show()
+			} else {
+				v.settingsCard.Hide()
+			}
+		}
+		if v.notifsCard != nil {
+			if enabled {
+				v.notifsCard.Show()
+			} else {
+				v.notifsCard.Hide()
+			}
+		}
+		if v.overridesCard != nil {
+			if enabled {
+				v.overridesCard.Show()
+			} else {
+				v.overridesCard.Hide()
+			}
+		}
+	})
 }
 
 // UpdateStatus updates the connection status badge on the Twitch tab.
@@ -579,6 +640,11 @@ func (v *TwitchTabView) buildTwitchSettingsCard(pCfg config.PlatformConfig) *wid
 }
 
 func (v *TwitchTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widget.Card {
+	v.notifChecks = nil
+	v.notifEntries = nil
+	v.notifHelpMarkers = nil
+	v.notifMinEntries = nil
+
 	notifsList := container.NewVBox()
 
 	v.followOAuthHint = widget.NewLabelWithStyle(
@@ -664,6 +730,10 @@ func (v *TwitchTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 		vars := EventTemplateVars("twitch", eventKey)
 		helpMarker := newTemplateHelpMarker(v.window, eventKey, label, vars, v.onStatus, &tmplEntry.Entry)
 
+		v.notifChecks = append(v.notifChecks, enabledCheck)
+		v.notifEntries = append(v.notifEntries, tmplEntry)
+		v.notifHelpMarkers = append(v.notifHelpMarkers, helpMarker)
+
 		if ev.hasThreshold {
 			minEntry := NewScrollPassEntry()
 			minEntry.SetPlaceHolder("0")
@@ -686,6 +756,7 @@ func (v *TwitchTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 					c.Platforms["twitch"] = p
 				})
 			}
+			v.notifMinEntries = append(v.notifMinEntries, minEntry)
 			rightWidget = container.NewHBox(
 				container.NewCenter(helpMarker),
 				widget.NewLabel("Min:"),
@@ -716,6 +787,7 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 		})
 	})
 	namesCheck.SetChecked(ov.SpeakNames)
+	v.namesCheck = namesCheck
 
 	emotesCheck := widget.NewCheck("Speak Emotes for Twitch Chat", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
@@ -725,6 +797,7 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 		})
 	})
 	emotesCheck.SetChecked(ov.SpeakEmotes)
+	v.emotesCheck = emotesCheck
 
 	selectedVoice := ov.DefaultVoice
 	sp := ov.DefaultSpeed
