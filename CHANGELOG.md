@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+---
+
+## v0.0.5 — 2026-10-22
+
 ### Added
 - **Stream Event Notifications & Watch Streaks across Platforms (#81)**:
   - **Twitch**: Added event capture and speech synthesis for Watch Streaks (`viewermilestone`), Automatic Channel Point Rewards (`highlighted-message`, `gigantified-emote-message`, `animated-message`), Sub Upgrades & Pay-It-Forward (`primepaidupgrade`, `giftpaidupgrade`, `anongiftpaidupgrade`, `standardpayforward`, `communitypayforward`, `extendsub`), Bits Badge Tier milestones (`bitsbadgetier`), Charity Donations (`charity_donation`), and Chat Announcements (`/announce`).
