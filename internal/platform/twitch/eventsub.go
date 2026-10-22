@@ -85,6 +85,94 @@ type eventSubRedemptionEvent struct {
 	} `json:"reward"`
 }
 
+type eventSubChatNotificationEvent struct {
+	BroadcasterUserID    string `json:"broadcaster_user_id"`
+	BroadcasterUserLogin string `json:"broadcaster_user_login"`
+	BroadcasterUserName  string `json:"broadcaster_user_name"`
+	ChatterUserID        string `json:"chatter_user_id"`
+	ChatterUserLogin     string `json:"chatter_user_login"`
+	ChatterUserName      string `json:"chatter_user_name"`
+	ChatterIsAnonymous   bool   `json:"chatter_is_anonymous"`
+	MessageID            string `json:"message_id"`
+	SystemMessage        string `json:"system_message"`
+	NoticeType           string `json:"notice_type"`
+	Message              struct {
+		Text string `json:"text"`
+	} `json:"message"`
+	Badges []struct {
+		SetID string `json:"set_id"`
+		ID    string `json:"id"`
+	} `json:"badges"`
+	Sub *struct {
+		SubTier        string `json:"sub_tier"`
+		IsPrime        bool   `json:"is_prime"`
+		DurationMonths int    `json:"duration_months"`
+	} `json:"sub"`
+	Resub *struct {
+		CumulativeMonths int    `json:"cumulative_months"`
+		DurationMonths   int    `json:"duration_months"`
+		StreakMonths     int    `json:"streak_months"`
+		SubTier          string `json:"sub_tier"`
+		IsPrime          bool   `json:"is_prime"`
+	} `json:"resub"`
+	SubGift *struct {
+		DurationMonths     int    `json:"duration_months"`
+		CumulativeTotal    int    `json:"cumulative_total"`
+		RecipientUserID    string `json:"recipient_user_id"`
+		RecipientUserName  string `json:"recipient_user_name"`
+		RecipientUserLogin string `json:"recipient_user_login"`
+		SubTier            string `json:"sub_tier"`
+	} `json:"sub_gift"`
+	CommunitySubGift *struct {
+		ID              string `json:"id"`
+		Total           int    `json:"total"`
+		SubTier         string `json:"sub_tier"`
+		CumulativeTotal int    `json:"cumulative_total"`
+	} `json:"community_sub_gift"`
+	GiftPaidUpgrade *struct {
+		GifterIsAnonymous bool   `json:"gifter_is_anonymous"`
+		GifterUserID      string `json:"gifter_user_id"`
+		GifterUserName    string `json:"gifter_user_name"`
+		GifterUserLogin   string `json:"gifter_user_login"`
+	} `json:"gift_paid_upgrade"`
+	PrimePaidUpgrade *struct {
+		SubTier string `json:"sub_tier"`
+	} `json:"prime_paid_upgrade"`
+	PayItForward *struct {
+		GifterIsAnonymous  bool   `json:"gifter_is_anonymous"`
+		GifterUserID       string `json:"gifter_user_id"`
+		GifterUserName     string `json:"gifter_user_name"`
+		GifterUserLogin    string `json:"gifter_user_login"`
+		RecipientUserID    string `json:"recipient_user_id"`
+		RecipientUserName  string `json:"recipient_user_name"`
+		RecipientUserLogin string `json:"recipient_user_login"`
+	} `json:"pay_it_forward"`
+	Raid *struct {
+		UserID      string `json:"user_id"`
+		UserName    string `json:"user_name"`
+		UserLogin   string `json:"user_login"`
+		ViewerCount int    `json:"viewer_count"`
+	} `json:"raid"`
+	Announcement *struct {
+		Color string `json:"color"`
+	} `json:"announcement"`
+	BitsBadgeTier *struct {
+		Tier int `json:"tier"`
+	} `json:"bits_badge_tier"`
+	CharityDonation *struct {
+		CharityName string `json:"charity_name"`
+		Amount      struct {
+			Value         int    `json:"value"`
+			DecimalPlaces int    `json:"decimal_places"`
+			Currency      string `json:"currency"`
+		} `json:"amount"`
+	} `json:"charity_donation"`
+	WatchStreak *struct {
+		StreakCount          int `json:"streak_count"`
+		ChannelPointsAwarded int `json:"channel_points_awarded"`
+	} `json:"watch_streak"`
+}
+
 // ParseEventSubNotification parses a Twitch EventSub notification payload into a normalized chat.Event.
 func ParseEventSubNotification(subType string, msgID string, eventRaw json.RawMessage, fallbackChannel string) (*chat.Event, error) {
 	switch subType {
@@ -172,9 +260,240 @@ func ParseEventSubNotification(subType string, msgID string, eventRaw json.RawMe
 			RewardID:    strings.TrimSpace(re.Reward.ID),
 			RewardTitle: strings.TrimSpace(re.Reward.Title),
 		}, nil
+
+	case "channel.chat.notification":
+		return parseChatNotificationEvent(msgID, eventRaw, fallbackChannel)
 	}
 
 	return nil, nil
+}
+
+func parseChatNotificationEvent(msgID string, eventRaw json.RawMessage, fallbackChannel string) (*chat.Event, error) {
+	var ce eventSubChatNotificationEvent
+	if err := json.Unmarshal(eventRaw, &ce); err != nil {
+		return nil, fmt.Errorf("unmarshal channel.chat.notification event: %w", err)
+	}
+
+	noticeType := strings.ToLower(strings.TrimSpace(ce.NoticeType))
+	noticeType = strings.TrimPrefix(noticeType, "shared_chat_")
+
+	userLogin := strings.ToLower(strings.TrimSpace(ce.ChatterUserLogin))
+	displayName := strings.TrimSpace(ce.ChatterUserName)
+	userID := strings.TrimSpace(ce.ChatterUserID)
+	if ce.ChatterIsAnonymous && userLogin == "" {
+		userLogin = "anonymous"
+		displayName = "Anonymous"
+	}
+	if displayName == "" {
+		displayName = userLogin
+	}
+
+	var roles []string
+	for _, b := range ce.Badges {
+		switch b.SetID {
+		case "broadcaster":
+			roles = append(roles, "broadcaster")
+		case "moderator":
+			roles = append(roles, "mod")
+		case "vip":
+			roles = append(roles, "vip")
+		case "subscriber", "founder":
+			roles = append(roles, "subscriber")
+		}
+	}
+
+	var (
+		kind        chat.EventKind
+		text        = strings.TrimSpace(ce.Message.Text)
+		months      int
+		count       int
+		amount      float64
+		currency    string
+		subTier     string
+		recipient   string
+		itemName    string
+		rewardTitle string
+	)
+
+	switch noticeType {
+	case "watch_streak":
+		kind = chat.EventKindWatchStreak
+		count = 1
+		if ce.WatchStreak != nil {
+			if ce.WatchStreak.StreakCount > 0 {
+				count = ce.WatchStreak.StreakCount
+			}
+			if ce.WatchStreak.ChannelPointsAwarded > 0 {
+				amount = float64(ce.WatchStreak.ChannelPointsAwarded)
+				currency = "points"
+			}
+		}
+	case "sub":
+		kind = chat.EventKindSub
+		months = 1
+		count = 1
+		if ce.Sub != nil {
+			if ce.Sub.IsPrime {
+				subTier = "Prime"
+			} else {
+				subTier = formatTwitchSubPlan(ce.Sub.SubTier)
+			}
+		}
+	case "resub":
+		kind = chat.EventKindResub
+		months = 1
+		count = 1
+		if ce.Resub != nil {
+			if ce.Resub.CumulativeMonths > 0 {
+				months = ce.Resub.CumulativeMonths
+			}
+			if ce.Resub.IsPrime {
+				subTier = "Prime"
+			} else {
+				subTier = formatTwitchSubPlan(ce.Resub.SubTier)
+			}
+		}
+	case "sub_gift":
+		kind = chat.EventKindGiftSub
+		count = 1
+		if ce.SubGift != nil {
+			recipient = strings.TrimSpace(ce.SubGift.RecipientUserName)
+			if recipient == "" {
+				recipient = strings.TrimSpace(ce.SubGift.RecipientUserLogin)
+			}
+			subTier = formatTwitchSubPlan(ce.SubGift.SubTier)
+		}
+		if recipient != "" {
+			text = "gifted a subscription to " + recipient
+		}
+	case "community_sub_gift":
+		kind = chat.EventKindGiftSub
+		count = 1
+		if ce.CommunitySubGift != nil {
+			if ce.CommunitySubGift.Total > 0 {
+				count = ce.CommunitySubGift.Total
+			}
+			subTier = formatTwitchSubPlan(ce.CommunitySubGift.SubTier)
+		}
+		text = fmt.Sprintf("gifted %d community subscriptions!", count)
+	case "prime_paid_upgrade":
+		kind = chat.EventKindSubUpgrade
+		count = 1
+		if ce.PrimePaidUpgrade != nil {
+			subTier = formatTwitchSubPlan(ce.PrimePaidUpgrade.SubTier)
+		}
+		if subTier != "" {
+			itemName = "Upgraded from a Prime subscription to " + subTier
+		} else {
+			itemName = "Upgraded from a Prime subscription"
+		}
+	case "gift_paid_upgrade":
+		kind = chat.EventKindSubUpgrade
+		count = 1
+		if ce.GiftPaidUpgrade != nil && !ce.GiftPaidUpgrade.GifterIsAnonymous {
+			recipient = strings.TrimSpace(ce.GiftPaidUpgrade.GifterUserName)
+			if recipient == "" {
+				recipient = strings.TrimSpace(ce.GiftPaidUpgrade.GifterUserLogin)
+			}
+		}
+		if recipient != "" {
+			itemName = "Upgraded a gift subscription from " + recipient
+		} else {
+			itemName = "Upgraded a gift subscription"
+		}
+	case "pay_it_forward":
+		kind = chat.EventKindSubUpgrade
+		count = 1
+		if ce.PayItForward != nil {
+			recipient = strings.TrimSpace(ce.PayItForward.RecipientUserName)
+			if recipient == "" {
+				recipient = strings.TrimSpace(ce.PayItForward.RecipientUserLogin)
+			}
+		}
+		if recipient != "" {
+			itemName = "Paid forward a gift subscription to " + recipient
+		} else {
+			itemName = "Paid forward a gift subscription to the community"
+		}
+	case "raid":
+		kind = chat.EventKindRaid
+		if ce.Raid != nil {
+			if ce.Raid.UserLogin != "" {
+				userLogin = strings.ToLower(strings.TrimSpace(ce.Raid.UserLogin))
+			}
+			if ce.Raid.UserName != "" {
+				displayName = strings.TrimSpace(ce.Raid.UserName)
+			}
+			if ce.Raid.UserID != "" {
+				userID = strings.TrimSpace(ce.Raid.UserID)
+			}
+			count = ce.Raid.ViewerCount
+		}
+		text = fmt.Sprintf("raided with %d viewers!", count)
+	case "bits_badge_tier":
+		kind = chat.EventKindBitsBadgeTier
+		if ce.BitsBadgeTier != nil {
+			count = ce.BitsBadgeTier.Tier
+			amount = float64(ce.BitsBadgeTier.Tier)
+		}
+		currency = "bits"
+	case "announcement":
+		kind = chat.EventKindAnnouncement
+	case "charity_donation":
+		kind = chat.EventKindCharityDonation
+		if ce.CharityDonation != nil {
+			rewardTitle = strings.TrimSpace(ce.CharityDonation.CharityName)
+			itemName = rewardTitle
+			val := float64(ce.CharityDonation.Amount.Value)
+			for range ce.CharityDonation.Amount.DecimalPlaces {
+				val /= 10
+			}
+			amount = val
+			currency = strings.ToUpper(strings.TrimSpace(ce.CharityDonation.Amount.Currency))
+			if currency == "" {
+				currency = "USD"
+			}
+		}
+	default:
+		return nil, nil
+	}
+
+	if userLogin == "" {
+		return nil, nil
+	}
+
+	ch := cleanChannelName(ce.BroadcasterUserLogin)
+	if ch == "" {
+		ch = fallbackChannel
+	}
+	id := strings.TrimSpace(ce.MessageID)
+	if id == "" {
+		id = msgID
+	}
+	if id == "" {
+		id = fmt.Sprintf("twitch-notif-%s-%s-%d", noticeType, userLogin, time.Now().UnixNano())
+	}
+
+	return &chat.Event{
+		ID:          id,
+		Platform:    "twitch",
+		Channel:     ch,
+		Kind:        kind,
+		Timestamp:   time.Now(),
+		UserID:      userID,
+		UserName:    userLogin,
+		DisplayName: displayName,
+		Roles:       roles,
+		Text:        text,
+		Amount:      amount,
+		Currency:    currency,
+		ItemName:    itemName,
+		RewardTitle: rewardTitle,
+		SubTier:     subTier,
+		Recipient:   recipient,
+		Months:      months,
+		Count:       count,
+	}, nil
 }
 
 func (c *Connector) startEventSubLocked() {
@@ -490,6 +809,15 @@ func (c *Connector) connectAndStreamEventSub(ctx context.Context, wsURL string, 
 					log.Printf("[Twitch EventSub] Subscribed to channel point redemptions for #%s", channel)
 				}
 
+				if err := c.createEventSubSubscription(ctx, token, sessionID, "channel.chat.notification", "1", map[string]string{
+					"broadcaster_user_id": broadcasterID,
+					"user_id":             moderatorID,
+				}); err != nil {
+					log.Printf("[Twitch EventSub] Failed to subscribe to channel.chat.notification for #%s: %v", channel, err)
+				} else {
+					log.Printf("[Twitch EventSub] Subscribed to channel.chat.notification for #%s", channel)
+				}
+
 				_ = c.createEventSubSubscription(ctx, token, sessionID, "stream.online", "1", map[string]string{
 					"broadcaster_user_id": broadcasterID,
 				})
@@ -530,9 +858,7 @@ func (c *Connector) connectAndStreamEventSub(ctx context.Context, wsURL string, 
 				if ev.Kind == chat.EventKindFollow {
 					c.MarkUserFollowing(ev.UserID, ev.UserName)
 				}
-				if c.onEvent != nil {
-					c.onEvent(ev)
-				}
+				c.emitEvent(ev)
 			}
 		}
 	}

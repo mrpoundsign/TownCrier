@@ -467,4 +467,22 @@ func TestParseDebugProtoMessages_BarrageEmoteAndSubNotify(t *testing.T) {
 	}
 }
 
+func TestMapUserEventShare(t *testing.T) {
+	ev := mapUserEvent(gotiktoklive.UserEvent{
+		Event: gotiktoklive.USER_SHARE,
+		User: &gotiktoklive.User{
+			ID:       404,
+			Username: "sharer1",
+			Nickname: "Sharer One",
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil share event")
+	}
+	if ev.Kind != chat.EventKindShare || ev.UserName != "sharer1" || ev.DisplayName != "Sharer One" {
+		t.Errorf("unexpected share event: %+v", ev)
+	}
+}
+
+
 

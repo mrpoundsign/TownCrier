@@ -8,17 +8,24 @@ import (
 type EventKind string
 
 const (
-	EventKindMessage      EventKind = "message"
-	EventKindFollow       EventKind = "follow"
-	EventKindSub          EventKind = "sub"
-	EventKindResub        EventKind = "resub"
-	EventKindGiftSub      EventKind = "gift_sub"
-	EventKindCheer        EventKind = "cheer"
-	EventKindRaid         EventKind = "raid"
-	EventKindRedemption   EventKind = "redemption"
-	EventKindSuperChat    EventKind = "super_chat"
-	EventKindSuperSticker EventKind = "super_sticker"
-	EventKindGift         EventKind = "gift"
+	EventKindMessage         EventKind = "message"
+	EventKindFollow          EventKind = "follow"
+	EventKindSub             EventKind = "sub"
+	EventKindResub           EventKind = "resub"
+	EventKindGiftSub         EventKind = "gift_sub"
+	EventKindGiftRedemption  EventKind = "gift_redemption"
+	EventKindSubUpgrade      EventKind = "sub_upgrade"
+	EventKindCheer           EventKind = "cheer"
+	EventKindBitsBadgeTier   EventKind = "bits_badge_tier"
+	EventKindRaid            EventKind = "raid"
+	EventKindRedemption      EventKind = "redemption"
+	EventKindWatchStreak     EventKind = "watch_streak"
+	EventKindSuperChat       EventKind = "super_chat"
+	EventKindSuperSticker    EventKind = "super_sticker"
+	EventKindGift            EventKind = "gift"
+	EventKindCharityDonation EventKind = "charity_donation"
+	EventKindAnnouncement    EventKind = "announcement"
+	EventKindShare           EventKind = "share"
 )
 
 // EmoteSpan defines the location and metadata of an emote in a message text.

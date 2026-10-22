@@ -229,3 +229,150 @@ func TestConnectorUserNoticeHandling(t *testing.T) {
 		t.Errorf("expected message text, got %q", dispatched.Text)
 	}
 }
+
+func TestConnectorWatchStreakAndExtendedUserNotices(t *testing.T) {
+	var events []*chat.Event
+	conn := NewConnector(
+		func(event *chat.Event) {
+			events = append(events, event)
+		},
+		nil,
+		nil,
+	)
+
+	// 1. Watch Streak (viewermilestone)
+	conn.handleUserNotice(twitch.UserNoticeMessage{
+		ID:      "streak-1",
+		MsgID:   "viewermilestone",
+		Message: "5 streams in a row!",
+		Time:    time.Now(),
+		User: twitch.User{
+			ID:          "u-streak",
+			Name:        "streakviewer",
+			DisplayName: "StreakViewer",
+		},
+		MsgParams: map[string]string{
+			"msg-param-category":   "watch-streak",
+			"msg-param-value":      "5",
+			"msg-param-copoReward": "450",
+		},
+	})
+
+	// 2. Prime Paid Upgrade
+	conn.handleUserNotice(twitch.UserNoticeMessage{
+		ID:    "upgrade-1",
+		MsgID: "primepaidupgrade",
+		Time:  time.Now(),
+		User: twitch.User{
+			ID:          "u-up",
+			Name:        "upgrader",
+			DisplayName: "Upgrader",
+		},
+		MsgParams: map[string]string{
+			"msg-param-sub-plan": "1000",
+		},
+	})
+
+	// 3. Bits Badge Tier
+	conn.handleUserNotice(twitch.UserNoticeMessage{
+		ID:      "bits-tier-1",
+		MsgID:   "bitsbadgetier",
+		Message: "1k badge hype!",
+		Time:    time.Now(),
+		User: twitch.User{
+			ID:          "u-bits",
+			Name:        "bitfan",
+			DisplayName: "BitFan",
+		},
+		MsgParams: map[string]string{
+			"msg-param-threshold": "1000",
+		},
+	})
+
+	// 4. Announcement
+	conn.handleUserNotice(twitch.UserNoticeMessage{
+		ID:      "ann-1",
+		MsgID:   "announcement",
+		Message: "Welcome to the tournament!",
+		Time:    time.Now(),
+		User: twitch.User{
+			ID:          "u-mod",
+			Name:        "moduser",
+			DisplayName: "ModUser",
+		},
+	})
+
+	// 5. Charity Donation
+	conn.handleUserNotice(twitch.UserNoticeMessage{
+		ID:      "charity-1",
+		MsgID:   "charitydonation",
+		Message: "For the kids!",
+		Time:    time.Now(),
+		User: twitch.User{
+			ID:          "u-donor",
+			Name:        "generous",
+			DisplayName: "Generous",
+		},
+		MsgParams: map[string]string{
+			"msg-param-donation-amount":   "2500",
+			"msg-param-donation-currency": "USD",
+			"msg-param-exponent":          "2",
+			"msg-param-charity-name":      "St. Jude",
+		},
+	})
+
+	// 6. Highlighted Message (Automatic Channel Point Reward via PRIVMSG)
+	conn.handlePrivateMessage(twitch.PrivateMessage{
+		ID:      "hl-1",
+		Message: "Look at my highlighted message!",
+		Time:    time.Now(),
+		User: twitch.User{
+			ID:          "u-hl",
+			Name:        "highlighter",
+			DisplayName: "Highlighter",
+		},
+		Tags: map[string]string{
+			"msg-id": "highlighted-message",
+		},
+	})
+
+	// 7. Duplicate ID should be ignored by deduplication cache
+	conn.handleUserNotice(twitch.UserNoticeMessage{
+		ID:      "streak-1",
+		MsgID:   "viewermilestone",
+		Message: "5 streams in a row!",
+		Time:    time.Now(),
+		User: twitch.User{
+			ID:          "u-streak",
+			Name:        "streakviewer",
+			DisplayName: "StreakViewer",
+		},
+		MsgParams: map[string]string{
+			"msg-param-category": "watch-streak",
+			"msg-param-value":    "5",
+		},
+	})
+
+	if len(events) != 6 {
+		t.Fatalf("expected 6 deduplicated events, got %d", len(events))
+	}
+
+	if events[0].Kind != chat.EventKindWatchStreak || events[0].Count != 5 || events[0].Amount != 450 || events[0].Text != "5 streams in a row!" {
+		t.Errorf("unexpected watch streak event: %+v", events[0])
+	}
+	if events[1].Kind != chat.EventKindSubUpgrade || events[1].SubTier != "Tier 1" {
+		t.Errorf("unexpected sub upgrade event: %+v", events[1])
+	}
+	if events[2].Kind != chat.EventKindBitsBadgeTier || events[2].Amount != 1000 || events[2].Text != "1k badge hype!" {
+		t.Errorf("unexpected bits badge tier event: %+v", events[2])
+	}
+	if events[3].Kind != chat.EventKindAnnouncement || events[3].Text != "Welcome to the tournament!" {
+		t.Errorf("unexpected announcement event: %+v", events[3])
+	}
+	if events[4].Kind != chat.EventKindCharityDonation || events[4].Amount != 25 || events[4].Currency != "USD" || events[4].RewardTitle != "St. Jude" {
+		t.Errorf("unexpected charity donation event: %+v", events[4])
+	}
+	if events[5].Kind != chat.EventKindRedemption || events[5].RewardTitle != "Highlight My Message" {
+		t.Errorf("unexpected highlighted message event: %+v", events[5])
+	}
+}

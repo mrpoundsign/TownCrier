@@ -1417,13 +1417,13 @@ func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
 		}
 	case "sub":
 		switch kindLower {
-		case "sub", "resub", "gift_sub", "membership", "gift_membership":
+		case "sub", "resub", "gift_sub", "gift_redemption", "sub_upgrade", "membership", "gift_membership":
 		default:
 			return false
 		}
 	case "cheer":
 		switch kindLower {
-		case "cheer", "gift", "superchat", "supersticker", "super_chat", "super_sticker":
+		case "cheer", "bits_badge_tier", "gift", "superchat", "supersticker", "super_chat", "super_sticker", "charity_donation":
 		default:
 			return false
 		}

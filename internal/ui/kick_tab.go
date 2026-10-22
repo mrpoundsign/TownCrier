@@ -343,6 +343,7 @@ func (v *KickTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widget
 		{"resub", "Resubscription", "{user} resubscribed for {months} months!", false},
 		{"gift_sub", "Gifted Subscriptions", "{user} gifted {count} subscriptions!", true},
 		{"gift", "Gifts / Kicks", "{user} sent {count} {reward}: {message}", true},
+		{"redemption", "Channel Reward Redemption", "{user} redeemed {reward}: {message}", false},
 		{"raid", "Host / Raid", "{user} hosted with {viewers} viewers!", true},
 		{"follow", "New Followers", "{user} followed on Kick!", false},
 	}
@@ -390,6 +391,9 @@ func (v *KickTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widget
 		}
 
 		var rightWidget fyne.CanvasObject
+		vars := EventTemplateVars("kick", eventKey)
+		helpMarker := newTemplateHelpMarker(v.window, eventKey, label, vars, v.onStatus, &tmplEntry.Entry)
+
 		if ev.hasThreshold {
 			minEntry := NewScrollPassEntry()
 			minEntry.SetPlaceHolder("0")
@@ -413,8 +417,14 @@ func (v *KickTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widget
 				})
 			}
 			rightWidget = container.NewHBox(
+				container.NewCenter(helpMarker),
 				widget.NewLabel("Min:"),
 				container.NewGridWrap(fyne.NewSize(70, 36), minEntry),
+			)
+		} else {
+			rightWidget = container.NewHBox(
+				container.NewCenter(helpMarker),
+				container.NewGridWrap(fyne.NewSize(108, 36), widget.NewLabel("")),
 			)
 		}
 

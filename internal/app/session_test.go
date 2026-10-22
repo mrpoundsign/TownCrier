@@ -876,3 +876,102 @@ func TestSessionFollowerRoleGatingTwitchAndKick(t *testing.T) {
 	}
 }
 
+func TestSessionWatchStreakAndExtendedEventFormatting(t *testing.T) {
+	ctx := context.Background()
+	sqlBackend, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, sqlBackend)
+	defer func() { _ = logMgr.Close() }()
+
+	cfg := config.DefaultConfig()
+	twCfg := cfg.Platforms["twitch"]
+	wsNotif := twCfg.Notifications["watch_streak"]
+	wsNotif.Threshold = 3
+	twCfg.Notifications["watch_streak"] = wsNotif
+	cfg.Platforms["twitch"] = twCfg
+
+	session := NewSession(cfg, secrets.NewMemoryStore())
+	session.SetEventLogger(logMgr)
+	defer func() { _ = session.Close() }()
+	session.Queue().Pause()
+
+	// 1. Watch Streak above threshold -> logged with formatted RawText and queued for TTS
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "tw-streak-5",
+		Platform:    "twitch",
+		Kind:        chat.EventKindWatchStreak,
+		UserID:      "u1",
+		UserName:    "streakfan",
+		DisplayName: "StreakFan",
+		Count:       5,
+		Amount:      450,
+		Currency:    "points",
+		Text:        "Never missed one!",
+	})
+
+	// 2. Watch Streak below threshold -> still logged in Chat Log, but dropped from TTS
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "tw-streak-2",
+		Platform:    "twitch",
+		Kind:        chat.EventKindWatchStreak,
+		UserID:      "u2",
+		UserName:    "newstreak",
+		DisplayName: "NewStreak",
+		Count:       2,
+	})
+
+	// 3. TikTok Share (default Enabled: false) -> logged in Chat Log, dropped from TTS
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "tt-share-1",
+		Platform:    "tiktok",
+		Kind:        chat.EventKindShare,
+		UserID:      "u3",
+		UserName:    "sharer",
+		DisplayName: "Sharer",
+	})
+
+	// 4. Kick Multi-Recipient Gift Sub -> logged with all recipient names
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "kick-giftsub-multi",
+		Platform:    "kick",
+		Kind:        chat.EventKindGiftSub,
+		UserID:      "u4",
+		UserName:    "biggifter",
+		DisplayName: "BigGifter",
+		Count:       3,
+		Recipient:   "Alice, Bob, Charlie",
+	})
+
+	res, err := logMgr.Query(ctx, eventlog.QueryFilter{})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	byID := make(map[string]eventlog.Entry)
+	for _, e := range res.Entries {
+		byID[e.ID] = e
+	}
+
+	s5 := byID["tw-streak-5"]
+	if !s5.PassedFilters || s5.RawText != "Shared a 5-stream watch streak (+450 pts): Never missed one!" {
+		t.Errorf("unexpected tw-streak-5 entry: %+v", s5)
+	}
+	s2 := byID["tw-streak-2"]
+	if s2.PassedFilters || s2.Outcome != eventlog.OutcomeDroppedThreshold || s2.RawText != "Shared a 2-stream watch streak" {
+		t.Errorf("unexpected tw-streak-2 entry: %+v", s2)
+	}
+	sh := byID["tt-share-1"]
+	if sh.PassedFilters || sh.Outcome != eventlog.OutcomeDroppedDisabled || sh.RawText != "Shared the stream" {
+		t.Errorf("unexpected tt-share-1 entry: %+v", sh)
+	}
+	kg := byID["kick-giftsub-multi"]
+	if !kg.PassedFilters || kg.RawText != "Gifted 3 subscriptions to Alice, Bob, Charlie" {
+		t.Errorf("unexpected kick-giftsub-multi entry: %+v", kg)
+	}
+}
+
+

@@ -217,13 +217,27 @@ type authorBadge struct {
 type chatAction struct {
 	AddChatItemAction *struct {
 		Item struct {
-			LiveChatTextMessageRenderer                          *textMessageRenderer    `json:"liveChatTextMessageRenderer"`
-			LiveChatPaidMessageRenderer                          *paidMessageRenderer    `json:"liveChatPaidMessageRenderer"`
-			LiveChatPaidStickerRenderer                          *paidStickerRenderer    `json:"liveChatPaidStickerRenderer"`
-			LiveChatMembershipItemRenderer                       *membershipItemRenderer `json:"liveChatMembershipItemRenderer"`
-			LiveChatSponsorshipsGiftPurchaseAnnouncementRenderer *giftPurchaseRenderer   `json:"liveChatSponsorshipsGiftPurchaseAnnouncementRenderer"`
+			LiveChatTextMessageRenderer                            *textMessageRenderer        `json:"liveChatTextMessageRenderer"`
+			LiveChatPaidMessageRenderer                            *paidMessageRenderer        `json:"liveChatPaidMessageRenderer"`
+			LiveChatPaidStickerRenderer                            *paidStickerRenderer        `json:"liveChatPaidStickerRenderer"`
+			LiveChatMembershipItemRenderer                         *membershipItemRenderer     `json:"liveChatMembershipItemRenderer"`
+			LiveChatSponsorshipsGiftPurchaseAnnouncementRenderer   *giftPurchaseRenderer       `json:"liveChatSponsorshipsGiftPurchaseAnnouncementRenderer"`
+			LiveChatSponsorshipsGiftRedemptionAnnouncementRenderer *giftRedemptionRenderer     `json:"liveChatSponsorshipsGiftRedemptionAnnouncementRenderer"`
+			LiveChatDonationAnnouncementRenderer                   *donationRenderer           `json:"liveChatDonationAnnouncementRenderer"`
+			LiveChatViewerEngagementMessageRenderer                *engagementMessageRenderer  `json:"liveChatViewerEngagementMessageRenderer"`
+			LiveChatBannerRedirectRenderer                         *bannerRedirectRenderer     `json:"liveChatBannerRedirectRenderer"`
 		} `json:"item"`
 	} `json:"addChatItemAction"`
+	AddBannerToLiveChatCommand *struct {
+		BannerRenderer struct {
+			LiveChatBannerRenderer *struct {
+				Contents struct {
+					LiveChatBannerRedirectRenderer *bannerRedirectRenderer `json:"liveChatBannerRedirectRenderer"`
+				} `json:"contents"`
+			} `json:"liveChatBannerRenderer"`
+			LiveChatBannerRedirectRenderer *bannerRedirectRenderer `json:"liveChatBannerRedirectRenderer"`
+		} `json:"bannerRenderer"`
+	} `json:"addBannerToLiveChatCommand"`
 	MarkChatItemAsDeletedAction *struct {
 		TargetItemID string `json:"targetItemId"`
 	} `json:"markChatItemAsDeletedAction"`
@@ -292,6 +306,41 @@ type giftPurchaseRenderer struct {
 			AuthorBadges []authorBadge `json:"authorBadges"`
 		} `json:"liveChatSponsorshipsHeaderRenderer"`
 	} `json:"header"`
+}
+
+type giftRedemptionRenderer struct {
+	ID                      string        `json:"id"`
+	TimestampUsec           string        `json:"timestampUsec"`
+	AuthorName              textRuns      `json:"authorName"`
+	AuthorExternalChannelID string        `json:"authorExternalChannelId"`
+	AuthorBadges            []authorBadge `json:"authorBadges"`
+	Message                 textRuns      `json:"message"`
+}
+
+type donationRenderer struct {
+	ID                      string        `json:"id"`
+	TimestampUsec           string        `json:"timestampUsec"`
+	AuthorName              textRuns      `json:"authorName"`
+	AuthorExternalChannelID string        `json:"authorExternalChannelId"`
+	AuthorBadges            []authorBadge `json:"authorBadges"`
+	Subtext                 textRuns      `json:"subtext"`
+	Message                 textRuns      `json:"message"`
+	PurchaseAmountText      textRuns      `json:"purchaseAmountText"`
+}
+
+type engagementMessageRenderer struct {
+	ID            string   `json:"id"`
+	TimestampUsec string   `json:"timestampUsec"`
+	Message       textRuns `json:"message"`
+	Icon          *struct {
+		IconType string `json:"iconType"`
+	} `json:"icon"`
+}
+
+type bannerRedirectRenderer struct {
+	ID            string   `json:"id"`
+	BannerMessage textRuns `json:"bannerMessage"`
+	AuthorName    textRuns `json:"authorName"`
 }
 
 // ParseLiveChatResponse parses a raw InnerTube get_live_chat JSON payload into normalized chat events,
@@ -365,6 +414,21 @@ func ParseLiveChatResponse(data []byte) (events []*chat.Event, modEvents []*chat
 			continue
 		}
 
+		if act.AddBannerToLiveChatCommand != nil {
+			var br *bannerRedirectRenderer
+			if act.AddBannerToLiveChatCommand.BannerRenderer.LiveChatBannerRedirectRenderer != nil {
+				br = act.AddBannerToLiveChatCommand.BannerRenderer.LiveChatBannerRedirectRenderer
+			} else if act.AddBannerToLiveChatCommand.BannerRenderer.LiveChatBannerRenderer != nil {
+				br = act.AddBannerToLiveChatCommand.BannerRenderer.LiveChatBannerRenderer.Contents.LiveChatBannerRedirectRenderer
+			}
+			if br != nil {
+				if ev := parseBannerRedirect(br); ev != nil {
+					events = append(events, ev)
+				}
+			}
+			continue
+		}
+
 		if act.AddChatItemAction == nil {
 			continue
 		}
@@ -389,6 +453,22 @@ func ParseLiveChatResponse(data []byte) (events []*chat.Event, modEvents []*chat
 			}
 		case item.LiveChatSponsorshipsGiftPurchaseAnnouncementRenderer != nil:
 			if ev := parseGiftPurchase(item.LiveChatSponsorshipsGiftPurchaseAnnouncementRenderer); ev != nil {
+				events = append(events, ev)
+			}
+		case item.LiveChatSponsorshipsGiftRedemptionAnnouncementRenderer != nil:
+			if ev := parseGiftRedemption(item.LiveChatSponsorshipsGiftRedemptionAnnouncementRenderer); ev != nil {
+				events = append(events, ev)
+			}
+		case item.LiveChatDonationAnnouncementRenderer != nil:
+			if ev := parseDonation(item.LiveChatDonationAnnouncementRenderer); ev != nil {
+				events = append(events, ev)
+			}
+		case item.LiveChatBannerRedirectRenderer != nil:
+			if ev := parseBannerRedirect(item.LiveChatBannerRedirectRenderer); ev != nil {
+				events = append(events, ev)
+			}
+		case item.LiveChatViewerEngagementMessageRenderer != nil:
+			if ev := parseEngagementRedirect(item.LiveChatViewerEngagementMessageRenderer); ev != nil {
 				events = append(events, ev)
 			}
 		}
@@ -557,6 +637,115 @@ func parseGiftPurchase(r *giftPurchaseRenderer) *chat.Event {
 		DisplayName: author,
 		Roles:       extractAuthorRoles(hdr.AuthorBadges),
 		Count:       count,
+	}
+}
+
+func parseGiftRedemption(r *giftRedemptionRenderer) *chat.Event {
+	author := strings.TrimLeft(flattenText(r.AuthorName), "@")
+	if author == "" {
+		return nil
+	}
+	msgText := flattenText(r.Message)
+	var gifter string
+	if idx := strings.LastIndex(strings.ToLower(msgText), " by "); idx >= 0 {
+		gifter = strings.TrimLeft(strings.TrimRight(strings.TrimSpace(msgText[idx+4:]), ".!"), "@")
+	} else if idx := strings.LastIndex(strings.ToLower(msgText), " from "); idx >= 0 {
+		gifter = strings.TrimLeft(strings.TrimRight(strings.TrimSpace(msgText[idx+6:]), ".!"), "@")
+	}
+
+	return &chat.Event{
+		ID:          r.ID,
+		Platform:    "youtube",
+		Kind:        chat.EventKindGiftRedemption,
+		Timestamp:   parseUsecTimestamp(r.TimestampUsec),
+		UserID:      r.AuthorExternalChannelID,
+		UserName:    author,
+		DisplayName: author,
+		Roles:       extractAuthorRoles(r.AuthorBadges),
+		Recipient:   gifter,
+		Count:       1,
+	}
+}
+
+func parseDonation(r *donationRenderer) *chat.Event {
+	author := strings.TrimLeft(flattenText(r.AuthorName), "@")
+	if author == "" {
+		author = "Donor"
+	}
+	text, emotes := extractTextAndEmotes(r.Message)
+	amountStr := flattenText(r.PurchaseAmountText)
+	if amountStr == "" {
+		amountStr = flattenText(r.Subtext)
+	}
+	amount, currency := parsePurchaseAmount(amountStr)
+
+	return &chat.Event{
+		ID:          r.ID,
+		Platform:    "youtube",
+		Kind:        chat.EventKindCharityDonation,
+		Timestamp:   parseUsecTimestamp(r.TimestampUsec),
+		UserID:      r.AuthorExternalChannelID,
+		UserName:    author,
+		DisplayName: author,
+		Roles:       extractAuthorRoles(r.AuthorBadges),
+		Text:        text,
+		EmoteSpans:  emotes,
+		Count:       1,
+		UnitAmount:  amount,
+		Amount:      amount,
+		Currency:    currency,
+	}
+}
+
+func parseBannerRedirect(r *bannerRedirectRenderer) *chat.Event {
+	author := strings.TrimLeft(flattenText(r.AuthorName), "@")
+	bannerMsg := flattenText(r.BannerMessage)
+	if author == "" && len(r.BannerMessage.Runs) > 0 {
+		author = strings.TrimLeft(strings.TrimSpace(r.BannerMessage.Runs[0].Text), "@")
+	}
+	if author == "" {
+		return nil
+	}
+	id := strings.TrimSpace(r.ID)
+	if id == "" {
+		id = fmt.Sprintf("yt-raid-%s-%d", strings.ToLower(author), time.Now().UnixNano())
+	}
+	return &chat.Event{
+		ID:          id,
+		Platform:    "youtube",
+		Kind:        chat.EventKindRaid,
+		Timestamp:   time.Now(),
+		UserID:      author,
+		UserName:    author,
+		DisplayName: author,
+		Text:        bannerMsg,
+		Count:       1,
+	}
+}
+
+func parseEngagementRedirect(r *engagementMessageRenderer) *chat.Event {
+	msgText := flattenText(r.Message)
+	lower := strings.ToLower(msgText)
+	if !strings.Contains(lower, "redirect") && !strings.Contains(lower, "raided") {
+		return nil
+	}
+	var author string
+	if len(r.Message.Runs) > 0 {
+		author = strings.TrimLeft(strings.TrimSpace(r.Message.Runs[0].Text), "@")
+	}
+	if author == "" {
+		author = "Channel"
+	}
+	return &chat.Event{
+		ID:          r.ID,
+		Platform:    "youtube",
+		Kind:        chat.EventKindRaid,
+		Timestamp:   parseUsecTimestamp(r.TimestampUsec),
+		UserID:      author,
+		UserName:    author,
+		DisplayName: author,
+		Text:        msgText,
+		Count:       1,
 	}
 }
 

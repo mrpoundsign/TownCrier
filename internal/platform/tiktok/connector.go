@@ -802,7 +802,16 @@ func protoIdentityToTikTokIdentity(uid *pb.UserIdentity) *gotiktoklive.UserIdent
 }
 
 func mapUserEvent(e gotiktoklive.UserEvent) *chat.Event {
-	if e.Event != gotiktoklive.USER_FOLLOW {
+	var kind chat.EventKind
+	var idPrefix string
+	switch e.Event {
+	case gotiktoklive.USER_FOLLOW:
+		kind = chat.EventKindFollow
+		idPrefix = "tt-follow-"
+	case gotiktoklive.USER_SHARE:
+		kind = chat.EventKindShare
+		idPrefix = "tt-share-"
+	default:
 		return nil
 	}
 	userID, userName, displayName := extractUserFields(e.User)
@@ -813,15 +822,15 @@ func mapUserEvent(e gotiktoklive.UserEvent) *chat.Event {
 		ts = parseTikTokTimestamp(e.Timestamp)
 	}
 
-	msgID := "tt-follow-" + strconv.FormatInt(e.MessageID, 10)
+	msgID := idPrefix + strconv.FormatInt(e.MessageID, 10)
 	if e.MessageID == 0 {
-		msgID = "tt-follow-" + userID + "-" + strconv.FormatInt(ts.UnixNano(), 10)
+		msgID = idPrefix + userID + "-" + strconv.FormatInt(ts.UnixNano(), 10)
 	}
 
 	return &chat.Event{
 		ID:           msgID,
 		Platform:     "tiktok",
-		Kind:         chat.EventKindFollow,
+		Kind:         kind,
 		Timestamp:    ts,
 		UserID:       userID,
 		UserName:     userName,

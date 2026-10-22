@@ -1092,9 +1092,9 @@ func buildWhereClause(filter QueryFilter) (string, []any) {
 	case "follow":
 		whereClauses = append(whereClauses, "kind = 'follow'")
 	case "sub":
-		whereClauses = append(whereClauses, "kind IN ('sub', 'resub', 'gift_sub', 'membership', 'gift_membership')")
+		whereClauses = append(whereClauses, "kind IN ('sub', 'resub', 'gift_sub', 'gift_redemption', 'sub_upgrade', 'membership', 'gift_membership')")
 	case "cheer":
-		whereClauses = append(whereClauses, "kind IN ('cheer', 'gift', 'super_chat', 'super_sticker', 'superchat', 'supersticker')")
+		whereClauses = append(whereClauses, "kind IN ('cheer', 'bits_badge_tier', 'gift', 'super_chat', 'super_sticker', 'superchat', 'supersticker', 'charity_donation')")
 	case "raid":
 		whereClauses = append(whereClauses, "kind = 'raid'")
 	case "redemption":

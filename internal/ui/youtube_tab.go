@@ -331,15 +331,19 @@ func (v *YouTubeTabView) buildNotificationsCard(pCfg config.PlatformConfig) *wid
 	notifsList := container.NewVBox()
 
 	events := []struct {
-		key      string
-		label    string
-		fallback string
+		key       string
+		label     string
+		fallback  string
+		defaultOn bool
 	}{
-		{"super_chat", "Super Chat", "{user} sent {amount} {currency}! {message}"},
-		{"super_sticker", "Super Sticker", "{user} sent a {amount} {currency} super sticker!"},
-		{"sub", "New Member", "{user} just became a member!"},
-		{"resub", "Member Milestone", "{user} has been a member for {months} months! {message}"},
-		{"gift_sub", "Gifted Memberships", "{user} gifted {count} memberships!"},
+		{"super_chat", "Super Chat", "{user} sent {amount} {currency}! {message}", true},
+		{"super_sticker", "Super Sticker", "{user} sent a {amount} {currency} super sticker!", true},
+		{"sub", "New Member", "{user} just became a member!", true},
+		{"resub", "Member Milestone", "{user} has been a member for {months} months! {message}", true},
+		{"gift_sub", "Gifted Memberships", "{user} gifted {count} memberships!", true},
+		{"gift_redemption", "Gift Membership Received", "{user} received a gift membership from {recipient}!", false},
+		{"raid", "Live Redirect / Raid", "{user} raided with a live redirect!", true},
+		{"charity_donation", "Charity Donation", "{user} donated {amount} {currency}! {message}", true},
 	}
 
 	for _, ev := range events {
@@ -350,7 +354,7 @@ func (v *YouTubeTabView) buildNotificationsCard(pCfg config.PlatformConfig) *wid
 		notif, ok := pCfg.Notifications[eventKey]
 		if !ok {
 			notif = config.NotificationEventConfig{
-				Enabled:  true,
+				Enabled:  ev.defaultOn,
 				Template: fallback,
 			}
 		}
@@ -384,7 +388,11 @@ func (v *YouTubeTabView) buildNotificationsCard(pCfg config.PlatformConfig) *wid
 			})
 		}
 
-		row := container.NewBorder(nil, nil, enabledCheck, nil, tmplEntry)
+		vars := EventTemplateVars("youtube", eventKey)
+		helpMarker := newTemplateHelpMarker(v.window, eventKey, label, vars, v.onStatus, &tmplEntry.Entry)
+		rightWidget := container.NewCenter(helpMarker)
+
+		row := container.NewBorder(nil, nil, enabledCheck, rightWidget, tmplEntry)
 		notifsList.Add(row)
 	}
 

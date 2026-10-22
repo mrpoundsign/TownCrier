@@ -349,3 +349,71 @@ func TestConnectorLifecycleAndStream(t *testing.T) {
 		t.Fatal("timed out waiting for YouTube live chat event")
 	}
 }
+
+func TestParseYouTubeGiftRedemptionDonationAndRaid(t *testing.T) {
+	payload := []byte(`{
+		"continuationContents": {
+			"liveChatContinuation": {
+				"continuations": [],
+				"actions": [
+					{
+						"addChatItemAction": {
+							"item": {
+								"liveChatSponsorshipsGiftRedemptionAnnouncementRenderer": {
+									"id": "yt-gift-redemp-1",
+									"timestampUsec": "1710000000000000",
+									"authorName": {"simpleText": "@LuckyViewer"},
+									"authorExternalChannelId": "UC_lucky",
+									"message": {"simpleText": "received a gift membership by @GenerousGifter"}
+								}
+							}
+						}
+					},
+					{
+						"addChatItemAction": {
+							"item": {
+								"liveChatDonationAnnouncementRenderer": {
+									"id": "yt-donation-1",
+									"timestampUsec": "1710000001000000",
+									"authorName": {"simpleText": "CharityHero"},
+									"authorExternalChannelId": "UC_hero",
+									"purchaseAmountText": {"simpleText": "$20.00"},
+									"message": {"simpleText": "Keep it up!"}
+								}
+							}
+						}
+					},
+					{
+						"addBannerToLiveChatCommand": {
+							"bannerRenderer": {
+								"liveChatBannerRedirectRenderer": {
+									"id": "yt-raid-1",
+									"authorName": {"simpleText": "RaidingCreator"},
+									"bannerMessage": {"simpleText": "RaidingCreator and their viewers just joined!"}
+								}
+							}
+						}
+					}
+				]
+			}
+		}
+	}`)
+
+	events, _, _, _, err := ParseLiveChatResponse(payload)
+	if err != nil {
+		t.Fatalf("ParseLiveChatResponse: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(events))
+	}
+
+	if events[0].Kind != chat.EventKindGiftRedemption || events[0].UserName != "LuckyViewer" || events[0].Recipient != "GenerousGifter" {
+		t.Errorf("unexpected gift redemption event: %+v", events[0])
+	}
+	if events[1].Kind != chat.EventKindCharityDonation || events[1].Amount != 20 || events[1].Currency != "dollars" || events[1].Text != "Keep it up!" {
+		t.Errorf("unexpected charity donation event: %+v", events[1])
+	}
+	if events[2].Kind != chat.EventKindRaid || events[2].UserName != "RaidingCreator" {
+		t.Errorf("unexpected raid redirect event: %+v", events[2])
+	}
+}

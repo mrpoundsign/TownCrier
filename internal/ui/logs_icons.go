@@ -118,6 +118,12 @@ var (
 			`<circle cx="12" cy="12" r="3" fill="#10B981"/>`+
 			`</svg>`))
 
+	resEventStreak = fyne.NewStaticResource("event_streak.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="2" y="2" width="20" height="20" rx="4" fill="#EA580C"/>`+
+			`<path d="M13.5 4.5c.3 2.3-1 3.8-2.2 5.2-1.2 1.4-2 2.8-2 4.5 0 2.6 2.1 4.8 4.7 4.8s4.7-2.2 4.7-4.8c0-2.5-1.5-4.8-3.2-6.2-.4 1.3-1.2 2-2 2.2.5-1.5.5-3.7 0-5.7z" fill="#FDE047"/>`+
+			`</svg>`))
+
 	// Passed Filters Icons
 	resFilterPassed = fyne.NewStaticResource("filter_passed.svg", []byte(
 		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
@@ -251,16 +257,18 @@ func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 	if e.IsPaidOrEvent || (kindLower != "" && kindLower != "message" && kindLower != "chat" && kindLower != "moderation") {
 		evIcon := resRolePaidEvent
 		switch kindLower {
-		case "follow":
+		case "follow", "share":
 			evIcon = resEventFollow
-		case "sub", "resub", "gift_sub", "membership", "gift_membership":
+		case "sub", "resub", "gift_sub", "gift_redemption", "sub_upgrade", "membership", "gift_membership":
 			evIcon = resEventSub
-		case "cheer", "gift", "superchat", "supersticker", "super_chat", "super_sticker":
+		case "cheer", "bits_badge_tier", "gift", "superchat", "supersticker", "super_chat", "super_sticker", "charity_donation":
 			evIcon = resEventCheer
-		case "raid":
+		case "raid", "announcement":
 			evIcon = resEventRaid
 		case "redemption":
 			evIcon = resEventRedemption
+		case "watch_streak":
+			evIcon = resEventStreak
 		}
 		tip := "Stream Event: " + strings.ToUpper(e.Kind)
 		if e.Recipient != "" {

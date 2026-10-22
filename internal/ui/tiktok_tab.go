@@ -426,7 +426,9 @@ func (v *TikTokTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 		})
 	}
 
-	minBox := container.NewHBox(widget.NewLabel("Min Diamonds:"), minDiamondsEntry)
+	giftVars := EventTemplateVars("tiktok", "gift")
+	giftHelp := newTemplateHelpMarker(v.window, "gift", "TikTok Gifts", giftVars, v.onStatus, &giftTmplEntry.Entry)
+	minBox := container.NewHBox(container.NewCenter(giftHelp), widget.NewLabel("Min Diamonds:"), minDiamondsEntry)
 	giftRow := container.NewBorder(nil, nil, giftCheck, minBox, giftTmplEntry)
 	notifsList.Add(giftRow)
 
@@ -468,10 +470,75 @@ func (v *TikTokTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 		})
 	}
 
-	followRow := container.NewBorder(nil, nil, followCheck, nil, followTmplEntry)
+	followVars := EventTemplateVars("tiktok", "follow")
+	followHelp := newTemplateHelpMarker(v.window, "follow", "Followers", followVars, v.onStatus, &followTmplEntry.Entry)
+	followRight := container.NewHBox(container.NewCenter(followHelp), container.NewGridWrap(fyne.NewSize(155, 36), widget.NewLabel("")))
+	followRow := container.NewBorder(nil, nil, followCheck, followRight, followTmplEntry)
 	notifsList.Add(followRow)
 
-	return widget.NewCard("Notification Events", "Spoken alert templates for TikTok Gifts ({user}, {count}, {gift}, {diamonds}) & Follows", notifsList)
+	extraEvents := []struct {
+		key       string
+		label     string
+		fallback  string
+		defaultOn bool
+	}{
+		{"sub", "New Super Fan (Sub)", "{user} became a Super Fan!", true},
+		{"resub", "Super Fan Renewal", "{user} has been a Super Fan for {months} months!", true},
+		{"gift_sub", "Gifted Super Fans", "{user} gifted {count} Super Fan memberships!", true},
+		{"share", "Stream Shares", "{user} shared the stream!", false},
+	}
+
+	for _, ev := range extraEvents {
+		eventKey := ev.key
+		label := ev.label
+		fallback := ev.fallback
+
+		notif, ok := pCfg.Notifications[eventKey]
+		if !ok {
+			notif = config.NotificationEventConfig{
+				Enabled:  ev.defaultOn,
+				Template: fallback,
+			}
+		}
+
+		chk := widget.NewCheck(label, func(b bool) {
+			v.updateConfig(func(c *config.Config) {
+				p := c.Platforms["tiktok"]
+				if p.Notifications == nil {
+					p.Notifications = make(map[string]config.NotificationEventConfig)
+				}
+				n := p.Notifications[eventKey]
+				n.Enabled = b
+				p.Notifications[eventKey] = n
+				c.Platforms["tiktok"] = p
+			})
+		})
+		chk.SetChecked(notif.Enabled)
+
+		tmplEntry := NewScrollPassEntry()
+		tmplEntry.SetPlaceHolder(fallback)
+		tmplEntry.SetText(notif.Template)
+		tmplEntry.OnChanged = func(val string) {
+			v.updateConfig(func(c *config.Config) {
+				p := c.Platforms["tiktok"]
+				if p.Notifications == nil {
+					p.Notifications = make(map[string]config.NotificationEventConfig)
+				}
+				n := p.Notifications[eventKey]
+				n.Template = val
+				p.Notifications[eventKey] = n
+				c.Platforms["tiktok"] = p
+			})
+		}
+
+		vars := EventTemplateVars("tiktok", eventKey)
+		helpMarker := newTemplateHelpMarker(v.window, eventKey, label, vars, v.onStatus, &tmplEntry.Entry)
+		rightWidget := container.NewHBox(container.NewCenter(helpMarker), container.NewGridWrap(fyne.NewSize(155, 36), widget.NewLabel("")))
+
+		notifsList.Add(container.NewBorder(nil, nil, chk, rightWidget, tmplEntry))
+	}
+
+	return widget.NewCard("Notification Events", "Spoken alert templates for TikTok Gifts, Super Fans, Follows & Shares", notifsList)
 }
 
 func (v *TikTokTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Card {
