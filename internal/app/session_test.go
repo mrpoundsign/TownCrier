@@ -974,4 +974,76 @@ func TestSessionWatchStreakAndExtendedEventFormatting(t *testing.T) {
 	}
 }
 
+func TestSessionDispatchEventTTSDisabled(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.DefaultConfig()
+	cfg.TTS.Enabled = false
+
+	sqlStore, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend failed: %v", err)
+	}
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, sqlStore)
+
+	session := NewSession(cfg, secrets.NewMemoryStore())
+	session.SetEventLogger(logMgr)
+	defer func() { _ = session.Close() }()
+
+	dispatchedCh := make(chan *chat.Event, 1)
+	session.SetOnEventDispatched(func(ev *chat.Event, voiceID string) {
+		dispatchedCh <- ev
+	})
+
+	chatEvent := &chat.Event{
+		ID:          "msg-tts-disabled",
+		Platform:    "twitch",
+		UserName:    "alice",
+		DisplayName: "Alice",
+		Kind:        chat.EventKindMessage,
+		Text:        "hello world while tts disabled",
+	}
+
+	if err := session.DispatchEvent(chatEvent); err != nil {
+		t.Fatalf("DispatchEvent failed: %v", err)
+	}
+
+	// 1. Verify not queued
+	if session.Queue().Depth() != 0 {
+		t.Fatalf("expected queue depth 0 when TTS is disabled, got %d", session.Queue().Depth())
+	}
+
+	// 2. Verify OnEventDispatched was invoked
+	select {
+	case ev := <-dispatchedCh:
+		if ev.ID != "msg-tts-disabled" {
+			t.Errorf("expected dispatched event ID 'msg-tts-disabled', got %q", ev.ID)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for OnEventDispatched")
+	}
+
+	// 3. Verify eventlog outcome is OutcomeTTSDisabled
+	res, err := logMgr.Query(ctx, eventlog.QueryFilter{})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(res.Entries) != 1 {
+		t.Fatalf("expected 1 log entry, got %d", len(res.Entries))
+	}
+	entry := res.Entries[0]
+	if entry.Outcome != eventlog.OutcomeTTSDisabled {
+		t.Errorf("expected outcome %q, got %q", eventlog.OutcomeTTSDisabled, entry.Outcome)
+	}
+	if !entry.PassedFilters {
+		t.Error("expected PassedFilters to be true")
+	}
+	if entry.Spoken {
+		t.Error("expected Spoken to be false")
+	}
+}
+
+
 

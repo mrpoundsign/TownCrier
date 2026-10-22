@@ -105,6 +105,9 @@ type LogsView struct {
 	enableLogCheck *widget.Check
 	chatRetSel     *widget.Select
 	eventRetSel    *widget.Select
+	pruneBtn       *widget.Button
+	addLiveLogBtn  *widget.Button
+	disabledBanner *fyne.Container
 
 	selectedSessionID      int64
 	selectedSessionIDs     []int64
@@ -335,7 +338,36 @@ func (v *LogsView) Build() fyne.CanvasObject {
 		container.NewTabItemWithIcon("Search History", theme.SearchIcon(), searchLayout),
 	)
 
-	return container.NewStack(v.subTabs, v.tooltipLayer)
+	bannerBg := canvas.NewRectangle(color.NRGBA{R: 69, G: 26, B: 3, A: 240})
+	bannerBg.CornerRadius = 4
+	bannerText := widget.NewLabelWithStyle("⚠️ Live Event Logging is disabled in Settings. Inbound stream events and chat messages are not being recorded to disk.", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	v.disabledBanner = container.NewStack(
+		bannerBg,
+		container.NewPadded(bannerText),
+	)
+
+	loggingEnabled := true
+	if v.session != nil {
+		loggingEnabled = v.session.Config().Logging.Enabled
+	}
+	if !loggingEnabled {
+		v.disabledBanner.Show()
+		if v.liveTailCheck != nil {
+			v.liveTailCheck.Disable()
+		}
+	} else {
+		v.disabledBanner.Hide()
+	}
+
+	mainBox := container.NewBorder(
+		v.disabledBanner,
+		nil,
+		nil,
+		nil,
+		v.subTabs,
+	)
+
+	return container.NewStack(mainBox, v.tooltipLayer)
 }
 
 func newFilterFieldLabel(text string) fyne.CanvasObject {
@@ -412,6 +444,10 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 		_ = v.session.UpdateConfig(func(c *config.Config) {
 			c.Logging.Enabled = checked
 		})
+		if v.session.EventLogger() != nil {
+			v.session.EventLogger().SetEnabled(checked)
+		}
+		v.SyncLoggingState(checked)
 		v.setStatus("✓ Event logging setting saved.")
 	})
 	v.enableLogCheck.SetChecked(cfg.Logging.Enabled)
@@ -444,7 +480,7 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 	})
 	v.eventRetSel.SetSelected(formatRetentionDays(cfg.Logging.EventRetentionDays))
 
-	pruneBtn := widget.NewButtonWithIcon("Prune Expired Now", theme.DeleteIcon(), func() {
+	v.pruneBtn = widget.NewButtonWithIcon("Prune Expired Now", theme.DeleteIcon(), func() {
 		if v.session == nil || v.session.EventLogger() == nil {
 			return
 		}
@@ -457,7 +493,13 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 		v.setStatus(fmt.Sprintf("✓ Pruned %d expired log entries.", deleted))
 	})
 
-	topRow := container.NewBorder(nil, nil, v.enableLogCheck, pruneBtn)
+	if !cfg.Logging.Enabled {
+		v.chatRetSel.Disable()
+		v.eventRetSel.Disable()
+		v.pruneBtn.Disable()
+	}
+
+	topRow := container.NewBorder(nil, nil, v.enableLogCheck, v.pruneBtn)
 	ttlRow := container.NewHBox(
 		widget.NewLabel("Chat TTL:"),
 		v.chatRetSel,
@@ -467,6 +509,60 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 	)
 
 	return widget.NewCard("Log Retention & Storage", "Configure automatic log expiration and storage cleanup", container.NewVBox(topRow, ttlRow))
+}
+
+// SyncLoggingState updates retention and live tail controls to reflect whether event logging is enabled.
+func (v *LogsView) SyncLoggingState(enabled bool) {
+	fyne.Do(func() {
+		if v.enableLogCheck != nil && v.enableLogCheck.Checked != enabled {
+			v.initializing = true
+			v.enableLogCheck.SetChecked(enabled)
+			v.initializing = false
+		}
+		if v.chatRetSel != nil {
+			if enabled {
+				v.chatRetSel.Enable()
+			} else {
+				v.chatRetSel.Disable()
+			}
+		}
+		if v.eventRetSel != nil {
+			if enabled {
+				v.eventRetSel.Enable()
+			} else {
+				v.eventRetSel.Disable()
+			}
+		}
+		if v.pruneBtn != nil {
+			if enabled {
+				v.pruneBtn.Enable()
+			} else {
+				v.pruneBtn.Disable()
+			}
+		}
+		if v.disabledBanner != nil {
+			if enabled {
+				v.disabledBanner.Hide()
+			} else {
+				v.disabledBanner.Show()
+			}
+		}
+		if v.liveTailCheck != nil {
+			if enabled {
+				v.liveTailCheck.Enable()
+			} else {
+				v.liveTailCheck.Disable()
+			}
+		}
+		if v.addLiveLogBtn != nil {
+			if enabled {
+				v.addLiveLogBtn.Enable()
+			} else {
+				v.addLiveLogBtn.Disable()
+			}
+		}
+		v.refreshLiveLogCards()
+	})
 }
 
 func (v *LogsView) buildFilterDrawer() *fyne.Container {

@@ -33,10 +33,12 @@ type templateHelpMarker struct {
 	target   *widget.Entry
 	minSize  fyne.Size
 	iconImg  *canvas.Image
+	disabled bool
 }
 
 var (
 	_ fyne.Widget        = (*templateHelpMarker)(nil)
+	_ fyne.Disableable   = (*templateHelpMarker)(nil)
 	_ desktop.Hoverable  = (*templateHelpMarker)(nil)
 	_ desktop.Cursorable = (*templateHelpMarker)(nil)
 	_ fyne.Tappable      = (*templateHelpMarker)(nil)
@@ -65,7 +67,24 @@ func (m *templateHelpMarker) CreateRenderer() fyne.WidgetRenderer {
 }
 
 func (m *templateHelpMarker) Cursor() desktop.Cursor {
+	if m.Disabled() {
+		return desktop.DefaultCursor
+	}
 	return desktop.PointerCursor
+}
+
+func (m *templateHelpMarker) Enable() {
+	m.disabled = false
+	m.Refresh()
+}
+
+func (m *templateHelpMarker) Disable() {
+	m.disabled = true
+	m.Refresh()
+}
+
+func (m *templateHelpMarker) Disabled() bool {
+	return m.disabled
 }
 
 func (m *templateHelpMarker) summaryText() string {
@@ -168,6 +187,9 @@ func (m *templateHelpMarker) showDialog() {
 }
 
 func (m *templateHelpMarker) MouseIn(_ *desktop.MouseEvent) {
+	if m.Disabled() {
+		return
+	}
 	if m.onStatus != nil {
 		m.onStatus("Template variables for " + m.title + ": " + m.summaryText())
 	}
@@ -178,6 +200,9 @@ func (m *templateHelpMarker) MouseMoved(_ *desktop.MouseEvent) {}
 func (m *templateHelpMarker) MouseOut() {}
 
 func (m *templateHelpMarker) Tapped(_ *fyne.PointEvent) {
+	if m.Disabled() {
+		return
+	}
 	m.showDialog()
 }
 

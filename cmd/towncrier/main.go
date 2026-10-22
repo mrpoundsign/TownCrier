@@ -163,81 +163,91 @@ func run() error {
 		initTTSAndLaunch = func() {
 			defer logging.RecoverAndExit("tts-init")
 
-			modelDir := tts.DefaultModelDir()
-			enabledModels := cfg.TTS.EffectiveEnabledModels()
+			var engine tts.Engine
+			if !cfg.TTS.Enabled {
+				log.Println("TTS is disabled in configuration. Skipping model download checks and initialization.")
+				tracker.SetTTSStatus(true, "Disabled")
+			} else {
+				modelDir := tts.DefaultModelDir()
+				enabledModels := cfg.TTS.EffectiveEnabledModels()
 
-			for _, fam := range enabledModels {
-				if fam == tts.ModelKokoro || fam == tts.ModelKokoroIntl {
-					if !tts.IsKokoroInstalledForMode(modelDir, cfg.TTS.UseGPU) {
-						log.Printf("Kokoro models missing in %s; starting download...", modelDir)
-						tracker.SetDownloadModel("Kokoro-82M")
-						tracker.SetStatus("Downloading Kokoro-82M neural TTS models...")
-						dlErr := tts.DownloadKokoroModelForMode(modelDir, cfg.TTS.UseGPU, tracker.SetDownloadProgress)
+				for _, fam := range enabledModels {
+					if fam == tts.ModelKokoro || fam == tts.ModelKokoroIntl {
+						if !tts.IsKokoroInstalledForMode(modelDir, cfg.TTS.UseGPU) {
+							log.Printf("Kokoro models missing in %s; starting download...", modelDir)
+							tracker.SetDownloadModel("Kokoro-82M")
+							tracker.SetStatus("Downloading Kokoro-82M neural TTS models...")
+							dlErr := tts.DownloadKokoroModelForMode(modelDir, cfg.TTS.UseGPU, tracker.SetDownloadProgress)
+							if dlErr != nil {
+								log.Printf("Error: failed to download Kokoro TTS models: %v", dlErr)
+								tracker.ShowFatalError(
+									"Failed to download required TTS models. Check your internet connection.",
+									"Download failed ("+dlErr.Error()+")",
+									initTTSAndLaunch,
+									quitApp,
+								)
+								return
+							}
+							log.Printf("Kokoro models downloaded and extracted to %s", modelDir)
+						}
+						continue
+					}
+
+					if !tts.IsModelFamilyInstalled(modelDir, fam, cfg.TTS.UseGPU) {
+						spec, _ := tts.ModelSpecByID(fam)
+						log.Printf("Model pack %q missing in %s; starting download...", fam, modelDir)
+						tracker.SetDownloadModel(spec.ShortName)
+						tracker.SetStatus("Downloading " + spec.ShortName + " neural TTS models...")
+						dlErr := tts.DownloadModelFamily(modelDir, fam, cfg.TTS.UseGPU, tracker.SetDownloadProgress)
 						if dlErr != nil {
-							log.Printf("Error: failed to download Kokoro TTS models: %v", dlErr)
+							log.Printf("Error: failed to download %s TTS models: %v", fam, dlErr)
 							tracker.ShowFatalError(
-								"Failed to download required TTS models. Check your internet connection.",
+								"Failed to download "+spec.ShortName+" TTS models. Check your internet connection.",
 								"Download failed ("+dlErr.Error()+")",
 								initTTSAndLaunch,
 								quitApp,
 							)
 							return
 						}
-						log.Printf("Kokoro models downloaded and extracted to %s", modelDir)
+						log.Printf("Model pack %q downloaded and extracted", fam)
 					}
-					continue
 				}
 
-				if !tts.IsModelFamilyInstalled(modelDir, fam, cfg.TTS.UseGPU) {
-					spec, _ := tts.ModelSpecByID(fam)
-					log.Printf("Model pack %q missing in %s; starting download...", fam, modelDir)
-					tracker.SetDownloadModel(spec.ShortName)
-					tracker.SetStatus("Downloading " + spec.ShortName + " neural TTS models...")
-					dlErr := tts.DownloadModelFamily(modelDir, fam, cfg.TTS.UseGPU, tracker.SetDownloadProgress)
-					if dlErr != nil {
-						log.Printf("Error: failed to download %s TTS models: %v", fam, dlErr)
-						tracker.ShowFatalError(
-							"Failed to download "+spec.ShortName+" TTS models. Check your internet connection.",
-							"Download failed ("+dlErr.Error()+")",
-							initTTSAndLaunch,
-							quitApp,
-						)
-						return
-					}
-					log.Printf("Model pack %q downloaded and extracted", fam)
+				tracker.SetStatus("Initializing neural TTS model(s)...")
+				threads := cfg.TTS.NumThreads
+				if threads <= 0 {
+					threads = 4
 				}
-			}
+				maxClause := cfg.TTS.MaxClauseWords
+				if maxClause <= 0 {
+					maxClause = tts.DefaultMaxClauseWords
+				}
+				log.Printf("Initializing MultiEngine (models=%v, threads=%d, gpu=%v)...", enabledModels, threads, cfg.TTS.UseGPU)
+				eng, engErr := tts.NewMultiEngine(modelDir, enabledModels, threads, cfg.TTS.UseGPU, maxClause, cfg.TTS.IdleUnloadMinutes)
+				if engErr != nil {
+					log.Printf("Error: failed to initialize TTS engine: %v", engErr)
+					tracker.ShowFatalError(
+						"Failed to initialize neural TTS engine.",
+						"Init error: "+engErr.Error(),
+						initTTSAndLaunch,
+						quitApp,
+					)
+					return
+				}
 
-			tracker.SetStatus("Initializing neural TTS model(s)...")
-			threads := cfg.TTS.NumThreads
-			if threads <= 0 {
-				threads = 4
+				engine = eng
+				activeEngine = eng
+				log.Printf("TTS engine ready (provider=%s)", eng.Provider())
+				tracker.SetTTSStatus(true, eng.Provider())
 			}
-			maxClause := cfg.TTS.MaxClauseWords
-			if maxClause <= 0 {
-				maxClause = tts.DefaultMaxClauseWords
-			}
-			log.Printf("Initializing MultiEngine (models=%v, threads=%d, gpu=%v)...", enabledModels, threads, cfg.TTS.UseGPU)
-			eng, engErr := tts.NewMultiEngine(modelDir, enabledModels, threads, cfg.TTS.UseGPU, maxClause, cfg.TTS.IdleUnloadMinutes)
-			if engErr != nil {
-				log.Printf("Error: failed to initialize TTS engine: %v", engErr)
-				tracker.ShowFatalError(
-					"Failed to initialize neural TTS engine.",
-					"Init error: "+engErr.Error(),
-					initTTSAndLaunch,
-					quitApp,
-				)
-				return
-			}
-
-			var engine tts.Engine = eng
-			activeEngine = eng
-			log.Printf("TTS engine ready (provider=%s)", eng.Provider())
-			tracker.SetTTSStatus(true, eng.Provider())
 
 			// Brief pause so user can see all status items verified
 			tracker.SetStatus("Ready! Opening main interface...")
-			time.Sleep(400 * time.Millisecond)
+			if cfg.TTS.Enabled {
+				time.Sleep(400 * time.Millisecond)
+			} else {
+				time.Sleep(50 * time.Millisecond)
+			}
 
 			// Step 4: Initialize application session and open full MainWindow
 			log.Println("Starting application session...")

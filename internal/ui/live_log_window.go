@@ -108,6 +108,10 @@ func (v *LogsView) buildLiveLogsTab() fyne.CanvasObject {
 		v.showLiveLogPresetDialog(nil)
 	})
 	addBtn.Importance = widget.HighImportance
+	v.addLiveLogBtn = addBtn
+	if v.session != nil && !v.session.Config().Logging.Enabled {
+		addBtn.Disable()
+	}
 
 	headerRow := container.NewBorder(nil, nil, nil, addBtn, container.NewVBox(headerTitle, headerSub))
 
@@ -135,6 +139,9 @@ func (v *LogsView) refreshLiveLogCards() {
 			v.OpenLiveLogWindow(p)
 		})
 		openBtn.Importance = widget.HighImportance
+		if v.session != nil && !v.session.Config().Logging.Enabled {
+			openBtn.Disable()
+		}
 
 		editBtn := widget.NewButtonWithIcon("Edit", theme.DocumentCreateIcon(), func() {
 			cp := p

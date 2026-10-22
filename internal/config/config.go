@@ -83,6 +83,7 @@ type AudioConfig struct {
 }
 
 type TTSConfig struct {
+	Enabled           bool     `json:"enabled"`
 	Preset            string   `json:"preset,omitempty"`         // "ultra_low", "fast_lean", "balanced", "beefy", "custom"
 	EnabledModels     []string `json:"enabled_models,omitempty"` // ["kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper"]
 	ModelFamily       string   `json:"model_family"`             // "kokoro"
@@ -331,6 +332,7 @@ func DefaultConfig() *Config {
 			Volume:     1.0,
 		},
 		TTS: TTSConfig{
+			Enabled:           true,
 			Preset:            "fast_lean",
 			EnabledModels:     []string{"supertonic"},
 			ModelFamily:       "supertonic",

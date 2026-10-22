@@ -42,6 +42,7 @@ type SettingsView struct {
 	generalTabItem    *container.TabItem
 	ttsTabItem        *container.TabItem
 	rulesTabItem      *container.TabItem
+	logsTabItem       *container.TabItem
 	twitchTab         *TwitchTabView
 	youtubeTab        *YouTubeTabView
 	tiktokTab         *TikTokTabView
@@ -65,22 +66,71 @@ type SettingsView struct {
 	prevPreset        string
 	prevUseGPU        bool
 	initializing      bool
+
+	onTTSChanged         func(enabled bool)
+	onLoggingChanged     func(enabled bool)
+	featuresCard         *widget.Card
+	generalBox           *fyne.Container
+	enableTTSCheck       *widget.Check
+	enableLogCheck       *widget.Check
+	globalVoiceCard      *widget.Card
+	audioCard            *widget.Card
+	presetSelect         *widget.Select
+	gpuCheck             *widget.Check
+	threadsSlider        *widget.Slider
+	idleSelect           *widget.Select
+	modelChecks          map[string]*widget.Check
+	deviceRefreshBtn     *widget.Button
+	rulesNamesCheck      *widget.Check
+	rulesEmotesCheck     *widget.Check
+	rulesPlatformCheck   *widget.Check
+	hotkeyCtrlCheck      *widget.Check
+	hotkeyShiftCheck     *widget.Check
+	hotkeyAltCheck       *widget.Check
+	hotkeyKeySelect      *widget.Select
+	hotkeyRecordBtn      *widget.Button
+	hotkeyResetBtn       *widget.Button
+	defaultBadWordsCheck *widget.Check
+	newWordEntry         *ScrollPassEntry
+	addWordBtn           *widget.Button
+	wordDeleteBtns       []*widget.Button
+	ttsEnabled           bool
+	loggingEnabled       bool
 }
 
 // NewSettingsView constructs a SettingsView for configuring audio, TTS hardware, and global rules.
 func NewSettingsView(w fyne.Window, cfg *config.Config, player audio.Player, engine tts.Engine) *SettingsView {
-	return &SettingsView{
-		window:     w,
-		cfg:        cfg,
-		player:     player,
-		engine:     engine,
-		modelDir:   tts.DefaultModelDir(),
-		deviceMap:  make(map[string]string),
-		deviceEnum: audio.EnumeratePlaybackDevices,
-		prevModels: slices.Clone(cfg.TTS.EffectiveEnabledModels()),
-		prevPreset: cfg.TTS.Preset,
-		prevUseGPU: cfg.TTS.UseGPU,
+	ttsOn := true
+	loggingOn := true
+	if cfg != nil {
+		ttsOn = cfg.TTS.Enabled
+		loggingOn = cfg.Logging.Enabled
 	}
+	return &SettingsView{
+		window:         w,
+		cfg:            cfg,
+		player:         player,
+		engine:         engine,
+		modelDir:       tts.DefaultModelDir(),
+		deviceMap:      make(map[string]string),
+		deviceEnum:     audio.EnumeratePlaybackDevices,
+		prevModels:     slices.Clone(cfg.TTS.EffectiveEnabledModels()),
+		prevPreset:     cfg.TTS.Preset,
+		prevUseGPU:     cfg.TTS.UseGPU,
+		ttsEnabled:     ttsOn,
+		loggingEnabled: loggingOn,
+		modelChecks:    make(map[string]*widget.Check),
+	}
+}
+
+// SetTTSChangedHandler registers a callback invoked when TTS is enabled or disabled from Settings.
+func (v *SettingsView) SetTTSChangedHandler(fn func(enabled bool)) {
+	v.onTTSChanged = fn
+}
+
+// SetLoggingChangedHandler registers a callback invoked when Event Logging is enabled or disabled from Settings.
+func (v *SettingsView) SetLoggingChangedHandler(fn func(enabled bool)) {
+	v.onLoggingChanged = fn
 }
 
 // SetDeviceEnumerator overrides the audio device enumeration function (useful for tests or mocking).
@@ -163,7 +213,10 @@ func (v *SettingsView) SyncPlatformTabVisibility() {
 	cfg := v.currentConfig()
 	items := []*container.TabItem{
 		v.generalTabItem,
-		v.ttsTabItem,
+	}
+
+	if v.ttsEnabled && v.ttsTabItem != nil {
+		items = append(items, v.ttsTabItem)
 	}
 
 	addIfVisible := func(platform string, item *container.TabItem) {
@@ -181,8 +234,11 @@ func (v *SettingsView) SyncPlatformTabVisibility() {
 	addIfVisible("tiktok", v.tiktokSettingsItem)
 	addIfVisible("kick", v.kickSettingsItem)
 
-	if v.rulesTabItem != nil {
+	if v.ttsEnabled && v.rulesTabItem != nil {
 		items = append(items, v.rulesTabItem)
+	}
+	if v.loggingEnabled && v.logsTabItem != nil {
+		items = append(items, v.logsTabItem)
 	}
 	v.subTabs.SetItems(items)
 }
@@ -219,6 +275,52 @@ func (v *SettingsView) RefreshVoices() {
 			}
 			v.globalVoiceField.SetVoiceAndSpeed(defVoice, defSpeed)
 		}
+	})
+}
+
+// SyncTTSState updates all Settings controls to reflect whether TTS is enabled or disabled.
+func (v *SettingsView) SyncTTSState(enabled bool) {
+	v.ttsEnabled = enabled
+	fyne.Do(func() {
+		if v.enableTTSCheck != nil && v.enableTTSCheck.Checked != enabled {
+			v.initializing = true
+			v.enableTTSCheck.SetChecked(enabled)
+			v.initializing = false
+		}
+		if v.globalVoiceCard != nil {
+			if enabled {
+				v.globalVoiceCard.Show()
+			} else {
+				v.globalVoiceCard.Hide()
+			}
+		}
+		if v.audioCard != nil {
+			if enabled {
+				v.audioCard.Show()
+			} else {
+				v.audioCard.Hide()
+			}
+		}
+		if v.generalBox != nil {
+			v.generalBox.Refresh()
+		}
+		v.SyncPlatformTabVisibility()
+	})
+}
+
+// SyncLoggingState synchronizes settings log retention controls with logging enabled state.
+func (v *SettingsView) SyncLoggingState(enabled bool) {
+	v.loggingEnabled = enabled
+	fyne.Do(func() {
+		if v.enableLogCheck != nil && v.enableLogCheck.Checked != enabled {
+			v.initializing = true
+			v.enableLogCheck.SetChecked(enabled)
+			v.initializing = false
+		}
+		if v.logsView != nil {
+			v.logsView.SyncLoggingState(enabled)
+		}
+		v.SyncPlatformTabVisibility()
 	})
 }
 
@@ -297,21 +399,31 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		})
 	}
 
+	v.featuresCard = v.buildFeaturesCard()
 	servicesCard := v.buildServicesCard()
-	globalVoiceCard := v.buildGlobalVoiceCard()
-	audioCard := v.buildAudioCard()
+	v.globalVoiceCard = v.buildGlobalVoiceCard()
+	v.audioCard = v.buildAudioCard()
+	botsCard := v.buildBotsCard()
 	displayCard := v.buildDisplayCard()
 	ttsCard := v.buildTTSCard()
 	rulesCard := v.buildRulesCard()
 	safetyCard := v.buildSafetyCard()
-	botsCard := v.buildBotsCard()
 
-	generalTabContent := newPanelVScroll(container.NewVBox(
+	if !v.ttsEnabled {
+		v.globalVoiceCard.Hide()
+		v.audioCard.Hide()
+	}
+
+	v.generalBox = container.NewVBox(
+		v.featuresCard,
 		servicesCard,
-		globalVoiceCard,
-		audioCard,
+		v.globalVoiceCard,
+		v.audioCard,
+		botsCard,
 		displayCard,
-	))
+	)
+
+	generalTabContent := newPanelVScroll(v.generalBox)
 	ttsTabContent := newPanelVScroll(container.NewVBox(
 		ttsCard,
 	))
@@ -322,13 +434,16 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	rulesTabContent := newPanelVScroll(container.NewVBox(
 		rulesCard,
 		safetyCard,
-		botsCard,
+	))
+
+	logsTabContent := newPanelVScroll(container.NewVBox(
 		v.logsView.BuildRetentionCard(),
 	))
 
 	v.generalTabItem = container.NewTabItemWithIcon("General & Audio", theme.VolumeUpIcon(), generalTabContent)
 	v.ttsTabItem = container.NewTabItemWithIcon("TTS & Hardware", theme.ComputerIcon(), ttsTabContent)
 	v.rulesTabItem = container.NewTabItemWithIcon("Rules & Safety", theme.ConfirmIcon(), rulesTabContent)
+	v.logsTabItem = container.NewTabItemWithIcon("Event Logs", theme.DocumentIcon(), logsTabContent)
 
 	if v.twitchTab != nil {
 		v.twitchSettingsItem = container.NewTabItemWithIcon("Twitch", theme.MediaPlayIcon(), v.twitchTab.Build())
@@ -343,10 +458,85 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		v.kickSettingsItem = container.NewTabItemWithIcon("Kick", theme.MediaFastForwardIcon(), v.kickTab.Build())
 	}
 
-	v.subTabs = container.NewAppTabs(v.generalTabItem, v.ttsTabItem, v.rulesTabItem)
+	v.subTabs = container.NewAppTabs(v.generalTabItem, v.ttsTabItem, v.rulesTabItem, v.logsTabItem)
 	v.SyncPlatformTabVisibility()
+	v.SyncTTSState(v.ttsEnabled)
 
 	return v.subTabs
+}
+
+func (v *SettingsView) buildFeaturesCard() *widget.Card {
+	cfg := v.currentConfig()
+
+	v.enableTTSCheck = widget.NewCheck("Enable Text-to-Speech (TTS)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.TTS.Enabled = checked
+		})
+		v.ttsEnabled = checked
+		if v.globalVoiceCard != nil {
+			if checked {
+				v.globalVoiceCard.Show()
+			} else {
+				v.globalVoiceCard.Hide()
+			}
+		}
+		if v.audioCard != nil {
+			if checked {
+				v.audioCard.Show()
+			} else {
+				v.audioCard.Hide()
+			}
+		}
+		if v.generalBox != nil {
+			v.generalBox.Refresh()
+		}
+		v.SyncPlatformTabVisibility()
+		if v.onTTSChanged != nil {
+			v.onTTSChanged(checked)
+		}
+		if checked {
+			v.setStatus("✓ Text-to-Speech enabled.")
+		} else {
+			v.setStatus("Text-to-Speech disabled.")
+		}
+	})
+	v.enableTTSCheck.SetChecked(cfg.TTS.Enabled)
+
+	v.enableLogCheck = widget.NewCheck("Enable Event Logging", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.Logging.Enabled = checked
+		})
+		v.loggingEnabled = checked
+		if v.session != nil && v.session.EventLogger() != nil {
+			v.session.EventLogger().SetEnabled(checked)
+		}
+		if v.logsView != nil {
+			v.logsView.SyncLoggingState(checked)
+		}
+		v.SyncPlatformTabVisibility()
+		if v.onLoggingChanged != nil {
+			v.onLoggingChanged(checked)
+		}
+		if checked {
+			v.setStatus("✓ Event logging enabled.")
+		} else {
+			v.setStatus("Event logging disabled.")
+		}
+	})
+	v.enableLogCheck.SetChecked(cfg.Logging.Enabled)
+
+	cardContent := container.NewVBox(
+		v.enableTTSCheck,
+		v.enableLogCheck,
+	)
+
+	return widget.NewCard("Application Features", "Enable or disable core system features", cardContent)
 }
 
 func (v *SettingsView) buildServicesCard() *widget.Card {
@@ -528,6 +718,7 @@ func (v *SettingsView) buildAudioCard() *widget.Card {
 		v.refreshDeviceList()
 		v.setStatus("Audio device list refreshed.")
 	})
+	v.deviceRefreshBtn = refreshBtn
 
 	deviceRow := container.NewBorder(nil, nil, widget.NewLabel("Output Device:"), refreshBtn, v.deviceSelect)
 
@@ -676,10 +867,12 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		presetLabels = append(presetLabels, p.Label)
 	}
 	presetSelect := widget.NewSelect(presetLabels, nil)
+	v.presetSelect = presetSelect
 	presetDescLabel := widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 	presetDescLabel.Wrapping = fyne.TextWrapWord
 
 	gpuCheck := widget.NewCheck("Use DirectML GPU for Kokoro-82M (fast ~0.3s start, +590 MB RAM)", nil)
+	v.gpuCheck = gpuCheck
 
 	initThreads := v.cfg.TTS.NumThreads
 	if initThreads <= 0 {
@@ -689,6 +882,7 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	threadsSlider := widget.NewSlider(1, 12)
 	threadsSlider.Step = 1
 	threadsSlider.SetValue(float64(initThreads))
+	v.threadsSlider = threadsSlider
 
 	idleOptions := []string{
 		"Never (Keep Models Warm in RAM)",
@@ -726,9 +920,11 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		}
 	}
 	idleSelect := widget.NewSelect(idleOptions, nil)
+	v.idleSelect = idleSelect
 
 	// --- Voice Model Pack Checkboxes ---
 	modelChecks := make(map[string]*widget.Check, len(tts.AllModelFamilies))
+	v.modelChecks = modelChecks
 	modelPackRows := container.NewVBox()
 
 	formatPackCheckLabel := func(spec tts.ModelFamilySpec) string {
@@ -978,6 +1174,33 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	}
 
 	syncWidgetsFromConfig()
+
+	v.enableTTSCheck = widget.NewCheck("Enable Text-to-Speech (TTS)", func(checked bool) {
+		if v.initializing || syncingControls {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.TTS.Enabled = checked
+		})
+		if !checked {
+			if v.session != nil {
+				if eng := v.session.Engine(); eng != nil {
+					_ = eng.Close()
+					v.session.SetEngine(nil)
+				}
+				tts.ReclaimOSMemory()
+			}
+			v.setStatus("✓ Text-to-Speech disabled.")
+		} else {
+			v.setStatus("Enabling Text-to-Speech...")
+			v.reloadTTSEngine(refreshPackLabels)
+		}
+		if v.onTTSChanged != nil {
+			v.onTTSChanged(checked)
+		}
+		v.SyncTTSState(checked)
+	})
+	v.enableTTSCheck.SetChecked(v.currentConfig().TTS.Enabled)
 
 	presetRow := container.NewBorder(
 		nil,
@@ -1283,6 +1506,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		})
 	})
 	checkNames.SetChecked(v.cfg.GlobalChatRules.SpeakNames)
+	v.rulesNamesCheck = checkNames
 
 	checkEmotes := widget.NewCheck("Speak Platform Emotes (unchecked = strip emotes)", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
@@ -1290,6 +1514,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		})
 	})
 	checkEmotes.SetChecked(v.cfg.GlobalChatRules.SpeakEmotes)
+	v.rulesEmotesCheck = checkEmotes
 
 	checkPlatform := widget.NewCheck("Speak Platform Name Prefix (e.g. '[Twitch]')", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
@@ -1297,6 +1522,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		})
 	})
 	checkPlatform.SetChecked(v.cfg.GlobalChatRules.SpeakPlatformName)
+	v.rulesPlatformCheck = checkPlatform
 
 	cardContent := container.NewVBox(
 		checkNames,
@@ -1330,6 +1556,11 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 	shiftCheck := widget.NewCheck("Shift", nil)
 	altCheck := widget.NewCheck("Alt", nil)
 	keySelect := widget.NewSelect(SupportedHotkeyKeys, nil)
+
+	v.hotkeyCtrlCheck = ctrlCheck
+	v.hotkeyShiftCheck = shiftCheck
+	v.hotkeyAltCheck = altCheck
+	v.hotkeyKeySelect = keySelect
 
 	syncWidgetsFromSpec := func(spec HotkeySpec) {
 		syncingHotkeyUI = true
@@ -1386,10 +1617,12 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 			applyNewHotkey(recorded)
 		})
 	})
+	v.hotkeyRecordBtn = recordBtn
 
 	resetHotkeyBtn := widget.NewButtonWithIcon("Reset Default", theme.ViewRefreshIcon(), func() {
 		applyNewHotkey("Ctrl+Shift+M")
 	})
+	v.hotkeyResetBtn = resetHotkeyBtn
 
 	hotkeyControlsRow := container.NewHBox(
 		widget.NewLabel("Modifiers:"),
@@ -1407,6 +1640,7 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 	var refreshWords func()
 	refreshWords = func() {
 		wordListContainer.Objects = nil
+		v.wordDeleteBtns = nil
 		if len(v.cfg.Safety.BlockedWords) == 0 {
 			wordListContainer.Add(widget.NewLabelWithStyle("No words currently blocked.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
 		} else {
@@ -1426,6 +1660,10 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 					v.setStatus(fmt.Sprintf("Removed %q from blocklist.", word))
 				})
 				delBtn.Importance = widget.LowImportance
+				if !v.ttsEnabled {
+					delBtn.Disable()
+				}
+				v.wordDeleteBtns = append(v.wordDeleteBtns, delBtn)
 				row := container.NewBorder(nil, nil, widget.NewLabel("• "+word), delBtn)
 				wordListContainer.Add(row)
 			}
@@ -1437,6 +1675,7 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 
 	newWordEntry := NewScrollPassEntry()
 	newWordEntry.SetPlaceHolder("Enter word or pattern to block (e.g. slurs, bad words)")
+	v.newWordEntry = newWordEntry
 
 	addBtn := widget.NewButtonWithIcon("Block Word", theme.ContentAddIcon(), func() {
 		text := strings.TrimSpace(newWordEntry.Text)
@@ -1450,6 +1689,7 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 		refreshWords()
 		v.setStatus(fmt.Sprintf("Added %q to blocklist.", text))
 	})
+	v.addWordBtn = addBtn
 
 	addRow := container.NewBorder(nil, nil, nil, addBtn, newWordEntry)
 
@@ -1459,6 +1699,7 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 		})
 	})
 	defaultBadWordsCheck.SetChecked(v.cfg.Safety.BlockDefaultBadWords)
+	v.defaultBadWordsCheck = defaultBadWordsCheck
 
 	cardContent := container.NewVBox(
 		hotkeyDisplay,

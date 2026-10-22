@@ -29,6 +29,50 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.Bots.IgnoreKnownBots {
 		t.Error("expected IgnoreKnownBots to be true by default")
 	}
+	if !cfg.TTS.Enabled {
+		t.Error("expected TTS.Enabled to be true by default")
+	}
+}
+
+func TestTTSConfigEnabledRetention(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+
+	cfg := DefaultConfig()
+	cfg.TTS.Enabled = false
+	cfg.TTS.UseGPU = true
+	cfg.TTS.NumThreads = 6
+	cfg.TTS.ModelFamily = "kokoro"
+	cfg.TTS.Preset = "balanced"
+	cfg.GlobalChatRules.DefaultVoice = "af_bella"
+
+	if err := Save(configPath, cfg); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if loaded.TTS.Enabled {
+		t.Error("expected loaded.TTS.Enabled to remain false")
+	}
+	if !loaded.TTS.UseGPU {
+		t.Errorf("expected TTS.UseGPU true, got %v", loaded.TTS.UseGPU)
+	}
+	if loaded.TTS.NumThreads != 6 {
+		t.Errorf("expected TTS.NumThreads 6, got %d", loaded.TTS.NumThreads)
+	}
+	if loaded.TTS.ModelFamily != "kokoro" {
+		t.Errorf("expected TTS.ModelFamily 'kokoro', got %q", loaded.TTS.ModelFamily)
+	}
+	if loaded.TTS.Preset != "balanced" {
+		t.Errorf("expected TTS.Preset 'balanced', got %q", loaded.TTS.Preset)
+	}
+	if loaded.GlobalChatRules.DefaultVoice != "af_bella" {
+		t.Errorf("expected DefaultVoice 'af_bella', got %q", loaded.GlobalChatRules.DefaultVoice)
+	}
 }
 
 func TestSaveAndLoadAtomic(t *testing.T) {

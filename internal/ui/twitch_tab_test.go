@@ -148,3 +148,44 @@ func TestTwitchTabOAuthGating(t *testing.T) {
 	}
 }
 
+func TestTwitchTabSyncTTSState(t *testing.T) {
+	appObj := test.NewApp()
+	win := appObj.NewWindow("TestTTSState")
+	cfg := config.DefaultConfig()
+	session := app.NewSession(cfg, secrets.NewMemoryStore())
+
+	tab := NewTwitchTabView(win, session)
+	_ = tab.Build()
+
+	// 1. SyncTTSState(false) hides TTS speech cards completely
+	tab.SyncTTSState(false)
+	if tab.rulesCard.Visible() {
+		t.Error("expected rulesCard to be hidden when TTS is disabled")
+	}
+	if tab.settingsCard.Visible() {
+		t.Error("expected settingsCard to be hidden when TTS is disabled")
+	}
+	if tab.notifsCard.Visible() {
+		t.Error("expected notifsCard to be hidden when TTS is disabled")
+	}
+	if tab.overridesCard.Visible() {
+		t.Error("expected overridesCard to be hidden when TTS is disabled")
+	}
+
+	// 2. SyncTTSState(true) restores them
+	tab.SyncTTSState(true)
+	if !tab.rulesCard.Visible() {
+		t.Error("expected rulesCard to be visible when TTS is enabled")
+	}
+	if !tab.settingsCard.Visible() {
+		t.Error("expected settingsCard to be visible when TTS is enabled")
+	}
+	if !tab.notifsCard.Visible() {
+		t.Error("expected notifsCard to be visible when TTS is enabled")
+	}
+	if !tab.overridesCard.Visible() {
+		t.Error("expected overridesCard to be visible when TTS is enabled")
+	}
+}
+
+
