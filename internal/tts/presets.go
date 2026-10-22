@@ -128,14 +128,14 @@ var AllModelFamilies = []ModelFamilySpec{
 		ShortName:      "Kokoro-82M",
 		SubDir:         "kokoro-en",
 		DownloadSizeMB: 408,
-		IdleRAMMB:      211,
-		ActiveRAMMB:    285,
-		GPUIdleRAMMB:   780,
-		GPUActiveRAMMB: 980,
+		IdleRAMMB:      190,
+		ActiveRAMMB:    260,
+		GPUIdleRAMMB:   650,
+		GPUActiveRAMMB: 850,
 		CPURTF:         0.74,
 		GPURTF:         0.09,
 		SupportsGPU:    true,
-		Summary:        "Best overall prosody (4.45 UTMOS). Fast on DirectML GPU (~0.3s start, ~950 MB RAM); slower on CPU INT8 (~2.7s start, ~285 MB RAM).",
+		Summary:        "Best overall prosody (4.45 UTMOS). Fast on DirectML GPU (~0.3s start, ~1.3 GB total RAM); slower on CPU INT8 (~2.7s start, ~710 MB total RAM).",
 		Voices:         KokoroVoiceCatalog,
 	},
 	{
@@ -144,10 +144,10 @@ var AllModelFamilies = []ModelFamilySpec{
 		ShortName:      "Kokoro Intl",
 		SubDir:         "kokoro-en",
 		DownloadSizeMB: 0,
-		IdleRAMMB:      211,
-		ActiveRAMMB:    285,
-		GPUIdleRAMMB:   780,
-		GPUActiveRAMMB: 980,
+		IdleRAMMB:      190,
+		ActiveRAMMB:    260,
+		GPUIdleRAMMB:   650,
+		GPUActiveRAMMB: 850,
 		CPURTF:         0.74,
 		GPURTF:         0.09,
 		SupportsGPU:    true,
@@ -160,14 +160,14 @@ var AllModelFamilies = []ModelFamilySpec{
 		ShortName:      "Supertonic INT8",
 		SubDir:         "supertonic-en",
 		DownloadSizeMB: 81,
-		IdleRAMMB:      152,
-		ActiveRAMMB:    195,
-		GPUIdleRAMMB:   152,
-		GPUActiveRAMMB: 195,
+		IdleRAMMB:      110,
+		ActiveRAMMB:    150,
+		GPUIdleRAMMB:   110,
+		GPUActiveRAMMB: 150,
 		CPURTF:         0.06,
 		GPURTF:         0.06,
 		SupportsGPU:    false,
-		Summary:        "Recommended Streamer Default: 66M-param 6x-compressed flow-matching model. Uses ~50 MB more RAM than Kitten Nano for weights, but ~3x less CPU (~0.2s instant start, 44.1 kHz).",
+		Summary:        "Recommended Streamer Default: 66M-param 6x-compressed flow-matching model (~600 MB total RAM, ~0.2s instant start, 44.1 kHz).",
 		Voices:         SupertonicVoiceCatalog,
 	},
 	{
@@ -176,14 +176,14 @@ var AllModelFamilies = []ModelFamilySpec{
 		ShortName:      "Kitten Mini v0.8",
 		SubDir:         "kitten-mini-en",
 		DownloadSizeMB: 65,
-		IdleRAMMB:      137,
-		ActiveRAMMB:    215,
-		GPUIdleRAMMB:   137,
-		GPUActiveRAMMB: 215,
+		IdleRAMMB:      105,
+		ActiveRAMMB:    170,
+		GPUIdleRAMMB:   105,
+		GPUActiveRAMMB: 170,
 		CPURTF:         0.37,
 		GPURTF:         0.37,
 		SupportsGPU:    false,
-		Summary:        "Distilled 80M Kokoro-style voices (~0.9s CPU start, ~215 MB RAM).",
+		Summary:        "Distilled 80M Kokoro-style voices (~0.9s CPU start, ~620 MB total RAM).",
 		Voices:         KittenMiniVoiceCatalog,
 	},
 	{
@@ -192,14 +192,14 @@ var AllModelFamilies = []ModelFamilySpec{
 		ShortName:      "Kitten Nano INT8",
 		SubDir:         "kitten-nano-en",
 		DownloadSizeMB: 30,
-		IdleRAMMB:      101,
-		ActiveRAMMB:    145,
-		GPUIdleRAMMB:   101,
-		GPUActiveRAMMB: 145,
+		IdleRAMMB:      60,
+		ActiveRAMMB:    95,
+		GPUIdleRAMMB:   60,
+		GPUActiveRAMMB: 95,
 		CPURTF:         0.18,
 		GPURTF:         0.18,
 		SupportsGPU:    false,
-		Summary:        "Tiny 15M-param (24 MB) weights for lowest RAM (~145 MB), though its iSTFTNet conv vocoder uses ~3x more CPU math per word than Supertonic (~0.4s start).",
+		Summary:        "Tiny 15M-param (24 MB) weights for lowest RAM (~545 MB total), though its iSTFTNet conv vocoder uses ~3x more CPU math per word than Supertonic (~0.4s start).",
 		Voices:         KittenNanoVoiceCatalog,
 	},
 	{
@@ -208,14 +208,14 @@ var AllModelFamilies = []ModelFamilySpec{
 		ShortName:      "Piper LibriTTS INT8",
 		SubDir:         "piper-libritts-en",
 		DownloadSizeMB: 35,
-		IdleRAMMB:      88,
-		ActiveRAMMB:    180,
-		GPUIdleRAMMB:   88,
-		GPUActiveRAMMB: 180,
+		IdleRAMMB:      65,
+		ActiveRAMMB:    115,
+		GPUIdleRAMMB:   65,
+		GPUActiveRAMMB: 115,
 		CPURTF:         0.85,
 		GPURTF:         0.85,
 		SupportsGPU:    false,
-		Summary:        "Classic VITS multi-speaker pack (~180 MB RAM, 904 speaker indices available).",
+		Summary:        "Classic VITS multi-speaker pack (~565 MB total RAM, 904 speaker indices available).",
 		Voices:         PiperVoiceCatalog,
 	},
 }
@@ -350,47 +350,47 @@ type PresetSpec struct {
 var HardwarePresets = []PresetSpec{
 	{
 		ID:                PresetUltraLow,
-		Label:             "Ultra-Low Resource — Kitten Nano INT8 (~145 MB)",
+		Label:             "Ultra-Low Resource — Kitten Nano INT8 (~545 MB)",
 		EnabledModels:     []string{ModelKittenNano},
 		UseGPU:            false,
 		NumThreads:        2,
 		MaxClauseWords:    8,
 		IdleUnloadMinutes: 5,
 		DefaultVoice:      "kitten_nano:f1",
-		Description:       "Lowest possible RAM (~145 MB active, auto-unloads when idle) and fast CPU response (~0.4s).",
+		Description:       "Lowest possible RAM (~545 MB active, auto-unloads when idle) and fast CPU response (~0.4s).",
 	},
 	{
 		ID:                PresetFastLean,
-		Label:             "Fast & Lean CPU (Default) — Supertonic INT8 (~195 MB)",
+		Label:             "Fast & Lean CPU (Default) — Supertonic INT8 (~600 MB)",
 		EnabledModels:     []string{ModelSupertonic},
 		UseGPU:            false,
 		NumThreads:        4,
 		MaxClauseWords:    12,
 		IdleUnloadMinutes: 0,
 		DefaultVoice:      "supertonic:f1",
-		Description:       "Recommended for streamers: 15x real-time CPU speed (~0.2s start, 0% GPU, 44.1 kHz) with near-Kokoro naturalness.",
+		Description:       "Recommended for streamers: 15x real-time CPU speed (~0.2s start, 0% GPU, 44.1 kHz, ~600 MB RAM) with near-Kokoro naturalness.",
 	},
 	{
 		ID:                PresetBalanced,
-		Label:             "Studio Quality CPU — Kokoro-82M INT8 (~285 MB)",
+		Label:             "Studio Quality CPU — Kokoro-82M INT8 (~710 MB)",
 		EnabledModels:     []string{ModelKokoro},
 		UseGPU:            false,
 		NumThreads:        4,
 		MaxClauseWords:    12,
 		IdleUnloadMinutes: 0,
 		DefaultVoice:      DefaultVoiceID,
-		Description:       "Highest voice naturalness (Kokoro 4.45 UTMOS) in ~285 MB RAM on CPU, with ~2.5–3.5s synthesis lead time per sentence.",
+		Description:       "Highest voice naturalness (Kokoro 4.45 UTMOS) in ~710 MB RAM on CPU, with ~2.5–3.5s synthesis lead time per sentence.",
 	},
 	{
 		ID:                PresetBeefy,
-		Label:             "Beefy Stream Rig — DirectML GPU + Multi-Pack (~1.1 GB)",
+		Label:             "Beefy Stream Rig — DirectML GPU + Multi-Pack (~1.7 GB)",
 		EnabledModels:     []string{ModelKokoro, ModelSupertonic, ModelKittenMini, ModelPiper},
 		UseGPU:            true,
 		NumThreads:        6,
 		MaxClauseWords:    16,
 		IdleUnloadMinutes: 0,
 		DefaultVoice:      DefaultVoiceID,
-		Description:       "DirectML GPU acceleration for instant Kokoro speech (~0.3s start) plus Supertonic, Kitten Mini, and Piper voices.",
+		Description:       "DirectML GPU acceleration for instant Kokoro speech (~0.3s start) plus Supertonic, Kitten Mini, and Piper voices (~1.7 GB total RAM).",
 	},
 	{
 		ID:          PresetCustom,
@@ -485,8 +485,8 @@ func EstimateHardwareImpact(enabledModels []string, useGPU bool, numThreads int)
 		numThreads = 4
 	}
 
-	// Base Go + Fyne + audio overhead ~55 MB
-	const baseRAMMB = 55
+	// Base Go + Fyne + audio + shared ONNX Runtime overhead ~450 MB
+	const baseRAMMB = 450
 	idleMB := baseRAMMB
 	activeMB := baseRAMMB
 	worstCPURTF := 0.0
@@ -535,13 +535,13 @@ func EstimateHardwareImpact(enabledModels []string, useGPU bool, numThreads int)
 		var rtf, gpuLoad float64
 
 		if useGPU && spec.SupportsGPU {
-			modelIdle = spec.GPUIdleRAMMB - baseRAMMB
-			modelActive = spec.GPUActiveRAMMB - baseRAMMB
+			modelIdle = spec.GPUIdleRAMMB
+			modelActive = spec.GPUActiveRAMMB
 			rtf = spec.GPURTF
 			gpuLoad = 0.65
 		} else {
-			modelIdle = max(spec.IdleRAMMB-baseRAMMB, 35)
-			modelActive = max(spec.ActiveRAMMB-baseRAMMB, 50)
+			modelIdle = spec.IdleRAMMB
+			modelActive = spec.ActiveRAMMB
 			if numThreads > 4 && (spec.ID == ModelKokoro || spec.ID == ModelKokoroIntl) {
 				modelActive += (numThreads - 4) * 28
 			}
@@ -593,15 +593,15 @@ func EstimateHardwareImpact(enabledModels []string, useGPU bool, numThreads int)
 		latParts = append(latParts, fmt.Sprintf("%s ~%.1fs", spec.ShortName, leadSec))
 	}
 
-	normRAMSegs, ramMeter := normalizeSegments(ramSegs, 1200.0)
+	normRAMSegs, ramMeter := normalizeSegments(ramSegs, 1600.0)
 	normCPUSegs, cpuMeter := normalizeSegments(cpuSegs, 1.0)
 	normGPUSegs, gpuMeter := normalizeSegments(gpuSegs, 1.0)
 	normLatSegs, latencyMeter := normalizeSegments(latSegs, 3.5)
 
 	ramTier := "Low"
-	if activeMB >= 750 {
+	if activeMB >= 950 {
 		ramTier = "High"
-	} else if activeMB >= 400 {
+	} else if activeMB >= 650 {
 		ramTier = "Moderate"
 	}
 	ramText := fmt.Sprintf("~%d MB Idle / ~%d MB Active (%s)", idleMB, activeMB, ramTier)
@@ -610,13 +610,13 @@ func EstimateHardwareImpact(enabledModels []string, useGPU bool, numThreads int)
 	var gpuText, gpuBarText string
 	switch {
 	case len(normGPUSegs) > 0:
-		gpuText = "Active (DirectML FP32 — fast ~0.3s speech start, uses ~700 MB extra RAM)"
+		gpuText = "Active (DirectML FP32 — fast ~0.3s speech start, uses ~590 MB extra RAM)"
 		gpuBarText = strings.Join(gpuParts, " + ")
 	case useGPU:
 		gpuText = "0% GPU (Enabled models use CPU SIMD; only Kokoro-82M uses DirectML)"
 		gpuBarText = "0% GPU (Selected models run on CPU)"
 	default:
-		gpuText = "0% GPU (CPU-only mode — saves ~700 MB RAM)"
+		gpuText = "0% GPU (CPU-only mode — saves ~590 MB RAM)"
 		gpuBarText = "CPU Only (0% GPU)"
 	}
 
@@ -656,11 +656,11 @@ func EstimateHardwareImpact(enabledModels []string, useGPU bool, numThreads int)
 	case len(enabledModels) > 1:
 		notice = fmt.Sprintf("💡 Multi-Model Mode: %d voice packs are loaded simultaneously in RAM (~%d MB total). Each model's additive RAM, CPU, GPU, and startup delay is shown in its matching color above.", len(enabledModels), activeMB)
 	case !useGPU && hasKokoro && !hasFastCPUModel:
-		notice = "💡 Tradeoff Note: Running Kokoro-82M on CPU (Use GPU unchecked) cuts RAM from ~980 MB down to ~285 MB, but its 82M-parameter INT8 network takes ~2.5s–3.5s to crunch a sentence before speaking. Enable Supertonic INT8 alongside or instead of Kokoro for instant (~0.2s) CPU voices."
+		notice = "💡 Tradeoff Note: Running Kokoro-82M on CPU (Use GPU unchecked) cuts RAM from ~1.3 GB down to ~710 MB, but its 82M-parameter INT8 network takes ~2.5s–3.5s to crunch a sentence before speaking. Enable Supertonic INT8 alongside or instead of Kokoro for instant (~0.2s) CPU voices."
 	case useGPU && hasKokoro:
-		notice = "💡 Tradeoff Note: DirectML GPU acceleration makes Kokoro-82M start speaking almost instantly (~0.3s), at the cost of ~800 MB–1.1 GB process RAM for FP32 GPU staging buffers."
+		notice = "💡 Tradeoff Note: DirectML GPU acceleration makes Kokoro-82M start speaking almost instantly (~0.3s), at the cost of ~1.3 GB process RAM for FP32 GPU staging buffers."
 	case hasFastCPUModel && !hasKokoro:
-		notice = "💡 Tradeoff Note: Supertonic INT8 uses ~6% CPU (~0.06x RTF, ~195 MB RAM) via 6x temporal compression, while Kitten Nano INT8 uses ~18%–25% CPU (~3x more CPU math in its iSTFTNet conv vocoder) in exchange for the smallest 24 MB model weights (~145 MB RAM)."
+		notice = "💡 Tradeoff Note: Supertonic INT8 uses ~6% CPU (~0.06x RTF, ~600 MB total RAM) via 6x temporal compression, while Kitten Nano INT8 uses ~18%–25% CPU (~3x more CPU math in its iSTFTNet conv vocoder) in exchange for the smallest 24 MB model weights (~545 MB total RAM)."
 	default:
 		notice = fmt.Sprintf("💡 Active Packs: %d model family(s) loaded in RAM (~%d MB active).", len(enabledModels), activeMB)
 	}

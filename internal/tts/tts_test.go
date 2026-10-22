@@ -464,6 +464,15 @@ func TestMultiModelPresetsAndHardwareImpact(t *testing.T) {
 	gpuImpact := EstimateHardwareImpact([]string{ModelKokoro}, true, 4)
 	superImpact := EstimateHardwareImpact([]string{ModelSupertonic}, false, 4)
 
+	if cpuImpact.ActiveRAMMB != 710 {
+		t.Errorf("expected CPU Kokoro ActiveRAMMB == 710 MB, got %d", cpuImpact.ActiveRAMMB)
+	}
+	if gpuImpact.ActiveRAMMB != 1300 {
+		t.Errorf("expected GPU Kokoro ActiveRAMMB == 1300 MB, got %d", gpuImpact.ActiveRAMMB)
+	}
+	if superImpact.ActiveRAMMB != 600 {
+		t.Errorf("expected Supertonic ActiveRAMMB == 600 MB, got %d", superImpact.ActiveRAMMB)
+	}
 	if cpuImpact.ActiveRAMMB >= gpuImpact.ActiveRAMMB {
 		t.Errorf("expected CPU Kokoro RAM (%d MB) < GPU Kokoro RAM (%d MB)", cpuImpact.ActiveRAMMB, gpuImpact.ActiveRAMMB)
 	}
@@ -480,6 +489,12 @@ func TestMultiModelPresetsAndHardwareImpact(t *testing.T) {
 	multiImpact := EstimateHardwareImpact([]string{ModelSupertonic, ModelKittenNano}, false, 4)
 	if len(multiImpact.RAMSegments) != 3 { // base + supertonic + kitten_nano
 		t.Errorf("expected 3 RAM segments for 2 enabled models, got %d", len(multiImpact.RAMSegments))
+	}
+	if multiImpact.RAMSegments[0].Label != "Base App: 450 MB" {
+		t.Errorf("expected base segment label 'Base App: 450 MB', got %q", multiImpact.RAMSegments[0].Label)
+	}
+	if multiImpact.ActiveRAMMB != 450+150+95 {
+		t.Errorf("expected multiImpact.ActiveRAMMB == %d, got %d", 450+150+95, multiImpact.ActiveRAMMB)
 	}
 	if len(multiImpact.CPUSegments) != 2 {
 		t.Errorf("expected 2 CPU segments for 2 enabled models, got %d", len(multiImpact.CPUSegments))

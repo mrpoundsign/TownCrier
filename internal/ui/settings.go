@@ -679,7 +679,7 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	presetDescLabel := widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 	presetDescLabel.Wrapping = fyne.TextWrapWord
 
-	gpuCheck := widget.NewCheck("Use DirectML GPU for Kokoro-82M (fast ~0.3s start, +700 MB RAM)", nil)
+	gpuCheck := widget.NewCheck("Use DirectML GPU for Kokoro-82M (fast ~0.3s start, +590 MB RAM)", nil)
 
 	initThreads := v.cfg.TTS.NumThreads
 	if initThreads <= 0 {
