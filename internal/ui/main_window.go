@@ -295,6 +295,11 @@ func (mw *MainWindow) initViews() {
 	mw.settingsTab.SetLoggingChangedHandler(func(enabled bool) {
 		mw.syncLoggingState(enabled)
 	})
+	mw.settingsTab.SetChatScaleChangedHandler(func(_ int) {
+		if mw.chatLogsTab != nil {
+			mw.chatLogsTab.ApplyChatScale()
+		}
+	})
 	mw.settingsTab.SetModelsChangedHandler(func() {
 		if mw.settingsTab != nil {
 			mw.settingsTab.RefreshVoices()

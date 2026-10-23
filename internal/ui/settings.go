@@ -69,6 +69,7 @@ type SettingsView struct {
 
 	onTTSChanged         func(enabled bool)
 	onLoggingChanged     func(enabled bool)
+	onChatScaleChanged   func(pct int)
 	featuresCard         *widget.Card
 	generalBox           *fyne.Container
 	enableTTSCheck       *widget.Check
@@ -131,6 +132,14 @@ func (v *SettingsView) SetTTSChangedHandler(fn func(enabled bool)) {
 // SetLoggingChangedHandler registers a callback invoked when Event Logging is enabled or disabled from Settings.
 func (v *SettingsView) SetLoggingChangedHandler(fn func(enabled bool)) {
 	v.onLoggingChanged = fn
+}
+
+// SetChatScaleChangedHandler registers a callback invoked when the default chat panel scale is updated in Settings.
+func (v *SettingsView) SetChatScaleChangedHandler(fn func(pct int)) {
+	v.onChatScaleChanged = fn
+	if v.logsView != nil {
+		v.logsView.SetOnChatScaleChanged(fn)
+	}
 }
 
 // SetDeviceEnumerator overrides the audio device enumeration function (useful for tests or mocking).
@@ -353,6 +362,7 @@ func (v *SettingsView) SyncFromConfig() {
 		v.globalVoiceField.SetVoiceAndSpeed(v.cfg.GlobalChatRules.DefaultVoice, v.cfg.GlobalChatRules.DefaultSpeed)
 	}
 	if v.logsView != nil {
+		v.logsView.SyncFromConfig()
 		v.logsView.RefreshQuery()
 	}
 }
@@ -429,6 +439,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	v.logsView = NewLogsView(v.window, v.session)
 	v.logsView.SetStatusHandler(v.setStatus)
 	v.logsView.SetOnAssignVoice(v.onAssignVoice)
+	v.logsView.SetOnChatScaleChanged(v.onChatScaleChanged)
 
 	rulesTabContent := newPanelVScroll(container.NewVBox(
 		rulesCard,

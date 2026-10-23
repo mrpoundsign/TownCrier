@@ -34,6 +34,7 @@ type LoggingConfig struct {
 	DBPath             string          `json:"db_path,omitempty"`
 	ChatRetentionDays  int             `json:"chat_retention_days"`
 	EventRetentionDays int             `json:"event_retention_days"`
+	ChatScale          int             `json:"chat_scale,omitempty"`
 	LiveLogs           []LiveLogPreset `json:"live_logs,omitempty"`
 }
 
@@ -49,6 +50,7 @@ type LiveLogPreset struct {
 	Outcome     string `json:"outcome,omitempty"`
 	UserQuery   string `json:"user_query,omitempty"`
 	TextQuery   string `json:"text_query,omitempty"`
+	ChatScale   int    `json:"chat_scale,omitempty"` // 0 = inherit LoggingConfig.ChatScale, or 50..300
 }
 
 // DefaultLiveLogPresets returns the two default saved Live Log cards: "Latest Session" and "All Events".
@@ -363,6 +365,7 @@ func DefaultConfig() *Config {
 			DBPath:             "",
 			ChatRetentionDays:  30,
 			EventRetentionDays: 90,
+			ChatScale:          100,
 			LiveLogs:           DefaultLiveLogPresets(),
 		},
 		GlobalChatRules: GlobalChatRules{
@@ -915,8 +918,27 @@ func migrate(cfg *Config) error {
 	if cfg.Logging.EventRetentionDays < 0 {
 		cfg.Logging.EventRetentionDays = 0
 	}
+	switch {
+	case cfg.Logging.ChatScale <= 0:
+		cfg.Logging.ChatScale = 100
+	case cfg.Logging.ChatScale < 50:
+		cfg.Logging.ChatScale = 50
+	case cfg.Logging.ChatScale > 300:
+		cfg.Logging.ChatScale = 300
+	}
 	if len(cfg.Logging.LiveLogs) == 0 {
 		cfg.Logging.LiveLogs = DefaultLiveLogPresets()
+	}
+	for i := range cfg.Logging.LiveLogs {
+		sc := cfg.Logging.LiveLogs[i].ChatScale
+		switch {
+		case sc < 0:
+			cfg.Logging.LiveLogs[i].ChatScale = 0
+		case sc > 0 && sc < 50:
+			cfg.Logging.LiveLogs[i].ChatScale = 50
+		case sc > 300:
+			cfg.Logging.LiveLogs[i].ChatScale = 300
+		}
 	}
 
 	// Normalize viewer keys and populate multi-platform Accounts slice

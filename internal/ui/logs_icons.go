@@ -221,6 +221,8 @@ func platformIconAndTip(platform string) (fyne.Resource, string) {
 func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 	var icons []fyne.CanvasObject
 	seen := make(map[string]bool)
+	s := v.chatScaleFactor()
+	iconSz := fyne.NewSize(16*s, 16*s)
 
 	for _, rawRole := range e.Roles {
 		r := strings.ToLower(strings.TrimSpace(rawRole))
@@ -228,27 +230,27 @@ func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 		case "broadcaster", "streamer", "owner":
 			if !seen["broadcaster"] {
 				seen["broadcaster"] = true
-				icons = append(icons, v.newHoverIcon(resRoleBroadcaster, fyne.NewSize(16, 16), "Tag: Broadcaster / Streamer", nil))
+				icons = append(icons, v.newHoverIcon(resRoleBroadcaster, iconSz, "Tag: Broadcaster / Streamer", nil))
 			}
 		case "moderator", "mod":
 			if !seen["moderator"] {
 				seen["moderator"] = true
-				icons = append(icons, v.newHoverIcon(resRoleModerator, fyne.NewSize(16, 16), "Tag: Moderator", nil))
+				icons = append(icons, v.newHoverIcon(resRoleModerator, iconSz, "Tag: Moderator", nil))
 			}
 		case "vip":
 			if !seen["vip"] {
 				seen["vip"] = true
-				icons = append(icons, v.newHoverIcon(resRoleVIP, fyne.NewSize(16, 16), "Tag: VIP", nil))
+				icons = append(icons, v.newHoverIcon(resRoleVIP, iconSz, "Tag: VIP", nil))
 			}
 		case "subscriber", "sub", "founder", "member":
 			if !seen["subscriber"] {
 				seen["subscriber"] = true
-				icons = append(icons, v.newHoverIcon(resRoleSubscriber, fyne.NewSize(16, 16), "Tag: Subscriber / Member", nil))
+				icons = append(icons, v.newHoverIcon(resRoleSubscriber, iconSz, "Tag: Subscriber / Member", nil))
 			}
 		case "follower":
 			if !seen["follower"] {
 				seen["follower"] = true
-				icons = append(icons, v.newHoverIcon(resRoleFollower, fyne.NewSize(16, 16), "Tag: Follower", nil))
+				icons = append(icons, v.newHoverIcon(resRoleFollower, iconSz, "Tag: Follower", nil))
 			}
 		}
 	}
@@ -290,7 +292,7 @@ func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 		if e.Count > 0 {
 			tip += fmt.Sprintf(" (x%d)", e.Count)
 		}
-		icons = append(icons, v.newHoverIcon(evIcon, fyne.NewSize(16, 16), tip, nil))
+		icons = append(icons, v.newHoverIcon(evIcon, iconSz, tip, nil))
 	}
 
 	return icons
@@ -590,6 +592,7 @@ func (l *wrappedCellLabel) MouseOut() {
 // [0] Time | [1] Svc | [2] User & Tags | [3] Message (flex) | [4] Filter | [5] Spoken | [6] Voice
 type logTableLayout struct {
 	getWidth func() float32
+	getScale func() float32
 }
 
 const (
@@ -603,9 +606,21 @@ const (
 	rowMinHeight    float32 = 30
 )
 
-func computeMsgColWidth(totalWidth float32) float32 {
-	fixedTotal := colWidthTime + colWidthService + colWidthUser +
-		colWidthFilter + colWidthSpoken + colWidthVoice + (6 * colGap)
+func (l logTableLayout) effectiveScale() float32 {
+	if l.getScale != nil {
+		if s := l.getScale(); s > 0 {
+			return s
+		}
+	}
+	return 1.0
+}
+
+func computeMsgColWidth(totalWidth, scale float32) float32 {
+	if scale <= 0 {
+		scale = 1.0
+	}
+	fixedTotal := (colWidthTime + colWidthService + colWidthUser +
+		colWidthFilter + colWidthSpoken + colWidthVoice + (6 * colGap)) * scale
 	msgWidth := totalWidth - fixedTotal
 	if msgWidth < 160 {
 		return 340
@@ -618,17 +633,19 @@ func (l logTableLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 		return
 	}
 
-	msgWidth := computeMsgColWidth(size.Width)
+	s := l.effectiveScale()
+	msgWidth := computeMsgColWidth(size.Width, s)
 
 	widths := [7]float32{
-		colWidthTime,
-		colWidthService,
-		colWidthUser,
+		colWidthTime * s,
+		colWidthService * s,
+		colWidthUser * s,
 		msgWidth,
-		colWidthFilter,
-		colWidthSpoken,
-		colWidthVoice,
+		colWidthFilter * s,
+		colWidthSpoken * s,
+		colWidthVoice * s,
 	}
+	gap := colGap * s
 
 	var x float32
 	for i := range 7 {
@@ -636,24 +653,25 @@ func (l logTableLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 		w := widths[i]
 		obj.Move(fyne.NewPos(x, 0))
 		obj.Resize(fyne.NewSize(w, size.Height))
-		x += w + colGap
+		x += w + gap
 	}
 }
 
 func (l logTableLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	s := l.effectiveScale()
 	if len(objects) >= 4 && objects[3] != nil {
 		var totalW float32
 		if l.getWidth != nil {
 			totalW = l.getWidth()
 		}
-		msgW := computeMsgColWidth(totalW)
+		msgW := computeMsgColWidth(totalW, s)
 		cur := objects[3].Size()
 		if cur.Width != msgW {
 			objects[3].Resize(fyne.NewSize(msgW, cur.Height))
 		}
 	}
 
-	maxH := rowMinHeight
+	maxH := rowMinHeight * s
 	for _, obj := range objects {
 		if obj != nil {
 			ms := obj.MinSize()

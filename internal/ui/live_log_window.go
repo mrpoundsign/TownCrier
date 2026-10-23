@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -94,6 +95,12 @@ func formatLiveLogPresetSummary(p config.LiveLogPreset) string {
 		parts = append(parts, "Summary: On")
 	} else {
 		parts = append(parts, "Summary: Off")
+	}
+
+	if p.ChatScale > 0 {
+		parts = append(parts, fmt.Sprintf("Scale: %d%%", NormalizeChatScale(p.ChatScale)))
+	} else {
+		parts = append(parts, "Scale: Default")
 	}
 
 	return strings.Join(parts, "  •  ")
@@ -323,8 +330,9 @@ func (v *LogsView) buildZeroChrome(preset config.LiveLogPreset) fyne.CanvasObjec
 		nil,
 		listScroll,
 	)
+	v.chatPanelThemeOverride = container.NewThemeOverride(mainLayout, NewScaledChatTheme(v.chatScaleFactor()))
 
-	return container.NewStack(mainLayout, v.tooltipLayer)
+	return container.NewStack(v.chatPanelThemeOverride, v.tooltipLayer)
 }
 
 func (v *LogsView) applyLivePreset(preset config.LiveLogPreset) {
@@ -370,12 +378,35 @@ func (v *LogsView) applyLivePreset(preset config.LiveLogPreset) {
 	v.selectedPlatform = normalizePlatformOption(platOpt)
 	v.hideBots = preset.HideBots
 	v.showSummary = preset.ShowSummary
+	v.presetChatScale = preset.ChatScale
 	v.liveTail = true
 	v.currentPage = 0
 	v.mu.Unlock()
 
+	if v.chatPanelThemeOverride != nil {
+		v.chatPanelThemeOverride.Theme = NewScaledChatTheme(v.chatScaleFactor())
+		v.chatPanelThemeOverride.Refresh()
+	}
+
 	v.initializing = false
 	v.RefreshQuery()
+}
+
+func (v *LogsView) previewLiveLogPreset(p config.LiveLogPreset) {
+	if strings.TrimSpace(p.ID) == "" {
+		return
+	}
+	v.mu.Lock()
+	openWin := v.openLiveWindows[p.ID]
+	v.mu.Unlock()
+	if openWin != nil {
+		if openWin.win != nil && strings.TrimSpace(p.Name) != "" {
+			openWin.win.SetTitle("TownCrier — " + strings.TrimSpace(p.Name))
+		}
+		if openWin.view != nil {
+			openWin.view.applyLivePreset(p)
+		}
+	}
 }
 
 func (v *LogsView) showLiveLogPresetDialog(existing *config.LiveLogPreset) {
@@ -389,10 +420,16 @@ func (v *LogsView) showLiveLogPresetDialog(existing *config.LiveLogPreset) {
 		EventType:   eventTypeAll,
 		Outcome:     outcomeLabelAll,
 	}
+	var originalPreset config.LiveLogPreset
+	hasOriginal := existing != nil
 	if existing != nil {
 		title = "Edit Live Log — " + existing.Name
 		preset = *existing
+		originalPreset = *existing
 	}
+
+	var dialogInitializing = true
+	defer func() { dialogInitializing = false }()
 
 	nameEntry := widget.NewEntry()
 	nameEntry.SetPlaceHolder("Live Log Name (e.g. Latest Session, Twitch Alerts)...")
@@ -458,8 +495,113 @@ func (v *LogsView) showLiveLogPresetDialog(existing *config.LiveLogPreset) {
 	msgEntry.SetPlaceHolder("Search message or spoken text...")
 	msgEntry.SetText(preset.TextQuery)
 
+	defaultPct := v.defaultChatScalePct()
+	customScaleEntry := widget.NewEntry()
+	customScaleEntry.SetPlaceHolder("50-300")
+	initCustomVal := defaultPct
+	if preset.ChatScale > 0 {
+		initCustomVal = NormalizeChatScale(preset.ChatScale)
+	}
+	customScaleEntry.SetText(strconv.Itoa(initCustomVal))
+	customScaleBox := container.NewBorder(nil, nil, nil, widget.NewLabel("%"), customScaleEntry)
+
+	var scaleSel *widget.Select
+	buildDraft := func(clampCustom bool) (config.LiveLogPreset, bool) {
+		draft := preset
+		draft.Name = strings.TrimSpace(nameEntry.Text)
+		if draft.Name == "" {
+			draft.Name = "Live Log"
+		}
+		if sessionSel.Selected == sessionOptionAll {
+			draft.SessionMode = "all"
+		} else {
+			draft.SessionMode = "latest"
+		}
+		draft.HideBots = hideBotsCheck.Checked
+		draft.ShowSummary = showSummaryCheck.Checked
+		draft.Platform = platSel.Selected
+		draft.EventType = typeSel.Selected
+		draft.Outcome = statusSel.Selected
+		draft.UserQuery = strings.TrimSpace(userEntry.Text)
+		draft.TextQuery = strings.TrimSpace(msgEntry.Text)
+
+		pct, isCustom, isInherit := ParseChatScaleLabel(scaleSel.Selected)
+		switch {
+		case isInherit:
+			draft.ChatScale = 0
+		case isCustom:
+			if clampCustom {
+				draft.ChatScale = ParseCustomChatScaleInput(customScaleEntry.Text, defaultPct)
+			} else {
+				clean := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(customScaleEntry.Text), "%"))
+				val, err := strconv.Atoi(clean)
+				if err != nil || val < ChatScaleMin || val > ChatScaleMax {
+					return draft, false
+				}
+				draft.ChatScale = val
+			}
+		default:
+			draft.ChatScale = pct
+		}
+		return draft, true
+	}
+
+	triggerLivePreview := func(clampCustom bool) {
+		if dialogInitializing || !hasOriginal {
+			return
+		}
+		if draft, valid := buildDraft(clampCustom); valid {
+			v.previewLiveLogPreset(draft)
+		}
+	}
+
+	scaleSel = widget.NewSelect(ChatScalePresetOptions(defaultPct), func(selected string) {
+		_, isCustom, _ := ParseChatScaleLabel(selected)
+		if isCustom {
+			customScaleBox.Show()
+		} else {
+			customScaleBox.Hide()
+		}
+		triggerLivePreview(false)
+	})
+	initScaleLbl := FormatPresetChatScaleLabel(preset.ChatScale, defaultPct)
+	scaleSel.SetSelected(initScaleLbl)
+	if initScaleLbl == ChatScaleLabelCustom {
+		customScaleBox.Show()
+	} else {
+		customScaleBox.Hide()
+	}
+
+	customScaleEntry.OnChanged = func(_ string) {
+		triggerLivePreview(false)
+	}
+	customScaleEntry.OnSubmitted = func(_ string) {
+		parsed := ParseCustomChatScaleInput(customScaleEntry.Text, defaultPct)
+		dialogInitializing = true
+		customScaleEntry.SetText(strconv.Itoa(parsed))
+		dialogInitializing = false
+		triggerLivePreview(true)
+	}
+
+	nameEntry.OnChanged = func(_ string) { triggerLivePreview(false) }
+	hideBotsCheck.OnChanged = func(_ bool) { triggerLivePreview(false) }
+	showSummaryCheck.OnChanged = func(_ bool) { triggerLivePreview(false) }
+	sessionSel.OnChanged = func(_ string) { triggerLivePreview(false) }
+	platSel.OnChanged = func(_ string) { triggerLivePreview(false) }
+	typeSel.OnChanged = func(_ string) { triggerLivePreview(false) }
+	statusSel.OnChanged = func(_ string) { triggerLivePreview(false) }
+	userEntry.OnChanged = func(_ string) { triggerLivePreview(false) }
+	msgEntry.OnChanged = func(_ string) { triggerLivePreview(false) }
+
 	nameRow := container.NewBorder(nil, nil, newFilterFieldLabel("Name:"), nil, nameEntry)
-	togglesRow := container.NewHBox(hideBotsCheck, showSummaryCheck)
+	togglesRow := container.NewHBox(
+		hideBotsCheck,
+		showSummaryCheck,
+		widget.NewSeparator(),
+		newFilterFieldLabel("Chat Scale:"),
+		newBorderedControl(scaleSel),
+		customScaleBox,
+	)
 
 	midRow := container.NewGridWithColumns(2,
 		container.NewBorder(nil, nil, newFilterFieldLabel("Session:"), nil, newBorderedControl(sessionSel)),
@@ -484,26 +626,13 @@ func (v *LogsView) showLiveLogPresetDialog(existing *config.LiveLogPreset) {
 
 	d := dialog.NewCustomConfirm(title, "Save", "Cancel", formWrap, func(ok bool) {
 		if !ok {
+			if hasOriginal {
+				v.previewLiveLogPreset(originalPreset)
+			}
 			return
 		}
-		preset.Name = strings.TrimSpace(nameEntry.Text)
-		if preset.Name == "" {
-			preset.Name = "Live Log"
-		}
-		if sessionSel.Selected == sessionOptionAll {
-			preset.SessionMode = "all"
-		} else {
-			preset.SessionMode = "latest"
-		}
-		preset.HideBots = hideBotsCheck.Checked
-		preset.ShowSummary = showSummaryCheck.Checked
-		preset.Platform = platSel.Selected
-		preset.EventType = typeSel.Selected
-		preset.Outcome = statusSel.Selected
-		preset.UserQuery = strings.TrimSpace(userEntry.Text)
-		preset.TextQuery = strings.TrimSpace(msgEntry.Text)
-
-		v.saveLiveLogPreset(preset)
+		finalDraft, _ := buildDraft(true)
+		v.saveLiveLogPreset(finalDraft)
 	}, v.window)
 	d.Resize(fyne.NewSize(680, 320))
 	d.Show()

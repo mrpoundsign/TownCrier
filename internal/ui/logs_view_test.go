@@ -974,6 +974,136 @@ func TestLiveLogPresetsAndZeroChromePopOutWindow(t *testing.T) {
 	}
 }
 
+func TestLogsViewChatPanelScaling(t *testing.T) {
+	testApp := test.NewApp()
+	defer testApp.Quit()
+
+	w := testApp.NewWindow("Chat Scale Test")
+	defer w.Close()
+
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
+
+	tmpDB := filepath.Join(t.TempDir(), "scale.db")
+	backend, err := eventlog.NewSQLiteBackend(tmpDB)
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	mgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, backend)
+	sess.SetEventLogger(mgr)
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	_ = mgr.Append(ctx, &eventlog.Entry{
+		ID:        "scale-ev-1",
+		CreatedAt: now,
+		Platform:  "twitch",
+		Kind:      "message",
+		UserName:  "chatter",
+		Roles:     []string{"subscriber"},
+		RawText:   "TestingKappa scale",
+		Emotes: []chat.EmoteSpan{
+			{Start: 7, End: 12, ID: "25", Name: "Kappa"},
+		},
+		PassedFilters: true,
+		Spoken:        true,
+		Outcome:       eventlog.OutcomeSpoken,
+	})
+
+	lv := NewLogsView(w, sess)
+	defer lv.Close()
+	w.SetContent(lv.Build())
+	w.Resize(fyne.NewSize(960, 640))
+
+	if lv.effectiveChatScalePct() != 100 {
+		t.Fatalf("expected initial effective chat scale 100%%, got %d%%", lv.effectiveChatScalePct())
+	}
+
+	// Open two pop-out windows: one inheriting default (ChatScale: 0), one overriding at 175%
+	inheritPreset := cfg.Logging.LiveLogs[0]
+	inheritPreset.ChatScale = 0
+	overridePreset := cfg.Logging.LiveLogs[1]
+	overridePreset.ChatScale = 175
+	lv.saveLiveLogPreset(overridePreset)
+
+	_ = lv.OpenLiveLogWindow(inheritPreset)
+	_ = lv.OpenLiveLogWindow(overridePreset)
+
+	lv.mu.Lock()
+	inheritWin := lv.openLiveWindows[inheritPreset.ID]
+	overrideWin := lv.openLiveWindows[overridePreset.ID]
+	lv.mu.Unlock()
+
+	if inheritWin == nil || overrideWin == nil {
+		t.Fatal("expected both pop-out windows to be open")
+	}
+	if inheritWin.view.effectiveChatScalePct() != 100 {
+		t.Errorf("expected inherit pop-out scale 100%%, got %d%%", inheritWin.view.effectiveChatScalePct())
+	}
+	if overrideWin.view.effectiveChatScalePct() != 175 {
+		t.Errorf("expected override pop-out scale 175%%, got %d%%", overrideWin.view.effectiveChatScalePct())
+	}
+
+	// Change Default Chat Panel Scale in Settings to 150%
+	lv.chatScaleSel.SetSelected("150%")
+	if sess.Config().Logging.ChatScale != 150 {
+		t.Errorf("expected persisted Logging.ChatScale 150, got %d", sess.Config().Logging.ChatScale)
+	}
+	if lv.effectiveChatScalePct() != 150 {
+		t.Errorf("expected main LogsView scale 150%%, got %d%%", lv.effectiveChatScalePct())
+	}
+	if inheritWin.view.effectiveChatScalePct() != 150 {
+		t.Errorf("expected inherited pop-out window scale to update to 150%%, got %d%%", inheritWin.view.effectiveChatScalePct())
+	}
+	if overrideWin.view.effectiveChatScalePct() != 175 {
+		t.Errorf("expected overridden pop-out window scale to remain 175%%, got %d%%", overrideWin.view.effectiveChatScalePct())
+	}
+
+	// Select Custom... and enter a custom percentage (135%), plus test clamping (400 -> 300)
+	lv.chatScaleSel.SetSelected(ChatScaleLabelCustom)
+	if !lv.chatScaleCustomBox.Visible() {
+		t.Error("expected custom scale input box to become visible when Custom... is selected")
+	}
+	lv.chatScaleCustomEntry.SetText("135")
+	if sess.Config().Logging.ChatScale != 135 {
+		t.Errorf("expected custom Logging.ChatScale 135, got %d", sess.Config().Logging.ChatScale)
+	}
+	lv.chatScaleCustomEntry.OnSubmitted("400")
+	if sess.Config().Logging.ChatScale != 300 {
+		t.Errorf("expected clamped Logging.ChatScale 300, got %d", sess.Config().Logging.ChatScale)
+	}
+	if lv.chatScaleCustomEntry.Text != "300" {
+		t.Errorf("expected custom entry text clamped to '300', got %q", lv.chatScaleCustomEntry.Text)
+	}
+
+	// Verify live preview on an open pop-out window and reset on cancel
+	previewDraft := overridePreset
+	previewDraft.ChatScale = 200
+	lv.previewLiveLogPreset(previewDraft)
+	if overrideWin.view.effectiveChatScalePct() != 200 {
+		t.Errorf("expected live preview to update open pop-out window to 200%%, got %d%%", overrideWin.view.effectiveChatScalePct())
+	}
+	// Resetting back to originalPreset (simulating Cancel) restores 175%
+	lv.previewLiveLogPreset(overridePreset)
+	if overrideWin.view.effectiveChatScalePct() != 175 {
+		t.Errorf("expected cancel reset to restore open pop-out window to 175%%, got %d%%", overrideWin.view.effectiveChatScalePct())
+	}
+
+	// Verify disabling Event Logging disables the Chat Scale controls while preserving config
+	lv.SyncLoggingState(false)
+	if !lv.chatScaleSel.Disabled() || !lv.chatScaleCustomEntry.Disabled() {
+		t.Error("expected chat scale controls to be disabled when logging is disabled")
+	}
+	if sess.Config().Logging.ChatScale != 300 {
+		t.Errorf("expected Logging.ChatScale 300 to be preserved when disabled, got %d", sess.Config().Logging.ChatScale)
+	}
+}
+
+
 
 
 

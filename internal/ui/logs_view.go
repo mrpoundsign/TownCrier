@@ -102,12 +102,18 @@ type LogsView struct {
 	userSearchEntry  *ScrollPassEntry
 	textSearchEntry  *ScrollPassEntry
 
-	enableLogCheck *widget.Check
-	chatRetSel     *widget.Select
-	eventRetSel    *widget.Select
-	pruneBtn       *widget.Button
-	addLiveLogBtn  *widget.Button
-	disabledBanner *fyne.Container
+	enableLogCheck       *widget.Check
+	chatRetSel           *widget.Select
+	eventRetSel          *widget.Select
+	chatScaleSel         *widget.Select
+	chatScaleCustomEntry *widget.Entry
+	chatScaleCustomBox   *fyne.Container
+	pruneBtn             *widget.Button
+	addLiveLogBtn        *widget.Button
+	disabledBanner       *fyne.Container
+
+	presetChatScale        int
+	chatPanelThemeOverride *container.ThemeOverride
 
 	selectedSessionID      int64
 	selectedSessionIDs     []int64
@@ -137,8 +143,9 @@ type LogsView struct {
 	tooltipText   *canvas.Text
 	emoteCache    *EmoteCache
 
-	onStatus      func(msg string)
-	onAssignVoice func(platform, username string)
+	onStatus           func(msg string)
+	onAssignVoice      func(platform, username string)
+	onChatScaleChanged func(pct int)
 }
 
 // NewLogsView constructs a new LogsView bound to the active Session.
@@ -166,6 +173,85 @@ func (v *LogsView) SetStatusHandler(fn func(msg string)) {
 // SetOnAssignVoice sets the callback invoked when a viewer voice override is saved from a log row.
 func (v *LogsView) SetOnAssignVoice(fn func(platform, username string)) {
 	v.onAssignVoice = fn
+}
+
+// SetOnChatScaleChanged sets the callback invoked when the default chat panel scale is updated in Settings.
+func (v *LogsView) SetOnChatScaleChanged(fn func(pct int)) {
+	v.onChatScaleChanged = fn
+}
+
+func (v *LogsView) defaultChatScalePct() int {
+	if v.session != nil && v.session.Config() != nil {
+		return NormalizeChatScale(v.session.Config().Logging.ChatScale)
+	}
+	return ChatScaleDefault
+}
+
+func (v *LogsView) effectiveChatScalePct() int {
+	v.mu.Lock()
+	pScale := v.presetChatScale
+	v.mu.Unlock()
+	if pScale > 0 {
+		return NormalizeChatScale(pScale)
+	}
+	return v.defaultChatScalePct()
+}
+
+func (v *LogsView) chatScaleFactor() float32 {
+	return float32(v.effectiveChatScalePct()) / 100.0
+}
+
+// ApplyChatScale updates the scoped chat panel theme, re-renders rows at the new scale,
+// and propagates inherited scale updates to any open Live Log pop-out windows.
+func (v *LogsView) ApplyChatScale() {
+	fyne.Do(func() {
+		s := v.chatScaleFactor()
+		if v.chatPanelThemeOverride != nil {
+			v.chatPanelThemeOverride.Theme = NewScaledChatTheme(s)
+			v.chatPanelThemeOverride.Refresh()
+		}
+		v.renderEntries()
+		v.refreshLiveLogCards()
+
+		v.mu.Lock()
+		var inherited []*liveLogWindow
+		for _, lw := range v.openLiveWindows {
+			if lw != nil && lw.preset.ChatScale <= 0 && lw.view != nil {
+				inherited = append(inherited, lw)
+			}
+		}
+		v.mu.Unlock()
+
+		for _, lw := range inherited {
+			lw.view.ApplyChatScale()
+		}
+	})
+}
+
+// SyncFromConfig updates the retention and chat scale controls from the active session config.
+func (v *LogsView) SyncFromConfig() {
+	if v.session == nil || v.session.Config() == nil {
+		return
+	}
+	cfg := v.session.Config()
+	v.initializing = true
+	defer func() { v.initializing = false }()
+
+	pct := NormalizeChatScale(cfg.Logging.ChatScale)
+	lbl := FormatChatScaleLabel(pct)
+	if v.chatScaleSel != nil {
+		v.chatScaleSel.SetSelected(lbl)
+	}
+	if v.chatScaleCustomEntry != nil {
+		v.chatScaleCustomEntry.SetText(strconv.Itoa(pct))
+	}
+	if v.chatScaleCustomBox != nil {
+		if lbl == ChatScaleLabelCustom {
+			v.chatScaleCustomBox.Show()
+		} else {
+			v.chatScaleCustomBox.Hide()
+		}
+	}
 }
 
 func (v *LogsView) setStatus(msg string) {
@@ -320,17 +406,28 @@ func (v *LogsView) Build() fyne.CanvasObject {
 
 	topSection := container.NewVBox(
 		compactTopBar,
-		v.summaryTotalsContainer,
 		v.filterDrawer,
+	)
+
+	chatPanelHeader := container.NewVBox(
+		v.summaryTotalsContainer,
 		tableHeader,
 	)
+	chatPanelBody := container.NewBorder(
+		chatPanelHeader,
+		nil,
+		nil,
+		nil,
+		listScroll,
+	)
+	v.chatPanelThemeOverride = container.NewThemeOverride(chatPanelBody, NewScaledChatTheme(v.chatScaleFactor()))
 
 	searchLayout := container.NewBorder(
 		topSection,
 		nil,
 		nil,
 		nil,
-		listScroll,
+		v.chatPanelThemeOverride,
 	)
 
 	v.subTabs = container.NewAppTabs(
@@ -493,9 +590,102 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 		v.setStatus(fmt.Sprintf("✓ Pruned %d expired log entries.", deleted))
 	})
 
+	defaultScalePct := NormalizeChatScale(cfg.Logging.ChatScale)
+	v.chatScaleCustomEntry = widget.NewEntry()
+	v.chatScaleCustomEntry.SetPlaceHolder("50-300")
+	v.chatScaleCustomEntry.SetText(strconv.Itoa(defaultScalePct))
+
+	applyCustomDefaultScale := func(raw string, clampText bool) {
+		if v.initializing || v.session == nil {
+			return
+		}
+		clean := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(raw), "%"))
+		val, err := strconv.Atoi(clean)
+		if err != nil || val <= 0 {
+			if clampText {
+				fallback := v.defaultChatScalePct()
+				v.initializing = true
+				v.chatScaleCustomEntry.SetText(strconv.Itoa(fallback))
+				v.initializing = false
+			}
+			return
+		}
+		if !clampText && (val < ChatScaleMin || val > ChatScaleMax) {
+			return
+		}
+		pct := NormalizeChatScale(val)
+		if clampText && strconv.Itoa(pct) != raw {
+			v.initializing = true
+			v.chatScaleCustomEntry.SetText(strconv.Itoa(pct))
+			v.initializing = false
+		}
+		_ = v.session.UpdateConfig(func(c *config.Config) {
+			c.Logging.ChatScale = pct
+		})
+		v.ApplyChatScale()
+		if v.onChatScaleChanged != nil {
+			v.onChatScaleChanged(pct)
+		}
+		v.setStatus(fmt.Sprintf("✓ Default chat panel scale updated to %d%%.", pct))
+	}
+
+	v.chatScaleCustomEntry.OnChanged = func(s string) {
+		applyCustomDefaultScale(s, false)
+	}
+	v.chatScaleCustomEntry.OnSubmitted = func(s string) {
+		applyCustomDefaultScale(s, true)
+	}
+
+	v.chatScaleCustomBox = container.NewHBox(
+		v.chatScaleCustomEntry,
+		widget.NewLabel("% (50–300%)"),
+	)
+
+	v.chatScaleSel = widget.NewSelect(ChatScaleOptions(), func(selected string) {
+		if v.initializing {
+			return
+		}
+		pct, isCustom, _ := ParseChatScaleLabel(selected)
+		if isCustom {
+			cur := v.defaultChatScalePct()
+			v.initializing = true
+			v.chatScaleCustomEntry.SetText(strconv.Itoa(cur))
+			v.initializing = false
+			if v.chatScaleCustomBox != nil {
+				v.chatScaleCustomBox.Show()
+			}
+			return
+		}
+		if v.chatScaleCustomBox != nil {
+			v.chatScaleCustomBox.Hide()
+		}
+		v.initializing = true
+		v.chatScaleCustomEntry.SetText(strconv.Itoa(pct))
+		v.initializing = false
+		if v.session != nil {
+			_ = v.session.UpdateConfig(func(c *config.Config) {
+				c.Logging.ChatScale = pct
+			})
+		}
+		v.ApplyChatScale()
+		if v.onChatScaleChanged != nil {
+			v.onChatScaleChanged(pct)
+		}
+		v.setStatus(fmt.Sprintf("✓ Default chat panel scale updated to %d%%.", pct))
+	})
+	initScaleLabel := FormatChatScaleLabel(defaultScalePct)
+	v.chatScaleSel.SetSelected(initScaleLabel)
+	if initScaleLabel == ChatScaleLabelCustom {
+		v.chatScaleCustomBox.Show()
+	} else {
+		v.chatScaleCustomBox.Hide()
+	}
+
 	if !cfg.Logging.Enabled {
 		v.chatRetSel.Disable()
 		v.eventRetSel.Disable()
+		v.chatScaleSel.Disable()
+		v.chatScaleCustomEntry.Disable()
 		v.pruneBtn.Disable()
 	}
 
@@ -507,8 +697,13 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 		widget.NewLabel("Alert/Paid TTL:"),
 		v.eventRetSel,
 	)
+	scaleRow := container.NewHBox(
+		widget.NewLabel("Default Chat Panel Scale:"),
+		v.chatScaleSel,
+		v.chatScaleCustomBox,
+	)
 
-	return widget.NewCard("Log Retention & Storage", "Configure automatic log expiration and storage cleanup", container.NewVBox(topRow, ttlRow))
+	return widget.NewCard("Log Retention & Storage", "Configure automatic log expiration, storage cleanup, and default chat panel scale", container.NewVBox(topRow, ttlRow, scaleRow))
 }
 
 // SyncLoggingState updates retention and live tail controls to reflect whether event logging is enabled.
@@ -531,6 +726,20 @@ func (v *LogsView) SyncLoggingState(enabled bool) {
 				v.eventRetSel.Enable()
 			} else {
 				v.eventRetSel.Disable()
+			}
+		}
+		if v.chatScaleSel != nil {
+			if enabled {
+				v.chatScaleSel.Enable()
+			} else {
+				v.chatScaleSel.Disable()
+			}
+		}
+		if v.chatScaleCustomEntry != nil {
+			if enabled {
+				v.chatScaleCustomEntry.Enable()
+			} else {
+				v.chatScaleCustomEntry.Disable()
 			}
 		}
 		if v.pruneBtn != nil {
@@ -1082,7 +1291,7 @@ func (v *LogsView) buildTableHeader() fyne.CanvasObject {
 		return widget.NewLabelWithStyle(title, align, fyne.TextStyle{Bold: true})
 	}
 
-	cols := container.New(logTableLayout{getWidth: v.currentTableWidth},
+	cols := container.New(logTableLayout{getWidth: v.currentTableWidth, getScale: v.chatScaleFactor},
 		colHdr("Time", fyne.TextAlignLeading),
 		colHdr("Svc", fyne.TextAlignCenter),
 		colHdr("User", fyne.TextAlignLeading),
@@ -1651,6 +1860,10 @@ func (v *LogsView) renderEntries() {
 	if len(entries) == 0 {
 		v.listBox.Add(widget.NewLabelWithStyle("No matching log entries found.", fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
 		v.listBox.Refresh()
+		if v.chatPanelThemeOverride != nil {
+			v.chatPanelThemeOverride.Theme = NewScaledChatTheme(v.chatScaleFactor())
+			v.chatPanelThemeOverride.Refresh()
+		}
 		return
 	}
 
@@ -1665,6 +1878,10 @@ func (v *LogsView) renderEntries() {
 		v.listBox.Add(v.buildLogRow(i, entry))
 	}
 	v.listBox.Refresh()
+	if v.chatPanelThemeOverride != nil {
+		v.chatPanelThemeOverride.Theme = NewScaledChatTheme(v.chatScaleFactor())
+		v.chatPanelThemeOverride.Refresh()
+	}
 }
 
 func (v *LogsView) buildDateSeparatorRow(t time.Time) fyne.CanvasObject {
@@ -1682,6 +1899,9 @@ func (v *LogsView) buildDateSeparatorRow(t time.Time) fyne.CanvasObject {
 }
 
 func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
+	s := v.chatScaleFactor()
+	iconSz := fyne.NewSize(20*s, 20*s)
+
 	// [0] Time column (HH:MM:SS, never truncated; date is shown on date separator banners)
 	localTS := e.CreatedAt.Local().Format("15:04:05")
 	timeTip := fmt.Sprintf("Time: %s Local (%s UTC)",
@@ -1691,7 +1911,7 @@ func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
 
 	// [1] Service icon column
 	platRes, platTip := platformIconAndTip(e.Platform)
-	svcCell := v.newHoverIcon(platRes, fyne.NewSize(20, 20), platTip, nil)
+	svcCell := v.newHoverIcon(platRes, iconSz, platTip, nil)
 
 	// [2] User & Role/Tag icons column
 	displayName := e.DisplayName
@@ -1742,7 +1962,7 @@ func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
 	}
 	var msgCell fyne.CanvasObject
 	if len(e.Emotes) > 0 {
-		ec := newEmoteMessageCell(v.emoteCache, v.showTooltipForObject)
+		ec := newScaledEmoteMessageCell(v.emoteCache, s, v.showTooltipForObject)
 		ec.SetContent(e.Platform, e.RawText, e.Emotes, msgTip, "")
 		msgCell = ec
 	} else {
@@ -1755,11 +1975,11 @@ func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
 
 	// [4] Passed Filters icon column
 	filterRes, filterTip := filterStatusIconAndTip(e)
-	filterCell := v.newHoverIcon(filterRes, fyne.NewSize(20, 20), filterTip, nil)
+	filterCell := v.newHoverIcon(filterRes, iconSz, filterTip, nil)
 
 	// [5] Spoken / Queue Outcome icon column
 	spokenRes, spokenTip := spokenStatusIconAndTip(e)
-	spokenCell := v.newHoverIcon(spokenRes, fyne.NewSize(20, 20), spokenTip, nil)
+	spokenCell := v.newHoverIcon(spokenRes, iconSz, spokenTip, nil)
 
 	// [6] Voice icon column (clickable to assign voice override)
 	voiceRes, voiceTip := voiceStatusIconAndTip(e)
@@ -1771,9 +1991,9 @@ func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
 			v.showAssignVoiceDialog(plat, uName)
 		}
 	}
-	voiceCell := v.newHoverIcon(voiceRes, fyne.NewSize(20, 20), voiceTip, onVoiceTap)
+	voiceCell := v.newHoverIcon(voiceRes, iconSz, voiceTip, onVoiceTap)
 
-	rowCols := container.New(logTableLayout{getWidth: v.currentTableWidth},
+	rowCols := container.New(logTableLayout{getWidth: v.currentTableWidth, getScale: v.chatScaleFactor},
 		timeCell,
 		svcCell,
 		userCell,

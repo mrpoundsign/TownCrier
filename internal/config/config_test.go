@@ -32,6 +32,67 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.TTS.Enabled {
 		t.Error("expected TTS.Enabled to be true by default")
 	}
+	if cfg.Logging.ChatScale != 100 {
+		t.Errorf("expected Logging.ChatScale 100 by default, got %d", cfg.Logging.ChatScale)
+	}
+}
+
+func TestChatScalePersistenceAndClamping(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+
+	cfg := DefaultConfig()
+	cfg.Logging.ChatScale = 145
+	cfg.Logging.LiveLogs = []LiveLogPreset{
+		{
+			ID:        "preset-inherit",
+			Name:      "Inherit",
+			ChatScale: 0,
+		},
+		{
+			ID:        "preset-custom",
+			Name:      "Custom 180",
+			ChatScale: 180,
+		},
+		{
+			ID:        "preset-low",
+			Name:      "Too Low",
+			ChatScale: 20,
+		},
+		{
+			ID:        "preset-high",
+			Name:      "Too High",
+			ChatScale: 500,
+		},
+	}
+
+	if err := Save(configPath, cfg); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if loaded.Logging.ChatScale != 145 {
+		t.Errorf("expected Logging.ChatScale 145, got %d", loaded.Logging.ChatScale)
+	}
+	if len(loaded.Logging.LiveLogs) != 4 {
+		t.Fatalf("expected 4 LiveLogPresets, got %d", len(loaded.Logging.LiveLogs))
+	}
+	if loaded.Logging.LiveLogs[0].ChatScale != 0 {
+		t.Errorf("expected preset 0 ChatScale 0 (inherit), got %d", loaded.Logging.LiveLogs[0].ChatScale)
+	}
+	if loaded.Logging.LiveLogs[1].ChatScale != 180 {
+		t.Errorf("expected preset 1 ChatScale 180, got %d", loaded.Logging.LiveLogs[1].ChatScale)
+	}
+	if loaded.Logging.LiveLogs[2].ChatScale != 50 {
+		t.Errorf("expected preset 2 ChatScale clamped to 50, got %d", loaded.Logging.LiveLogs[2].ChatScale)
+	}
+	if loaded.Logging.LiveLogs[3].ChatScale != 300 {
+		t.Errorf("expected preset 3 ChatScale clamped to 300, got %d", loaded.Logging.LiveLogs[3].ChatScale)
+	}
 }
 
 func TestTTSConfigEnabledRetention(t *testing.T) {
