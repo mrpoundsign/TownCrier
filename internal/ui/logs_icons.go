@@ -105,6 +105,15 @@ var (
 			`<polygon points="12,4 19,11 12,20 5,11" fill="#FEF08A"/>`+
 			`</svg>`))
 
+	resEventJewel = fyne.NewStaticResource("event_jewel.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="2" y="2" width="20" height="20" rx="4" fill="#7F1D1D"/>`+
+			`<polygon points="7,5 17,5 20,10 12,20 4,10" fill="#EF4444"/>`+
+			`<polygon points="7,5 17,5 15,10 9,10" fill="#FCA5A5"/>`+
+			`<polygon points="4,10 9,10 12,20" fill="#DC2626"/>`+
+			`<polygon points="15,10 20,10 12,20" fill="#B91C1C"/>`+
+			`</svg>`))
+
 	resEventRaid = fyne.NewStaticResource("event_raid.svg", []byte(
 		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
 			`<rect x="2" y="2" width="20" height="20" rx="4" fill="#0284C7"/>`+
@@ -310,7 +319,13 @@ func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 			evIcon = resEventFollow
 		case "sub", "resub", "gift_sub", "gift_redemption", "sub_upgrade", "membership", "gift_membership":
 			evIcon = resEventSub
-		case "cheer", "bits_badge_tier", "gift", "superchat", "supersticker", "super_chat", "super_sticker", "charity_donation":
+		case "gift":
+			if strings.EqualFold(e.Platform, "youtube") || strings.EqualFold(e.Currency, "Jewels") || strings.EqualFold(e.Currency, "Jewel") {
+				evIcon = resEventJewel
+			} else {
+				evIcon = resEventCheer
+			}
+		case "cheer", "bits_badge_tier", "superchat", "supersticker", "super_chat", "super_sticker", "charity_donation":
 			evIcon = resEventCheer
 		case "raid", "announcement":
 			evIcon = resEventRaid

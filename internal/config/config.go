@@ -504,6 +504,12 @@ func DefaultConfig() *Config {
 						Voice:     "",
 						Threshold: 0,
 					},
+					"gift": {
+						Enabled:   true,
+						Template:  "{user} sent {gift}!",
+						Voice:     "",
+						Threshold: 0,
+					},
 					"sub": {
 						Enabled:   true,
 						Template:  "{user} just became a member!",

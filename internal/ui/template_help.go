@@ -298,6 +298,13 @@ func EventTemplateVars(platform, eventKey string) []TemplateVar {
 				{Var: "{amount}", Desc: "Super Sticker amount"},
 				{Var: "{currency}", Desc: "Currency code (e.g. USD)"},
 			}
+		case "gift":
+			return []TemplateVar{
+				{Var: "{user}", Desc: "Sender username"},
+				{Var: "{gift}", Desc: "Gift item name (e.g. 100, Donut)"},
+				{Var: "{count}", Desc: "Number of gifts sent"},
+				{Var: "{amount}", Desc: "Jewel amount (if provided by YouTube)"},
+			}
 		case "sub":
 			return []TemplateVar{
 				{Var: "{user}", Desc: "New member username"},

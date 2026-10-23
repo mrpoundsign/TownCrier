@@ -213,7 +213,7 @@ func (v *YouTubeTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget
 	})
 
 	hintLabel := widget.NewLabelWithStyle(
-		"✓ Zero-Config Mode: Enter your YouTube channel name, channel URL, or live video URL (no @ required). Public chat, Super Chats, Super Stickers, and Memberships work automatically with no OAuth or API key needed.",
+		"✓ Zero-Config Mode: Enter your YouTube channel name, channel URL, or live video URL (no @ required). Public chat, Super Chats, Super Stickers, Gifts (Jewels), and Memberships work automatically with no OAuth or API key needed.",
 		fyne.TextAlignLeading,
 		fyne.TextStyle{Italic: true},
 	)
@@ -319,7 +319,7 @@ func (v *YouTubeTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.
 		roleBoxes.Add(chk)
 	}
 
-	v.paidOnlyCheck = widget.NewCheck("Paid Only (Only read Super Chats, Super Stickers, and Memberships)", func(b bool) {
+	v.paidOnlyCheck = widget.NewCheck("Paid Only (Only read Super Chats, Super Stickers, Gifts, and Memberships)", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
 			p := c.Platforms["youtube"]
 			p.ReadRules.PaidOnly = b
@@ -396,6 +396,7 @@ func (v *YouTubeTabView) buildNotificationsCard(pCfg config.PlatformConfig) *wid
 	}{
 		{"super_chat", "Super Chat", "{user} sent {amount} {currency}! {message}", true},
 		{"super_sticker", "Super Sticker", "{user} sent a {amount} {currency} super sticker!", true},
+		{"gift", "Gifts (Jewels)", "{user} sent {gift}!", true},
 		{"sub", "New Member", "{user} just became a member!", true},
 		{"resub", "Member Milestone", "{user} has been a member for {months} months! {message}", true},
 		{"gift_sub", "Gifted Memberships", "{user} gifted {count} memberships!", true},
@@ -458,7 +459,7 @@ func (v *YouTubeTabView) buildNotificationsCard(pCfg config.PlatformConfig) *wid
 		notifsList.Add(row)
 	}
 
-	return widget.NewCard("Notification Events", "Spoken alert templates for YouTube Super Chats & Memberships", notifsList)
+	return widget.NewCard("Notification Events", "Spoken alert templates for YouTube Super Chats, Gifts & Memberships", notifsList)
 }
 
 func (v *YouTubeTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Card {

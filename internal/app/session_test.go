@@ -972,6 +972,25 @@ func TestSessionWatchStreakAndExtendedEventFormatting(t *testing.T) {
 		Recipient:   "Alice, Bob, Charlie",
 	})
 
+	// 5. YouTube Gift (Powered by Jewels) -> logged as "Sent 100 (2 Jewels) :100:" and SpokenText "IgorB-x8u sent 100!"
+	_ = session.DispatchEvent(&chat.Event{
+		ID:          "yt-gift-100",
+		Platform:    "youtube",
+		Kind:        chat.EventKindGift,
+		UserID:      "UC6391gIzzyKbri_pkMzFcoQ",
+		UserName:    "IgorB-x8u",
+		DisplayName: "IgorB-x8u",
+		ItemName:    "100",
+		RewardTitle: "100",
+		Count:       1,
+		UnitAmount:  2,
+		Amount:      2,
+		Currency:    "Jewels",
+		EmoteSpans: []chat.EmoteSpan{
+			{Start: 0, End: 3, ID: "youtube_gift_100", Name: "100", URL: "https://www.gstatic.com/youtube/img/pdg/gift/assets/100.png"},
+		},
+	})
+
 	res, err := logMgr.Query(ctx, eventlog.QueryFilter{})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
@@ -996,6 +1015,13 @@ func TestSessionWatchStreakAndExtendedEventFormatting(t *testing.T) {
 	kg := byID["kick-giftsub-multi"]
 	if !kg.PassedFilters || kg.RawText != "Gifted 3 subscriptions to Alice, Bob, Charlie" {
 		t.Errorf("unexpected kick-giftsub-multi entry: %+v", kg)
+	}
+	ytg := byID["yt-gift-100"]
+	if !ytg.PassedFilters || ytg.RawText != "Sent 100 (2 Jewels) :100:" || ytg.SpokenText != "IgorB-x8u sent 100!" {
+		t.Errorf("unexpected yt-gift-100 entry: RawText=%q SpokenText=%q Entry=%+v", ytg.RawText, ytg.SpokenText, ytg)
+	}
+	if res.Summary.TotalJewels != 2 {
+		t.Errorf("expected TotalJewels=2 in QuerySummary, got %v", res.Summary.TotalJewels)
 	}
 }
 

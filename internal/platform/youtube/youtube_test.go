@@ -417,3 +417,105 @@ func TestParseYouTubeGiftRedemptionDonationAndRaid(t *testing.T) {
 		t.Errorf("unexpected raid redirect event: %+v", events[2])
 	}
 }
+
+func TestParseYouTubeGiftMessageViewModel(t *testing.T) {
+	payload := []byte(`{
+		"continuationContents": {
+			"liveChatContinuation": {
+				"continuations": [],
+				"actions": [
+					{
+						"addChatItemAction": {
+							"item": {
+								"giftMessageViewModel": {
+									"id": "yt-jewel-gift-100",
+									"authorName": {
+										"content": "@IgorB-x8u ",
+										"styleRuns": [{"startIndex": 0, "length": 11}]
+									},
+									"authorExternalChannelId": "UC6391gIzzyKbri_pkMzFcoQ",
+									"text": {
+										"content": "sent 100",
+										"styleRuns": [{"startIndex": 0, "length": 8}]
+									},
+									"giftImage": {
+										"sources": [
+											{"url": "//www.gstatic.com/youtube/img/pdg/gift/assets/100.png=w480-h480", "width": 480, "height": 480},
+											{"url": "//www.gstatic.com/youtube/img/pdg/gift/assets/100.png=w640-h640", "width": 640, "height": 640}
+										]
+									},
+									"giftImageA11yLabel": "@IgorB-x8u sent a gift, 100"
+								}
+							}
+						}
+					},
+					{
+						"addChatItemAction": {
+							"item": {
+								"giftMessageViewModel": {
+									"id": "yt-jewel-gift-explicit",
+									"authorName": {
+										"content": "@GoldFan"
+									},
+									"text": {
+										"content": "sent Gold coin for 15 Jewels"
+									},
+									"giftImage": {
+										"sources": [
+											{"url": "https://www.gstatic.com/youtube/img/pdg/gift/assets/gold_coin.png"}
+										]
+									}
+								}
+							}
+						}
+					},
+					{
+						"addChatItemAction": {
+							"item": {
+								"giftMessageViewModel": {
+									"id": "yt-jewel-gift-a11y",
+									"giftImageA11yLabel": "@A11ySender sent a gift, Mystery Box"
+								}
+							}
+						}
+					}
+				]
+			}
+		}
+	}`)
+
+	events, _, _, _, err := ParseLiveChatResponse(payload)
+	if err != nil {
+		t.Fatalf("ParseLiveChatResponse: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 gift events, got %d", len(events))
+	}
+
+	// 1. Standard "sent 100" with fallback lookup (2 Jewels) and protocol-relative image URL
+	ev0 := events[0]
+	if ev0.Kind != chat.EventKindGift || ev0.Platform != "youtube" {
+		t.Errorf("unexpected event[0] kind/platform: %+v", ev0)
+	}
+	if ev0.UserName != "IgorB-x8u" || ev0.UserID != "UC6391gIzzyKbri_pkMzFcoQ" {
+		t.Errorf("unexpected event[0] user fields: UserName=%q UserID=%q", ev0.UserName, ev0.UserID)
+	}
+	if ev0.ItemName != "100" || ev0.Amount != 2 || ev0.Currency != "Jewels" || ev0.Count != 1 {
+		t.Errorf("unexpected event[0] gift metadata: ItemName=%q Amount=%v Currency=%q Count=%d", ev0.ItemName, ev0.Amount, ev0.Currency, ev0.Count)
+	}
+	if len(ev0.EmoteSpans) != 1 || ev0.EmoteSpans[0].URL != "https://www.gstatic.com/youtube/img/pdg/gift/assets/100.png=w640-h640" {
+		t.Errorf("unexpected event[0] EmoteSpans: %+v", ev0.EmoteSpans)
+	}
+
+	// 2. Explicit "sent Gold coin for 15 Jewels"
+	ev1 := events[1]
+	if ev1.UserName != "GoldFan" || ev1.ItemName != "Gold coin" || ev1.Amount != 15 || ev1.Currency != "Jewels" {
+		t.Errorf("unexpected event[1]: %+v", ev1)
+	}
+
+	// 3. Fallback from giftImageA11yLabel
+	ev2 := events[2]
+	if ev2.UserName != "A11ySender" || ev2.ItemName != "Mystery Box" || ev2.Amount != 0 {
+		t.Errorf("unexpected event[2]: %+v", ev2)
+	}
+}

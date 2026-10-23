@@ -1015,6 +1015,22 @@ func formatEventLogRawTextAndEmotes(event *chat.Event) (string, []chat.EmoteSpan
 		if strings.EqualFold(msg, giftName) {
 			msg = ""
 		}
+		if strings.EqualFold(event.Platform, "youtube") || strings.EqualFold(event.Currency, "Jewels") || strings.EqualFold(event.Currency, "Jewel") {
+			base := "Sent " + giftName
+			if event.Amount > 0 {
+				base = fmt.Sprintf("Sent %s (%.0f Jewels)", giftName, event.Amount)
+			}
+			if len(rawEmotes) > 0 && strings.TrimSpace(rawEmotes[0].URL) != "" {
+				token := ":" + giftName + ":"
+				start := utf8.RuneCountInString(base) + 1
+				sp := rawEmotes[0]
+				sp.Start = start
+				sp.End = start + utf8.RuneCountInString(token)
+				sp.Name = giftName
+				return base + " " + token, []chat.EmoteSpan{sp}
+			}
+			return base, nil
+		}
 		count := event.Count
 		if count <= 0 {
 			count = int(event.Amount)

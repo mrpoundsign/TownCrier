@@ -125,6 +125,7 @@ type LogsView struct {
 	multiSessionBtn        *widget.Button
 	summary                eventlog.QuerySummary
 	summaryTotalsLabel     *widget.Label
+	summaryTotalsItemsBox  *fyne.Container
 	summaryTotalsContainer *fyne.Container
 
 	heldQueueContainer *fyne.Container
@@ -387,15 +388,7 @@ func (v *LogsView) Build() fyne.CanvasObject {
 	// Initialize retention widgets as well so programmatic/test access works seamlessly.
 	_ = v.BuildRetentionCard()
 
-	v.summaryTotalsLabel = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
-	totalsBg := canvas.NewRectangle(colorSlateSurface)
-	totalsBorder := canvas.NewRectangle(colorSkyBlueDim)
-	totalsBorder.SetMinSize(fyne.NewSize(1, 1))
-	v.summaryTotalsContainer = container.NewStack(
-		totalsBg,
-		container.NewBorder(nil, totalsBorder, nil, nil, container.NewPadded(v.summaryTotalsLabel)),
-	)
-	v.summaryTotalsContainer.Hide()
+	v.initSummaryTotalsBanner()
 
 	v.heldQueueContainer = v.buildHeldQueueBanner()
 
@@ -498,6 +491,89 @@ func newBorderedControl(ctrl fyne.CanvasObject) fyne.CanvasObject {
 	return container.NewStack(box, ctrl)
 }
 
+func (v *LogsView) initSummaryTotalsBanner() {
+	v.summaryTotalsLabel = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	v.summaryTotalsItemsBox = container.NewHBox(v.summaryTotalsLabel)
+	totalsBg := canvas.NewRectangle(colorSlateSurface)
+	totalsBorder := canvas.NewRectangle(colorSkyBlueDim)
+	totalsBorder.SetMinSize(fyne.NewSize(1, 1))
+	v.summaryTotalsContainer = container.NewStack(
+		totalsBg,
+		container.NewBorder(nil, totalsBorder, nil, nil, container.NewPadded(container.NewCenter(v.summaryTotalsItemsBox))),
+	)
+	v.summaryTotalsContainer.Hide()
+}
+
+func (v *LogsView) buildSummaryTotalsObjects(s eventlog.QuerySummary) []fyne.CanvasObject {
+	type item struct {
+		icon fyne.Resource
+		text string
+	}
+	var items []item
+	if s.TotalBits > 0 {
+		items = append(items, item{text: fmt.Sprintf("🪙 %.0f Bits", s.TotalBits)})
+	}
+	if s.TotalDiamonds > 0 {
+		items = append(items, item{text: fmt.Sprintf("💎 %.0f Diamonds", s.TotalDiamonds)})
+	}
+	if s.TotalJewels > 0 {
+		items = append(items, item{icon: resEventJewel, text: fmt.Sprintf("%.0f Jewels", s.TotalJewels)})
+	}
+	if len(s.SuperChatByCurr) > 0 {
+		currs := make([]string, 0, len(s.SuperChatByCurr))
+		for curr := range s.SuperChatByCurr {
+			currs = append(currs, curr)
+		}
+		slices.Sort(currs)
+		for _, curr := range currs {
+			amt := s.SuperChatByCurr[curr]
+			if amt > 0 {
+				items = append(items, item{text: fmt.Sprintf("💬 %.0f %s", amt, curr)})
+			}
+		}
+	}
+	if s.TotalSubs > 0 {
+		items = append(items, item{text: fmt.Sprintf("⭐ %d Subs", s.TotalSubs)})
+	}
+	if s.TotalGiftSubs > 0 {
+		items = append(items, item{text: fmt.Sprintf("🎁 %d Gift Subs", s.TotalGiftSubs)})
+	}
+	if s.TotalKicks > 0 {
+		items = append(items, item{text: fmt.Sprintf("🟢 %.0f Kicks", s.TotalKicks)})
+	}
+	if s.TotalFollows > 0 {
+		items = append(items, item{text: fmt.Sprintf("❤️ %d Follows", s.TotalFollows)})
+	}
+	if s.TotalRaids > 0 {
+		items = append(items, item{text: fmt.Sprintf("🚀 %d Raids", s.TotalRaids)})
+	}
+	if s.TotalRedemptions > 0 {
+		items = append(items, item{text: fmt.Sprintf("🎟️ %d Redemptions", s.TotalRedemptions)})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	scale := v.chatScaleFactor()
+	iconSz := fyne.NewSize(18*scale, 18*scale)
+	var objs []fyne.CanvasObject
+	for i, it := range items {
+		if i > 0 {
+			objs = append(objs, widget.NewLabelWithStyle("•", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
+		}
+		lbl := widget.NewLabelWithStyle(it.text, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+		if it.icon != nil {
+			img := canvas.NewImageFromResource(it.icon)
+			img.FillMode = canvas.ImageFillContain
+			img.SetMinSize(iconSz)
+			objs = append(objs, container.NewHBox(container.NewCenter(img), lbl))
+		} else {
+			objs = append(objs, lbl)
+		}
+	}
+	return objs
+}
+
 func formatSummaryTotals(s eventlog.QuerySummary) string {
 	var parts []string
 	if s.TotalBits > 0 {
@@ -505,6 +581,9 @@ func formatSummaryTotals(s eventlog.QuerySummary) string {
 	}
 	if s.TotalDiamonds > 0 {
 		parts = append(parts, fmt.Sprintf("💎 %.0f Diamonds", s.TotalDiamonds))
+	}
+	if s.TotalJewels > 0 {
+		parts = append(parts, fmt.Sprintf("♦️ %.0f Jewels", s.TotalJewels))
 	}
 	if len(s.SuperChatByCurr) > 0 {
 		currs := make([]string, 0, len(s.SuperChatByCurr))
@@ -1856,12 +1935,20 @@ func (v *LogsView) renderEntries() {
 		txt := formatSummaryTotals(summary)
 		if showSum && txt != "" {
 			v.summaryTotalsLabel.SetText(txt)
+			if v.summaryTotalsItemsBox != nil {
+				v.summaryTotalsItemsBox.Objects = v.buildSummaryTotalsObjects(summary)
+				v.summaryTotalsItemsBox.Refresh()
+			}
 			if v.summaryTotalsContainer != nil {
 				v.summaryTotalsContainer.Show()
 				v.summaryTotalsContainer.Refresh()
 			}
 		} else {
 			v.summaryTotalsLabel.SetText("")
+			if v.summaryTotalsItemsBox != nil {
+				v.summaryTotalsItemsBox.Objects = nil
+				v.summaryTotalsItemsBox.Refresh()
+			}
 			if v.summaryTotalsContainer != nil {
 				v.summaryTotalsContainer.Hide()
 				v.summaryTotalsContainer.Refresh()

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
@@ -297,15 +296,7 @@ func (v *LogsView) buildZeroChrome(preset config.LiveLogPreset) fyne.CanvasObjec
 	v.tooltipBubble, v.tooltipText = buildTooltipBubble()
 	v.tooltipLayer = container.NewWithoutLayout(v.tooltipBubble)
 
-	v.summaryTotalsLabel = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
-	totalsBg := canvas.NewRectangle(colorSlateSurface)
-	totalsBorder := canvas.NewRectangle(colorSkyBlueDim)
-	totalsBorder.SetMinSize(fyne.NewSize(1, 1))
-	v.summaryTotalsContainer = container.NewStack(
-		totalsBg,
-		container.NewBorder(nil, totalsBorder, nil, nil, container.NewPadded(v.summaryTotalsLabel)),
-	)
-	v.summaryTotalsContainer.Hide()
+	v.initSummaryTotalsBanner()
 
 	v.heldQueueContainer = v.buildHeldQueueBanner()
 

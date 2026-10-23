@@ -545,6 +545,7 @@ func TestLogsViewStreamSessionAndTotalsSummary(t *testing.T) {
 	testSummary := eventlog.QuerySummary{
 		TotalBits:       1000,
 		TotalDiamonds:   250,
+		TotalJewels:     12,
 		TotalSubs:       3,
 		TotalGiftSubs:   1,
 		TotalFollows:    10,
@@ -552,7 +553,7 @@ func TestLogsViewStreamSessionAndTotalsSummary(t *testing.T) {
 		SuperChatByCurr: map[string]float64{"USD": 50},
 	}
 	formatted := formatSummaryTotals(testSummary)
-	for _, expectedToken := range []string{"1000 Bits", "250 Diamonds", "3 Subs", "1 Gift Subs", "10 Follows", "2 Raids", "50 USD"} {
+	for _, expectedToken := range []string{"1000 Bits", "250 Diamonds", "12 Jewels", "3 Subs", "1 Gift Subs", "10 Follows", "2 Raids", "50 USD"} {
 		if !strings.Contains(formatted, expectedToken) {
 			t.Errorf("formatSummaryTotals missing %q: %q", expectedToken, formatted)
 		}
