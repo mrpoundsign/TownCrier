@@ -15,7 +15,7 @@ func TestDashboardViewBuild(t *testing.T) {
 	appObj := test.NewApp()
 	win := appObj.NewWindow("Test")
 	cfg := config.DefaultConfig()
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
 	dash := NewDashboardView(win, session)
 	content := dash.Build()
@@ -40,7 +40,7 @@ func TestDashboardSyncTTSState(t *testing.T) {
 	appObj := test.NewApp()
 	win := appObj.NewWindow("Test")
 	cfg := config.DefaultConfig()
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
 	dash := NewDashboardView(win, session)
 	_ = dash.Build()

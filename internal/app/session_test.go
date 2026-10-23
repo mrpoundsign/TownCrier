@@ -17,7 +17,7 @@ import (
 func TestSessionLifecycle(t *testing.T) {
 	cfg := config.DefaultConfig()
 	store := secrets.NewMemoryStore()
-	session := NewSession(cfg, store)
+	session := NewSession(cfg, store, config.NewMemoryStore(cfg))
 
 	if session.IsRunning() {
 		t.Error("expected session not to be running initially")
@@ -61,7 +61,7 @@ func TestSessionLifecycle(t *testing.T) {
 func TestSessionReloadConfig(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.GlobalChatRules.DefaultVoice = "af_bella"
-	session := NewSession(cfg, secrets.NewMemoryStore())
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
 	newCfg := cfg.Clone()
 	newCfg.GlobalChatRules.DefaultVoice = "am_adam"
@@ -83,7 +83,8 @@ func TestSessionReloadConfig(t *testing.T) {
 func TestSessionUpdateConfig(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.GlobalChatRules.DefaultVoice = "af_bella"
-	session := NewSession(cfg, secrets.NewMemoryStore())
+	memStore := config.NewMemoryStore(cfg)
+	session := NewSession(cfg, secrets.NewMemoryStore(), memStore)
 
 	err := session.UpdateConfig(func(c *config.Config) {
 		c.GlobalChatRules.DefaultVoice = "am_michael"
@@ -101,13 +102,37 @@ func TestSessionUpdateConfig(t *testing.T) {
 		t.Errorf("expected SpeakEmotes to be false")
 	}
 
+	// Verify persistence when FileStore with TestLocations is used
+	tmpDir := t.TempDir()
+	loc := config.TestLocations(tmpDir)
+	fileStore, err := config.NewFileStore(loc)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	fileSession := NewSession(cfg, secrets.NewMemoryStore(), fileStore)
+
+	err = fileSession.UpdateConfig(func(c *config.Config) {
+		c.GlobalChatRules.DefaultVoice = "am_adam"
+	})
+	if err != nil {
+		t.Fatalf("UpdateConfig with FileStore failed: %v", err)
+	}
+
+	persisted, err := fileStore.Load()
+	if err != nil {
+		t.Fatalf("failed to load persisted config from %s: %v", loc.ConfigPath(), err)
+	}
+	if persisted.GlobalChatRules.DefaultVoice != "am_adam" {
+		t.Errorf("expected persisted voice 'am_adam', got %q", persisted.GlobalChatRules.DefaultVoice)
+	}
+
 	if err := session.UpdateConfig(nil); err == nil {
 		t.Error("expected error with nil mutator")
 	}
 }
 
 func TestSessionConcurrency(t *testing.T) {
-	session := NewSession(config.DefaultConfig(), secrets.NewMemoryStore())
+	session := NewSession(config.DefaultConfig(), secrets.NewMemoryStore(), config.NewMemoryStore(nil))
 	_ = session.Start()
 
 	var wg sync.WaitGroup
@@ -127,7 +152,7 @@ func TestSessionConcurrency(t *testing.T) {
 
 func TestSessionDispatchEvent(t *testing.T) {
 	cfg := config.DefaultConfig()
-	session := NewSession(cfg, secrets.NewMemoryStore())
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
 	// Pause queue so we can inspect enqueued items
 	session.Queue().Pause()
@@ -217,7 +242,7 @@ func TestSessionTwitchConnector(t *testing.T) {
 	p.AccountName = "mrpoundsign"
 	cfg.Platforms["twitch"] = p
 
-	session := NewSession(cfg, secrets.NewMemoryStore())
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	conn := session.TwitchConnector()
 	if conn == nil {
 		t.Fatal("expected non-nil TwitchConnector")
@@ -236,7 +261,7 @@ func TestSessionDispatchEventEmotes(t *testing.T) {
 	cfg.GlobalChatRules.SpeakNames = true
 	cfg.GlobalChatRules.SpeakEmotes = false
 
-	session := NewSession(cfg, secrets.NewMemoryStore())
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	if err := session.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -347,7 +372,7 @@ func TestSessionEventLogOutcomes(t *testing.T) {
 		EventRetentionDays: 90,
 	}, sqlStore)
 
-	session := NewSession(cfg, secrets.NewMemoryStore())
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	session.SetEventLogger(logMgr)
 	defer func() { _ = session.Close() }()
 
@@ -443,7 +468,7 @@ func TestSessionStreamEventsAndRedemptionFilter(t *testing.T) {
 		EventRetentionDays: 90,
 	}, sqlStore)
 
-	session := NewSession(cfg, secrets.NewMemoryStore())
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	session.SetEventLogger(logMgr)
 	defer func() { _ = session.Close() }()
 	session.Queue().Pause()
@@ -555,7 +580,7 @@ func TestUnifiedStreamSessionLifecycleAcrossPlatforms(t *testing.T) {
 		EventRetentionDays: 90,
 	}, sqlStore)
 
-	session := NewSession(cfg, secrets.NewMemoryStore())
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	session.SetEventLogger(logMgr)
 	defer func() { _ = session.Close() }()
 	session.Queue().Pause()
@@ -644,7 +669,7 @@ func TestSession_InlineGiftAndStickerLogFormatting(t *testing.T) {
 		EventRetentionDays: 90,
 	}, sqlStore)
 
-	session := NewSession(cfg, secrets.NewMemoryStore())
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	session.SetEventLogger(logMgr)
 	defer func() { _ = session.Close() }()
 	session.Queue().Pause()
@@ -777,7 +802,7 @@ func TestSessionFollowerRoleGatingTwitchAndKick(t *testing.T) {
 	kickCfg.ReadRules.Roles = []string{"follower"}
 	cfg.Platforms["kick"] = kickCfg
 
-	session := NewSession(cfg, secrets.NewMemoryStore())
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	session.SetEventLogger(logMgr)
 	defer func() { _ = session.Close() }()
 	session.Queue().Pause()
@@ -895,7 +920,7 @@ func TestSessionWatchStreakAndExtendedEventFormatting(t *testing.T) {
 	twCfg.Notifications["watch_streak"] = wsNotif
 	cfg.Platforms["twitch"] = twCfg
 
-	session := NewSession(cfg, secrets.NewMemoryStore())
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	session.SetEventLogger(logMgr)
 	defer func() { _ = session.Close() }()
 	session.Queue().Pause()
@@ -988,7 +1013,7 @@ func TestSessionDispatchEventTTSDisabled(t *testing.T) {
 		EventRetentionDays: 90,
 	}, sqlStore)
 
-	session := NewSession(cfg, secrets.NewMemoryStore())
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	session.SetEventLogger(logMgr)
 	defer func() { _ = session.Close() }()
 

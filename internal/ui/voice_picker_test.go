@@ -18,7 +18,7 @@ func TestVoiceSpeedFieldAndSummary(t *testing.T) {
 	win := appObj.NewWindow("Test VoiceSpeedField")
 
 	cfg := config.DefaultConfig()
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	defer func() { _ = session.Close() }()
 
 	field := NewVoiceSpeedField(win, session, "Edit Voice", "af_bella", 1.25, nil, nil)
@@ -80,7 +80,7 @@ func TestSettingsGlobalVoiceFieldAndRefresh(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.GlobalChatRules.DefaultVoice = "supertonic:f1"
 	cfg.GlobalChatRules.DefaultSpeed = 1.15
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	defer func() { _ = session.Close() }()
 
 	view := NewSettingsView(win, cfg, nil, nil)

@@ -62,15 +62,19 @@ type Session struct {
 	streamMu        sync.Mutex
 	livePlatforms   map[string]string
 	activeSessionID int64
+	configStore     config.Store
 }
 
-// NewSession creates an application session initialized with configuration and secret store.
-func NewSession(cfg *config.Config, store secrets.Store) *Session {
+// NewSession creates an application session initialized with configuration, secret store, and config store.
+func NewSession(cfg *config.Config, store secrets.Store, configStore config.Store) *Session {
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
 	if store == nil {
 		store = secrets.NewKeyringStore("")
+	}
+	if configStore == nil {
+		configStore = config.NewMemoryStore(cfg)
 	}
 
 	matcher, _ := bots.NewMatcher()
@@ -80,6 +84,7 @@ func NewSession(cfg *config.Config, store secrets.Store) *Session {
 	s := &Session{
 		cfg:           cfg.Clone(),
 		secrets:       store,
+		configStore:   configStore,
 		router:        router,
 		sanitizer:     sanitizer,
 		bots:          matcher,
@@ -320,7 +325,14 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 	return nil
 }
 
-// UpdateConfig safely mutates the session configuration, reloads subsystems, and persists to disk.
+// ConfigStore returns the configuration store attached to this session.
+func (s *Session) ConfigStore() config.Store {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.configStore
+}
+
+// UpdateConfig safely mutates the session configuration, reloads subsystems, and persists via ConfigStore.
 func (s *Session) UpdateConfig(fn func(c *config.Config)) error {
 	if fn == nil {
 		return errors.New("mutator function cannot be nil")
@@ -330,8 +342,13 @@ func (s *Session) UpdateConfig(fn func(c *config.Config)) error {
 	if err := s.ReloadConfig(cfg); err != nil {
 		return fmt.Errorf("reload config: %w", err)
 	}
-	if err := config.Save("", cfg); err != nil {
-		return fmt.Errorf("save config: %w", err)
+	s.mu.RLock()
+	cStore := s.configStore
+	s.mu.RUnlock()
+	if cStore != nil {
+		if err := cStore.Save(cfg); err != nil {
+			return fmt.Errorf("save config: %w", err)
+		}
 	}
 	return nil
 }

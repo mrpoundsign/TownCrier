@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"testing"
 )
 
 const CurrentVersion = 1
@@ -728,19 +729,15 @@ func (c *Config) Clone() *Config {
 var fileLock sync.Mutex
 
 // Load loads the configuration from the given file path.
-// If path is empty, it uses the default path from ConfigPath().
+// The file path must be explicitly provided and non-empty.
 // If the file does not exist, DefaultConfig() is returned.
 func Load(path string) (*Config, error) {
+	if path == "" {
+		return nil, errors.New("cannot load config: explicit path must be provided")
+	}
+
 	fileLock.Lock()
 	defer fileLock.Unlock()
-
-	if path == "" {
-		var err error
-		path, err = ConfigPath()
-		if err != nil {
-			return nil, err
-		}
-	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -795,10 +792,17 @@ func Save(path string, cfg *Config) error {
 
 func saveLocked(path string, cfg *Config) error {
 	if path == "" {
-		var err error
-		path, err = ConfigPath()
-		if err != nil {
-			return err
+		return errors.New("cannot save config: explicit path must be provided")
+	}
+	if testing.Testing() {
+		// During unit tests, never write to the host user config.
+		// Only writes inside os.TempDir() are permitted.
+		tempDir := filepath.Clean(os.TempDir())
+		cleanPath := filepath.Clean(path)
+		rel, err := filepath.Rel(tempDir, cleanPath)
+		isTemp := err == nil && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel)
+		if !isTemp {
+			return errors.New("refusing to save configuration outside of temporary directory during unit tests")
 		}
 	}
 

@@ -22,7 +22,7 @@ func TestViewersTabViewBuild(t *testing.T) {
 		Nickname: "SarahFan",
 	}
 
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
 	view := NewViewersTabView(win, session)
 	content := view.Build()

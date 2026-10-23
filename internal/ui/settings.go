@@ -377,7 +377,6 @@ func (v *SettingsView) updateConfig(fn func(c *config.Config)) {
 		v.cfg = v.session.Config()
 	} else {
 		fn(v.cfg)
-		_ = config.Save("", v.cfg)
 	}
 	v.setStatus("✓ Settings saved.")
 }

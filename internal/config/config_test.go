@@ -192,8 +192,10 @@ func TestLegacyMigration(t *testing.T) {
 		t.Fatalf("failed to save legacy config: %v", err)
 	}
 
-	// Calling Load with "" should detect legacy config and migrate to TownCrier
-	migrated, err := Load("")
+	newPath := filepath.Join(tmpDir, "com.github.mrpoundsign.towncrier", "config.json")
+
+	// Calling Load with non-existent newPath should detect legacy config and migrate to newPath
+	migrated, err := Load(newPath)
 	if err != nil {
 		t.Fatalf("Load with legacy migration failed: %v", err)
 	}
@@ -205,7 +207,6 @@ func TestLegacyMigration(t *testing.T) {
 		t.Errorf("expected migrated device 'Migrated Device', got %q", migrated.Audio.DeviceName)
 	}
 
-	newPath := filepath.Join(tmpDir, "com.github.mrpoundsign.towncrier", "config.json")
 	if _, err := os.Stat(newPath); err != nil {
 		t.Errorf("expected migrated config at %s, got error: %v", newPath, err)
 	}

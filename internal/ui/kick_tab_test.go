@@ -16,7 +16,7 @@ func TestKickTabViewBuild(t *testing.T) {
 
 	w := fyneApp.NewWindow("Test Kick Tab")
 	cfg := config.DefaultConfig()
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	defer func() { _ = session.Close() }()
 
 	kickView := NewKickTabView(w, session)
