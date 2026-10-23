@@ -71,7 +71,7 @@ func TestUIScaleSettingAndEnv(t *testing.T) {
 	w := appObj.NewWindow("TestUIScale")
 
 	cfg := config.DefaultConfig()
-	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
 	view := NewSettingsView(w, cfg, nil, nil)
 	view.SetSession(sess)
@@ -110,7 +110,7 @@ func TestSettingsViewAutoSave(t *testing.T) {
 	w := appObj.NewWindow("TestAutoSave")
 
 	cfg := config.DefaultConfig()
-	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
 	view := NewSettingsView(w, cfg, nil, nil)
 	view.SetSession(sess)
@@ -240,7 +240,7 @@ func TestSettingsView_RollbackTTSConfig(t *testing.T) {
 	w := appObj.NewWindow("TestRollback")
 
 	cfg := config.DefaultConfig()
-	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	view := NewSettingsView(w, cfg, nil, nil)
 	view.SetSession(sess)
 	view.modelDir = t.TempDir()
@@ -270,7 +270,7 @@ func TestSettingsView_TTSAndLoggingToggles(t *testing.T) {
 	w := appObj.NewWindow("TestTTSLoggingToggles")
 
 	cfg := config.DefaultConfig()
-	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	view := NewSettingsView(w, cfg, nil, nil)
 	view.SetSession(sess)
 	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) {

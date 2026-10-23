@@ -36,7 +36,7 @@ func TestLogsViewLiveTailAndSearch(t *testing.T) {
 	}, backend)
 	defer func() { _ = mgr.Close() }()
 
-	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	sess.SetEventLogger(mgr)
 
 	var lastStatus string
@@ -244,7 +244,7 @@ func TestLogsTableIconsAndHoverTooltips(t *testing.T) {
 	w := appObj.NewWindow("TestLogsIcons")
 
 	cfg := config.DefaultConfig()
-	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	lv := NewLogsView(w, sess)
 	w.SetContent(lv.Build())
 
@@ -459,7 +459,7 @@ func TestLogsViewStreamSessionAndTotalsSummary(t *testing.T) {
 		Outcome:       eventlog.OutcomeSpoken,
 	})
 
-	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	sess.SetEventLogger(mgr)
 
 	lv := NewLogsView(w, sess)
@@ -596,7 +596,7 @@ func TestLogsViewLiveTailSummaryTotalsUpdate(t *testing.T) {
 	}, backend)
 	defer func() { _ = mgr.Close() }()
 
-	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	sess.SetEventLogger(mgr)
 
 	lv := NewLogsView(w, sess)
@@ -774,7 +774,7 @@ func TestLogsViewLatestSessionAutoSwitchAndThemeContrast(t *testing.T) {
 		Outcome:   eventlog.OutcomeSpoken,
 	})
 
-	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	sess.SetEventLogger(mgr)
 
 	lv := NewLogsView(w, sess)
@@ -889,7 +889,7 @@ func TestLiveLogPresetsAndZeroChromePopOutWindow(t *testing.T) {
 		Outcome:   eventlog.OutcomeSpoken,
 	})
 
-	sess := app.NewSession(cfg, secrets.NewMemoryStore())
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	sess.SetEventLogger(mgr)
 
 	lv := NewLogsView(w, sess)

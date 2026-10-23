@@ -14,7 +14,7 @@ func TestTwitchTabViewBuild(t *testing.T) {
 	appObj := test.NewApp()
 	win := appObj.NewWindow("Test")
 	cfg := config.DefaultConfig()
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
 	tab := NewTwitchTabView(win, session)
 	content := tab.Build()
@@ -60,7 +60,7 @@ func TestTwitchTabViewBuildPreEnabled(t *testing.T) {
 	p.ReadRules.RoleGated = true
 	p.ReadRules.Roles = []string{"mod", "broadcaster"}
 	cfg.Platforms["twitch"] = p
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
 	tab := NewTwitchTabView(win, session)
 	content := tab.Build()
@@ -77,7 +77,7 @@ func TestTwitchTabStatusHandler(t *testing.T) {
 	appObj := test.NewApp()
 	win := appObj.NewWindow("TestStatus")
 	cfg := config.DefaultConfig()
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
 	tab := NewTwitchTabView(win, session)
 	var lastStatus string
@@ -111,7 +111,7 @@ func TestTwitchTabOAuthGating(t *testing.T) {
 	win := appObj.NewWindow("TestOAuthGating")
 	cfg := config.DefaultConfig()
 	store := secrets.NewMemoryStore()
-	session := app.NewSession(cfg, store)
+	session := app.NewSession(cfg, store, config.NewMemoryStore(cfg))
 
 	tab := NewTwitchTabView(win, session)
 	_ = tab.Build()
@@ -152,7 +152,7 @@ func TestTwitchTabSyncTTSState(t *testing.T) {
 	appObj := test.NewApp()
 	win := appObj.NewWindow("TestTTSState")
 	cfg := config.DefaultConfig()
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
 	tab := NewTwitchTabView(win, session)
 	_ = tab.Build()

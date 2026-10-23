@@ -600,10 +600,9 @@ func (mw *MainWindow) initHeader() {
 		if p := mw.Session.Player(); p != nil {
 			p.SetVolume(gain)
 		}
-		c := mw.Session.Config()
-		c.Audio.Volume = gain
-		_ = mw.Session.ReloadConfig(c)
-		_ = config.Save("", c)
+		_ = mw.Session.UpdateConfig(func(c *config.Config) {
+			c.Audio.Volume = gain
+		})
 	}
 
 	volSliderSpacer := canvas.NewRectangle(color.Transparent)

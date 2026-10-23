@@ -17,6 +17,7 @@
 > 8. **Planning Repository Independence**: `planning/` is its own local-only git repository (no remote) ignored by the main repo. Planning commits happen independently inside `planning/` referencing ticket numbers.
 > 9. **Always Link PRs, Issues, and CI Runs**: Whenever creating or referencing GitHub Pull Requests, Issues, or Actions CI runs, always include clickable Markdown links so the user can watch or inspect them directly.
 > 10. **GitHub CLI Issue & PR Bodies via Files**: PowerShell mangles markdown backticks and escapes (e.g., `\t`, `\f`) when passing strings inline to `gh`. NEVER pass multiline issue or PR descriptions inline via `--body`. ALWAYS write markdown content to a temporary file in `build/` and pass `--body-file`, then clean up the temporary file.
+> 11. **Strict Test Configuration & Directory Isolation**: NEVER write tests that use or default to real configuration locations (`%APPDATA%`, `~/.config`, etc.). Tests must ALWAYS use `config.NewMemoryStore()` or `config.TestLocations(t.TempDir())`. Attempting to load or save default/production config locations during test execution is strictly forbidden and will fail immediately.
 
 ---
 

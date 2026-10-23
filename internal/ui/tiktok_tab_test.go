@@ -16,7 +16,7 @@ func TestTikTokTabViewBuild(t *testing.T) {
 
 	w := fyneApp.NewWindow("Test TikTok Tab")
 	cfg := config.DefaultConfig()
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	defer func() { _ = session.Close() }()
 
 	ttView := NewTikTokTabView(w, session)

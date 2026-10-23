@@ -16,7 +16,7 @@ func TestYouTubeTabViewBuild(t *testing.T) {
 
 	w := fyneApp.NewWindow("Test YouTube Tab")
 	cfg := config.DefaultConfig()
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	defer func() { _ = session.Close() }()
 
 	ytView := NewYouTubeTabView(w, session)

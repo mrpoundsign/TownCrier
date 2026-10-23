@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+- **Strict Configuration Test Isolation & Explicit Locations (#87)**:
+  - Replaced implicit empty string (`""`) path fallbacks with an explicit `config.Store` interface and `config.Locations` type (`ProductionLocations()`, `TestLocations()`, `NewMemoryStore()`).
+  - Added strict test-time protections preventing tests from ever accessing or overwriting the host user's production configuration in `%APPDATA%` / `~/.config`.
+  - Wired `config.Store` into `app.NewSession` and `cmd/towncrier/main.go`, and updated all unit tests across the repository to execute in isolated temporary directories or in-memory stores.
+
 ---
 
 ## v0.0.5 — 2026-10-22

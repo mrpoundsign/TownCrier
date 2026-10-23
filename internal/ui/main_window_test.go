@@ -13,7 +13,7 @@ import (
 func TestMainWindowCreation(t *testing.T) {
 	appObj := test.NewApp()
 	cfg := config.DefaultConfig()
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
 	mw := NewMainWindow(appObj, session)
 	if mw == nil || mw.Window == nil {
@@ -51,7 +51,7 @@ func TestMainWindowCreation(t *testing.T) {
 func TestMainWindowCloseIntercept(t *testing.T) {
 	appObj := test.NewApp()
 	cfg := config.DefaultConfig()
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	_ = session.Start()
 
 	mw := NewMainWindow(appObj, session)
@@ -70,7 +70,7 @@ func TestMainWindowCloseIntercept(t *testing.T) {
 func TestMainWindowPanicToggle(t *testing.T) {
 	appObj := test.NewApp()
 	cfg := config.DefaultConfig()
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	_ = session.Start()
 
 	mw := NewMainWindow(appObj, session)
@@ -117,7 +117,7 @@ func TestMainWindowPanicToggle(t *testing.T) {
 func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 	appObj := test.NewApp()
 	cfg := config.DefaultConfig()
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	defer func() { _ = session.Close() }()
 
 	mw := NewMainWindow(appObj, session)
@@ -184,7 +184,7 @@ func TestMainWindowPlatformStatusResolution(t *testing.T) {
 		Enabled:     false,
 		AccountName: "",
 	}
-	session := app.NewSession(cfg, secrets.NewMemoryStore())
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	mw := NewMainWindow(appObj, session)
 	defer func() {
 		if mw.hotkeyMgr != nil {

@@ -114,13 +114,22 @@ func run() error {
 
 		// Step 1: Configuration
 		tracker.SetStatus("Loading configuration...")
-		cfg, err := config.Load("")
+		locations, locErr := config.ProductionLocations()
+		if locErr != nil {
+			log.Fatalf("Fatal: could not resolve configuration locations: %v", locErr)
+		}
+		configStore, storeErr := config.NewFileStore(locations)
+		if storeErr != nil {
+			log.Fatalf("Fatal: could not initialize configuration store: %v", storeErr)
+		}
+
+		cfg, err := configStore.Load()
 		if err != nil {
 			log.Printf("Using default config (load error: %v)", err)
 			cfg = config.DefaultConfig()
 			tracker.SetConfigStatus(false, "Using defaults")
 		} else {
-			log.Printf("Loaded config.json successfully")
+			log.Printf("Loaded config.json successfully from %s", configStore.Location())
 			tracker.SetConfigStatus(true, "Loaded config.json")
 		}
 
@@ -132,7 +141,7 @@ func run() error {
 			p.AccountName = *twitchChannelFlag
 			p.Enabled = true
 			cfg.Platforms["twitch"] = p
-			_ = config.Save("", cfg)
+			_ = configStore.Save(cfg)
 			log.Printf("Configured Twitch channel from CLI flag: %s", *twitchChannelFlag)
 		}
 
@@ -251,7 +260,7 @@ func run() error {
 
 			// Step 4: Initialize application session and open full MainWindow
 			log.Println("Starting application session...")
-			session := app.NewSession(cfg, secrets.NewKeyringStore(""))
+			session := app.NewSession(cfg, secrets.NewKeyringStore(""), configStore)
 			activeSession = session
 
 			if sqlStore, logErr := eventlog.NewSQLiteBackend(cfg.Logging.DBPath); logErr != nil {
