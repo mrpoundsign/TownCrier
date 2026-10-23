@@ -63,6 +63,11 @@ type Session struct {
 	livePlatforms   map[string]string
 	activeSessionID int64
 	configStore     config.Store
+
+	heldMu        sync.Mutex
+	heldMessages  []twitch.AutoModHoldEvent
+	heldListeners map[uint64]func()
+	heldSubSeq    atomic.Uint64
 }
 
 // NewSession creates an application session initialized with configuration, secret store, and config store.
@@ -109,6 +114,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		},
 	)
 	s.twitchConnector.SetOAuthManager(s.twitchOAuth)
+	s.twitchConnector.SetOnAutoModHold(s.HandleAutoModHold)
 	s.twitchConnector.SetOnStreamStateChange(func(live bool) {
 		ch := ""
 		if s.twitchConnector != nil {

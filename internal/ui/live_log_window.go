@@ -307,6 +307,8 @@ func (v *LogsView) buildZeroChrome(preset config.LiveLogPreset) fyne.CanvasObjec
 	)
 	v.summaryTotalsContainer.Hide()
 
+	v.heldQueueContainer = v.buildHeldQueueBanner()
+
 	// Initialize hidden filter controls so currentFilter() and applyLivePreset() work identically.
 	_ = v.buildFilterDrawer()
 	v.refreshSessionDropdown()
@@ -320,6 +322,7 @@ func (v *LogsView) buildZeroChrome(preset config.LiveLogPreset) fyne.CanvasObjec
 
 	topSection := container.NewVBox(
 		v.summaryTotalsContainer,
+		v.heldQueueContainer,
 		tableHeader,
 	)
 

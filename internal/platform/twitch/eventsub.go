@@ -818,6 +818,24 @@ func (c *Connector) connectAndStreamEventSub(ctx context.Context, wsURL string, 
 					log.Printf("[Twitch EventSub] Subscribed to channel.chat.notification for #%s", channel)
 				}
 
+				if err := c.createEventSubSubscription(ctx, token, sessionID, "automod.message.hold", "2", map[string]string{
+					"broadcaster_user_id": broadcasterID,
+					"moderator_user_id":   moderatorID,
+				}); err != nil {
+					log.Printf("[Twitch EventSub] Failed to subscribe to automod.message.hold for #%s: %v", channel, err)
+				} else {
+					log.Printf("[Twitch EventSub] Subscribed to automod.message.hold for #%s", channel)
+				}
+
+				if err := c.createEventSubSubscription(ctx, token, sessionID, "automod.message.update", "2", map[string]string{
+					"broadcaster_user_id": broadcasterID,
+					"moderator_user_id":   moderatorID,
+				}); err != nil {
+					log.Printf("[Twitch EventSub] Failed to subscribe to automod.message.update for #%s: %v", channel, err)
+				} else {
+					log.Printf("[Twitch EventSub] Subscribed to automod.message.update for #%s", channel)
+				}
+
 				_ = c.createEventSubSubscription(ctx, token, sessionID, "stream.online", "1", map[string]string{
 					"broadcaster_user_id": broadcasterID,
 				})
@@ -847,6 +865,16 @@ func (c *Connector) connectAndStreamEventSub(ctx context.Context, wsURL string, 
 				continue
 			case "stream.offline":
 				c.setStreamLive(false)
+				continue
+			case "automod.message.hold", "automod.message.update":
+				holdEv, holdErr := ParseAutoModEvent(subType, notif.Event, channel)
+				if holdErr != nil {
+					log.Printf("[Twitch EventSub] Error parsing %s notification: %v", subType, holdErr)
+					continue
+				}
+				if holdEv != nil {
+					c.emitAutoModHold(holdEv)
+				}
 				continue
 			}
 			ev, err := ParseEventSubNotification(subType, env.Metadata.MessageID, notif.Event, channel)

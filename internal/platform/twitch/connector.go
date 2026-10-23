@@ -59,6 +59,7 @@ type Connector struct {
 	seenEventOrder   []string
 	onEvent          func(event *chat.Event)
 	onModeration     func(modEvent *chat.ModerationEvent)
+	onAutoModHold    func(holdEvent *AutoModHoldEvent)
 	onStatusChange   func(status ConnectionStatus, detail string)
 	onStreamLive     func(live bool)
 }

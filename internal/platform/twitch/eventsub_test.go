@@ -213,8 +213,15 @@ func TestEventSubEndToEndWebSocket(t *testing.T) {
 	subs := append([]string(nil), createdSubs...)
 	subMu.Unlock()
 
-	if len(subs) != 5 || subs[0] != "channel.follow:2" || subs[1] != "channel.channel_points_custom_reward_redemption.add:1" || subs[2] != "channel.chat.notification:1" || subs[3] != "stream.online:1" || subs[4] != "stream.offline:1" {
-		t.Fatalf("expected 5 subscriptions, got %v", subs)
+	if len(subs) != 7 ||
+		subs[0] != "channel.follow:2" ||
+		subs[1] != "channel.channel_points_custom_reward_redemption.add:1" ||
+		subs[2] != "channel.chat.notification:1" ||
+		subs[3] != "automod.message.hold:2" ||
+		subs[4] != "automod.message.update:2" ||
+		subs[5] != "stream.online:1" ||
+		subs[6] != "stream.offline:1" {
+		t.Fatalf("expected 7 subscriptions, got %v", subs)
 	}
 
 	evMu.Lock()

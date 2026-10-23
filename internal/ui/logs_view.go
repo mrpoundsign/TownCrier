@@ -85,6 +85,7 @@ type LogsView struct {
 	fromDate     *time.Time
 	toDate       *time.Time
 	unsubLive    func()
+	unsubHeld    func()
 	searchTimer  *time.Timer
 	queryCancel  context.CancelFunc
 	querySeq     uint64
@@ -126,6 +127,12 @@ type LogsView struct {
 	summaryTotalsLabel     *widget.Label
 	summaryTotalsContainer *fyne.Container
 
+	heldQueueContainer *fyne.Container
+	heldQueueHeaderLbl *widget.Label
+	heldQueueToggleBtn *widget.Button
+	heldQueueItemsBox  *fyne.Container
+	heldQueueExpanded  bool
+
 	summaryLabel    *widget.Label
 	hoverInfoLabel  *hoverCellLabel
 	prevPageBtn     *widget.Button
@@ -151,12 +158,13 @@ type LogsView struct {
 // NewLogsView constructs a new LogsView bound to the active Session.
 func NewLogsView(w fyne.Window, session *app.Session) *LogsView {
 	return &LogsView{
-		window:      w,
-		session:     session,
-		liveTail:    true,
-		hideBots:    true,
-		showSummary: true,
-		listBox:     container.NewVBox(),
+		window:            w,
+		session:           session,
+		liveTail:          true,
+		hideBots:          true,
+		showSummary:       true,
+		heldQueueExpanded: true,
+		listBox:           container.NewVBox(),
 	}
 }
 
@@ -338,6 +346,8 @@ func (v *LogsView) Close() {
 	v.mu.Lock()
 	unsub := v.unsubLive
 	v.unsubLive = nil
+	unsubHeld := v.unsubHeld
+	v.unsubHeld = nil
 	if v.searchTimer != nil {
 		v.searchTimer.Stop()
 		v.searchTimer = nil
@@ -357,6 +367,9 @@ func (v *LogsView) Close() {
 	v.mu.Unlock()
 	if unsub != nil {
 		unsub()
+	}
+	if unsubHeld != nil {
+		unsubHeld()
 	}
 	for _, lw := range toClose {
 		lw.Close()
@@ -383,6 +396,8 @@ func (v *LogsView) Build() fyne.CanvasObject {
 		container.NewBorder(nil, totalsBorder, nil, nil, container.NewPadded(v.summaryTotalsLabel)),
 	)
 	v.summaryTotalsContainer.Hide()
+
+	v.heldQueueContainer = v.buildHeldQueueBanner()
 
 	v.filterDrawer = v.buildFilterDrawer()
 	v.filterDrawer.Show()
@@ -411,6 +426,7 @@ func (v *LogsView) Build() fyne.CanvasObject {
 
 	chatPanelHeader := container.NewVBox(
 		v.summaryTotalsContainer,
+		v.heldQueueContainer,
 		tableHeader,
 	)
 	chatPanelBody := container.NewBorder(
@@ -1296,9 +1312,8 @@ func (v *LogsView) buildTableHeader() fyne.CanvasObject {
 		colHdr("Svc", fyne.TextAlignCenter),
 		colHdr("User", fyne.TextAlignLeading),
 		colHdr("Message", fyne.TextAlignLeading),
-		colHdr("Filter", fyne.TextAlignCenter),
-		colHdr("Spoken", fyne.TextAlignCenter),
-		colHdr("Voice", fyne.TextAlignCenter),
+		colHdr("TTS Status", fyne.TextAlignCenter),
+		colHdr("Mod Controls", fyne.TextAlignCenter),
 	)
 
 	return container.NewStack(
@@ -1683,6 +1698,17 @@ func (v *LogsView) subscribeLiveTail() {
 	v.mu.Lock()
 	v.unsubLive = unsub
 	v.mu.Unlock()
+
+	if v.session != nil {
+		unsubHeld := v.session.SubscribeHeldMessages(func() {
+			fyne.Do(func() {
+				v.renderHeldQueue()
+			})
+		})
+		v.mu.Lock()
+		v.unsubHeld = unsubHeld
+		v.mu.Unlock()
+	}
 }
 
 func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
@@ -1804,6 +1830,8 @@ func (v *LogsView) renderEntries() {
 	if v.listBox == nil {
 		return
 	}
+
+	v.renderHeldQueue()
 
 	v.mu.Lock()
 	entries := make([]eventlog.Entry, len(v.entries))
@@ -1973,34 +2001,19 @@ func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
 		msgCell = v.newWrappedCellLabel(msgLine, msgTip, fyne.TextStyle{})
 	}
 
-	// [4] Passed Filters icon column
-	filterRes, filterTip := filterStatusIconAndTip(e)
-	filterCell := v.newHoverIcon(filterRes, iconSz, filterTip, nil)
+	// [4] Collapsed TTS Status icon column ([Filter] [Spoken] [Voice])
+	ttsStatusCell := v.ttsStatusIcons(e)
 
-	// [5] Spoken / Queue Outcome icon column
-	spokenRes, spokenTip := spokenStatusIconAndTip(e)
-	spokenCell := v.newHoverIcon(spokenRes, iconSz, spokenTip, nil)
-
-	// [6] Voice icon column (clickable to assign voice override)
-	voiceRes, voiceTip := voiceStatusIconAndTip(e)
-	var onVoiceTap func()
-	if e.UserName != "" && e.Kind != "moderation" {
-		plat := e.Platform
-		uName := e.UserName
-		onVoiceTap = func() {
-			v.showAssignVoiceDialog(plat, uName)
-		}
-	}
-	voiceCell := v.newHoverIcon(voiceRes, iconSz, voiceTip, onVoiceTap)
+	// [5] Moderation Controls icon column ([Delete] [Timeout] [Ban] [Mute TTS])
+	modControlsCell := v.modControlIcons(e)
 
 	rowCols := container.New(logTableLayout{getWidth: v.currentTableWidth, getScale: v.chatScaleFactor},
 		timeCell,
 		svcCell,
 		userCell,
 		msgCell,
-		filterCell,
-		spokenCell,
-		voiceCell,
+		ttsStatusCell,
+		modControlsCell,
 	)
 
 	var bgColor color.Color = colorObsidianSlate

@@ -14,6 +14,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/chat"
 	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
+	"github.com/mrpoundsign/TownCrier/internal/platform/twitch"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
 )
 
@@ -1102,6 +1103,144 @@ func TestLogsViewChatPanelScaling(t *testing.T) {
 		t.Errorf("expected Logging.ChatScale 300 to be preserved when disabled, got %d", sess.Config().Logging.ChatScale)
 	}
 }
+
+func TestLogsViewModerationAndHeldQueueFIFO(t *testing.T) {
+	testApp := test.NewApp()
+	defer testApp.Quit()
+
+	w := testApp.NewWindow("Moderation & Held Queue Test")
+	defer w.Close()
+
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
+
+	tmpDB := filepath.Join(t.TempDir(), "mod_test.db")
+	backend, err := eventlog.NewSQLiteBackend(tmpDB)
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	mgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, backend)
+	sess.SetEventLogger(mgr)
+
+	var lastStatus string
+	lv := NewLogsView(w, sess)
+	lv.SetStatusHandler(func(msg string) {
+		lastStatus = msg
+	})
+	defer lv.Close()
+	w.SetContent(lv.Build())
+	w.Resize(fyne.NewSize(960, 640))
+
+	// 1. Initially 0 held messages -> heldQueueContainer is hidden
+	if lv.heldQueueContainer.Visible() {
+		t.Fatal("expected heldQueueContainer to be hidden when 0 messages are held")
+	}
+
+	// 2. Verify filterStatusIconAndTip returns resFilterHeld for OutcomeHeldForReview
+	res, tip := filterStatusIconAndTip(eventlog.Entry{
+		Outcome:       eventlog.OutcomeHeldForReview,
+		OutcomeDetail: "AutoMod: Aggression (Level 2)",
+	})
+	if res != resFilterHeld || !strings.Contains(tip, "Held for Review") {
+		t.Errorf("expected resFilterHeld and Held for Review tooltip, got res=%v tip=%q", res, tip)
+	}
+
+	// 3. Simulate two inbound AutoMod held messages in sequence -> verify FIFO ordering (oldest at top, newest at bottom)
+	now := time.Now().UTC()
+	sess.HandleAutoModHold(&twitch.AutoModHoldEvent{
+		MessageID: "hold-msg-1",
+		UserID:    "u901",
+		UserLogin: "first_troll",
+		UserName:  "FirstTroll",
+		Channel:   "streamer",
+		Text:      "First held message (oldest)",
+		Reason:    "AutoMod: Aggression (Level 2)",
+		Status:    "PENDING",
+		HeldAt:    now.Add(-20 * time.Second),
+	})
+	sess.HandleAutoModHold(&twitch.AutoModHoldEvent{
+		MessageID: "hold-msg-2",
+		UserID:    "u902",
+		UserLogin: "second_troll",
+		UserName:  "SecondTroll",
+		Channel:   "streamer",
+		Text:      "Second held message (newest)",
+		Reason:    "Blocked Term",
+		Status:    "PENDING",
+		HeldAt:    now.Add(-5 * time.Second),
+	})
+
+	held := sess.HeldMessages()
+	if len(held) != 2 || held[0].MessageID != "hold-msg-1" || held[1].MessageID != "hold-msg-2" {
+		t.Fatalf("expected strict FIFO order [hold-msg-1, hold-msg-2], got %+v", held)
+	}
+	if !lv.heldQueueContainer.Visible() {
+		t.Error("expected heldQueueContainer to become visible when messages are held")
+	}
+	if len(lv.heldQueueItemsBox.Objects) != 2 {
+		t.Fatalf("expected 2 rendered rows in heldQueueItemsBox, got %d", len(lv.heldQueueItemsBox.Objects))
+	}
+	if !strings.Contains(lv.heldQueueHeaderLbl.Text, "HELD FOR REVIEW (2)") {
+		t.Errorf("unexpected heldQueueHeaderLbl text: %q", lv.heldQueueHeaderLbl.Text)
+	}
+
+	// 4. Test Collapse / Expand toggle on Held-for-Review banner
+	lv.heldQueueToggleBtn.OnTapped()
+	if lv.heldQueueItemsBox.Visible() {
+		t.Error("expected heldQueueItemsBox to hide when collapsed")
+	}
+	lv.heldQueueToggleBtn.OnTapped()
+	if !lv.heldQueueItemsBox.Visible() {
+		t.Error("expected heldQueueItemsBox to show when expanded")
+	}
+
+	// 5. Resolve first held message ("ALLOW") and second held message ("DENY") -> banner auto-hides when 0 remain
+	if err := sess.ResolveHeldMessage(context.Background(), "hold-msg-1", "ALLOW"); err != nil {
+		t.Fatalf("ResolveHeldMessage ALLOW: %v", err)
+	}
+	if len(sess.HeldMessages()) != 1 || sess.HeldMessages()[0].MessageID != "hold-msg-2" {
+		t.Fatalf("expected only hold-msg-2 remaining after resolving hold-msg-1, got %+v", sess.HeldMessages())
+	}
+
+	if err := sess.ResolveHeldMessage(context.Background(), "hold-msg-2", "DENY"); err != nil {
+		t.Fatalf("ResolveHeldMessage DENY: %v", err)
+	}
+	lv.renderHeldQueue()
+	if lv.heldQueueContainer.Visible() {
+		t.Error("expected heldQueueContainer to auto-hide once all held messages are resolved")
+	}
+
+	// 6. Test Local TTS Mute toggle across platforms (e.g. YouTube & Twitch)
+	ytEntry := eventlog.Entry{
+		ID:          "yt-msg-1",
+		Platform:    "youtube",
+		UserID:      "uc_yt_123",
+		UserName:    "noisy_chatter",
+		DisplayName: "NoisyChatter",
+		Kind:        "message",
+		RawText:     "Spamming TTS",
+	}
+	lv.toggleMuteUserTTS(ytEntry)
+	if !sess.IsUserLocallyMutedTTS("youtube", "uc_yt_123", "noisy_chatter") {
+		t.Error("expected noisy_chatter to be muted in local TTS after first toggle")
+	}
+	if !strings.Contains(lastStatus, "Muted @noisy_chatter") {
+		t.Errorf("unexpected status after mute: %q", lastStatus)
+	}
+
+	lv.toggleMuteUserTTS(ytEntry)
+	if sess.IsUserLocallyMutedTTS("youtube", "uc_yt_123", "noisy_chatter") {
+		t.Error("expected noisy_chatter to be unmuted in local TTS after second toggle")
+	}
+	if !strings.Contains(lastStatus, "Unmuted @noisy_chatter") {
+		t.Errorf("unexpected status after unmute: %q", lastStatus)
+	}
+}
+
 
 
 

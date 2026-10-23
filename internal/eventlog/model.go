@@ -31,6 +31,7 @@ const (
 
 	// Inbound platform moderation sync action
 	OutcomeModerationEvent EventOutcome = "moderation_event"
+	OutcomeHeldForReview   EventOutcome = "held_for_review"
 )
 
 // OutcomeDisplayLabel returns a concise human-readable badge label for an EventOutcome.
@@ -64,6 +65,8 @@ func OutcomeDisplayLabel(outcome EventOutcome) string {
 		return "🧹 Filtered (Empty / Blocked)"
 	case OutcomeModerationEvent:
 		return "🛡️ Moderation Action"
+	case OutcomeHeldForReview:
+		return "🛡️ Held for Review"
 	default:
 		if outcome == "" {
 			return "Unknown"

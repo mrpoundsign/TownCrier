@@ -33,6 +33,9 @@ var DefaultTwitchScopes = []string{
 	"channel:read:redemptions",
 	"moderator:read:chat_messages",
 	"moderator:read:followers",
+	"moderator:manage:chat_messages",
+	"moderator:manage:banned_users",
+	"moderator:manage:automod",
 }
 
 // DeviceCodeResponse holds the response from Twitch's device authorization endpoint.
