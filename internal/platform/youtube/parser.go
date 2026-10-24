@@ -17,10 +17,39 @@ var (
 	reInnertubeKey  = regexp.MustCompile(`"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"`)
 	reContinuation  = regexp.MustCompile(`"liveChatRenderer"\s*:\s*\{.*?"continuations"\s*:\s*\[\s*\{\s*"(?:timedContinuationData|invalidationContinuationData|reloadContinuationData)"\s*:\s*\{[^}]*?"continuation"\s*:\s*"([^"]+)"`)
 	reReloadCont    = regexp.MustCompile(`"continuation"\s*:\s*"(0ofMyA[^"]+)"`)
-	reAmountNumbers = regexp.MustCompile(`([0-9]+(?:[.,][0-9]+)?)`)
-	reMonthsCount   = regexp.MustCompile(`([0-9]+)\s*(?:month|months|mo\b)`)
-	reGiftsCount    = regexp.MustCompile(`([0-9]+)`)
+	reAmountNumbers     = regexp.MustCompile(`([0-9]+(?:[.,][0-9]+)?)`)
+	reMonthsCount       = regexp.MustCompile(`([0-9]+)\s*(?:month|months|mo\b)`)
+	reGiftsCount        = regexp.MustCompile(`([0-9]+)`)
+	reGiftSentForJewels = regexp.MustCompile(`(?i)^sent\s+(?:a\s+gift:?\s*)?(.+?)\s+for\s+([0-9,]+)\s+jewels?$`)
+	reGiftSentSimple    = regexp.MustCompile(`(?i)^sent\s+(?:a\s+gift:?\s*|a\s+)?(.+)$`)
+	reGiftA11y          = regexp.MustCompile(`(?i)^(?:@?([^\s]+)\s+)?sent\s+a\s+gift,\s*(.+)$`)
 )
+
+// knownYouTubeGiftJewels provides fallback Jewel valuations for standard YouTube Gifts
+// when InnerTube's giftMessageViewModel omits the explicit "for N Jewels" suffix.
+var knownYouTubeGiftJewels = map[string]float64{
+	"100":           2,
+	"heart":         2,
+	"party popper":  2,
+	"thumbs up":     2,
+	"smile":         2,
+	"clap":          2,
+	"fire":          2,
+	"star":          5,
+	"rose":          5,
+	"donut":         10,
+	"doughnut":      10,
+	"gold coin":     10,
+	"coffee":        10,
+	"stay hydrated": 10,
+	"ramen":         20,
+	"boba":          20,
+	"pizza":         20,
+	"trophy":        50,
+	"crown":         100,
+	"diamond":       100,
+	"rocket":        200,
+}
 
 // NormalizeTarget converts a YouTube channel name/handle, channel ID (UC...),
 // or full URL into a canonical live page URL and a clean display label.
@@ -61,11 +90,18 @@ func NormalizeTarget(input string) (liveURL string, display string) {
 // ExtractVideoDetails parses the videoDetails JSON object from YouTube HTML if present,
 // returning whether the stream is actively live and whether videoDetails was found.
 func ExtractVideoDetails(html string) (isLive bool, found bool) {
+	_, isLive, found = ExtractVideoIDAndDetails(html)
+	return isLive, found
+}
+
+// ExtractVideoIDAndDetails parses the videoDetails JSON object from YouTube HTML if present,
+// returning the videoId, whether the stream is actively live, and whether videoDetails was found.
+func ExtractVideoIDAndDetails(html string) (videoID string, isLive bool, found bool) {
 	search := html
 	for {
 		idx := strings.Index(search, `"videoDetails"`)
 		if idx == -1 {
-			return false, false
+			return "", false, false
 		}
 
 		rest := search[idx+len(`"videoDetails"`):]
@@ -111,11 +147,12 @@ func ExtractVideoDetails(html string) (isLive bool, found bool) {
 
 		if end != -1 {
 			var details struct {
-				IsLive        bool `json:"isLive"`
-				IsLiveContent bool `json:"isLiveContent"`
+				VideoID       string `json:"videoId"`
+				IsLive        bool   `json:"isLive"`
+				IsLiveContent bool   `json:"isLiveContent"`
 			}
 			if err := json.Unmarshal([]byte(rest[start:end]), &details); err == nil {
-				return details.IsLive, true
+				return strings.TrimSpace(details.VideoID), details.IsLive, true
 			}
 		}
 
@@ -226,6 +263,7 @@ type chatAction struct {
 			LiveChatDonationAnnouncementRenderer                   *donationRenderer           `json:"liveChatDonationAnnouncementRenderer"`
 			LiveChatViewerEngagementMessageRenderer                *engagementMessageRenderer  `json:"liveChatViewerEngagementMessageRenderer"`
 			LiveChatBannerRedirectRenderer                         *bannerRedirectRenderer     `json:"liveChatBannerRedirectRenderer"`
+			GiftMessageViewModel                                   *giftMessageViewModel       `json:"giftMessageViewModel"`
 		} `json:"item"`
 	} `json:"addChatItemAction"`
 	AddBannerToLiveChatCommand *struct {
@@ -341,6 +379,32 @@ type bannerRedirectRenderer struct {
 	ID            string   `json:"id"`
 	BannerMessage textRuns `json:"bannerMessage"`
 	AuthorName    textRuns `json:"authorName"`
+}
+
+type viewModelText struct {
+	Content    string    `json:"content"`
+	SimpleText string    `json:"simpleText"`
+	Runs       []textRun `json:"runs"`
+}
+
+type viewModelImage struct {
+	Sources []struct {
+		URL string `json:"url"`
+	} `json:"sources"`
+	Thumbnails []struct {
+		URL string `json:"url"`
+	} `json:"thumbnails"`
+}
+
+type giftMessageViewModel struct {
+	ID                      string          `json:"id"`
+	TimestampUsec           string          `json:"timestampUsec"`
+	AuthorName              viewModelText   `json:"authorName"`
+	AuthorExternalChannelID string          `json:"authorExternalChannelId"`
+	AuthorBadges            []authorBadge   `json:"authorBadges"`
+	Text                    viewModelText   `json:"text"`
+	GiftImage               *viewModelImage `json:"giftImage"`
+	GiftImageA11yLabel      string          `json:"giftImageA11yLabel"`
 }
 
 // ParseLiveChatResponse parses a raw InnerTube get_live_chat JSON payload into normalized chat events,
@@ -469,6 +533,10 @@ func ParseLiveChatResponse(data []byte) (events []*chat.Event, modEvents []*chat
 			}
 		case item.LiveChatViewerEngagementMessageRenderer != nil:
 			if ev := parseEngagementRedirect(item.LiveChatViewerEngagementMessageRenderer); ev != nil {
+				events = append(events, ev)
+			}
+		case item.GiftMessageViewModel != nil:
+			if ev := parseGiftMessage(item.GiftMessageViewModel); ev != nil {
 				events = append(events, ev)
 			}
 		}
@@ -747,6 +815,117 @@ func parseEngagementRedirect(r *engagementMessageRenderer) *chat.Event {
 		Text:        msgText,
 		Count:       1,
 	}
+}
+
+func parseGiftMessage(r *giftMessageViewModel) *chat.Event {
+	author := strings.TrimSpace(strings.TrimLeft(flattenViewModelText(r.AuthorName), "@"))
+	rawText := flattenViewModelText(r.Text)
+
+	var giftName string
+	var jewels float64
+
+	if m := reGiftSentForJewels.FindStringSubmatch(rawText); len(m) > 2 {
+		giftName = strings.TrimSpace(m[1])
+		numStr := strings.ReplaceAll(m[2], ",", "")
+		if parsed, err := strconv.ParseFloat(numStr, 64); err == nil && parsed > 0 {
+			jewels = parsed
+		}
+	} else if m := reGiftSentSimple.FindStringSubmatch(rawText); len(m) > 1 {
+		giftName = strings.TrimSpace(m[1])
+	}
+
+	if author == "" || giftName == "" {
+		if m := reGiftA11y.FindStringSubmatch(strings.TrimSpace(r.GiftImageA11yLabel)); len(m) > 2 {
+			if author == "" && m[1] != "" {
+				author = strings.TrimSpace(strings.TrimLeft(m[1], "@"))
+			}
+			if giftName == "" && m[2] != "" {
+				giftName = strings.TrimSpace(m[2])
+			}
+		}
+	}
+
+	if author == "" {
+		return nil
+	}
+	if giftName == "" {
+		giftName = "Gift"
+	}
+
+	if jewels <= 0 {
+		if known, ok := knownYouTubeGiftJewels[strings.ToLower(giftName)]; ok {
+			jewels = known
+		}
+	}
+
+	var giftURL string
+	if r.GiftImage != nil {
+		for _, v := range slices.Backward(r.GiftImage.Sources) {
+			u := strings.TrimSpace(v.URL)
+			if u != "" {
+				giftURL = u
+				break
+			}
+		}
+		if giftURL == "" {
+			for _, v := range slices.Backward(r.GiftImage.Thumbnails) {
+				u := strings.TrimSpace(v.URL)
+				if u != "" {
+					giftURL = u
+					break
+				}
+			}
+		}
+		if strings.HasPrefix(giftURL, "//") {
+			giftURL = "https:" + giftURL
+		}
+	}
+
+	var spans []chat.EmoteSpan
+	if giftURL != "" {
+		spans = []chat.EmoteSpan{
+			{
+				Start: 0,
+				End:   utf8.RuneCountInString(giftName),
+				ID:    "youtube_gift_" + strings.ToLower(strings.ReplaceAll(giftName, " ", "_")),
+				Name:  giftName,
+				URL:   giftURL,
+			},
+		}
+	}
+
+	userID := strings.TrimSpace(r.AuthorExternalChannelID)
+	if userID == "" {
+		userID = author
+	}
+
+	return &chat.Event{
+		ID:          r.ID,
+		Platform:    "youtube",
+		Kind:        chat.EventKindGift,
+		Timestamp:   parseUsecTimestamp(r.TimestampUsec),
+		UserID:      userID,
+		UserName:    author,
+		DisplayName: author,
+		Roles:       extractAuthorRoles(r.AuthorBadges),
+		ItemName:    giftName,
+		RewardTitle: giftName,
+		EmoteSpans:  spans,
+		Count:       1,
+		UnitAmount:  jewels,
+		Amount:      jewels,
+		Currency:    "Jewels",
+	}
+}
+
+func flattenViewModelText(vt viewModelText) string {
+	if vt.Content != "" {
+		return strings.TrimSpace(vt.Content)
+	}
+	return flattenText(textRuns{
+		SimpleText: vt.SimpleText,
+		Runs:       vt.Runs,
+	})
 }
 
 func flattenText(tr textRuns) string {

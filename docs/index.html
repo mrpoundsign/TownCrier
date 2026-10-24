@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TownCrier — Open-Source Neural TTS & Live Chat Aggregator</title>
+  <link rel="icon" type="image/png" href="icon.png">
+  <!-- Place your Google Search Console verification meta tag below when available: -->
+  <!-- <meta name="google-site-verification" content="PASTE_SEARCH_CONSOLE_CODE_HERE" /> -->
+  <style>
+    :root {
+      --bg-color: #0F172A;
+      --card-bg: #1E293B;
+      --border-color: #334155;
+      --text-main: #F8FAFC;
+      --text-muted: #94A3B8;
+      --accent: #38BDF8;
+      --accent-hover: #0284C7;
+      --code-bg: #0B1120;
+      --badge-bg: rgba(56, 189, 248, 0.12);
+      --badge-text: #38BDF8;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      padding: 2rem 1.5rem 5rem;
+    }
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 1.25rem;
+      margin-bottom: 1.75rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+    header img {
+      width: 68px;
+      height: 68px;
+      border-radius: 14px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    }
+    header h1 {
+      font-size: 2.1rem;
+      font-weight: 700;
+      color: var(--text-main);
+      letter-spacing: -0.02em;
+    }
+    header p {
+      color: var(--accent);
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+    nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-bottom: 2rem;
+      padding: 0.75rem 1.25rem;
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+    }
+    nav a {
+      color: var(--text-main);
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 0.95rem;
+      transition: color 0.15s ease;
+    }
+    nav a:hover {
+      color: var(--accent);
+    }
+    .hero {
+      background: linear-gradient(180deg, #1E293B 0%, #152033 100%);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 2.25rem 2rem;
+      margin-bottom: 2rem;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+    .hero h2 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+      color: var(--text-main);
+      letter-spacing: -0.01em;
+    }
+    .hero p {
+      color: var(--text-muted);
+      font-size: 1.05rem;
+      margin-bottom: 1.5rem;
+      line-height: 1.65;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.75rem 2rem;
+      margin-bottom: 1.75rem;
+    }
+    h2 {
+      color: var(--text-main);
+      font-size: 1.4rem;
+      margin-bottom: 0.75rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    h3 {
+      color: var(--text-main);
+      font-size: 1.15rem;
+      margin-top: 1.25rem;
+      margin-bottom: 0.5rem;
+      font-weight: 600;
+    }
+    p {
+      color: var(--text-muted);
+      margin-bottom: 1rem;
+    }
+    p:last-child {
+      margin-bottom: 0;
+    }
+    ul {
+      list-style-type: none;
+      padding-left: 0;
+      margin-bottom: 1rem;
+    }
+    li {
+      color: var(--text-muted);
+      position: relative;
+      padding-left: 1.5rem;
+      margin-bottom: 0.6rem;
+    }
+    li::before {
+      content: "•";
+      color: var(--accent);
+      position: absolute;
+      left: 0.5rem;
+      font-weight: bold;
+    }
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    .btn-group {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-top: 1.25rem;
+    }
+    .btn {
+      display: inline-block;
+      background: var(--accent);
+      color: #0F172A;
+      font-weight: 600;
+      padding: 0.7rem 1.35rem;
+      border-radius: 6px;
+      text-decoration: none;
+      transition: background 0.15s ease, transform 0.1s ease;
+    }
+    .btn:hover {
+      background: var(--accent-hover);
+      text-decoration: none;
+      color: #0F172A;
+    }
+    .btn-secondary {
+      background: transparent;
+      color: var(--text-main);
+      border: 1px solid var(--border-color);
+    }
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--accent);
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .media-card {
+      margin: 1.25rem 0;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border-color);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    }
+    .media-card img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    .badge {
+      display: inline-block;
+      background: var(--badge-bg);
+      color: var(--badge-text);
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.2rem 0.6rem;
+      border-radius: 9999px;
+      margin-right: 0.5rem;
+      vertical-align: middle;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    kbd {
+      background: var(--code-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      padding: 0.15rem 0.45rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.85em;
+      color: var(--accent);
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+      margin-top: 1rem;
+    }
+    @media (max-width: 680px) {
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+    }
+    .grid-item {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1.25rem;
+    }
+    .grid-item h4 {
+      color: var(--text-main);
+      font-size: 1.05rem;
+      margin-bottom: 0.4rem;
+    }
+    .grid-item p {
+      font-size: 0.92rem;
+      margin-bottom: 0;
+    }
+    footer {
+      margin-top: 3.5rem;
+      padding-top: 1.75rem;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      font-size: 0.875rem;
+      color: var(--text-muted);
+    }
+    footer nav {
+      background: transparent;
+      border: none;
+      padding: 0;
+      margin: 0;
+      gap: 1.25rem;
+    }
+    footer nav a {
+      color: var(--text-muted);
+    }
+    footer nav a:hover {
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <img src="icon.png" alt="TownCrier Logo">
+      <div>
+        <h1>TownCrier</h1>
+        <p>Offline Neural TTS & Multi-Platform Livestream Chat Aggregator</p>
+      </div>
+    </header>
+
+    <nav aria-label="Main Navigation">
+      <a href="index.html"><strong>Home</strong></a>
+      <a href="privacy.html">Privacy Policy</a>
+      <a href="terms.html">Terms of Service</a>
+      <a href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
+      <a href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Releases</a>
+    </nav>
+
+    <main>
+      <!-- Hero -->
+      <section class="hero">
+        <h2>Local Neural TTS & Centralized Chat Aggregation</h2>
+        <p>
+          <strong>TownCrier</strong> is an open-source Windows and Linux desktop application that reads livestream chat and alerts aloud using local neural text-to-speech (TTS), or operates as an ultra-fast, lightweight multi-platform chat aggregator, event logger, and moderation tool.
+        </p>
+        <p>
+          Direct your TTS audio to any virtual cable or monitor sink for clean OBS Studio capture. Everything runs 100% offline on your machine with zero cloud subscriptions, API rate limits, character caps, or developer servers.
+        </p>
+        <div class="btn-group">
+          <a class="btn" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Download TownCrier</a>
+          <a class="btn btn-secondary" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">View on GitHub</a>
+          <a class="btn btn-secondary" href="privacy.html">Privacy Policy</a>
+        </div>
+      </section>
+
+      <div class="media-card">
+        <img src="screenshots/dashboard.png" alt="TownCrier Dashboard with Live Speech and Chatter Voice Management">
+      </div>
+
+      <!-- Feature: Modular Performance -->
+      <section class="card">
+        <span class="badge">Architecture</span>
+        <h2>Modular Operation & Lightweight Efficiency</h2>
+        <p>
+          Configure TownCrier to fit your streaming hardware: toggle <strong>Text-to-Speech (TTS)</strong> and <strong>Event Logging</strong> independently in <strong>Settings &rarr; General & Audio</strong>.
+        </p>
+        <div class="grid-2">
+          <div class="grid-item">
+            <h4>Full Voice Announcer + Logger</h4>
+            <p>Generates high-fidelity local neural speech with priority queues, custom chatter voice assignments, and multi-platform event alerts.</p>
+          </div>
+          <div class="grid-item">
+            <h4>Lean Chat Aggregator (<40MB RAM)</h4>
+            <p>Disable TTS to skip ONNX runtime initialization entirely. TownCrier launches in <100ms and acts as a minimal chat monitor and event logger.</p>
+          </div>
+        </div>
+        <div class="media-card">
+          <img src="screenshots/general-audio-features.png" alt="TownCrier Modular Features and Audio Settings">
+        </div>
+      </section>
+
+      <!-- Feature: Chat Logging & Pop-Outs -->
+      <section class="card">
+        <span class="badge">Chat & Overlays</span>
+        <h2>Centralized Live Logs & Distraction-Free Pop-Outs</h2>
+        <p>
+          Connect all your stream platforms into a single unified chronological live tail feed:
+        </p>
+        <ul>
+          <li><strong>Multi-Platform Aggregation:</strong> Unified feed uniting Twitch, YouTube Live, Kick, and TikTok into one synchronized log.</li>
+          <li><strong>Rich Inline Emotes & Badges:</strong> Native rendering of Twitch emotes, YouTube custom emotes and Super Stickers, Kick emotes, and animated TikTok gifts (with automatic rapid combo grouping). Chatter badges (Broadcaster, Mod, VIP, Subscriber, Founder, Fan Club) appear alongside usernames.</li>
+          <li><strong>Independent Chat Font Scaling:</strong> Customize the zoom level of the chat feed to match your monitor layout with instant presets (<strong>80%</strong>, <strong>100%</strong>, <strong>125%</strong>, <strong>150%</strong>) or a smooth custom % slider.</li>
+          <li><strong>Streamlined Pop-Out Windows:</strong> Launch floating windows stripped of toolbars and sidebars—displaying only the live event feed, sticky stream metrics, and active session status. Perfect for a secondary portrait monitor or capturing directly in OBS Studio via Window Capture.</li>
+        </ul>
+        <div class="media-card">
+          <img src="screenshots/live-popout.png" alt="TownCrier Streamlined Pop-Out Live Log Window">
+        </div>
+      </section>
+
+      <!-- Feature: Broadcast Sessions -->
+      <section class="card">
+        <span class="badge">Sessions & Metrics</span>
+        <h2>Broadcast Stream Sessions & Telemetry</h2>
+        <p>
+          TownCrier automatically tracks your broadcast sessions as you stream:
+        </p>
+        <ul>
+          <li><strong>Automatic Session Tracking:</strong> Detects broadcast start and end timestamps and maintains an active elapsed duration counter (<kbd>HH:MM:SS</kbd>).</li>
+          <li><strong>Sticky Stream Metrics:</strong> Real-time summary counters tracking total message volume, alert events (subscriptions, bits, Super Chats, gifts), and unique chatter counts.</li>
+          <li><strong>Session-Bound Filtering:</strong> Isolate events from your active broadcast session or filter chat to specific elapsed broadcast time ranges.</li>
+        </ul>
+      </section>
+
+      <!-- Feature: Search History -->
+      <section class="card">
+        <span class="badge">Search & Storage</span>
+        <h2>Instant SQLite FTS5 Full-Text Search History</h2>
+        <p>
+          Never lose a chat message or moderation event. TownCrier embeds an ultra-fast local SQLite database with full-text search indexing:
+        </p>
+        <ul>
+          <li><strong>FTS5 Trigram Search:</strong> Blazing-fast full-text search across millions of historical chat messages and alerts with instant, typo-tolerant search matches.</li>
+          <li><strong>Multi-Session & Date Filters:</strong> Query historical records by specific date ranges, multi-session broadcast selections, platforms, event kinds, or usernames.</li>
+          <li><strong>Automated Data Retention:</strong> Configure automatic database retention policies (pruning by age in days or total row limit) to keep disk space lean.</li>
+          <li><strong>100% Local Storage:</strong> All chat logs and search indexes reside on your machine in <code>%LOCALAPPDATA%</code> (Windows) or <code>~/.local/share</code> (Linux). Zero cloud synchronization.</li>
+        </ul>
+      </section>
+
+      <!-- Feature: Moderation & Stream Safety -->
+      <section class="card">
+        <span class="badge">Stream Safety</span>
+        <h2>In-Log Streamer Moderation & Safety Controls</h2>
+        <p>
+          Manage your stream safety directly from the chat feed with built-in moderation tools:
+        </p>
+        <ul>
+          <li><strong>Inline Moderation Actions:</strong> Delete messages, timeout chatters, or permanently ban users on Twitch and YouTube Live (via secure OAuth 2.0 PKCE) with a single click on any chat log row.</li>
+          <li><strong>Local TTS Mute:</strong> Instantly silence irritating or spammy viewers from speech synthesis without having to timeout or ban them on the streaming platform.</li>
+          <li><strong>Twitch AutoMod Held Queue:</strong> Review held messages in real-time with one-click approve or deny actions before they reach your stream.</li>
+          <li><strong>Sub-50&micro;s Emergency Panic Stop:</strong> Hit <strong>EMERGENCY STOP</strong>, press <kbd>Esc</kbd>, or trigger the global hotkey (<kbd>Ctrl+Shift+M</kbd>) to instantly cut audio buffers in under 50 microseconds and flush speech queues.</li>
+          <li><strong>Live Moderation Sync:</strong> Moderator deletions or timeouts on Twitch and Kick immediately purge queued speech items and halt playback mid-sentence.</li>
+          <li><strong>Bot & Profanity Filters:</strong> One-click common profanity filter toggle, custom blocked words/phrases, and known stream bot filtering (Nightbot, StreamElements, Fossabot, etc.) with per-viewer allow/ignore overrides.</li>
+        </ul>
+      </section>
+
+      <!-- Feature: Voice Packs & TTS Engine -->
+      <section class="card">
+        <span class="badge">Neural Audio</span>
+        <h2>Offline Neural Voice Packs & Hardware Presets</h2>
+        <p>
+          Experience natural speech synthesis without cloud subscriptions or character caps:
+        </p>
+        <ul>
+          <li><strong>Five Local Voice Model Families:</strong> Supertonic (default, ultra-fast 66M flow-matching model), Kokoro-82M (with Windows DirectML GPU acceleration), Kokoro International (Japanese, Mandarin, Spanish, French, Hindi, Italian, Brazilian Portuguese), Kitten Mini & Nano (distilled for single-PC streaming rigs), and Piper LibriTTS (904 distinct speakers).</li>
+          <li><strong>Hardware Presets & Impact Meters:</strong> One-click presets (<em>Ultra-Low Resource</em>, <em>Fast & Lean</em>, <em>Studio Quality</em>, <em>Crowd Mode</em>, <em>Full Arsenal</em>) with stacked color-coded bars displaying RAM, CPU math, and GPU acceleration usage.</li>
+          <li><strong>Priority Speech Queue:</strong> Subscriptions, Super Chats, Bits, Follows, and Raids bypass regular chat with zero queue expiration, while chat older than 30s drops during fast chat bursts to keep TTS synchronized with live stream events.</li>
+        </ul>
+        <div class="media-card">
+          <img src="screenshots/tts-hardware-presets.png" alt="TownCrier Neural Voice Packs and Hardware Presets">
+        </div>
+      </section>
+
+      <!-- Legal & Privacy -->
+      <section class="card">
+        <span class="badge">Compliance</span>
+        <h2>Legal, Licensing & Privacy</h2>
+        <p>
+          TownCrier is free, open-source software licensed under the <a href="https://github.com/mrpoundsign/TownCrier/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GNU Affero General Public License v3.0 (AGPL-3.0)</a>.
+        </p>
+        <p>
+          We operate zero backend servers, telemetry, or user databases. For full details regarding our Google API Services Limited Use compliance and terms for optional platform integrations:
+        </p>
+        <div class="btn-group">
+          <a class="btn btn-secondary" href="privacy.html">Privacy Policy</a>
+          <a class="btn btn-secondary" href="terms.html">Terms of Service</a>
+          <a class="btn btn-secondary" href="https://github.com/mrpoundsign/TownCrier/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">AGPL-3.0 License</a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div>&copy; TownCrier Open Source Project. Licensed under GNU AGPLv3.</div>
+      <nav aria-label="Footer Navigation">
+        <a href="index.html">Home</a>
+        <a href="privacy.html">Privacy Policy</a>
+        <a href="terms.html">Terms of Service</a>
+        <a href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>
+      </nav>
+    </footer>
+  </div>
+</body>
+</html>

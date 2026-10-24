@@ -25,6 +25,8 @@ type TwitchTabView struct {
 	session *app.Session
 
 	channelEntry        *ScrollPassEntry
+	channelRow          *fyne.Container
+	hintLabel           *widget.Label
 	statusBadge         *widget.Label
 	oauthStatusLabel    *widget.Label
 	connectBtn          *widget.Button
@@ -204,12 +206,47 @@ func (v *TwitchTabView) hasOAuth() bool {
 
 func (v *TwitchTabView) syncOAuthState() {
 	authed := v.hasOAuth()
+	var login string
+	if authed && v.session != nil && v.session.TwitchOAuth() != nil {
+		_, storedLogin, _ := v.session.TwitchOAuth().StoredUser()
+		login = storedLogin
+		if login == "" {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				defer cancel()
+				if _, fetchedLogin, _, err := v.session.TwitchOAuth().FetchAuthenticatedUser(ctx); err == nil && fetchedLogin != "" {
+					fyne.Do(v.syncOAuthState)
+				}
+			}()
+		} else if v.channelEntry != nil && strings.TrimSpace(v.channelEntry.Text) == "" {
+			v.channelEntry.SetText(login)
+		}
+	}
+
+	if v.channelRow != nil {
+		if authed {
+			v.channelRow.Hide()
+		} else {
+			v.channelRow.Show()
+		}
+	}
+	if v.hintLabel != nil {
+		if authed {
+			v.hintLabel.Hide()
+		} else {
+			v.hintLabel.Show()
+		}
+	}
 
 	if v.oauthStatusLabel != nil {
 		if authed {
-			v.oauthStatusLabel.SetText("🔑 OAuth: Connected (Channel Points & Follow alerts unlocked)")
+			if login != "" {
+				v.oauthStatusLabel.SetText("🟢 Twitch OAuth: Connected (@" + login + ") — Full Helix API & EventSub WebSocket Mode active")
+			} else {
+				v.oauthStatusLabel.SetText("🟢 Twitch OAuth: Connected — Full Helix API & EventSub WebSocket Mode active")
+			}
 		} else {
-			v.oauthStatusLabel.SetText("🔒 OAuth: Not Connected (Public chat, Subs, Cheers & Raids work without OAuth)")
+			v.oauthStatusLabel.SetText("⚪ Twitch OAuth: Not Connected")
 		}
 	}
 
@@ -327,14 +364,34 @@ func (v *TwitchTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.
 	})
 	v.connectBtn.Importance = widget.HighImportance
 
+	v.channelRow = container.NewBorder(nil, nil, widget.NewLabel("Channel Name:"), nil, v.channelEntry)
+	v.hintLabel = widget.NewLabelWithStyle(
+		"✓ Zero-Config Mode: Enter your Twitch channel name for public chat, Subs, Cheers & Raids, or connect OAuth to use official Helix API & EventSub WebSocket for everything (including Follows, Channel Points, Moderation & AutoMod).",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	v.hintLabel.Wrapping = fyne.TextWrapWord
+
+	if v.session != nil && v.session.TwitchOAuth() != nil {
+		v.session.TwitchOAuth().SetOnAuthChange(func() {
+			fyne.Do(func() {
+				if v.session != nil {
+					v.session.RefreshTwitchOAuth()
+				}
+				v.syncOAuthState()
+			})
+		})
+	}
+
 	cardContent := container.NewVBox(
 		v.enableCheck,
-		container.NewBorder(nil, nil, widget.NewLabel("Channel Name:"), nil, v.channelEntry),
+		v.channelRow,
 		container.NewBorder(nil, nil, v.statusBadge, nil, v.connectBtn),
 		v.oauthStatusLabel,
+		v.hintLabel,
 	)
 
-	return widget.NewCard("Twitch Connection", "Public IRC chat works immediately; OAuth unlocks EventSub features", cardContent)
+	return widget.NewCard("Twitch Connection", "Auto-detects live broadcasts and reads chat & stream events", cardContent)
 }
 
 func (v *TwitchTabView) disconnectOAuth() {
@@ -446,6 +503,11 @@ func (v *TwitchTabView) startOAuthFlow() {
 						return
 					}
 
+					if v.session != nil && v.session.TwitchOAuth() != nil {
+						if _, login, _ := v.session.TwitchOAuth().StoredUser(); login != "" && v.channelEntry != nil {
+							v.channelEntry.SetText(login)
+						}
+					}
 					if v.session != nil {
 						v.session.RefreshTwitchOAuth()
 					}
@@ -789,7 +851,7 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 	namesCheck.SetChecked(ov.SpeakNames)
 	v.namesCheck = namesCheck
 
-	emotesCheck := widget.NewCheck("Speak Emotes for Twitch Chat", func(b bool) {
+	emotesCheck := widget.NewCheck("Speak Emotes & Emojis for Twitch Chat", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
 			p := c.Platforms["twitch"]
 			p.Overrides.SpeakEmotes = b
@@ -798,6 +860,29 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 	})
 	emotesCheck.SetChecked(ov.SpeakEmotes)
 	v.emotesCheck = emotesCheck
+
+	dedupeCheck := widget.NewCheck("Deduplicate Emotes & Emojis for Twitch Chat", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["twitch"]
+			p.Overrides.DeduplicateEmotes = b
+			c.Platforms["twitch"] = p
+		})
+	})
+	dedupeCheck.SetChecked(ov.DeduplicateEmotes)
+
+	dupWordsSelect := widget.NewSelect(DuplicateWordsOptions, func(s string) {
+		val := OptionToDuplicateWords(s)
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["twitch"]
+			p.Overrides.MaxDuplicateWords = val
+			c.Platforms["twitch"] = p
+		})
+	})
+	dupWordsSelect.SetSelected(DuplicateWordsToOption(ov.MaxDuplicateWords))
+	dupWordsRow := container.NewHBox(
+		widget.NewLabel("Max Consecutive Duplicate Words:"),
+		dupWordsSelect,
+	)
 
 	selectedVoice := ov.DefaultVoice
 	sp := ov.DefaultSpeed
@@ -826,6 +911,8 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 	v.overridesBox = container.NewVBox(
 		namesCheck,
 		emotesCheck,
+		dedupeCheck,
+		dupWordsRow,
 		voiceRow,
 	)
 

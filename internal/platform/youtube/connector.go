@@ -32,20 +32,25 @@ const (
 	defaultStreamWaitPoll = 15 * time.Second
 )
 
-// Connector manages zero-config YouTube Live stream discovery and InnerTube live chat polling.
+// Connector manages zero-config YouTube Live stream discovery and InnerTube live chat polling,
+// plus optional OAuth 2.0 moderation actions via YouTube Data API v3.
 type Connector struct {
-	mu             sync.Mutex
-	httpClient     *http.Client
-	baseURL        string // Overrideable for unit tests (defaults to https://www.youtube.com)
-	waitInterval   time.Duration
-	target         string
-	status         ConnectionStatus
-	running        bool
-	cancelFn       context.CancelFunc
-	seenIDs        map[string]struct{}
-	onEvent        func(event *chat.Event)
-	onModeration   func(modEvent *chat.ModerationEvent)
-	onStatusChange func(status ConnectionStatus, detail string)
+	mu               sync.Mutex
+	httpClient       *http.Client
+	baseURL          string // Overrideable for unit tests (defaults to https://www.youtube.com)
+	apiBaseURL       string // Overrideable for unit tests (defaults to https://www.googleapis.com/youtube/v3)
+	oauth            *OAuthManager
+	activeVideoID    string
+	activeLiveChatID string
+	waitInterval     time.Duration
+	target           string
+	status           ConnectionStatus
+	running          bool
+	cancelFn         context.CancelFunc
+	seenIDs          map[string]struct{}
+	onEvent          func(event *chat.Event)
+	onModeration     func(modEvent *chat.ModerationEvent)
+	onStatusChange   func(status ConnectionStatus, detail string)
 }
 
 // NewConnector creates a new YouTube Live connector.
@@ -59,12 +64,29 @@ func NewConnector(
 			Timeout: 15 * time.Second,
 		},
 		baseURL:        "https://www.youtube.com",
+		apiBaseURL:     DefaultYouTubeAPIBaseURL,
 		waitInterval:   defaultStreamWaitPoll,
 		status:         StatusDisconnected,
 		seenIDs:        make(map[string]struct{}),
 		onEvent:        onEvent,
 		onModeration:   onModeration,
 		onStatusChange: onStatusChange,
+	}
+}
+
+// SetOAuthManager binds an OAuthManager to the connector for YouTube Data API v3 moderation.
+func (c *Connector) SetOAuthManager(oauth *OAuthManager) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.oauth = oauth
+}
+
+// SetAPIBaseURL overrides the YouTube Data API v3 base URL (used in unit tests).
+func (c *Connector) SetAPIBaseURL(apiBaseURL string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if apiBaseURL != "" {
+		c.apiBaseURL = strings.TrimRight(apiBaseURL, "/")
 	}
 }
 
@@ -175,6 +197,38 @@ func (c *Connector) runLoop(ctx context.Context, target string) {
 }
 
 func (c *Connector) discoverStream(ctx context.Context, liveURL string) (string, string, error) {
+	apiKey, continuation, err := c.fetchWatchPageTokens(ctx, liveURL)
+	if err == nil && apiKey != "" && continuation != "" {
+		return apiKey, continuation, nil
+	}
+
+	// If OAuth is connected, attempt authenticated broadcast discovery (detects Unlisted streams,
+	// scheduled streams transitioning to live, or multi-stream broadcasts).
+	c.mu.Lock()
+	hasOAuth := c.oauth != nil && c.oauth.HasToken()
+	baseURL := strings.TrimRight(c.baseURL, "/")
+	c.mu.Unlock()
+
+	if hasOAuth {
+		if videoID, liveChatID, bErr := c.discoverAuthenticatedBroadcast(ctx); bErr == nil && videoID != "" {
+			c.mu.Lock()
+			c.activeVideoID = videoID
+			if liveChatID != "" {
+				c.activeLiveChatID = liveChatID
+			}
+			c.mu.Unlock()
+
+			watchURL := fmt.Sprintf("%s/watch?v=%s", baseURL, videoID)
+			if k, cont, wErr := c.fetchWatchPageTokens(ctx, watchURL); wErr == nil && k != "" && cont != "" {
+				return k, cont, nil
+			}
+		}
+	}
+
+	return "", "", err
+}
+
+func (c *Connector) fetchWatchPageTokens(ctx context.Context, liveURL string) (string, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, liveURL, nil)
 	if err != nil {
 		return "", "", err
@@ -198,9 +252,18 @@ func (c *Connector) discoverStream(ctx context.Context, liveURL string) (string,
 		return "", "", err
 	}
 
-	apiKey, continuation, ok := ExtractBootstrapTokens(string(bodyBytes))
+	htmlStr := string(bodyBytes)
+	apiKey, continuation, ok := ExtractBootstrapTokens(htmlStr)
 	if !ok {
 		return "", "", errors.New("stream not currently live or chat disabled")
+	}
+	if vid, _, found := ExtractVideoIDAndDetails(htmlStr); found && vid != "" {
+		c.mu.Lock()
+		if c.activeVideoID != vid {
+			c.activeVideoID = vid
+			c.activeLiveChatID = ""
+		}
+		c.mu.Unlock()
 	}
 	return apiKey, continuation, nil
 }

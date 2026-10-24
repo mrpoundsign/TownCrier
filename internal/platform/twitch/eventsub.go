@@ -10,8 +10,10 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mrpoundsign/TownCrier/internal/chat"
 	"golang.org/x/net/websocket"
@@ -173,6 +175,116 @@ type eventSubChatNotificationEvent struct {
 	} `json:"watch_streak"`
 }
 
+type eventSubChatMessageEvent struct {
+	BroadcasterUserID           string `json:"broadcaster_user_id"`
+	BroadcasterUserLogin        string `json:"broadcaster_user_login"`
+	BroadcasterUserName         string `json:"broadcaster_user_name"`
+	ChatterUserID               string `json:"chatter_user_id"`
+	ChatterUserLogin            string `json:"chatter_user_login"`
+	ChatterUserName             string `json:"chatter_user_name"`
+	MessageID                   string `json:"message_id"`
+	MessageType                 string `json:"message_type"`
+	ChannelPointsCustomRewardID string `json:"channel_points_custom_reward_id"`
+	Message                     struct {
+		Text      string `json:"text"`
+		Fragments []struct {
+			Type  string `json:"type"`
+			Text  string `json:"text"`
+			Emote *struct {
+				ID string `json:"id"`
+			} `json:"emote"`
+		} `json:"fragments"`
+	} `json:"message"`
+	Badges []struct {
+		SetID string `json:"set_id"`
+		ID    string `json:"id"`
+	} `json:"badges"`
+	Cheer *struct {
+		Bits int `json:"bits"`
+	} `json:"cheer"`
+}
+
+type eventSubMessageDeleteEvent struct {
+	BroadcasterUserLogin string `json:"broadcaster_user_login"`
+	MessageID            string `json:"message_id"`
+}
+
+type eventSubClearUserMessagesEvent struct {
+	BroadcasterUserLogin string `json:"broadcaster_user_login"`
+	TargetUserID         string `json:"target_user_id"`
+	TargetUserLogin      string `json:"target_user_login"`
+}
+
+type eventSubClearChatEvent struct {
+	BroadcasterUserLogin string `json:"broadcaster_user_login"`
+}
+
+// ParseEventSubModeration parses a Twitch EventSub moderation notification payload into a normalized chat.ModerationEvent.
+func ParseEventSubModeration(subType string, eventRaw json.RawMessage, fallbackChannel string) (*chat.ModerationEvent, error) {
+	switch subType {
+	case "channel.chat.message_delete":
+		var de eventSubMessageDeleteEvent
+		if err := json.Unmarshal(eventRaw, &de); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(de.MessageID) == "" {
+			return nil, nil
+		}
+		ch := cleanChannelName(de.BroadcasterUserLogin)
+		if ch == "" {
+			ch = fallbackChannel
+		}
+		return &chat.ModerationEvent{
+			Platform:        "twitch",
+			Channel:         ch,
+			Action:          chat.ModActionDeleteMessage,
+			TargetMessageID: strings.TrimSpace(de.MessageID),
+			Timestamp:       time.Now(),
+		}, nil
+
+	case "channel.chat.clear_user_messages":
+		var ce eventSubClearUserMessagesEvent
+		if err := json.Unmarshal(eventRaw, &ce); err != nil {
+			return nil, err
+		}
+		target := strings.ToLower(strings.TrimSpace(ce.TargetUserLogin))
+		if target == "" {
+			target = strings.TrimSpace(ce.TargetUserID)
+		}
+		if target == "" {
+			return nil, nil
+		}
+		ch := cleanChannelName(ce.BroadcasterUserLogin)
+		if ch == "" {
+			ch = fallbackChannel
+		}
+		return &chat.ModerationEvent{
+			Platform:     "twitch",
+			Channel:      ch,
+			Action:       chat.ModActionBanUser,
+			TargetUserID: target,
+			Timestamp:    time.Now(),
+		}, nil
+
+	case "channel.chat.clear":
+		var cle eventSubClearChatEvent
+		if err := json.Unmarshal(eventRaw, &cle); err != nil {
+			return nil, err
+		}
+		ch := cleanChannelName(cle.BroadcasterUserLogin)
+		if ch == "" {
+			ch = fallbackChannel
+		}
+		return &chat.ModerationEvent{
+			Platform:  "twitch",
+			Channel:   ch,
+			Action:    chat.ModActionClearChat,
+			Timestamp: time.Now(),
+		}, nil
+	}
+	return nil, nil
+}
+
 // ParseEventSubNotification parses a Twitch EventSub notification payload into a normalized chat.Event.
 func ParseEventSubNotification(subType string, msgID string, eventRaw json.RawMessage, fallbackChannel string) (*chat.Event, error) {
 	switch subType {
@@ -263,9 +375,135 @@ func ParseEventSubNotification(subType string, msgID string, eventRaw json.RawMe
 
 	case "channel.chat.notification":
 		return parseChatNotificationEvent(msgID, eventRaw, fallbackChannel)
+
+	case "channel.chat.message":
+		return parseChatMessageEvent(msgID, eventRaw, fallbackChannel)
 	}
 
 	return nil, nil
+}
+
+func parseChatMessageEvent(msgID string, eventRaw json.RawMessage, fallbackChannel string) (*chat.Event, error) {
+	var me eventSubChatMessageEvent
+	if err := json.Unmarshal(eventRaw, &me); err != nil {
+		return nil, fmt.Errorf("unmarshal channel.chat.message event: %w", err)
+	}
+
+	userLogin := strings.ToLower(strings.TrimSpace(me.ChatterUserLogin))
+	displayName := strings.TrimSpace(me.ChatterUserName)
+	if displayName == "" {
+		displayName = userLogin
+	}
+	if userLogin == "" {
+		return nil, nil
+	}
+
+	ch := cleanChannelName(me.BroadcasterUserLogin)
+	if ch == "" {
+		ch = fallbackChannel
+	}
+
+	var roles []string
+	for _, b := range me.Badges {
+		switch b.SetID {
+		case "broadcaster":
+			if !slices.Contains(roles, "broadcaster") {
+				roles = append(roles, "broadcaster")
+			}
+		case "moderator":
+			if !slices.Contains(roles, "mod") {
+				roles = append(roles, "mod")
+			}
+		case "vip":
+			if !slices.Contains(roles, "vip") {
+				roles = append(roles, "vip")
+			}
+		case "subscriber", "founder":
+			if !slices.Contains(roles, "subscriber") {
+				roles = append(roles, "subscriber")
+			}
+		}
+	}
+	if ch != "" && userLogin == ch && !slices.Contains(roles, "broadcaster") {
+		roles = append(roles, "broadcaster")
+	}
+
+	var emotes []chat.EmoteSpan
+	runeOffset := 0
+	for _, frag := range me.Message.Fragments {
+		fragLen := utf8.RuneCountInString(frag.Text)
+		if frag.Type == "emote" && frag.Emote != nil && fragLen > 0 {
+			emID := strings.TrimSpace(frag.Emote.ID)
+			var imgURL string
+			if emID != "" {
+				imgURL = "https://static-cdn.jtvnw.net/emoticons/v2/" + emID + "/static/dark/1.0"
+			}
+			emotes = append(emotes, chat.EmoteSpan{
+				Start: runeOffset,
+				End:   runeOffset + fragLen,
+				ID:    emID,
+				Name:  frag.Text,
+				URL:   imgURL,
+			})
+		}
+		runeOffset += fragLen
+	}
+
+	kind := chat.EventKindMessage
+	var amount float64
+	var unitAmount float64
+	var currency string
+	var count int
+	var rewardTitle string
+	rewardID := strings.TrimSpace(me.ChannelPointsCustomRewardID)
+
+	if me.Cheer != nil && me.Cheer.Bits > 0 {
+		kind = chat.EventKindCheer
+		amount = float64(me.Cheer.Bits)
+		unitAmount = 1
+		count = me.Cheer.Bits
+		currency = "bits"
+	} else {
+		switch strings.ToLower(strings.TrimSpace(me.MessageType)) {
+		case "channel_points_highlighted":
+			kind = chat.EventKindRedemption
+			rewardTitle = "Highlight My Message"
+		case "power_ups_gigantified_emote":
+			kind = chat.EventKindRedemption
+			rewardTitle = "Gigantified Emote"
+		case "power_ups_message_effect":
+			kind = chat.EventKindRedemption
+			rewardTitle = "Message Effects"
+		}
+	}
+
+	id := strings.TrimSpace(me.MessageID)
+	if id == "" {
+		id = msgID
+	}
+	if id == "" {
+		id = fmt.Sprintf("twitch-msg-%s-%d", userLogin, time.Now().UnixNano())
+	}
+
+	return &chat.Event{
+		ID:          id,
+		Platform:    "twitch",
+		Channel:     ch,
+		Kind:        kind,
+		Timestamp:   time.Now(),
+		UserID:      strings.TrimSpace(me.ChatterUserID),
+		UserName:    userLogin,
+		DisplayName: displayName,
+		Roles:       roles,
+		Text:        me.Message.Text,
+		EmoteSpans:  emotes,
+		Amount:      amount,
+		UnitAmount:  unitAmount,
+		Currency:    currency,
+		Count:       count,
+		RewardID:    rewardID,
+		RewardTitle: rewardTitle,
+	}, nil
 }
 
 func parseChatNotificationEvent(msgID string, eventRaw json.RawMessage, fallbackChannel string) (*chat.Event, error) {
@@ -791,7 +1029,40 @@ func (c *Connector) connectAndStreamEventSub(ctx context.Context, wsURL string, 
 			if !subscribed {
 				subscribed = true
 				sessionID := welcome.Session.ID
-				// Create EventSub subscriptions for follow and channel point redemptions
+
+				c.mu.Lock()
+				if c.running && c.channel == channel {
+					if c.isLive {
+						c.updateStatusLocked(StatusConnected, "#"+channel)
+					} else {
+						c.updateStatusLocked(StatusWaitingForStream, "#"+channel)
+					}
+				}
+				c.mu.Unlock()
+
+				// Create EventSub subscriptions for chat, moderation, follow, and channel point redemptions
+				if err := c.createEventSubSubscription(ctx, token, sessionID, "channel.chat.message", "1", map[string]string{
+					"broadcaster_user_id": broadcasterID,
+					"user_id":             moderatorID,
+				}); err != nil {
+					log.Printf("[Twitch EventSub] Failed to subscribe to channel.chat.message for #%s: %v", channel, err)
+				} else {
+					log.Printf("[Twitch EventSub] Subscribed to channel.chat.message for #%s", channel)
+				}
+
+				_ = c.createEventSubSubscription(ctx, token, sessionID, "channel.chat.message_delete", "1", map[string]string{
+					"broadcaster_user_id": broadcasterID,
+					"user_id":             moderatorID,
+				})
+				_ = c.createEventSubSubscription(ctx, token, sessionID, "channel.chat.clear_user_messages", "1", map[string]string{
+					"broadcaster_user_id": broadcasterID,
+					"user_id":             moderatorID,
+				})
+				_ = c.createEventSubSubscription(ctx, token, sessionID, "channel.chat.clear", "1", map[string]string{
+					"broadcaster_user_id": broadcasterID,
+					"user_id":             moderatorID,
+				})
+
 				if err := c.createEventSubSubscription(ctx, token, sessionID, "channel.follow", "2", map[string]string{
 					"broadcaster_user_id": broadcasterID,
 					"moderator_user_id":   moderatorID,
@@ -816,6 +1087,24 @@ func (c *Connector) connectAndStreamEventSub(ctx context.Context, wsURL string, 
 					log.Printf("[Twitch EventSub] Failed to subscribe to channel.chat.notification for #%s: %v", channel, err)
 				} else {
 					log.Printf("[Twitch EventSub] Subscribed to channel.chat.notification for #%s", channel)
+				}
+
+				if err := c.createEventSubSubscription(ctx, token, sessionID, "automod.message.hold", "2", map[string]string{
+					"broadcaster_user_id": broadcasterID,
+					"moderator_user_id":   moderatorID,
+				}); err != nil {
+					log.Printf("[Twitch EventSub] Failed to subscribe to automod.message.hold for #%s: %v", channel, err)
+				} else {
+					log.Printf("[Twitch EventSub] Subscribed to automod.message.hold for #%s", channel)
+				}
+
+				if err := c.createEventSubSubscription(ctx, token, sessionID, "automod.message.update", "2", map[string]string{
+					"broadcaster_user_id": broadcasterID,
+					"moderator_user_id":   moderatorID,
+				}); err != nil {
+					log.Printf("[Twitch EventSub] Failed to subscribe to automod.message.update for #%s: %v", channel, err)
+				} else {
+					log.Printf("[Twitch EventSub] Subscribed to automod.message.update for #%s", channel)
 				}
 
 				_ = c.createEventSubSubscription(ctx, token, sessionID, "stream.online", "1", map[string]string{
@@ -847,6 +1136,22 @@ func (c *Connector) connectAndStreamEventSub(ctx context.Context, wsURL string, 
 				continue
 			case "stream.offline":
 				c.setStreamLive(false)
+				continue
+			case "automod.message.hold", "automod.message.update":
+				holdEv, holdErr := ParseAutoModEvent(subType, notif.Event, channel)
+				if holdErr != nil {
+					log.Printf("[Twitch EventSub] Error parsing %s notification: %v", subType, holdErr)
+					continue
+				}
+				if holdEv != nil {
+					c.emitAutoModHold(holdEv)
+				}
+				continue
+			case "channel.chat.message_delete", "channel.chat.clear_user_messages", "channel.chat.clear":
+				modEv, modErr := ParseEventSubModeration(subType, notif.Event, channel)
+				if modErr == nil && modEv != nil && c.onModeration != nil {
+					c.onModeration(modEv)
+				}
 				continue
 			}
 			ev, err := ParseEventSubNotification(subType, env.Metadata.MessageID, notif.Event, channel)
@@ -926,29 +1231,40 @@ func (c *Connector) checkChannelLive(ctx context.Context, channel string) (bool,
 		gqlURL = DefaultTwitchGQLURL
 	}
 
-	// 1. Prefer authenticated Helix /streams?user_login=<channel> when OAuth is connected
+	// 1. When OAuth is connected, exclusively use Helix /streams?user_login=<channel> (no GQL fallback)
 	if oauth != nil && oauth.HasToken() {
-		if token, err := oauth.GetValidAccessToken(ctx); err == nil && token != "" {
-			streamsURL := fmt.Sprintf("%s/streams?user_login=%s", helixBase, url.QueryEscape(channel))
-			if req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, streamsURL, nil); reqErr == nil {
-				req.Header.Set("Authorization", "Bearer "+token)
-				req.Header.Set("Client-Id", oauth.ClientID())
-				if resp, doErr := httpClient.Do(req); doErr == nil {
-					var sResp struct {
-						Data []struct {
-							ID   string `json:"id"`
-							Type string `json:"type"`
-						} `json:"data"`
-					}
-					_ = json.NewDecoder(resp.Body).Decode(&sResp)
-					_ = resp.Body.Close()
-					if resp.StatusCode == http.StatusOK {
-						isLive := len(sResp.Data) > 0 && (strings.EqualFold(sResp.Data[0].Type, "live") || sResp.Data[0].ID != "")
-						return isLive, nil
-					}
-				}
-			}
+		token, err := oauth.GetValidAccessToken(ctx)
+		if err != nil || token == "" {
+			return false, err
 		}
+		streamsURL := fmt.Sprintf("%s/streams?user_login=%s", helixBase, url.QueryEscape(channel))
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, streamsURL, nil)
+		if reqErr != nil {
+			return false, reqErr
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Client-Id", oauth.ClientID())
+		resp, doErr := httpClient.Do(req)
+		if doErr != nil {
+			return false, doErr
+		}
+		var sResp struct {
+			Data []struct {
+				ID   string `json:"id"`
+				Type string `json:"type"`
+			} `json:"data"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&sResp)
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized {
+			_, _ = oauth.HandleUnauthorized(ctx)
+			return false, errors.New("helix /streams HTTP 401 unauthorized")
+		}
+		if resp.StatusCode != http.StatusOK {
+			return false, fmt.Errorf("helix /streams status %d", resp.StatusCode)
+		}
+		isLive := len(sResp.Data) > 0 && (strings.EqualFold(sResp.Data[0].Type, "live") || sResp.Data[0].ID != "")
+		return isLive, nil
 	}
 
 	// 2. Zero-auth fallback via Twitch public GQL UseLive query
@@ -1009,21 +1325,41 @@ func (c *Connector) resolveEventSubUserIDs(ctx context.Context, token string, ch
 	}
 	clientID := c.oauth.ClientID()
 
-	// 1. Validate OAuth token to obtain authenticated user_id (moderator_user_id)
-	valReq, err := http.NewRequestWithContext(ctx, http.MethodGet, validateURL, nil)
-	if err == nil {
-		valReq.Header.Set("Authorization", "OAuth "+token)
-		if resp, doErr := httpClient.Do(valReq); doErr == nil {
-			var valData struct {
-				UserID string `json:"user_id"`
-				Login  string `json:"login"`
-			}
-			_ = json.NewDecoder(resp.Body).Decode(&valData)
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK && valData.UserID != "" {
-				moderatorID = valData.UserID
-				if strings.EqualFold(valData.Login, channelLogin) {
-					broadcasterID = valData.UserID
+	// 0. Check cached user identity in OAuthManager
+	if storedUID, storedLogin, _ := c.oauth.StoredUser(); storedUID != "" {
+		moderatorID = storedUID
+		if strings.EqualFold(storedLogin, channelLogin) {
+			broadcasterID = storedUID
+		}
+	}
+
+	// 1. Validate OAuth token to obtain authenticated user_id (moderator_user_id) if not cached
+	if moderatorID == "" {
+		valReq, err := http.NewRequestWithContext(ctx, http.MethodGet, validateURL, nil)
+		if err == nil {
+			valReq.Header.Set("Authorization", "OAuth "+token)
+			if resp, doErr := httpClient.Do(valReq); doErr == nil {
+				var valData struct {
+					UserID string `json:"user_id"`
+					Login  string `json:"login"`
+				}
+				_ = json.NewDecoder(resp.Body).Decode(&valData)
+				_ = resp.Body.Close()
+				if resp.StatusCode == http.StatusUnauthorized {
+					_, _ = c.oauth.HandleUnauthorized(ctx)
+					return "", "", errors.New("twitch oauth validate HTTP 401 unauthorized")
+				}
+				if resp.StatusCode == http.StatusOK && valData.UserID != "" {
+					moderatorID = valData.UserID
+					if c.oauth.store != nil {
+						_ = c.oauth.store.Set(SecretTwitchUserID, valData.UserID)
+						if valData.Login != "" {
+							_ = c.oauth.store.Set(SecretTwitchUserLogin, strings.ToLower(valData.Login))
+						}
+					}
+					if strings.EqualFold(valData.Login, channelLogin) {
+						broadcasterID = valData.UserID
+					}
 				}
 			}
 		}
@@ -1051,6 +1387,10 @@ func (c *Connector) resolveEventSubUserIDs(ctx context.Context, token string, ch
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&usersResp)
 		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized {
+			_, _ = c.oauth.HandleUnauthorized(ctx)
+			return "", "", errors.New("helix /users HTTP 401 unauthorized")
+		}
 		if resp.StatusCode != http.StatusOK || len(usersResp.Data) == 0 {
 			return "", "", fmt.Errorf("helix /users lookup failed for %q (status %d)", channelLogin, resp.StatusCode)
 		}

@@ -1121,6 +1121,15 @@ func TestFTS5TrigramSearchAndSkipSummary(t *testing.T) {
 	}
 }
 
+func TestNewSQLiteBackendRequiresPath(t *testing.T) {
+	if _, err := NewSQLiteBackend(""); err == nil {
+		t.Fatal("expected error when calling NewSQLiteBackend with empty dbPath")
+	}
+	if _, err := NewSQLiteBackend("   "); err == nil {
+		t.Fatal("expected error when calling NewSQLiteBackend with whitespace dbPath")
+	}
+}
+
 func BenchmarkSQLiteQuerySearch(b *testing.B) {
 	ctx := context.Background()
 	dbFile := filepath.Join(b.TempDir(), "bench.db")

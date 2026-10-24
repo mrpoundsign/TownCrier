@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image/color"
+	"sync"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -14,9 +15,17 @@ import (
 // focused, while retaining normal internal text scrolling when focused.
 type ScrollPassEntry struct {
 	widget.Entry
+	mu           sync.Mutex
 	focused      bool
 	parentScroll fyne.Scrollable
 	innerScroll  fyne.Scrollable
+}
+
+// GetText returns the entry's current text synchronized with any in-progress Refresh.
+func (e *ScrollPassEntry) GetText() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.Text
 }
 
 // NewScrollPassEntry creates a new single-line ScrollPassEntry.
@@ -294,6 +303,8 @@ func (r *scrollPassEntryRenderer) Objects() []fyne.CanvasObject {
 }
 
 func (r *scrollPassEntryRenderer) Refresh() {
+	r.entry.mu.Lock()
+	defer r.entry.mu.Unlock()
 	if r.entry.innerScroll == nil {
 		for _, obj := range r.base.Objects() {
 			if sc, ok := obj.(fyne.Scrollable); ok {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"log"
 	"os"
@@ -44,6 +45,17 @@ func main() {
 }
 
 func run() error {
+	releaseInstance, lockErr := app.AcquireInstanceLock(app.DefaultInstanceMutexName)
+	if lockErr != nil {
+		if errors.Is(lockErr, app.ErrInstanceAlreadyRunning) {
+			log.Println("TownCrier is already running; exiting duplicate instance.")
+			return nil
+		}
+		log.Printf("Warning: could not acquire single-instance lock: %v", lockErr)
+	} else {
+		defer releaseInstance()
+	}
+
 	logPath, err := logging.Init(parseLogFlagEarly())
 	if err != nil {
 		log.Printf("Warning: failed to initialize persistent log file: %v", err)
@@ -263,17 +275,27 @@ func run() error {
 			session := app.NewSession(cfg, secrets.NewKeyringStore(""), configStore)
 			activeSession = session
 
-			if sqlStore, logErr := eventlog.NewSQLiteBackend(cfg.Logging.DBPath); logErr != nil {
-				log.Printf("Warning: failed to initialize SQLite event log store: %v", logErr)
-			} else {
-				logMgr := eventlog.NewManager(eventlog.RetentionPolicy{
-					ChatRetentionDays:  cfg.Logging.ChatRetentionDays,
-					EventRetentionDays: cfg.Logging.EventRetentionDays,
-				}, sqlStore)
-				logMgr.SetEnabled(cfg.Logging.Enabled)
-				logMgr.StartAutoPrune(15 * time.Minute)
-				session.SetEventLogger(logMgr)
-				log.Printf("Event log initialized at %s", sqlStore.Path())
+			dbPath := strings.TrimSpace(cfg.Logging.DBPath)
+			if dbPath == "" {
+				if defPath, pathErr := eventlog.DefaultDBPath(); pathErr != nil {
+					log.Printf("Warning: failed to resolve default SQLite event log path: %v", pathErr)
+				} else {
+					dbPath = defPath
+				}
+			}
+			if dbPath != "" {
+				if sqlStore, logErr := eventlog.NewSQLiteBackend(dbPath); logErr != nil {
+					log.Printf("Warning: failed to initialize SQLite event log store: %v", logErr)
+				} else {
+					logMgr := eventlog.NewManager(eventlog.RetentionPolicy{
+						ChatRetentionDays:  cfg.Logging.ChatRetentionDays,
+						EventRetentionDays: cfg.Logging.EventRetentionDays,
+					}, sqlStore)
+					logMgr.SetEnabled(cfg.Logging.Enabled)
+					logMgr.StartAutoPrune(15 * time.Minute)
+					session.SetEventLogger(logMgr)
+					log.Printf("Event log initialized at %s", sqlStore.Path())
+				}
 			}
 
 			if player != nil {

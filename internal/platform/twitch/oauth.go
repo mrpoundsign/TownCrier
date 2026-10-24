@@ -23,6 +23,9 @@ const (
 	SecretTwitchAccessToken  = "twitch_access_token"
 	SecretTwitchRefreshToken = "twitch_refresh_token"
 	SecretTwitchTokenExpiry  = "twitch_token_expiry"
+	SecretTwitchUserID       = "twitch_user_id"
+	SecretTwitchUserLogin    = "twitch_user_login"
+	SecretTwitchDisplayName  = "twitch_display_name"
 )
 
 // DefaultTwitchScopes contains the required permissions for stream chat reading, alerts, and moderation.
@@ -33,6 +36,9 @@ var DefaultTwitchScopes = []string{
 	"channel:read:redemptions",
 	"moderator:read:chat_messages",
 	"moderator:read:followers",
+	"moderator:manage:chat_messages",
+	"moderator:manage:banned_users",
+	"moderator:manage:automod",
 }
 
 // DeviceCodeResponse holds the response from Twitch's device authorization endpoint.
@@ -61,8 +67,10 @@ type OAuthManager struct {
 	clientID       string
 	deviceEndpoint string
 	tokenEndpoint  string
+	helixBaseURL   string
 	httpClient     *http.Client
 	store          secrets.Store
+	onAuthChange   func()
 }
 
 // NewOAuthManager creates a new Twitch OAuthManager.
@@ -74,8 +82,34 @@ func NewOAuthManager(clientID string, store secrets.Store) *OAuthManager {
 		clientID:       clientID,
 		deviceEndpoint: DefaultTwitchDeviceEndpoint,
 		tokenEndpoint:  DefaultTwitchTokenEndpoint,
+		helixBaseURL:   DefaultHelixBaseURL,
 		httpClient:     &http.Client{Timeout: 15 * time.Second},
 		store:          store,
+	}
+}
+
+// SetHelixBaseURL overrides the Helix API base URL (used in unit tests).
+func (m *OAuthManager) SetHelixBaseURL(helixBaseURL string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if helixBaseURL != "" {
+		m.helixBaseURL = strings.TrimRight(helixBaseURL, "/")
+	}
+}
+
+// SetOnAuthChange registers a callback invoked whenever OAuth token state changes (e.g., revoked or cleared).
+func (m *OAuthManager) SetOnAuthChange(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onAuthChange = fn
+}
+
+func (m *OAuthManager) notifyAuthChange() {
+	m.mu.RLock()
+	fn := m.onAuthChange
+	m.mu.RUnlock()
+	if fn != nil {
+		fn()
 	}
 }
 
@@ -201,6 +235,7 @@ func (m *OAuthManager) PollToken(ctx context.Context, deviceCode string, interva
 				if err := m.SaveTokens(&tResp); err != nil {
 					return &tResp, fmt.Errorf("tokens received but failed to save: %w", err)
 				}
+				_, _, _, _ = m.FetchAuthenticatedUser(ctx)
 				return &tResp, nil
 			}
 
@@ -251,6 +286,9 @@ func (m *OAuthManager) RefreshToken(ctx context.Context, refreshToken string) (*
 			Message string `json:"message"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&errResp)
+		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized {
+			_ = m.ClearTokens()
+		}
 		return nil, fmt.Errorf("refresh failed (status %d): %s", resp.StatusCode, errResp.Message)
 	}
 
@@ -324,10 +362,109 @@ func (m *OAuthManager) HasToken() bool {
 	return err == nil && tok != ""
 }
 
-// ClearTokens removes stored Twitch tokens from the secret store.
+// ClearTokens removes stored Twitch tokens and user identity from the secret store.
 func (m *OAuthManager) ClearTokens() error {
 	_ = m.store.Delete(SecretTwitchAccessToken)
 	_ = m.store.Delete(SecretTwitchRefreshToken)
 	_ = m.store.Delete(SecretTwitchTokenExpiry)
+	_ = m.store.Delete(SecretTwitchUserID)
+	_ = m.store.Delete(SecretTwitchUserLogin)
+	_ = m.store.Delete(SecretTwitchDisplayName)
+	m.notifyAuthChange()
 	return nil
+}
+
+// HandleUnauthorized is called when a Twitch Helix API or EventSub call receives HTTP 401.
+// It attempts a single token refresh if a refresh token is stored; if refresh fails or is unavailable,
+// it clears the invalid tokens and notifies UI listeners.
+func (m *OAuthManager) HandleUnauthorized(ctx context.Context) (string, error) {
+	refreshTok, err := m.store.Get(SecretTwitchRefreshToken)
+	if err == nil && strings.TrimSpace(refreshTok) != "" {
+		if refreshed, refErr := m.RefreshToken(ctx, refreshTok); refErr == nil && refreshed != nil && refreshed.AccessToken != "" {
+			return refreshed.AccessToken, nil
+		}
+	}
+	_ = m.ClearTokens()
+	return "", errors.New("twitch oauth session expired or revoked; disconnected")
+}
+
+// StoredUser returns the cached authenticated Twitch user identity (userID, login, displayName) from the secret store.
+func (m *OAuthManager) StoredUser() (userID, login, displayName string) {
+	if m.store == nil {
+		return "", "", ""
+	}
+	uid, _ := m.store.Get(SecretTwitchUserID)
+	ulog, _ := m.store.Get(SecretTwitchUserLogin)
+	udisp, _ := m.store.Get(SecretTwitchDisplayName)
+	return strings.TrimSpace(uid), strings.TrimSpace(ulog), strings.TrimSpace(udisp)
+}
+
+// FetchAuthenticatedUser queries GET /helix/users to resolve and persist the authenticated Twitch user's ID, login, and display name.
+func (m *OAuthManager) FetchAuthenticatedUser(ctx context.Context) (userID, login, displayName string, err error) {
+	token, err := m.GetValidAccessToken(ctx)
+	if err != nil || token == "" {
+		return "", "", "", err
+	}
+
+	m.mu.RLock()
+	helixBase := strings.TrimRight(m.helixBaseURL, "/")
+	cID := m.clientID
+	client := m.httpClient
+	m.mu.RUnlock()
+
+	if helixBase == "" {
+		helixBase = DefaultHelixBaseURL
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, helixBase+"/users", nil)
+	if err != nil {
+		return "", "", "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Client-Id", cID)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		_, _ = m.HandleUnauthorized(ctx)
+		return "", "", "", errors.New("twitch /helix/users HTTP 401 unauthorized")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", "", "", fmt.Errorf("twitch /helix/users HTTP %d", resp.StatusCode)
+	}
+
+	var parsed struct {
+		Data []struct {
+			ID          string `json:"id"`
+			Login       string `json:"login"`
+			DisplayName string `json:"display_name"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", "", "", err
+	}
+	if len(parsed.Data) == 0 {
+		return "", "", "", errors.New("no twitch user returned from /helix/users")
+	}
+
+	userID = strings.TrimSpace(parsed.Data[0].ID)
+	login = strings.ToLower(strings.TrimSpace(parsed.Data[0].Login))
+	displayName = strings.TrimSpace(parsed.Data[0].DisplayName)
+	if displayName == "" {
+		displayName = login
+	}
+
+	if m.store != nil {
+		_ = m.store.Set(SecretTwitchUserID, userID)
+		_ = m.store.Set(SecretTwitchUserLogin, login)
+		_ = m.store.Set(SecretTwitchDisplayName, displayName)
+	}
+	return userID, login, displayName, nil
 }

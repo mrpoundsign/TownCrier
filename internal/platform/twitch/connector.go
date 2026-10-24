@@ -59,6 +59,7 @@ type Connector struct {
 	seenEventOrder   []string
 	onEvent          func(event *chat.Event)
 	onModeration     func(modEvent *chat.ModerationEvent)
+	onAutoModHold    func(holdEvent *AutoModHoldEvent)
 	onStatusChange   func(status ConnectionStatus, detail string)
 	onStreamLive     func(live bool)
 }
@@ -215,7 +216,8 @@ func (c *Connector) SetEventSubEndpoints(wsURL, helixBaseURL, validateURL string
 	}
 }
 
-// RefreshOAuth restarts or stops the EventSub WebSocket loop based on the current OAuth token state.
+// RefreshOAuth switches the active Twitch connection between full Helix/EventSub mode (when OAuth is connected)
+// and zero-config anonymous IRC + GQL mode (when OAuth is disconnected).
 func (c *Connector) RefreshOAuth() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -223,11 +225,7 @@ func (c *Connector) RefreshOAuth() {
 		c.stopEventSubLocked()
 		return
 	}
-	if c.oauth != nil && c.oauth.HasToken() {
-		c.startEventSubLocked()
-	} else {
-		c.stopEventSubLocked()
-	}
+	c.connectLocked()
 }
 
 // Start connects to the given Twitch channel (e.g. "mrpoundsign").
@@ -236,12 +234,19 @@ func (c *Connector) Start(channel string) error {
 	defer c.mu.Unlock()
 
 	cleanChannel := cleanChannelName(channel)
+	if cleanChannel == "" && c.oauth != nil && c.oauth.HasToken() {
+		_, login, _ := c.oauth.StoredUser()
+		cleanChannel = cleanChannelName(login)
+	}
 	if cleanChannel == "" {
 		return errors.New("empty channel name")
 	}
 
-	if c.running && c.client != nil && c.channel == cleanChannel {
-		return nil
+	hasOAuth := c.oauth != nil && c.oauth.HasToken()
+	if c.running && c.channel == cleanChannel {
+		if (hasOAuth && c.eventSubCancel != nil && c.client == nil) || (!hasOAuth && c.client != nil && c.eventSubCancel == nil) {
+			return nil
+		}
 	}
 
 	c.channel = cleanChannel
@@ -310,6 +315,13 @@ func (c *Connector) connectLocked() {
 
 	c.updateStatusLocked(StatusConnecting, "Connecting to #"+ch+"...")
 
+	// When OAuth is connected, use 100% official Twitch Helix API + EventSub WebSocket (no anonymous IRC client).
+	if c.oauth != nil && c.oauth.HasToken() {
+		c.startEventSubLocked()
+		c.startLivePollLocked(ch)
+		return
+	}
+
 	client := twitch.NewAnonymousClient()
 
 	client.OnConnect(func() {
@@ -362,7 +374,6 @@ func (c *Connector) connectLocked() {
 		}
 	}(client, ch)
 
-	c.startEventSubLocked()
 	c.startLivePollLocked(ch)
 }
 
@@ -392,7 +403,7 @@ func (c *Connector) setStreamLiveLocked(live bool) {
 		return
 	}
 	c.isLive = live
-	if c.running && c.client != nil && c.status != StatusDisconnected {
+	if c.running && (c.client != nil || c.eventSubConn != nil || c.eventSubCancel != nil) && c.status != StatusDisconnected {
 		if live {
 			c.updateStatusLocked(StatusConnected, "#"+c.channel)
 		} else {

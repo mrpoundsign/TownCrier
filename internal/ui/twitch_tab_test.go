@@ -129,11 +129,21 @@ func TestTwitchTabOAuthGating(t *testing.T) {
 	if !tab.rewardOAuthHint.Visible() {
 		t.Error("expected rewardOAuthHint to be visible when OAuth is not connected")
 	}
+	if !tab.channelRow.Visible() || !tab.hintLabel.Visible() {
+		t.Error("expected channelRow and Zero-Config hintLabel to be visible when OAuth is not connected")
+	}
 
-	// Simulate OAuth token stored
+	// Simulate OAuth token stored with user login
 	_ = store.Set("twitch_access_token", "valid_token_123")
+	_ = store.Set("twitch_user_login", "mrpoundsign")
 	tab.syncOAuthState()
 
+	if tab.channelRow.Visible() || tab.hintLabel.Visible() {
+		t.Error("expected channelRow and Zero-Config hintLabel to be hidden when OAuth is connected")
+	}
+	if tab.channelEntry.Text != "mrpoundsign" {
+		t.Errorf("expected empty channelEntry to auto-fill 'mrpoundsign', got %q", tab.channelEntry.Text)
+	}
 	if tab.rewardEntry.Disabled() {
 		t.Error("expected rewardEntry to be enabled when OAuth is connected")
 	}

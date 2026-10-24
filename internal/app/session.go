@@ -52,10 +52,12 @@ type Session struct {
 	twitchOAuth       *twitch.OAuthManager
 	onTwitchStatus    func(status string, detail string)
 	youtubeConnector  *youtube.Connector
+	youtubeOAuth      *youtube.OAuthManager
 	onYouTubeStatus   func(status string, detail string)
 	tiktokConnector   *tiktok.Connector
 	onTikTokStatus    func(status string, detail string)
 	kickConnector     *kick.Connector
+	kickOAuth         *kick.OAuthManager
 	onKickStatus      func(status string, detail string)
 	onEventDispatched func(event *chat.Event, voiceID string)
 
@@ -63,6 +65,11 @@ type Session struct {
 	livePlatforms   map[string]string
 	activeSessionID int64
 	configStore     config.Store
+
+	heldMu        sync.Mutex
+	heldMessages  []twitch.AutoModHoldEvent
+	heldListeners map[uint64]func()
+	heldSubSeq    atomic.Uint64
 }
 
 // NewSession creates an application session initialized with configuration, secret store, and config store.
@@ -71,7 +78,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		cfg = config.DefaultConfig()
 	}
 	if store == nil {
-		store = secrets.NewKeyringStore("")
+		store = secrets.NewMemoryStore()
 	}
 	if configStore == nil {
 		configStore = config.NewMemoryStore(cfg)
@@ -89,6 +96,8 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		sanitizer:     sanitizer,
 		bots:          matcher,
 		twitchOAuth:   twitch.NewOAuthManager("", store),
+		youtubeOAuth:  youtube.NewOAuthManager("", "", store),
+		kickOAuth:     kick.NewOAuthManager("", "", store),
 		livePlatforms: make(map[string]string),
 	}
 
@@ -109,6 +118,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		},
 	)
 	s.twitchConnector.SetOAuthManager(s.twitchOAuth)
+	s.twitchConnector.SetOnAutoModHold(s.HandleAutoModHold)
 	s.twitchConnector.SetOnStreamStateChange(func(live bool) {
 		ch := ""
 		if s.twitchConnector != nil {
@@ -139,6 +149,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 			}
 		},
 	)
+	s.youtubeConnector.SetOAuthManager(s.youtubeOAuth)
 
 	s.tiktokConnector = tiktok.NewConnector(
 		func(event *chat.Event) {
@@ -176,6 +187,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 			}
 		},
 	)
+	s.kickConnector.SetOAuthManager(s.kickOAuth)
 	s.kickConnector.SetOnStreamStateChange(func(live bool) {
 		ch := ""
 		if s.kickConnector != nil {
@@ -206,15 +218,24 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 // Start transitions the session to running state and initializes active subsystems.
 func (s *Session) Start() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.running {
+		s.mu.Unlock()
 		return ErrAlreadyStarted
 	}
 
 	s.running = true
-	s.queue.Resume()
-	s.syncConnectorsLocked()
+	q := s.queue
+	cfg := s.cfg.Clone()
+	tw := s.twitchConnector
+	yt := s.youtubeConnector
+	tt := s.tiktokConnector
+	kk := s.kickConnector
+	s.mu.Unlock()
+
+	if q != nil {
+		q.Resume()
+	}
+	syncConnectors(cfg, tw, yt, tt, kk)
 	return nil
 }
 
@@ -227,20 +248,28 @@ func (s *Session) Stop() error {
 	}
 
 	s.running = false
-	s.queue.Pause()
-	if s.twitchConnector != nil {
-		_ = s.twitchConnector.Stop()
-	}
-	if s.youtubeConnector != nil {
-		_ = s.youtubeConnector.Stop()
-	}
-	if s.tiktokConnector != nil {
-		_ = s.tiktokConnector.Stop()
-	}
-	if s.kickConnector != nil {
-		_ = s.kickConnector.Stop()
-	}
+	q := s.queue
+	tw := s.twitchConnector
+	yt := s.youtubeConnector
+	tt := s.tiktokConnector
+	kk := s.kickConnector
 	s.mu.Unlock()
+
+	if q != nil {
+		q.Pause()
+	}
+	if tw != nil {
+		_ = tw.Stop()
+	}
+	if yt != nil {
+		_ = yt.Stop()
+	}
+	if tt != nil {
+		_ = tt.Stop()
+	}
+	if kk != nil {
+		_ = kk.Stop()
+	}
 
 	s.endActiveStreamSession()
 	return nil
@@ -250,22 +279,32 @@ func (s *Session) Stop() error {
 func (s *Session) Close() error {
 	s.mu.Lock()
 	s.running = false
-	if s.twitchConnector != nil {
-		_ = s.twitchConnector.Stop()
-	}
-	if s.youtubeConnector != nil {
-		_ = s.youtubeConnector.Stop()
-	}
-	if s.tiktokConnector != nil {
-		_ = s.tiktokConnector.Stop()
-	}
-	if s.kickConnector != nil {
-		_ = s.kickConnector.Stop()
-	}
-	if s.queue != nil {
-		s.queue.Close()
-	}
+	s.onTwitchStatus = nil
+	s.onYouTubeStatus = nil
+	s.onTikTokStatus = nil
+	s.onKickStatus = nil
+	tw := s.twitchConnector
+	yt := s.youtubeConnector
+	tt := s.tiktokConnector
+	kk := s.kickConnector
+	q := s.queue
 	s.mu.Unlock()
+
+	if tw != nil {
+		_ = tw.Stop()
+	}
+	if yt != nil {
+		_ = yt.Stop()
+	}
+	if tt != nil {
+		_ = tt.Stop()
+	}
+	if kk != nil {
+		_ = kk.Stop()
+	}
+	if q != nil {
+		q.Close()
+	}
 
 	s.endActiveStreamSession()
 
@@ -309,11 +348,18 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 
 	s.mu.Lock()
 	s.cfg = newCfg.Clone()
+	cfgSnap := s.cfg.Clone()
 	elog := s.eventLog
-	if s.running {
-		s.syncConnectorsLocked()
-	}
+	running := s.running
+	tw := s.twitchConnector
+	yt := s.youtubeConnector
+	tt := s.tiktokConnector
+	kk := s.kickConnector
 	s.mu.Unlock()
+
+	if running {
+		syncConnectors(cfgSnap, tw, yt, tt, kk)
+	}
 
 	if elog != nil {
 		elog.SetEnabled(newCfg.Logging.Enabled)
@@ -353,40 +399,43 @@ func (s *Session) UpdateConfig(fn func(c *config.Config)) error {
 	return nil
 }
 
-func (s *Session) syncConnectorsLocked() {
-	if s.twitchConnector != nil {
-		p, ok := s.cfg.Platforms["twitch"]
+func syncConnectors(cfg *config.Config, tw *twitch.Connector, ytConn *youtube.Connector, ttConn *tiktok.Connector, kkConn *kick.Connector) {
+	if cfg == nil {
+		return
+	}
+	if tw != nil {
+		p, ok := cfg.Platforms["twitch"]
 		if ok && p.Enabled && p.AccountName != "" {
-			_ = s.twitchConnector.Start(p.AccountName)
+			_ = tw.Start(p.AccountName)
 		} else {
-			_ = s.twitchConnector.Stop()
+			_ = tw.Stop()
 		}
 	}
 
-	if s.youtubeConnector != nil {
-		yt, ok := s.cfg.Platforms["youtube"]
+	if ytConn != nil {
+		yt, ok := cfg.Platforms["youtube"]
 		if ok && yt.Enabled && yt.AccountName != "" {
-			_ = s.youtubeConnector.Start(yt.AccountName)
+			_ = ytConn.Start(yt.AccountName)
 		} else {
-			_ = s.youtubeConnector.Stop()
+			_ = ytConn.Stop()
 		}
 	}
 
-	if s.tiktokConnector != nil {
-		tt, ok := s.cfg.Platforms["tiktok"]
+	if ttConn != nil {
+		tt, ok := cfg.Platforms["tiktok"]
 		if ok && tt.Enabled && tt.AccountName != "" {
-			_ = s.tiktokConnector.Start(tt.AccountName)
+			_ = ttConn.Start(tt.AccountName)
 		} else {
-			_ = s.tiktokConnector.Stop()
+			_ = ttConn.Stop()
 		}
 	}
 
-	if s.kickConnector != nil {
-		kc, ok := s.cfg.Platforms["kick"]
+	if kkConn != nil {
+		kc, ok := cfg.Platforms["kick"]
 		if ok && kc.Enabled && kc.AccountName != "" {
-			_ = s.kickConnector.Start(kc.AccountName)
+			_ = kkConn.Start(kc.AccountName)
 		} else {
-			_ = s.kickConnector.Stop()
+			_ = kkConn.Stop()
 		}
 	}
 }
@@ -426,51 +475,69 @@ func (s *Session) TwitchOAuth() *twitch.OAuthManager {
 	return s.twitchOAuth
 }
 
+// YouTubeOAuth returns the YouTube OAuth manager.
+func (s *Session) YouTubeOAuth() *youtube.OAuthManager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.youtubeOAuth
+}
+
+// KickOAuth returns the Kick OAuth manager.
+func (s *Session) KickOAuth() *kick.OAuthManager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.kickOAuth
+}
+
 // SetOnTwitchStatus registers a callback for Twitch connection status changes.
 func (s *Session) SetOnTwitchStatus(fn func(status string, detail string)) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.onTwitchStatus = fn
-	if s.twitchConnector != nil && fn != nil {
-		curStatus := s.twitchConnector.Status()
-		curChannel := s.twitchConnector.Channel()
-		go fn(string(curStatus), curChannel)
+	tw := s.twitchConnector
+	s.mu.Unlock()
+	if tw != nil && fn != nil {
+		curStatus := tw.Status()
+		curChannel := tw.Channel()
+		fn(string(curStatus), curChannel)
 	}
 }
 
 // SetOnYouTubeStatus registers a callback for YouTube connection status changes.
 func (s *Session) SetOnYouTubeStatus(fn func(status string, detail string)) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.onYouTubeStatus = fn
-	if s.youtubeConnector != nil && fn != nil {
-		curStatus := s.youtubeConnector.Status()
-		curTarget := s.youtubeConnector.Target()
-		go fn(string(curStatus), curTarget)
+	yt := s.youtubeConnector
+	s.mu.Unlock()
+	if yt != nil && fn != nil {
+		curStatus := yt.Status()
+		curTarget := yt.Target()
+		fn(string(curStatus), curTarget)
 	}
 }
 
 // SetOnTikTokStatus registers a callback for TikTok connection status changes.
 func (s *Session) SetOnTikTokStatus(fn func(status string, detail string)) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.onTikTokStatus = fn
-	if s.tiktokConnector != nil && fn != nil {
-		curStatus := s.tiktokConnector.Status()
-		curUser := s.tiktokConnector.Username()
-		go fn(string(curStatus), curUser)
+	tt := s.tiktokConnector
+	s.mu.Unlock()
+	if tt != nil && fn != nil {
+		curStatus := tt.Status()
+		curUser := tt.Username()
+		fn(string(curStatus), curUser)
 	}
 }
 
 // SetOnKickStatus registers a callback for Kick connection status changes.
 func (s *Session) SetOnKickStatus(fn func(status string, detail string)) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.onKickStatus = fn
-	if s.kickConnector != nil && fn != nil {
-		curStatus := s.kickConnector.Status()
-		curChan := s.kickConnector.Channel()
-		go fn(string(curStatus), curChan)
+	kk := s.kickConnector
+	s.mu.Unlock()
+	if kk != nil && fn != nil {
+		curStatus := kk.Status()
+		curChan := kk.Channel()
+		fn(string(curStatus), curChan)
 	}
 }
 
@@ -792,8 +859,11 @@ func (s *Session) syncAndEnrichFollowerRole(event *chat.Event) {
 	if slices.ContainsFunc(event.Roles, func(r string) bool { return strings.EqualFold(r, "follower") }) {
 		return
 	}
+	if s.bots != nil && s.bots.ShouldIgnore(event, s.Config()) {
+		return
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	isFol := false
@@ -1009,6 +1079,22 @@ func formatEventLogRawTextAndEmotes(event *chat.Event) (string, []chat.EmoteSpan
 		if strings.EqualFold(msg, giftName) {
 			msg = ""
 		}
+		if strings.EqualFold(event.Platform, "youtube") || strings.EqualFold(event.Currency, "Jewels") || strings.EqualFold(event.Currency, "Jewel") {
+			base := "Sent " + giftName
+			if event.Amount > 0 {
+				base = fmt.Sprintf("Sent %s (%.0f Jewels)", giftName, event.Amount)
+			}
+			if len(rawEmotes) > 0 && strings.TrimSpace(rawEmotes[0].URL) != "" {
+				token := ":" + giftName + ":"
+				start := utf8.RuneCountInString(base) + 1
+				sp := rawEmotes[0]
+				sp.Start = start
+				sp.End = start + utf8.RuneCountInString(token)
+				sp.Name = giftName
+				return base + " " + token, []chat.EmoteSpan{sp}
+			}
+			return base, nil
+		}
 		count := event.Count
 		if count <= 0 {
 			count = int(event.Amount)
@@ -1146,7 +1232,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 
 	// 3. Text & Emote Sanitizer on raw message text
 	// Emote offsets are relative to event.Text before chatter name prefixing.
-	_, speakEmotes, _, _, _ := cfg.EffectiveChatRules(event.Platform)
+	_, speakEmotes, deduplicateEmotes, maxDuplicateWords, _, _, _ := cfg.EffectiveChatRules(event.Platform)
 	blockedWords := chat.EffectiveBlockedWords(cfg.Safety.BlockDefaultBadWords, cfg.Safety.BlockedWords)
 	if event.Text != "" {
 		spansForSanitize := event.EmoteSpans
@@ -1154,7 +1240,13 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 			// Gift icon EmoteSpans are for inline visual rendering in logs; never strip the gift name when SpeakEmotes is false.
 			spansForSanitize = nil
 		}
-		event.Text = s.sanitizer.Sanitize(event.Text, spansForSanitize, speakEmotes, blockedWords)
+		event.Text = s.sanitizer.SanitizeWithOptions(event.Text, chat.SanitizeOptions{
+			EmoteSpans:        spansForSanitize,
+			SpeakEmotes:       speakEmotes,
+			DeduplicateEmotes: deduplicateEmotes,
+			MaxDuplicateWords: maxDuplicateWords,
+			BlockedWords:      blockedWords,
+		})
 		event.EmoteSpans = nil // already applied to event.Text
 		if event.Text == "" && event.Kind == chat.EventKindMessage {
 			log.Printf("[Session] Chat message sanitized to empty text: user=%q", event.UserName)
@@ -1172,7 +1264,12 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	}
 
 	// 5. Final sanitation pass on formatted text (length clamping, blocked words in templates/names)
-	sanitizedText := s.sanitizer.Sanitize(resolved.Text, nil, true, blockedWords)
+	sanitizedText := s.sanitizer.SanitizeWithOptions(resolved.Text, chat.SanitizeOptions{
+		SpeakEmotes:       true,
+		DeduplicateEmotes: false,
+		MaxDuplicateWords: 0,
+		BlockedWords:      blockedWords,
+	})
 	if sanitizedText == "" {
 		log.Printf("[Session] Event sanitized to empty text: user=%q original=%q", event.UserName, resolved.Text)
 		s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Formatted speech text sanitized to empty"))

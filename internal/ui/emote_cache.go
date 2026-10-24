@@ -231,26 +231,31 @@ func (c *EmoteCache) downloadAndNormalizePNG(rawURL string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// emoteInlineWidget renders a 20x20 inline emote image (or a compact :name: fallback while loading)
+// emoteInlineWidget renders a scaled inline emote image (or a compact :name: fallback while loading)
 // with a mouse-over tooltip displaying the emote code.
 type emoteInlineWidget struct {
 	widget.BaseWidget
 
 	name     string
 	imageURL string
+	scale    float32
 	res      fyne.Resource
 	onHover  func(obj fyne.CanvasObject, tip string, hovered bool)
 }
 
 var _ desktop.Hoverable = (*emoteInlineWidget)(nil)
 
-func newEmoteInlineWidget(cache *EmoteCache, name, imageURL string, onHover func(obj fyne.CanvasObject, tip string, hovered bool)) *emoteInlineWidget {
+func newScaledEmoteInlineWidget(cache *EmoteCache, name, imageURL string, scale float32, onHover func(obj fyne.CanvasObject, tip string, hovered bool)) *emoteInlineWidget {
 	if cache == nil {
 		cache = DefaultEmoteCache()
+	}
+	if scale <= 0 {
+		scale = 1.0
 	}
 	w := &emoteInlineWidget{
 		name:     name,
 		imageURL: imageURL,
+		scale:    scale,
 		onHover:  onHover,
 	}
 	w.ExtendBaseWidget(w)
@@ -261,6 +266,13 @@ func newEmoteInlineWidget(cache *EmoteCache, name, imageURL string, onHover func
 		})
 	}
 	return w
+}
+
+func (w *emoteInlineWidget) effectiveScale() float32 {
+	if w.scale <= 0 {
+		return 1.0
+	}
+	return w.scale
 }
 
 func (w *emoteInlineWidget) tooltipText() string {
@@ -300,13 +312,15 @@ func (w *emoteInlineWidget) fallbackLabelText() string {
 }
 
 func (w *emoteInlineWidget) CreateRenderer() fyne.WidgetRenderer {
+	s := w.effectiveScale()
+	sz := emoteInlineSize * s
 	img := canvas.NewImageFromResource(w.res)
 	img.FillMode = canvas.ImageFillContain
 	img.ScaleMode = canvas.ImageScaleSmooth
-	img.SetMinSize(fyne.NewSize(emoteInlineSize, emoteInlineSize))
+	img.SetMinSize(fyne.NewSize(sz, sz))
 
 	fallback := canvas.NewText(w.fallbackLabelText(), colorSkyBlue)
-	fallback.TextSize = theme.TextSize() - 1
+	fallback.TextSize = (theme.TextSize() - 1) * s
 	fallback.TextStyle = fyne.TextStyle{Bold: true}
 
 	r := &emoteInlineRenderer{
@@ -325,11 +339,12 @@ type emoteInlineRenderer struct {
 }
 
 func (r *emoteInlineRenderer) Layout(size fyne.Size) {
+	sz := emoteInlineSize * r.w.effectiveScale()
 	if r.w.res != nil {
-		r.img.Resize(fyne.NewSize(emoteInlineSize, emoteInlineSize))
+		r.img.Resize(fyne.NewSize(sz, sz))
 		r.img.Move(fyne.NewPos(
-			(size.Width-emoteInlineSize)/2,
-			(size.Height-emoteInlineSize)/2,
+			(size.Width-sz)/2,
+			(size.Height-sz)/2,
 		))
 	} else {
 		fbMin := r.fallback.MinSize()
@@ -339,11 +354,12 @@ func (r *emoteInlineRenderer) Layout(size fyne.Size) {
 }
 
 func (r *emoteInlineRenderer) MinSize() fyne.Size {
+	sz := emoteInlineSize * r.w.effectiveScale()
 	if r.w.res != nil {
-		return fyne.NewSize(emoteInlineSize, emoteInlineSize)
+		return fyne.NewSize(sz, sz)
 	}
 	fbMin := r.fallback.MinSize()
-	return fyne.NewSize(max(fbMin.Width, emoteInlineSize), max(fbMin.Height, emoteInlineSize))
+	return fyne.NewSize(max(fbMin.Width, sz), max(fbMin.Height, sz))
 }
 
 func (r *emoteInlineRenderer) Refresh() {
@@ -366,10 +382,18 @@ func (r *emoteInlineRenderer) Objects() []fyne.CanvasObject {
 
 func (r *emoteInlineRenderer) Destroy() {}
 
-// inlineFlowLayout arranges word labels and 20x20 emote widgets left-to-right with automatic word wrapping.
+// inlineFlowLayout arranges word labels and inline emote widgets left-to-right with automatic word wrapping.
 // Its MinSize().Width is always clamped to 80px so long messages never expand the OS window width.
 type inlineFlowLayout struct {
 	wrapWidth float32
+	scale     float32
+}
+
+func (l *inlineFlowLayout) effectiveScale() float32 {
+	if l.scale <= 0 {
+		return 1.0
+	}
+	return l.scale
 }
 
 func (l *inlineFlowLayout) effectiveWidth(currentW float32) float32 {
@@ -385,8 +409,10 @@ func (l *inlineFlowLayout) effectiveWidth(currentW float32) float32 {
 func (l *inlineFlowLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	l.wrapWidth = size.Width
 	maxW := l.effectiveWidth(size.Width)
+	s := l.effectiveScale()
 	var x, y float32
-	lineH := emoteLineHeight
+	lineH := emoteLineHeight * s
+	spacing := emoteWordSpacing * s
 
 	for _, obj := range objects {
 		if obj == nil || !obj.Visible() {
@@ -398,19 +424,21 @@ func (l *inlineFlowLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 		}
 		if x > 0 && x+sz.Width > maxW {
 			x = 0
-			y += lineH + 2
+			y += lineH + 2*s
 		}
 		yOffset := (lineH - sz.Height) / 2
 		obj.Move(fyne.NewPos(x, y+yOffset))
 		obj.Resize(sz)
-		x += sz.Width + emoteWordSpacing
+		x += sz.Width + spacing
 	}
 }
 
 func (l *inlineFlowLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	maxW := l.effectiveWidth(l.wrapWidth)
+	s := l.effectiveScale()
 	var x, y float32
-	lineH := emoteLineHeight
+	lineH := emoteLineHeight * s
+	spacing := emoteWordSpacing * s
 	hasVisible := false
 
 	for _, obj := range objects {
@@ -424,9 +452,9 @@ func (l *inlineFlowLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 		}
 		if x > 0 && x+sz.Width > maxW {
 			x = 0
-			y += lineH + 2
+			y += lineH + 2*s
 		}
-		x += sz.Width + emoteWordSpacing
+		x += sz.Width + spacing
 	}
 
 	if !hasVisible {
@@ -506,12 +534,13 @@ func splitWordsForFlow(s string) []inlineToken {
 	return out
 }
 
-// emoteMessageCell renders a chat message with inline 20x20 emote images (when EmoteSpans are present)
+// emoteMessageCell renders a chat message with inline emote images (when EmoteSpans are present)
 // or a fast wrappedCellLabel (when plain text), plus an optional muted secondary note line.
 type emoteMessageCell struct {
 	widget.BaseWidget
 
 	cache      *EmoteCache
+	scale      float32
 	onHover    func(obj fyne.CanvasObject, tip string, hovered bool)
 	plainLabel *wrappedCellLabel
 	flowLayout *inlineFlowLayout
@@ -521,12 +550,19 @@ type emoteMessageCell struct {
 }
 
 func newEmoteMessageCell(cache *EmoteCache, onHover func(obj fyne.CanvasObject, tip string, hovered bool)) *emoteMessageCell {
+	return newScaledEmoteMessageCell(cache, 1.0, onHover)
+}
+
+func newScaledEmoteMessageCell(cache *EmoteCache, scale float32, onHover func(obj fyne.CanvasObject, tip string, hovered bool)) *emoteMessageCell {
 	if cache == nil {
 		cache = DefaultEmoteCache()
 	}
+	if scale <= 0 {
+		scale = 1.0
+	}
 	plain := newClampedWrapLabel("", fyne.TextStyle{})
 	plain.onHover = onHover
-	fl := &inlineFlowLayout{wrapWidth: 360}
+	fl := &inlineFlowLayout{wrapWidth: 360, scale: scale}
 	flow := container.New(fl)
 	flow.Hide()
 	sub := newClampedWrapLabel("", fyne.TextStyle{Italic: true})
@@ -534,6 +570,7 @@ func newEmoteMessageCell(cache *EmoteCache, onHover func(obj fyne.CanvasObject, 
 
 	c := &emoteMessageCell{
 		cache:      cache,
+		scale:      scale,
 		onHover:    onHover,
 		plainLabel: plain,
 		flowLayout: fl,
@@ -545,8 +582,17 @@ func newEmoteMessageCell(cache *EmoteCache, onHover func(obj fyne.CanvasObject, 
 	return c
 }
 
+func (c *emoteMessageCell) effectiveScale() float32 {
+	if c.scale <= 0 {
+		return 1.0
+	}
+	return c.scale
+}
+
 // SetContent updates the cell to display rawText with inline emotes and an optional tooltip/subtext.
 func (c *emoteMessageCell) SetContent(platform, rawText string, emotes []chat.EmoteSpan, tooltip string, subText string) {
+	s := c.effectiveScale()
+	c.flowLayout.scale = s
 	c.plainLabel.tooltip = tooltip
 	if len(emotes) == 0 {
 		c.flowBox.Objects = nil
@@ -571,10 +617,10 @@ func (c *emoteMessageCell) SetContent(platform, rawText string, emotes []chat.Em
 	objs := make([]fyne.CanvasObject, 0, len(tokens))
 	for _, tok := range tokens {
 		if tok.isEmote {
-			objs = append(objs, newEmoteInlineWidget(c.cache, tok.name, tok.imageURL, c.onHover))
+			objs = append(objs, newScaledEmoteInlineWidget(c.cache, tok.name, tok.imageURL, s, c.onHover))
 		} else {
 			lbl := canvas.NewText(tok.text, colorChromeWhite)
-			lbl.TextSize = theme.TextSize()
+			lbl.TextSize = theme.TextSize() * s
 			objs = append(objs, lbl)
 		}
 	}
@@ -603,6 +649,7 @@ func (c *emoteMessageCell) Resize(size fyne.Size) {
 }
 
 func (c *emoteMessageCell) MinSize() fyne.Size {
+	s := c.effectiveScale()
 	var h float32
 	if c.plainLabel.Visible() {
 		h += c.plainLabel.MinSize().Height
@@ -612,12 +659,13 @@ func (c *emoteMessageCell) MinSize() fyne.Size {
 	}
 	if c.subLabel.Visible() {
 		if h > 0 {
-			h += 2
+			h += 2 * s
 		}
 		h += c.subLabel.MinSize().Height
 	}
-	if h < emoteLineHeight {
-		h = emoteLineHeight
+	minH := emoteLineHeight * s
+	if h < minH {
+		h = minH
 	}
 	return fyne.NewSize(80, h)
 }

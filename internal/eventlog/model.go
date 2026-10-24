@@ -31,6 +31,7 @@ const (
 
 	// Inbound platform moderation sync action
 	OutcomeModerationEvent EventOutcome = "moderation_event"
+	OutcomeHeldForReview   EventOutcome = "held_for_review"
 )
 
 // OutcomeDisplayLabel returns a concise human-readable badge label for an EventOutcome.
@@ -64,6 +65,8 @@ func OutcomeDisplayLabel(outcome EventOutcome) string {
 		return "🧹 Filtered (Empty / Blocked)"
 	case OutcomeModerationEvent:
 		return "🛡️ Moderation Action"
+	case OutcomeHeldForReview:
+		return "🛡️ Held for Review"
 	default:
 		if outcome == "" {
 			return "Unknown"
@@ -208,6 +211,7 @@ type QuerySummary struct {
 	TotalGiftSubs    int                `json:"total_gift_subs"`
 	TotalBits        float64            `json:"total_bits"`
 	TotalDiamonds    float64            `json:"total_diamonds"`
+	TotalJewels      float64            `json:"total_jewels"`
 	TotalKicks       float64            `json:"total_kicks"`
 	SuperChatByCurr  map[string]float64 `json:"super_chat_by_curr,omitempty"`
 	TotalRaids       int                `json:"total_raids"`
@@ -255,9 +259,12 @@ func (s *QuerySummary) AccumulateRow(kind, platform, currency string, rowCount i
 		if val <= 0 {
 			val = float64(sumCount)
 		}
-		if platform == "kick" || currency == "KICKS" {
+		switch {
+		case platform == "kick" || currency == "KICKS":
 			s.TotalKicks += val
-		} else {
+		case platform == "youtube" || currency == "JEWELS" || currency == "JEWEL":
+			s.TotalJewels += val
+		default:
 			s.TotalDiamonds += val
 		}
 	case "super_chat", "super_sticker", "superchat", "supersticker", "charity_donation":

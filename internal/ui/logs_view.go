@@ -25,10 +25,17 @@ import (
 )
 
 const (
-	logsPageSize           = 50
-	maxLiveTailRows        = 150
-	searchDebounceDuration = 200 * time.Millisecond
+	logsPageSize               = 50
+	maxLiveTailRows            = 150
+	searchDebounceDuration     = 200 * time.Millisecond
+	liveRenderCoalesceDuration = 15 * time.Millisecond
 )
+
+// uiRenderMu serializes background-goroutine UI render batches across views.
+// In Fyne's headless test driver, fyne.Do(fn) executes directly on the calling
+// goroutine without an event loop, so concurrent timer/status callbacks would
+// otherwise access Fyne's process-wide font/theme caches in parallel.
+var uiRenderMu sync.Mutex
 
 const (
 	datePresetAllTime = "All Time"
@@ -76,6 +83,7 @@ type LogsView struct {
 	session *app.Session
 
 	mu           sync.Mutex
+	closed       bool
 	entries      []eventlog.Entry
 	totalCount   int
 	currentPage  int
@@ -85,7 +93,12 @@ type LogsView struct {
 	fromDate     *time.Time
 	toDate       *time.Time
 	unsubLive    func()
+	unsubHeld    func()
 	searchTimer  *time.Timer
+	renderTimer  *time.Timer
+	tabActive    bool
+	renderDirty  bool
+	renderCount  uint64
 	queryCancel  context.CancelFunc
 	querySeq     uint64
 	initializing bool
@@ -102,12 +115,18 @@ type LogsView struct {
 	userSearchEntry  *ScrollPassEntry
 	textSearchEntry  *ScrollPassEntry
 
-	enableLogCheck *widget.Check
-	chatRetSel     *widget.Select
-	eventRetSel    *widget.Select
-	pruneBtn       *widget.Button
-	addLiveLogBtn  *widget.Button
-	disabledBanner *fyne.Container
+	enableLogCheck       *widget.Check
+	chatRetSel           *widget.Select
+	eventRetSel          *widget.Select
+	chatScaleSel         *widget.Select
+	chatScaleCustomEntry *widget.Entry
+	chatScaleCustomBox   *fyne.Container
+	pruneBtn             *widget.Button
+	addLiveLogBtn        *widget.Button
+	disabledBanner       *fyne.Container
+
+	presetChatScale        int
+	chatPanelThemeOverride *container.ThemeOverride
 
 	selectedSessionID      int64
 	selectedSessionIDs     []int64
@@ -118,7 +137,14 @@ type LogsView struct {
 	multiSessionBtn        *widget.Button
 	summary                eventlog.QuerySummary
 	summaryTotalsLabel     *widget.Label
+	summaryTotalsItemsBox  *fyne.Container
 	summaryTotalsContainer *fyne.Container
+
+	heldQueueContainer *fyne.Container
+	heldQueueHeaderLbl *widget.Label
+	heldQueueToggleBtn *widget.Button
+	heldQueueItemsBox  *fyne.Container
+	heldQueueExpanded  bool
 
 	summaryLabel    *widget.Label
 	hoverInfoLabel  *hoverCellLabel
@@ -137,20 +163,67 @@ type LogsView struct {
 	tooltipText   *canvas.Text
 	emoteCache    *EmoteCache
 
-	onStatus      func(msg string)
-	onAssignVoice func(platform, username string)
+	onStatus           func(msg string)
+	onAssignVoice      func(platform, username string)
+	onChatScaleChanged func(pct int)
 }
 
 // NewLogsView constructs a new LogsView bound to the active Session.
 func NewLogsView(w fyne.Window, session *app.Session) *LogsView {
 	return &LogsView{
-		window:      w,
-		session:     session,
-		liveTail:    true,
-		hideBots:    true,
-		showSummary: true,
-		listBox:     container.NewVBox(),
+		window:            w,
+		session:           session,
+		liveTail:          true,
+		hideBots:          true,
+		showSummary:       true,
+		tabActive:         true,
+		heldQueueExpanded: true,
+		listBox:           container.NewVBox(),
 	}
+}
+
+// SetTabActive notifies LogsView whether its containing tab is currently visible in the main window.
+// While inactive, live-tail UI rebuilds are deferred until the tab becomes active again.
+func (v *LogsView) SetTabActive(active bool) {
+	v.mu.Lock()
+	wasActive := v.tabActive
+	v.tabActive = active
+	dirty := v.renderDirty
+	if active {
+		v.renderDirty = false
+	} else if v.renderTimer != nil {
+		v.renderTimer.Stop()
+		v.renderTimer = nil
+	}
+	v.mu.Unlock()
+
+	if active && !wasActive && dirty {
+		fyne.Do(func() {
+			v.renderEntries()
+		})
+	}
+}
+
+func (v *LogsView) scheduleLiveRender() {
+	v.mu.Lock()
+	v.renderDirty = true
+	if !v.tabActive || v.renderTimer != nil {
+		v.mu.Unlock()
+		return
+	}
+	v.renderTimer = time.AfterFunc(liveRenderCoalesceDuration, func() {
+		v.mu.Lock()
+		v.renderTimer = nil
+		active := v.tabActive && !v.closed
+		dirty := v.renderDirty
+		v.mu.Unlock()
+		if active && dirty {
+			fyne.Do(func() {
+				v.renderEntries()
+			})
+		}
+	})
+	v.mu.Unlock()
 }
 
 // SetEmoteCache overrides the EmoteCache used for inline emote rendering (useful in tests).
@@ -166,6 +239,87 @@ func (v *LogsView) SetStatusHandler(fn func(msg string)) {
 // SetOnAssignVoice sets the callback invoked when a viewer voice override is saved from a log row.
 func (v *LogsView) SetOnAssignVoice(fn func(platform, username string)) {
 	v.onAssignVoice = fn
+}
+
+// SetOnChatScaleChanged sets the callback invoked when the default chat panel scale is updated in Settings.
+func (v *LogsView) SetOnChatScaleChanged(fn func(pct int)) {
+	v.onChatScaleChanged = fn
+}
+
+func (v *LogsView) defaultChatScalePct() int {
+	if v.session != nil && v.session.Config() != nil {
+		return NormalizeChatScale(v.session.Config().Logging.ChatScale)
+	}
+	return ChatScaleDefault
+}
+
+func (v *LogsView) effectiveChatScalePct() int {
+	v.mu.Lock()
+	pScale := v.presetChatScale
+	v.mu.Unlock()
+	if pScale > 0 {
+		return NormalizeChatScale(pScale)
+	}
+	return v.defaultChatScalePct()
+}
+
+func (v *LogsView) chatScaleFactor() float32 {
+	return float32(v.effectiveChatScalePct()) / 100.0
+}
+
+// ApplyChatScale updates the scoped chat panel theme, re-renders rows at the new scale,
+// and propagates inherited scale updates to any open Live Log pop-out windows.
+func (v *LogsView) ApplyChatScale() {
+	fyne.Do(func() {
+		s := v.chatScaleFactor()
+		if v.chatPanelThemeOverride != nil {
+			uiRenderMu.Lock()
+			v.chatPanelThemeOverride.Theme = NewScaledChatTheme(s)
+			v.chatPanelThemeOverride.Refresh()
+			uiRenderMu.Unlock()
+		}
+		v.renderEntries()
+		v.refreshLiveLogCards()
+
+		v.mu.Lock()
+		var inherited []*liveLogWindow
+		for _, lw := range v.openLiveWindows {
+			if lw != nil && lw.preset.ChatScale <= 0 && lw.view != nil {
+				inherited = append(inherited, lw)
+			}
+		}
+		v.mu.Unlock()
+
+		for _, lw := range inherited {
+			lw.view.ApplyChatScale()
+		}
+	})
+}
+
+// SyncFromConfig updates the retention and chat scale controls from the active session config.
+func (v *LogsView) SyncFromConfig() {
+	if v.session == nil || v.session.Config() == nil {
+		return
+	}
+	cfg := v.session.Config()
+	v.initializing = true
+	defer func() { v.initializing = false }()
+
+	pct := NormalizeChatScale(cfg.Logging.ChatScale)
+	lbl := FormatChatScaleLabel(pct)
+	if v.chatScaleSel != nil {
+		v.chatScaleSel.SetSelected(lbl)
+	}
+	if v.chatScaleCustomEntry != nil {
+		v.chatScaleCustomEntry.SetText(strconv.Itoa(pct))
+	}
+	if v.chatScaleCustomBox != nil {
+		if lbl == ChatScaleLabelCustom {
+			v.chatScaleCustomBox.Show()
+		} else {
+			v.chatScaleCustomBox.Hide()
+		}
+	}
 }
 
 func (v *LogsView) setStatus(msg string) {
@@ -250,11 +404,18 @@ func (v *LogsView) showTooltipForObject(obj fyne.CanvasObject, tip string, hover
 // Close unsubscribes any active Live Tail listener, closes any open pop-out windows, and cancels any pending search timer or query.
 func (v *LogsView) Close() {
 	v.mu.Lock()
+	v.closed = true
 	unsub := v.unsubLive
 	v.unsubLive = nil
+	unsubHeld := v.unsubHeld
+	v.unsubHeld = nil
 	if v.searchTimer != nil {
 		v.searchTimer.Stop()
 		v.searchTimer = nil
+	}
+	if v.renderTimer != nil {
+		v.renderTimer.Stop()
+		v.renderTimer = nil
 	}
 	if v.queryCancel != nil {
 		v.queryCancel()
@@ -272,13 +433,21 @@ func (v *LogsView) Close() {
 	if unsub != nil {
 		unsub()
 	}
+	if unsubHeld != nil {
+		unsubHeld()
+	}
 	for _, lw := range toClose {
 		lw.Close()
 	}
+	uiRenderMu.Lock()
+	uiRenderMu.Unlock() //nolint:staticcheck // barrier ensuring any in-flight renderEntries completes before Close returns
 }
 
 // Build constructs the Chat Logs UI canvas object with Live Logs and Search History sub-tabs.
 func (v *LogsView) Build() fyne.CanvasObject {
+	v.mu.Lock()
+	v.closed = false
+	v.mu.Unlock()
 	v.initializing = true
 	defer func() { v.initializing = false }()
 
@@ -288,15 +457,9 @@ func (v *LogsView) Build() fyne.CanvasObject {
 	// Initialize retention widgets as well so programmatic/test access works seamlessly.
 	_ = v.BuildRetentionCard()
 
-	v.summaryTotalsLabel = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
-	totalsBg := canvas.NewRectangle(colorSlateSurface)
-	totalsBorder := canvas.NewRectangle(colorSkyBlueDim)
-	totalsBorder.SetMinSize(fyne.NewSize(1, 1))
-	v.summaryTotalsContainer = container.NewStack(
-		totalsBg,
-		container.NewBorder(nil, totalsBorder, nil, nil, container.NewPadded(v.summaryTotalsLabel)),
-	)
-	v.summaryTotalsContainer.Hide()
+	v.initSummaryTotalsBanner()
+
+	v.heldQueueContainer = v.buildHeldQueueBanner()
 
 	v.filterDrawer = v.buildFilterDrawer()
 	v.filterDrawer.Show()
@@ -320,17 +483,29 @@ func (v *LogsView) Build() fyne.CanvasObject {
 
 	topSection := container.NewVBox(
 		compactTopBar,
-		v.summaryTotalsContainer,
 		v.filterDrawer,
+	)
+
+	chatPanelHeader := container.NewVBox(
+		v.summaryTotalsContainer,
+		v.heldQueueContainer,
 		tableHeader,
 	)
+	chatPanelBody := container.NewBorder(
+		chatPanelHeader,
+		nil,
+		nil,
+		nil,
+		listScroll,
+	)
+	v.chatPanelThemeOverride = container.NewThemeOverride(chatPanelBody, NewScaledChatTheme(v.chatScaleFactor()))
 
 	searchLayout := container.NewBorder(
 		topSection,
 		nil,
 		nil,
 		nil,
-		listScroll,
+		v.chatPanelThemeOverride,
 	)
 
 	v.subTabs = container.NewAppTabs(
@@ -385,6 +560,89 @@ func newBorderedControl(ctrl fyne.CanvasObject) fyne.CanvasObject {
 	return container.NewStack(box, ctrl)
 }
 
+func (v *LogsView) initSummaryTotalsBanner() {
+	v.summaryTotalsLabel = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	v.summaryTotalsItemsBox = container.NewHBox(v.summaryTotalsLabel)
+	totalsBg := canvas.NewRectangle(colorSlateSurface)
+	totalsBorder := canvas.NewRectangle(colorSkyBlueDim)
+	totalsBorder.SetMinSize(fyne.NewSize(1, 1))
+	v.summaryTotalsContainer = container.NewStack(
+		totalsBg,
+		container.NewBorder(nil, totalsBorder, nil, nil, container.NewPadded(container.NewCenter(v.summaryTotalsItemsBox))),
+	)
+	v.summaryTotalsContainer.Hide()
+}
+
+func (v *LogsView) buildSummaryTotalsObjects(s eventlog.QuerySummary) []fyne.CanvasObject {
+	type item struct {
+		icon fyne.Resource
+		text string
+	}
+	var items []item
+	if s.TotalBits > 0 {
+		items = append(items, item{text: fmt.Sprintf("🪙 %.0f Bits", s.TotalBits)})
+	}
+	if s.TotalDiamonds > 0 {
+		items = append(items, item{text: fmt.Sprintf("💎 %.0f Diamonds", s.TotalDiamonds)})
+	}
+	if s.TotalJewels > 0 {
+		items = append(items, item{icon: resEventJewel, text: fmt.Sprintf("%.0f Jewels", s.TotalJewels)})
+	}
+	if len(s.SuperChatByCurr) > 0 {
+		currs := make([]string, 0, len(s.SuperChatByCurr))
+		for curr := range s.SuperChatByCurr {
+			currs = append(currs, curr)
+		}
+		slices.Sort(currs)
+		for _, curr := range currs {
+			amt := s.SuperChatByCurr[curr]
+			if amt > 0 {
+				items = append(items, item{text: fmt.Sprintf("💬 %.0f %s", amt, curr)})
+			}
+		}
+	}
+	if s.TotalSubs > 0 {
+		items = append(items, item{text: fmt.Sprintf("⭐ %d Subs", s.TotalSubs)})
+	}
+	if s.TotalGiftSubs > 0 {
+		items = append(items, item{text: fmt.Sprintf("🎁 %d Gift Subs", s.TotalGiftSubs)})
+	}
+	if s.TotalKicks > 0 {
+		items = append(items, item{text: fmt.Sprintf("🟢 %.0f Kicks", s.TotalKicks)})
+	}
+	if s.TotalFollows > 0 {
+		items = append(items, item{text: fmt.Sprintf("❤️ %d Follows", s.TotalFollows)})
+	}
+	if s.TotalRaids > 0 {
+		items = append(items, item{text: fmt.Sprintf("🚀 %d Raids", s.TotalRaids)})
+	}
+	if s.TotalRedemptions > 0 {
+		items = append(items, item{text: fmt.Sprintf("🎟️ %d Redemptions", s.TotalRedemptions)})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	scale := v.chatScaleFactor()
+	iconSz := fyne.NewSize(18*scale, 18*scale)
+	var objs []fyne.CanvasObject
+	for i, it := range items {
+		if i > 0 {
+			objs = append(objs, widget.NewLabelWithStyle("•", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
+		}
+		lbl := widget.NewLabelWithStyle(it.text, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+		if it.icon != nil {
+			img := canvas.NewImageFromResource(it.icon)
+			img.FillMode = canvas.ImageFillContain
+			img.SetMinSize(iconSz)
+			objs = append(objs, container.NewHBox(container.NewCenter(img), lbl))
+		} else {
+			objs = append(objs, lbl)
+		}
+	}
+	return objs
+}
+
 func formatSummaryTotals(s eventlog.QuerySummary) string {
 	var parts []string
 	if s.TotalBits > 0 {
@@ -392,6 +650,9 @@ func formatSummaryTotals(s eventlog.QuerySummary) string {
 	}
 	if s.TotalDiamonds > 0 {
 		parts = append(parts, fmt.Sprintf("💎 %.0f Diamonds", s.TotalDiamonds))
+	}
+	if s.TotalJewels > 0 {
+		parts = append(parts, fmt.Sprintf("♦️ %.0f Jewels", s.TotalJewels))
 	}
 	if len(s.SuperChatByCurr) > 0 {
 		currs := make([]string, 0, len(s.SuperChatByCurr))
@@ -493,9 +754,102 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 		v.setStatus(fmt.Sprintf("✓ Pruned %d expired log entries.", deleted))
 	})
 
+	defaultScalePct := NormalizeChatScale(cfg.Logging.ChatScale)
+	v.chatScaleCustomEntry = widget.NewEntry()
+	v.chatScaleCustomEntry.SetPlaceHolder("50-300")
+	v.chatScaleCustomEntry.SetText(strconv.Itoa(defaultScalePct))
+
+	applyCustomDefaultScale := func(raw string, clampText bool) {
+		if v.initializing || v.session == nil {
+			return
+		}
+		clean := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(raw), "%"))
+		val, err := strconv.Atoi(clean)
+		if err != nil || val <= 0 {
+			if clampText {
+				fallback := v.defaultChatScalePct()
+				v.initializing = true
+				v.chatScaleCustomEntry.SetText(strconv.Itoa(fallback))
+				v.initializing = false
+			}
+			return
+		}
+		if !clampText && (val < ChatScaleMin || val > ChatScaleMax) {
+			return
+		}
+		pct := NormalizeChatScale(val)
+		if clampText && strconv.Itoa(pct) != raw {
+			v.initializing = true
+			v.chatScaleCustomEntry.SetText(strconv.Itoa(pct))
+			v.initializing = false
+		}
+		_ = v.session.UpdateConfig(func(c *config.Config) {
+			c.Logging.ChatScale = pct
+		})
+		v.ApplyChatScale()
+		if v.onChatScaleChanged != nil {
+			v.onChatScaleChanged(pct)
+		}
+		v.setStatus(fmt.Sprintf("✓ Default chat panel scale updated to %d%%.", pct))
+	}
+
+	v.chatScaleCustomEntry.OnChanged = func(s string) {
+		applyCustomDefaultScale(s, false)
+	}
+	v.chatScaleCustomEntry.OnSubmitted = func(s string) {
+		applyCustomDefaultScale(s, true)
+	}
+
+	v.chatScaleCustomBox = container.NewHBox(
+		v.chatScaleCustomEntry,
+		widget.NewLabel("% (50–300%)"),
+	)
+
+	v.chatScaleSel = widget.NewSelect(ChatScaleOptions(), func(selected string) {
+		if v.initializing {
+			return
+		}
+		pct, isCustom, _ := ParseChatScaleLabel(selected)
+		if isCustom {
+			cur := v.defaultChatScalePct()
+			v.initializing = true
+			v.chatScaleCustomEntry.SetText(strconv.Itoa(cur))
+			v.initializing = false
+			if v.chatScaleCustomBox != nil {
+				v.chatScaleCustomBox.Show()
+			}
+			return
+		}
+		if v.chatScaleCustomBox != nil {
+			v.chatScaleCustomBox.Hide()
+		}
+		v.initializing = true
+		v.chatScaleCustomEntry.SetText(strconv.Itoa(pct))
+		v.initializing = false
+		if v.session != nil {
+			_ = v.session.UpdateConfig(func(c *config.Config) {
+				c.Logging.ChatScale = pct
+			})
+		}
+		v.ApplyChatScale()
+		if v.onChatScaleChanged != nil {
+			v.onChatScaleChanged(pct)
+		}
+		v.setStatus(fmt.Sprintf("✓ Default chat panel scale updated to %d%%.", pct))
+	})
+	initScaleLabel := FormatChatScaleLabel(defaultScalePct)
+	v.chatScaleSel.SetSelected(initScaleLabel)
+	if initScaleLabel == ChatScaleLabelCustom {
+		v.chatScaleCustomBox.Show()
+	} else {
+		v.chatScaleCustomBox.Hide()
+	}
+
 	if !cfg.Logging.Enabled {
 		v.chatRetSel.Disable()
 		v.eventRetSel.Disable()
+		v.chatScaleSel.Disable()
+		v.chatScaleCustomEntry.Disable()
 		v.pruneBtn.Disable()
 	}
 
@@ -507,8 +861,13 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 		widget.NewLabel("Alert/Paid TTL:"),
 		v.eventRetSel,
 	)
+	scaleRow := container.NewHBox(
+		widget.NewLabel("Default Chat Panel Scale:"),
+		v.chatScaleSel,
+		v.chatScaleCustomBox,
+	)
 
-	return widget.NewCard("Log Retention & Storage", "Configure automatic log expiration and storage cleanup", container.NewVBox(topRow, ttlRow))
+	return widget.NewCard("Log Retention & Storage", "Configure automatic log expiration, storage cleanup, and default chat panel scale", container.NewVBox(topRow, ttlRow, scaleRow))
 }
 
 // SyncLoggingState updates retention and live tail controls to reflect whether event logging is enabled.
@@ -531,6 +890,20 @@ func (v *LogsView) SyncLoggingState(enabled bool) {
 				v.eventRetSel.Enable()
 			} else {
 				v.eventRetSel.Disable()
+			}
+		}
+		if v.chatScaleSel != nil {
+			if enabled {
+				v.chatScaleSel.Enable()
+			} else {
+				v.chatScaleSel.Disable()
+			}
+		}
+		if v.chatScaleCustomEntry != nil {
+			if enabled {
+				v.chatScaleCustomEntry.Enable()
+			} else {
+				v.chatScaleCustomEntry.Disable()
 			}
 		}
 		if v.pruneBtn != nil {
@@ -1082,14 +1455,13 @@ func (v *LogsView) buildTableHeader() fyne.CanvasObject {
 		return widget.NewLabelWithStyle(title, align, fyne.TextStyle{Bold: true})
 	}
 
-	cols := container.New(logTableLayout{getWidth: v.currentTableWidth},
+	cols := container.New(logTableLayout{getWidth: v.currentTableWidth, getScale: v.chatScaleFactor},
 		colHdr("Time", fyne.TextAlignLeading),
 		colHdr("Svc", fyne.TextAlignCenter),
 		colHdr("User", fyne.TextAlignLeading),
 		colHdr("Message", fyne.TextAlignLeading),
-		colHdr("Filter", fyne.TextAlignCenter),
-		colHdr("Spoken", fyne.TextAlignCenter),
-		colHdr("Voice", fyne.TextAlignCenter),
+		colHdr("TTS Status", fyne.TextAlignCenter),
+		colHdr("Mod Controls", fyne.TextAlignCenter),
 	)
 
 	return container.NewStack(
@@ -1241,11 +1613,11 @@ func (v *LogsView) currentFilter() eventlog.QueryFilter {
 
 	userQ := ""
 	if v.userSearchEntry != nil {
-		userQ = strings.TrimSpace(v.userSearchEntry.Text)
+		userQ = strings.TrimSpace(v.userSearchEntry.GetText())
 	}
 	textQ := ""
 	if v.textSearchEntry != nil {
-		textQ = strings.TrimSpace(v.textSearchEntry.Text)
+		textQ = strings.TrimSpace(v.textSearchEntry.GetText())
 	}
 
 	var excludedUsers []string
@@ -1346,6 +1718,10 @@ func (v *LogsView) RefreshQuery() {
 		v.searchTimer.Stop()
 		v.searchTimer = nil
 	}
+	if v.renderTimer != nil {
+		v.renderTimer.Stop()
+		v.renderTimer = nil
+	}
 	if v.queryCancel != nil {
 		v.queryCancel()
 		v.queryCancel = nil
@@ -1383,6 +1759,9 @@ func (v *LogsView) RefreshQuery() {
 
 func (v *LogsView) subscribeLiveTail() {
 	v.Close()
+	v.mu.Lock()
+	v.closed = false
+	v.mu.Unlock()
 	if v.session == nil || v.session.EventLogger() == nil {
 		return
 	}
@@ -1434,9 +1813,7 @@ func (v *LogsView) subscribeLiveTail() {
 			}
 			v.mu.Unlock()
 
-			fyne.Do(func() {
-				v.renderEntries()
-			})
+			v.scheduleLiveRender()
 
 		case eventlog.LiveUpdateOutcome:
 			v.mu.Lock()
@@ -1462,9 +1839,7 @@ func (v *LogsView) subscribeLiveTail() {
 					v.RefreshQuery()
 					return
 				}
-				fyne.Do(func() {
-					v.renderEntries()
-				})
+				v.scheduleLiveRender()
 			} else if filter.OutcomeMode == eventlog.FilterOutcomeSpokenOnly || filter.OutcomeMode == eventlog.FilterOutcomeDroppedQueue {
 				v.RefreshQuery()
 			}
@@ -1474,6 +1849,17 @@ func (v *LogsView) subscribeLiveTail() {
 	v.mu.Lock()
 	v.unsubLive = unsub
 	v.mu.Unlock()
+
+	if v.session != nil {
+		unsubHeld := v.session.SubscribeHeldMessages(func() {
+			fyne.Do(func() {
+				v.renderHeldQueue()
+			})
+		})
+		v.mu.Lock()
+		v.unsubHeld = unsubHeld
+		v.mu.Unlock()
+	}
 }
 
 func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
@@ -1592,79 +1978,110 @@ func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
 }
 
 func (v *LogsView) renderEntries() {
+	uiRenderMu.Lock()
+	defer func() {
+		v.mu.Lock()
+		v.mu.Unlock() //nolint:staticcheck // establishes happens-before edge after Fyne cache updates
+		uiRenderMu.Unlock()
+	}()
+
 	if v.listBox == nil {
 		return
 	}
 
-	v.mu.Lock()
-	entries := make([]eventlog.Entry, len(v.entries))
-	copy(entries, v.entries)
-	total := v.totalCount
-	page := v.currentPage
-	showSum := v.showSummary
-	summary := v.summary.Clone()
-	v.mu.Unlock()
-
-	if v.summaryLabel != nil {
-		if total == 0 || len(entries) == 0 {
-			v.summaryLabel.SetText("0 matching events")
-		} else {
-			startIdx := page*logsPageSize + 1
-			endIdx := startIdx + len(entries) - 1
-			v.summaryLabel.SetText(fmt.Sprintf("Showing %d–%d of %d matching events", startIdx, endIdx, total))
+	for {
+		v.mu.Lock()
+		if v.closed {
+			v.mu.Unlock()
+			return
 		}
-	}
+		v.renderDirty = false
+		v.renderCount++
+		entries := make([]eventlog.Entry, len(v.entries))
+		copy(entries, v.entries)
+		total := v.totalCount
+		page := v.currentPage
+		showSum := v.showSummary
+		summary := v.summary.Clone()
+		v.mu.Unlock()
 
-	if v.summaryTotalsLabel != nil {
-		txt := formatSummaryTotals(summary)
-		if showSum && txt != "" {
-			v.summaryTotalsLabel.SetText(txt)
-			if v.summaryTotalsContainer != nil {
-				v.summaryTotalsContainer.Show()
-				v.summaryTotalsContainer.Refresh()
-			}
-		} else {
-			v.summaryTotalsLabel.SetText("")
-			if v.summaryTotalsContainer != nil {
-				v.summaryTotalsContainer.Hide()
-				v.summaryTotalsContainer.Refresh()
+		v.renderHeldQueueLocked()
+
+		if v.summaryLabel != nil {
+			if total == 0 || len(entries) == 0 {
+				v.summaryLabel.SetText("0 matching events")
+			} else {
+				startIdx := page*logsPageSize + 1
+				endIdx := startIdx + len(entries) - 1
+				v.summaryLabel.SetText(fmt.Sprintf("Showing %d–%d of %d matching events", startIdx, endIdx, total))
 			}
 		}
-	}
 
-	if v.prevPageBtn != nil {
-		if page > 0 {
-			v.prevPageBtn.Enable()
+		if v.summaryTotalsLabel != nil {
+			txt := formatSummaryTotals(summary)
+			if showSum && txt != "" {
+				v.summaryTotalsLabel.SetText(txt)
+				if v.summaryTotalsItemsBox != nil {
+					v.summaryTotalsItemsBox.Objects = v.buildSummaryTotalsObjects(summary)
+					v.summaryTotalsItemsBox.Refresh()
+				}
+				if v.summaryTotalsContainer != nil {
+					v.summaryTotalsContainer.Show()
+					v.summaryTotalsContainer.Refresh()
+				}
+			} else {
+				v.summaryTotalsLabel.SetText("")
+				if v.summaryTotalsItemsBox != nil {
+					v.summaryTotalsItemsBox.Objects = nil
+					v.summaryTotalsItemsBox.Refresh()
+				}
+				if v.summaryTotalsContainer != nil {
+					v.summaryTotalsContainer.Hide()
+					v.summaryTotalsContainer.Refresh()
+				}
+			}
+		}
+
+		if v.prevPageBtn != nil {
+			if page > 0 {
+				v.prevPageBtn.Enable()
+			} else {
+				v.prevPageBtn.Disable()
+			}
+		}
+		if v.nextPageBtn != nil {
+			if (page+1)*logsPageSize < total {
+				v.nextPageBtn.Enable()
+			} else {
+				v.nextPageBtn.Disable()
+			}
+		}
+
+		v.listBox.Objects = nil
+		if len(entries) == 0 {
+			v.listBox.Add(widget.NewLabelWithStyle("No matching log entries found.", fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
+			v.listBox.Refresh()
 		} else {
-			v.prevPageBtn.Disable()
+			lastDateKey := ""
+			for i, entry := range entries {
+				localTime := entry.CreatedAt.Local()
+				dateKey := localTime.Format("2006-01-02")
+				if dateKey != lastDateKey {
+					lastDateKey = dateKey
+					v.listBox.Add(v.buildDateSeparatorRow(localTime))
+				}
+				v.listBox.Add(v.buildLogRow(i, entry))
+			}
+			v.listBox.Refresh()
 		}
-	}
-	if v.nextPageBtn != nil {
-		if (page+1)*logsPageSize < total {
-			v.nextPageBtn.Enable()
-		} else {
-			v.nextPageBtn.Disable()
-		}
-	}
 
-	v.listBox.Objects = nil
-	if len(entries) == 0 {
-		v.listBox.Add(widget.NewLabelWithStyle("No matching log entries found.", fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
-		v.listBox.Refresh()
-		return
-	}
-
-	lastDateKey := ""
-	for i, entry := range entries {
-		localTime := entry.CreatedAt.Local()
-		dateKey := localTime.Format("2006-01-02")
-		if dateKey != lastDateKey {
-			lastDateKey = dateKey
-			v.listBox.Add(v.buildDateSeparatorRow(localTime))
+		v.mu.Lock()
+		stillDirty := v.renderDirty && v.tabActive && !v.closed
+		v.mu.Unlock()
+		if !stillDirty {
+			break
 		}
-		v.listBox.Add(v.buildLogRow(i, entry))
 	}
-	v.listBox.Refresh()
 }
 
 func (v *LogsView) buildDateSeparatorRow(t time.Time) fyne.CanvasObject {
@@ -1682,6 +2099,9 @@ func (v *LogsView) buildDateSeparatorRow(t time.Time) fyne.CanvasObject {
 }
 
 func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
+	s := v.chatScaleFactor()
+	iconSz := fyne.NewSize(20*s, 20*s)
+
 	// [0] Time column (HH:MM:SS, never truncated; date is shown on date separator banners)
 	localTS := e.CreatedAt.Local().Format("15:04:05")
 	timeTip := fmt.Sprintf("Time: %s Local (%s UTC)",
@@ -1691,7 +2111,7 @@ func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
 
 	// [1] Service icon column
 	platRes, platTip := platformIconAndTip(e.Platform)
-	svcCell := v.newHoverIcon(platRes, fyne.NewSize(20, 20), platTip, nil)
+	svcCell := v.newHoverIcon(platRes, iconSz, platTip, nil)
 
 	// [2] User & Role/Tag icons column
 	displayName := e.DisplayName
@@ -1742,7 +2162,7 @@ func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
 	}
 	var msgCell fyne.CanvasObject
 	if len(e.Emotes) > 0 {
-		ec := newEmoteMessageCell(v.emoteCache, v.showTooltipForObject)
+		ec := newScaledEmoteMessageCell(v.emoteCache, s, v.showTooltipForObject)
 		ec.SetContent(e.Platform, e.RawText, e.Emotes, msgTip, "")
 		msgCell = ec
 	} else {
@@ -1753,34 +2173,19 @@ func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
 		msgCell = v.newWrappedCellLabel(msgLine, msgTip, fyne.TextStyle{})
 	}
 
-	// [4] Passed Filters icon column
-	filterRes, filterTip := filterStatusIconAndTip(e)
-	filterCell := v.newHoverIcon(filterRes, fyne.NewSize(20, 20), filterTip, nil)
+	// [4] Collapsed TTS Status icon column ([Filter] [Spoken] [Voice])
+	ttsStatusCell := v.ttsStatusIcons(e)
 
-	// [5] Spoken / Queue Outcome icon column
-	spokenRes, spokenTip := spokenStatusIconAndTip(e)
-	spokenCell := v.newHoverIcon(spokenRes, fyne.NewSize(20, 20), spokenTip, nil)
+	// [5] Moderation Controls icon column ([Delete] [Timeout] [Ban] [Mute TTS])
+	modControlsCell := v.modControlIcons(e)
 
-	// [6] Voice icon column (clickable to assign voice override)
-	voiceRes, voiceTip := voiceStatusIconAndTip(e)
-	var onVoiceTap func()
-	if e.UserName != "" && e.Kind != "moderation" {
-		plat := e.Platform
-		uName := e.UserName
-		onVoiceTap = func() {
-			v.showAssignVoiceDialog(plat, uName)
-		}
-	}
-	voiceCell := v.newHoverIcon(voiceRes, fyne.NewSize(20, 20), voiceTip, onVoiceTap)
-
-	rowCols := container.New(logTableLayout{getWidth: v.currentTableWidth},
+	rowCols := container.New(logTableLayout{getWidth: v.currentTableWidth, getScale: v.chatScaleFactor},
 		timeCell,
 		svcCell,
 		userCell,
 		msgCell,
-		filterCell,
-		spokenCell,
-		voiceCell,
+		ttsStatusCell,
+		modControlsCell,
 	)
 
 	var bgColor color.Color = colorObsidianSlate

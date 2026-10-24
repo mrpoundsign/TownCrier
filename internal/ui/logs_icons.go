@@ -105,6 +105,15 @@ var (
 			`<polygon points="12,4 19,11 12,20 5,11" fill="#FEF08A"/>`+
 			`</svg>`))
 
+	resEventJewel = fyne.NewStaticResource("event_jewel.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="2" y="2" width="20" height="20" rx="4" fill="#7F1D1D"/>`+
+			`<polygon points="7,5 17,5 20,10 12,20 4,10" fill="#EF4444"/>`+
+			`<polygon points="7,5 17,5 15,10 9,10" fill="#FCA5A5"/>`+
+			`<polygon points="4,10 9,10 12,20" fill="#DC2626"/>`+
+			`<polygon points="15,10 20,10 12,20" fill="#B91C1C"/>`+
+			`</svg>`))
+
 	resEventRaid = fyne.NewStaticResource("event_raid.svg", []byte(
 		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
 			`<rect x="2" y="2" width="20" height="20" rx="4" fill="#0284C7"/>`+
@@ -186,6 +195,53 @@ var (
 		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
 			`<path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" fill="#64748B"/>`+
 			`</svg>`))
+
+	// Moderation & AutoMod Held-for-Review Icons
+	resBtnHeldAllow = fyne.NewStaticResource("btn_held_allow.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 24" width="64" height="24">`+
+			`<rect x="1" y="1" width="62" height="22" rx="4" fill="#16A34A"/>`+
+			`<path d="M12.5 16.2L8.8 12.5l1.4-1.4 2.3 2.3 5.3-5.3 1.4 1.4-6.7 6.7z" fill="#FFFFFF"/>`+
+			`<text x="23" y="16" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="bold" fill="#FFFFFF">Allow</text>`+
+			`</svg>`))
+
+	resBtnHeldDeny = fyne.NewStaticResource("btn_held_deny.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 62 24" width="62" height="24">`+
+			`<rect x="1" y="1" width="60" height="22" rx="4" fill="#E11D48"/>`+
+			`<path d="M17.2 9.2L14.4 12l2.8 2.8-1.4 1.4L13 13.4l-2.8 2.8-1.4-1.4L11.6 12 8.8 9.2l1.4-1.4L13 10.6l2.8-2.8 1.4 1.4z" fill="#FFFFFF"/>`+
+			`<text x="22" y="16" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="bold" fill="#FFFFFF">Deny</text>`+
+			`</svg>`))
+
+	resModDelete = fyne.NewStaticResource("mod_delete.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="1.5" y="1.5" width="21" height="21" rx="4" fill="#1E293B" stroke="#475569" stroke-width="1.2"/>`+
+			`<path d="M9.5 5h5l.8 1.5H18v1.8H6V6.5h2.7L9.5 5zm-2 4.5h9l-.7 8.5c-.1.8-.7 1.5-1.5 1.5H9.7c-.8 0-1.4-.7-1.5-1.5L7.5 9.5zm3 1.8v5.5h1.2v-5.5h-1.2zm2.3 0v5.5H14v-5.5h-1.2z" fill="#E2E8F0"/>`+
+			`</svg>`))
+
+	resModTimeout = fyne.NewStaticResource("mod_timeout.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="1.5" y="1.5" width="21" height="21" rx="4" fill="#1E293B" stroke="#F59E0B" stroke-width="1.2"/>`+
+			`<rect x="9.5" y="4.2" width="5" height="1.6" rx="0.8" fill="#FBBF24"/>`+
+			`<path d="M12 7a6.5 6.5 0 1 0 6.5 6.5A6.5 6.5 0 0 0 12 7zm0 11.2a4.7 4.7 0 1 1 4.7-4.7 4.7 4.7 0 0 1-4.7 4.7zm-.8-7.7h1.6v3.4l2.4 1.4-.8 1.3-3.2-1.9V10.5z" fill="#FBBF24"/>`+
+			`</svg>`))
+
+	resModBan = fyne.NewStaticResource("mod_ban.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="1.5" y="1.5" width="21" height="21" rx="4" fill="#450A0A" stroke="#EF4444" stroke-width="1.2"/>`+
+			`<path d="M14.2 5.2l3.6 3.6-2.1 2.1-3.6-3.6 2.1-2.1zM8.5 7.3l2.1-2.1 1.4 1.4-2.1 2.1-1.4-1.4zm7.8 4.2l1.4 1.4-2.1 2.1-1.4-1.4 2.1-2.1zM11.3 10.1l1.6 1.6-5.7 5.7-1.6-1.6 5.7-5.7zM6 17.8h12v1.7H6v-1.7z" fill="#FCA5A5"/>`+
+			`</svg>`))
+
+	resModMuteTTS = fyne.NewStaticResource("mod_mute_tts.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="1.5" y="1.5" width="21" height="21" rx="4" fill="#1E293B" stroke="#0284C7" stroke-width="1.2"/>`+
+			`<path d="M6 10v4h2.8l3.5 3.5V6.5L8.8 10H6zm8.2 2l2.1-2.1-1.1-1.1-2.1 2.1-2.1-2.1-1.1 1.1 2.1 2.1-2.1 2.1 1.1 1.1 2.1-2.1 2.1 2.1 1.1-1.1-2.1-2.1z" fill="#38BDF8"/>`+
+			`</svg>`))
+
+	resFilterHeld = fyne.NewStaticResource("filter_held.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<path d="M12 2L4 5v6.1c0 5 3.4 9.7 8 10.9 4.6-1.2 8-5.9 8-10.9V5l-8-3z" fill="#F59E0B"/>`+
+			`<rect x="11" y="7" width="2" height="6" rx="1" fill="#0F172A"/>`+
+			`<circle cx="12" cy="16" r="1.3" fill="#0F172A"/>`+
+			`</svg>`))
 )
 
 // platformIconAndTip returns the SVG icon resource and tooltip description for a platform.
@@ -221,6 +277,8 @@ func platformIconAndTip(platform string) (fyne.Resource, string) {
 func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 	var icons []fyne.CanvasObject
 	seen := make(map[string]bool)
+	s := v.chatScaleFactor()
+	iconSz := fyne.NewSize(16*s, 16*s)
 
 	for _, rawRole := range e.Roles {
 		r := strings.ToLower(strings.TrimSpace(rawRole))
@@ -228,27 +286,27 @@ func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 		case "broadcaster", "streamer", "owner":
 			if !seen["broadcaster"] {
 				seen["broadcaster"] = true
-				icons = append(icons, v.newHoverIcon(resRoleBroadcaster, fyne.NewSize(16, 16), "Tag: Broadcaster / Streamer", nil))
+				icons = append(icons, v.newHoverIcon(resRoleBroadcaster, iconSz, "Tag: Broadcaster / Streamer", nil))
 			}
 		case "moderator", "mod":
 			if !seen["moderator"] {
 				seen["moderator"] = true
-				icons = append(icons, v.newHoverIcon(resRoleModerator, fyne.NewSize(16, 16), "Tag: Moderator", nil))
+				icons = append(icons, v.newHoverIcon(resRoleModerator, iconSz, "Tag: Moderator", nil))
 			}
 		case "vip":
 			if !seen["vip"] {
 				seen["vip"] = true
-				icons = append(icons, v.newHoverIcon(resRoleVIP, fyne.NewSize(16, 16), "Tag: VIP", nil))
+				icons = append(icons, v.newHoverIcon(resRoleVIP, iconSz, "Tag: VIP", nil))
 			}
 		case "subscriber", "sub", "founder", "member":
 			if !seen["subscriber"] {
 				seen["subscriber"] = true
-				icons = append(icons, v.newHoverIcon(resRoleSubscriber, fyne.NewSize(16, 16), "Tag: Subscriber / Member", nil))
+				icons = append(icons, v.newHoverIcon(resRoleSubscriber, iconSz, "Tag: Subscriber / Member", nil))
 			}
 		case "follower":
 			if !seen["follower"] {
 				seen["follower"] = true
-				icons = append(icons, v.newHoverIcon(resRoleFollower, fyne.NewSize(16, 16), "Tag: Follower", nil))
+				icons = append(icons, v.newHoverIcon(resRoleFollower, iconSz, "Tag: Follower", nil))
 			}
 		}
 	}
@@ -261,7 +319,13 @@ func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 			evIcon = resEventFollow
 		case "sub", "resub", "gift_sub", "gift_redemption", "sub_upgrade", "membership", "gift_membership":
 			evIcon = resEventSub
-		case "cheer", "bits_badge_tier", "gift", "superchat", "supersticker", "super_chat", "super_sticker", "charity_donation":
+		case "gift":
+			if strings.EqualFold(e.Platform, "youtube") || strings.EqualFold(e.Currency, "Jewels") || strings.EqualFold(e.Currency, "Jewel") {
+				evIcon = resEventJewel
+			} else {
+				evIcon = resEventCheer
+			}
+		case "cheer", "bits_badge_tier", "superchat", "supersticker", "super_chat", "super_sticker", "charity_donation":
 			evIcon = resEventCheer
 		case "raid", "announcement":
 			evIcon = resEventRaid
@@ -290,7 +354,7 @@ func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 		if e.Count > 0 {
 			tip += fmt.Sprintf(" (x%d)", e.Count)
 		}
-		icons = append(icons, v.newHoverIcon(evIcon, fyne.NewSize(16, 16), tip, nil))
+		icons = append(icons, v.newHoverIcon(evIcon, iconSz, tip, nil))
 	}
 
 	return icons
@@ -304,6 +368,13 @@ func filterStatusIconAndTip(e eventlog.Entry) (fyne.Resource, string) {
 			tip += ": " + e.OutcomeDetail
 		}
 		return resFilterMod, tip
+	}
+	if e.Outcome == eventlog.OutcomeHeldForReview {
+		tip := "Held for Review (Twitch AutoMod / Blocked Term)"
+		if e.OutcomeDetail != "" {
+			tip += ": " + e.OutcomeDetail
+		}
+		return resFilterHeld, tip
 	}
 	if e.PassedFilters {
 		return resFilterPassed, "Passed Filters: Yes (Eligible for TTS Queue)"
@@ -586,26 +657,38 @@ func (l *wrappedCellLabel) MouseOut() {
 	}
 }
 
-// logTableLayout aligns the 7 columns of the Event Logs table across the sticky header and all rows:
-// [0] Time | [1] Svc | [2] User & Tags | [3] Message (flex) | [4] Filter | [5] Spoken | [6] Voice
+// logTableLayout aligns the 6 columns of the Event Logs table across the sticky header and all rows:
+// [0] Time | [1] Svc | [2] User & Tags | [3] Message (flex) | [4] TTS Status | [5] Mod Controls
 type logTableLayout struct {
 	getWidth func() float32
+	getScale func() float32
 }
 
 const (
-	colWidthTime    float32 = 88
-	colWidthService float32 = 36
-	colWidthUser    float32 = 195
-	colWidthFilter  float32 = 48
-	colWidthSpoken  float32 = 48
-	colWidthVoice   float32 = 48
-	colGap          float32 = 6
-	rowMinHeight    float32 = 30
+	colWidthTime       float32 = 88
+	colWidthService    float32 = 36
+	colWidthUser       float32 = 195
+	colWidthTTSStatus  float32 = 76  // Collapsed [Filter] [Spoken] [Voice] HBox
+	colWidthModControl float32 = 104 // [Delete] [Timeout] [Ban] [Mute TTS] HBox
+	colGap             float32 = 6
+	rowMinHeight       float32 = 30
 )
 
-func computeMsgColWidth(totalWidth float32) float32 {
-	fixedTotal := colWidthTime + colWidthService + colWidthUser +
-		colWidthFilter + colWidthSpoken + colWidthVoice + (6 * colGap)
+func (l logTableLayout) effectiveScale() float32 {
+	if l.getScale != nil {
+		if s := l.getScale(); s > 0 {
+			return s
+		}
+	}
+	return 1.0
+}
+
+func computeMsgColWidth(totalWidth, scale float32) float32 {
+	if scale <= 0 {
+		scale = 1.0
+	}
+	fixedTotal := (colWidthTime + colWidthService + colWidthUser +
+		colWidthTTSStatus + colWidthModControl + (5 * colGap)) * scale
 	msgWidth := totalWidth - fixedTotal
 	if msgWidth < 160 {
 		return 340
@@ -614,46 +697,48 @@ func computeMsgColWidth(totalWidth float32) float32 {
 }
 
 func (l logTableLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
-	if len(objects) < 7 {
+	if len(objects) < 6 {
 		return
 	}
 
-	msgWidth := computeMsgColWidth(size.Width)
+	s := l.effectiveScale()
+	msgWidth := computeMsgColWidth(size.Width, s)
 
-	widths := [7]float32{
-		colWidthTime,
-		colWidthService,
-		colWidthUser,
+	widths := [6]float32{
+		colWidthTime * s,
+		colWidthService * s,
+		colWidthUser * s,
 		msgWidth,
-		colWidthFilter,
-		colWidthSpoken,
-		colWidthVoice,
+		colWidthTTSStatus * s,
+		colWidthModControl * s,
 	}
+	gap := colGap * s
 
 	var x float32
-	for i := range 7 {
+	for i := range 6 {
 		obj := objects[i]
 		w := widths[i]
 		obj.Move(fyne.NewPos(x, 0))
 		obj.Resize(fyne.NewSize(w, size.Height))
-		x += w + colGap
+		x += w + gap
 	}
 }
 
 func (l logTableLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	s := l.effectiveScale()
 	if len(objects) >= 4 && objects[3] != nil {
 		var totalW float32
 		if l.getWidth != nil {
 			totalW = l.getWidth()
 		}
-		msgW := computeMsgColWidth(totalW)
+		msgW := computeMsgColWidth(totalW, s)
 		cur := objects[3].Size()
 		if cur.Width != msgW {
 			objects[3].Resize(fyne.NewSize(msgW, cur.Height))
 		}
 	}
 
-	maxH := rowMinHeight
+	maxH := rowMinHeight * s
 	for _, obj := range objects {
 		if obj != nil {
 			ms := obj.MinSize()
@@ -663,8 +748,125 @@ func (l logTableLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 		}
 	}
 	minW := colWidthTime + colWidthService + colWidthUser +
-		140 + colWidthFilter + colWidthSpoken + colWidthVoice + (6 * colGap)
+		140 + colWidthTTSStatus + colWidthModControl + (5 * colGap)
 	return fyne.NewSize(minW, maxH)
+}
+
+// ttsStatusIcons builds the collapsed 3-icon HBox for the "TTS Status" column:
+// [0] Filter Passed/Blocked | [1] Spoken/Queue Fate | [2] Voice Assignment (clickable)
+func (v *LogsView) ttsStatusIcons(e eventlog.Entry) *fyne.Container {
+	s := v.chatScaleFactor()
+	iconSz := fyne.NewSize(20*s, 20*s)
+
+	filterRes, filterTip := filterStatusIconAndTip(e)
+	spokenRes, spokenTip := spokenStatusIconAndTip(e)
+	voiceRes, voiceTip := voiceStatusIconAndTip(e)
+
+	var onVoiceTap func()
+	if e.UserName != "" && e.Kind != "moderation" {
+		plat := e.Platform
+		uName := e.UserName
+		onVoiceTap = func() {
+			v.showAssignVoiceDialog(plat, uName)
+		}
+	}
+
+	return container.NewCenter(container.NewHBox(
+		v.newHoverIcon(filterRes, iconSz, filterTip, nil),
+		v.newHoverIcon(spokenRes, iconSz, spokenTip, nil),
+		v.newHoverIcon(voiceRes, iconSz, voiceTip, onVoiceTap),
+	))
+}
+
+// modControlIcons builds the compact 20x20 vector icon buttons for a chat row:
+// Delete Message, Timeout User, and Ban User are only rendered when the row's platform
+// supports moderation and has an active OAuth connection; Mute User in TTS Only is always shown for chatters.
+func (v *LogsView) modControlIcons(e eventlog.Entry) *fyne.Container {
+	s := v.chatScaleFactor()
+	iconSz := fyne.NewSize(20*s, 20*s)
+
+	uName := e.UserName
+	if uName == "" {
+		uName = e.DisplayName
+	}
+	if uName == "" || e.Kind == "moderation" {
+		return container.NewCenter(container.NewHBox())
+	}
+
+	platLower := strings.ToLower(strings.TrimSpace(e.Platform))
+	hasTwitchMod := platLower == "twitch" && v.session != nil && v.session.TwitchOAuth() != nil && v.session.TwitchOAuth().HasToken()
+	hasYouTubeMod := platLower == "youtube" && v.session != nil && v.session.YouTubeOAuth() != nil && v.session.YouTubeOAuth().HasToken()
+	hasKickMod := platLower == "kick" && v.session != nil && v.session.KickOAuth() != nil && v.session.KickOAuth().HasToken()
+
+	var icons []fyne.CanvasObject
+
+	switch {
+	case hasTwitchMod:
+		if e.ID != "" && !strings.HasPrefix(e.ID, "held-") {
+			entryCopy := e
+			icons = append(icons, v.newHoverIcon(resModDelete, iconSz, "Delete Message on Twitch & Purge TTS", func() {
+				v.confirmDeleteMessage(entryCopy)
+			}))
+		}
+		if e.UserID != "" || uName != "" {
+			entryCopy := e
+			icons = append(icons,
+				v.newHoverIcon(resModTimeout, iconSz, "Timeout @"+uName+" on Twitch (1m / 5m / 10m / 1h / 24h)", func() {
+					v.confirmTimeoutUser(entryCopy)
+				}),
+				v.newHoverIcon(resModBan, iconSz, "Permanently Ban @"+uName+" on Twitch & Ignore in TTS", func() {
+					v.confirmBanUser(entryCopy)
+				}),
+			)
+		}
+	case hasYouTubeMod:
+		if e.ID != "" {
+			entryCopy := e
+			icons = append(icons, v.newHoverIcon(resModDelete, iconSz, "Delete Message on YouTube & Purge TTS", func() {
+				v.confirmDeleteMessage(entryCopy)
+			}))
+		}
+		if e.UserID != "" {
+			entryCopy := e
+			icons = append(icons,
+				v.newHoverIcon(resModTimeout, iconSz, "Timeout @"+uName+" on YouTube (1m / 5m / 10m / 1h / 24h)", func() {
+					v.confirmTimeoutUser(entryCopy)
+				}),
+				v.newHoverIcon(resModBan, iconSz, "Permanently Ban @"+uName+" on YouTube & Ignore in TTS", func() {
+					v.confirmBanUser(entryCopy)
+				}),
+			)
+		}
+	case hasKickMod:
+		if e.ID != "" {
+			entryCopy := e
+			icons = append(icons, v.newHoverIcon(resModDelete, iconSz, "Delete Message on Kick & Purge TTS", func() {
+				v.confirmDeleteMessage(entryCopy)
+			}))
+		}
+		if e.UserID != "" {
+			entryCopy := e
+			icons = append(icons,
+				v.newHoverIcon(resModTimeout, iconSz, "Timeout @"+uName+" on Kick (1m / 5m / 10m / 1h / 24h)", func() {
+					v.confirmTimeoutUser(entryCopy)
+				}),
+				v.newHoverIcon(resModBan, iconSz, "Permanently Ban @"+uName+" on Kick & Ignore in TTS", func() {
+					v.confirmBanUser(entryCopy)
+				}),
+			)
+		}
+	}
+
+	entryCopy := e
+	ttsTip := "Mute @" + uName + " in Local TTS Only"
+	if v.session != nil && v.session.IsUserLocallyMutedTTS(e.Platform, e.UserID, uName) {
+		ttsTip = "Unmute @" + uName + " in Local TTS (Currently Ignored)"
+	}
+	icons = append(icons, v.newHoverIcon(resModMuteTTS, iconSz, ttsTip, func() {
+		v.toggleMuteUserTTS(entryCopy)
+	}))
+
+	return container.NewCenter(container.NewHBox(icons...))
 }
 
 // buildTooltipBubble constructs the floating non-interactive tooltip box and returns its container and text element.

@@ -5,7 +5,68 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/zalando/go-keyring"
 )
+
+type fakeKeyringProvider struct {
+	mu      sync.Mutex
+	entries map[string]map[string]string
+	failErr error
+}
+
+func newFakeKeyringProvider() *fakeKeyringProvider {
+	return &fakeKeyringProvider{
+		entries: make(map[string]map[string]string),
+	}
+}
+
+func (f *fakeKeyringProvider) Set(service, user, password string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failErr != nil {
+		return f.failErr
+	}
+	if f.entries[service] == nil {
+		f.entries[service] = make(map[string]string)
+	}
+	f.entries[service][user] = password
+	return nil
+}
+
+func (f *fakeKeyringProvider) Get(service, user string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failErr != nil {
+		return "", f.failErr
+	}
+	svc, ok := f.entries[service]
+	if !ok {
+		return "", keyring.ErrNotFound
+	}
+	val, ok := svc[user]
+	if !ok {
+		return "", keyring.ErrNotFound
+	}
+	return val, nil
+}
+
+func (f *fakeKeyringProvider) Delete(service, user string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failErr != nil {
+		return f.failErr
+	}
+	svc, ok := f.entries[service]
+	if !ok {
+		return keyring.ErrNotFound
+	}
+	if _, exists := svc[user]; !exists {
+		return keyring.ErrNotFound
+	}
+	delete(svc, user)
+	return nil
+}
 
 func TestMemoryStore(t *testing.T) {
 	s := NewMemoryStore()
@@ -40,8 +101,8 @@ func TestMemoryStore(t *testing.T) {
 }
 
 func TestKeyringStoreWithFallback(t *testing.T) {
-	// Testing with a custom test service name
-	k := NewKeyringStore("TownCrierTest")
+	fake := newFakeKeyringProvider()
+	k := newKeyringStoreWithProvider("TownCrierTest", fake)
 
 	if err := k.Set("oauth_token", "test_value_abc"); err != nil {
 		t.Fatalf("Set failed: %v", err)
@@ -57,6 +118,19 @@ func TestKeyringStoreWithFallback(t *testing.T) {
 
 	if err := k.Delete("oauth_token"); err != nil {
 		t.Fatalf("Delete failed: %v", err)
+	}
+	if _, err := k.Get("oauth_token"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound after delete, got %v", err)
+	}
+
+	// Simulate OS keyring failure and verify fallback to MemoryStore
+	fake.failErr = errors.New("credential manager unavailable")
+	if err := k.Set("fallback_key", "fallback_secret"); err != nil {
+		t.Fatalf("Set with fallback failed: %v", err)
+	}
+	fbVal, err := k.Get("fallback_key")
+	if err != nil || fbVal != "fallback_secret" {
+		t.Fatalf("expected fallback_secret, got %q (err=%v)", fbVal, err)
 	}
 }
 

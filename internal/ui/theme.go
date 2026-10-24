@@ -1,12 +1,16 @@
 package ui
 
 import (
+	"fmt"
 	"image/color"
 	"os"
+	"strconv"
 	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/theme"
+
+	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
 // UI scale mode constants and display labels.
@@ -229,5 +233,175 @@ func (t *ObsidianTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
 
 func (t *ObsidianTheme) Size(name fyne.ThemeSizeName) float32 {
 	return theme.DefaultTheme().Size(name)
+}
+
+// Chat panel independent scaling constants and helpers.
+const (
+	ChatScaleMin     = 50
+	ChatScaleMax     = 300
+	ChatScaleDefault = 100
+
+	ChatScaleLabelDefault = "100% (Default)"
+	ChatScaleLabelCustom  = "Custom..."
+)
+
+// NormalizeChatScale clamps non-zero percentages to [50, 300] and defaults <= 0 to 100.
+func NormalizeChatScale(pct int) int {
+	if pct <= 0 {
+		return ChatScaleDefault
+	}
+	if pct < ChatScaleMin {
+		return ChatScaleMin
+	}
+	if pct > ChatScaleMax {
+		return ChatScaleMax
+	}
+	return pct
+}
+
+// IsStandardChatScalePreset reports whether pct matches one of the built-in dropdown presets.
+func IsStandardChatScalePreset(pct int) bool {
+	switch pct {
+	case 75, 90, 100, 115, 125, 150, 175, 200:
+		return true
+	default:
+		return false
+	}
+}
+
+// ChatScaleOptions returns the dropdown options for the Default Chat Panel Scale in Settings -> Event Logs.
+func ChatScaleOptions() []string {
+	return []string{
+		"75%",
+		"90%",
+		ChatScaleLabelDefault,
+		"115%",
+		"125%",
+		"150%",
+		"175%",
+		"200%",
+		ChatScaleLabelCustom,
+	}
+}
+
+// FormatDefaultInheritLabel formats the "Default (X%)" option label for a Live Log preset selector.
+func FormatDefaultInheritLabel(defaultPct int) string {
+	return fmt.Sprintf("Default (%d%%)", NormalizeChatScale(defaultPct))
+}
+
+// ChatScalePresetOptions returns the dropdown options for a Live Log preset card (including Default Inherit).
+func ChatScalePresetOptions(defaultPct int) []string {
+	return []string{
+		FormatDefaultInheritLabel(defaultPct),
+		"75%",
+		"90%",
+		"100%",
+		"115%",
+		"125%",
+		"150%",
+		"175%",
+		"200%",
+		ChatScaleLabelCustom,
+	}
+}
+
+// FormatChatScaleLabel maps a persisted default ChatScale percentage to its Settings dropdown option.
+func FormatChatScaleLabel(pct int) string {
+	norm := NormalizeChatScale(pct)
+	if norm == ChatScaleDefault {
+		return ChatScaleLabelDefault
+	}
+	if IsStandardChatScalePreset(norm) {
+		return fmt.Sprintf("%d%%", norm)
+	}
+	return ChatScaleLabelCustom
+}
+
+// FormatPresetChatScaleLabel maps a LiveLogPreset's ChatScale (0 = inherit) to its preset dialog dropdown option.
+func FormatPresetChatScaleLabel(presetPct, defaultPct int) string {
+	if presetPct <= 0 {
+		return FormatDefaultInheritLabel(defaultPct)
+	}
+	norm := NormalizeChatScale(presetPct)
+	if IsStandardChatScalePreset(norm) {
+		return fmt.Sprintf("%d%%", norm)
+	}
+	return ChatScaleLabelCustom
+}
+
+// ParseChatScaleLabel parses a dropdown selection from either the Settings or Live Log preset scale selector.
+func ParseChatScaleLabel(label string) (pct int, isCustom bool, isInherit bool) {
+	clean := strings.TrimSpace(label)
+	lower := strings.ToLower(clean)
+	if strings.HasPrefix(lower, "default") {
+		return 0, false, true
+	}
+	if strings.HasPrefix(lower, "custom") {
+		return 0, true, false
+	}
+	clean = strings.TrimSuffix(clean, "(Default)")
+	clean = strings.TrimSpace(clean)
+	clean = strings.TrimSuffix(clean, "%")
+	clean = strings.TrimSpace(clean)
+	if val, err := strconv.Atoi(clean); err == nil && val > 0 {
+		return NormalizeChatScale(val), false, false
+	}
+	return ChatScaleDefault, false, false
+}
+
+// ParseCustomChatScaleInput parses a user-entered custom percentage string and clamps it to [50, 300].
+func ParseCustomChatScaleInput(text string, fallback int) int {
+	clean := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(text), "%"))
+	if val, err := strconv.Atoi(clean); err == nil && val > 0 {
+		return NormalizeChatScale(val)
+	}
+	return NormalizeChatScale(fallback)
+}
+
+// EffectivePresetChatScale returns the effective chat scale percentage for a LiveLogPreset.
+func EffectivePresetChatScale(preset config.LiveLogPreset, defaultPct int) int {
+	if preset.ChatScale > 0 {
+		return NormalizeChatScale(preset.ChatScale)
+	}
+	return NormalizeChatScale(defaultPct)
+}
+
+// ScaledChatTheme wraps ObsidianTheme to scale text, inline icons, and cell padding inside chat panels
+// without affecting the rest of the application UI.
+type ScaledChatTheme struct {
+	ObsidianTheme
+	scale float32
+}
+
+var _ fyne.Theme = (*ScaledChatTheme)(nil)
+
+// NewScaledChatTheme constructs a ScaledChatTheme for the given multiplier (e.g., 1.25 for 125%).
+func NewScaledChatTheme(scale float32) *ScaledChatTheme {
+	if scale <= 0 {
+		scale = 1.0
+	}
+	return &ScaledChatTheme{scale: scale}
+}
+
+// Size scales typography, inline icons, and spacing proportionally by the chat panel scale factor.
+func (t *ScaledChatTheme) Size(name fyne.ThemeSizeName) float32 {
+	base := t.ObsidianTheme.Size(name)
+	s := t.scale
+	if s <= 0 {
+		s = 1.0
+	}
+	switch name {
+	case theme.SizeNameText,
+		theme.SizeNameSubHeadingText,
+		theme.SizeNameCaptionText,
+		theme.SizeNameHeadingText,
+		theme.SizeNameInlineIcon,
+		theme.SizeNamePadding,
+		theme.SizeNameInnerPadding,
+		theme.SizeNameLineSpacing:
+		return base * s
+	default:
+		return base
+	}
 }
 
