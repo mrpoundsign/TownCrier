@@ -233,7 +233,9 @@ type Connector struct {
 	mu                  sync.Mutex
 	httpClient          *http.Client
 	apiBaseURL          string
+	publicAPIURL        string
 	wsURL               string
+	oauth               *OAuthManager
 	reconnectDelay      time.Duration
 	pingPeriod          time.Duration
 	livePollPeriod      time.Duration
@@ -263,6 +265,7 @@ func NewConnector(
 	return &Connector{
 		httpClient:       &http.Client{Timeout: 10 * time.Second},
 		apiBaseURL:       DefaultKickAPIBase,
+		publicAPIURL:     DefaultKickPublicAPIBaseURL,
 		wsURL:            DefaultPusherWSURL,
 		reconnectDelay:   defaultReconnect,
 		pingPeriod:       defaultPingPeriod,
@@ -375,10 +378,16 @@ func (c *Connector) checkChannelLive(ctx context.Context, slug string) (bool, er
 	fn := c.checkLiveFn
 	client := c.httpClient
 	base := c.apiBaseURL
+	hasOAuth := c.oauth != nil && c.oauth.HasToken()
 	c.mu.Unlock()
 
 	if fn != nil {
 		return fn(ctx, slug)
+	}
+	if hasOAuth {
+		if live, err := c.checkLivePublicV1(ctx, slug); err == nil {
+			return live, nil
+		}
 	}
 	info, err := ResolveChannelInfo(ctx, client, base, slug)
 	if err != nil {
@@ -392,6 +401,11 @@ func (c *Connector) Start(target string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if strings.TrimSpace(target) == "" && c.oauth != nil && c.oauth.HasToken() {
+		if tok, err := c.oauth.LoadToken(); err == nil && tok != nil && tok.Slug != "" {
+			target = tok.Slug
+		}
+	}
 	cleanSlug, directInfo := NormalizeChannelInfo(target)
 	if cleanSlug == "" && directInfo.ChatroomID == 0 {
 		return errors.New("empty Kick channel")

@@ -796,6 +796,7 @@ func (v *LogsView) modControlIcons(e eventlog.Entry) *fyne.Container {
 	platLower := strings.ToLower(strings.TrimSpace(e.Platform))
 	hasTwitchMod := platLower == "twitch" && v.session != nil && v.session.TwitchOAuth() != nil && v.session.TwitchOAuth().HasToken()
 	hasYouTubeMod := platLower == "youtube" && v.session != nil && v.session.YouTubeOAuth() != nil && v.session.YouTubeOAuth().HasToken()
+	hasKickMod := platLower == "kick" && v.session != nil && v.session.KickOAuth() != nil && v.session.KickOAuth().HasToken()
 
 	var icons []fyne.CanvasObject
 
@@ -832,6 +833,24 @@ func (v *LogsView) modControlIcons(e eventlog.Entry) *fyne.Container {
 					v.confirmTimeoutUser(entryCopy)
 				}),
 				v.newHoverIcon(resModBan, iconSz, "Permanently Ban @"+uName+" on YouTube & Ignore in TTS", func() {
+					v.confirmBanUser(entryCopy)
+				}),
+			)
+		}
+	case hasKickMod:
+		if e.ID != "" {
+			entryCopy := e
+			icons = append(icons, v.newHoverIcon(resModDelete, iconSz, "Delete Message on Kick & Purge TTS", func() {
+				v.confirmDeleteMessage(entryCopy)
+			}))
+		}
+		if e.UserID != "" {
+			entryCopy := e
+			icons = append(icons,
+				v.newHoverIcon(resModTimeout, iconSz, "Timeout @"+uName+" on Kick (1m / 5m / 10m / 1h / 24h)", func() {
+					v.confirmTimeoutUser(entryCopy)
+				}),
+				v.newHoverIcon(resModBan, iconSz, "Permanently Ban @"+uName+" on Kick & Ignore in TTS", func() {
 					v.confirmBanUser(entryCopy)
 				}),
 			)

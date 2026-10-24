@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"context"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -21,7 +23,14 @@ type KickTabView struct {
 	session *app.Session
 
 	channelEntry       *ScrollPassEntry
+	channelRow         *fyne.Container
 	statusBadge        *widget.Label
+	hintLabel          *widget.Label
+	modHintLabel       *widget.Label
+	oauthStatusLabel   *widget.Label
+	oauthConnectBtn    *widget.Button
+	oauthDisconnectBtn *widget.Button
+	oauthCancel        context.CancelFunc
 	infoLink           *widget.Hyperlink
 	enableCheck        *widget.Check
 	allChatCheck       *widget.Check
@@ -115,6 +124,7 @@ func (v *KickTabView) SyncFromConfig() {
 		v.overrideVoiceField.SetVoiceAndSpeed(pCfg.Overrides.DefaultVoice, pCfg.Overrides.DefaultSpeed)
 	}
 	v.initializing = false
+	v.refreshOAuthState()
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
 	v.SyncTTSState(v.session.Config().TTS.Enabled)
 }
@@ -226,25 +236,202 @@ func (v *KickTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.Ca
 		v.UpdateStatus(status, detail)
 	})
 
-	hintLabel := widget.NewLabelWithStyle(
+	v.hintLabel = widget.NewLabelWithStyle(
 		"⚠️ Unofficial Pusher WebSocket Connector (may break if Kick changes internal schema): Enter your Kick channel name or URL. Chat, subscriptions, gifted subs, and moderation deletions stream with zero OAuth required. Tip: If Cloudflare blocks automatic channel lookup, enter channelname#chatroom_id (or channelname#channel_id:chatroom_id).",
 		fyne.TextAlignLeading,
 		fyne.TextStyle{Italic: true},
 	)
-	hintLabel.Wrapping = fyne.TextWrapWord
+	v.hintLabel.Wrapping = fyne.TextWrapWord
 
 	lookupURL, _ := url.Parse(kickChannelInfoLookupURL)
 	v.infoLink = widget.NewHyperlink("🔍 Look up Kick Channel & Chatroom ID (b3ck.com/kick/info)", lookupURL)
 
+	v.modHintLabel = widget.NewLabelWithStyle(
+		"🛡️ Optional OAuth: Sign in with Kick (OAuth 2.1 PKCE) to enable official Public API v1 channel/live detection and Chat Log moderation (Delete, Timeout, Ban).",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	v.modHintLabel.Wrapping = fyne.TextWrapWord
+
+	v.oauthStatusLabel = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	v.oauthConnectBtn = widget.NewButton("Connect Kick OAuth", func() {
+		v.startOAuthFlow()
+	})
+	v.oauthConnectBtn.Importance = widget.HighImportance
+
+	v.oauthDisconnectBtn = widget.NewButton("Disconnect", func() {
+		if v.oauthCancel != nil {
+			v.oauthCancel()
+			v.oauthCancel = nil
+		}
+		if v.session != nil && v.session.KickOAuth() != nil {
+			_ = v.session.KickOAuth().Disconnect()
+		}
+		v.refreshOAuthState()
+		if v.onStatus != nil {
+			v.onStatus("✓ Disconnected Kick OAuth.")
+		}
+	})
+
+	v.channelRow = container.NewBorder(nil, nil, widget.NewLabel("Kick Channel or URL:"), nil, v.channelEntry)
+
+	if v.session != nil && v.session.KickOAuth() != nil {
+		v.session.KickOAuth().SetOnAuthChange(func() {
+			fyne.Do(v.refreshOAuthState)
+		})
+	}
+
+	v.refreshOAuthState()
+
+	oauthRow := container.NewHBox(v.oauthStatusLabel, v.oauthConnectBtn, v.oauthDisconnectBtn)
+
 	cardContent := container.NewVBox(
 		v.enableCheck,
-		container.NewBorder(nil, nil, widget.NewLabel("Kick Channel or URL:"), nil, v.channelEntry),
+		v.channelRow,
 		v.statusBadge,
-		hintLabel,
+		v.hintLabel,
 		v.infoLink,
+		widget.NewSeparator(),
+		oauthRow,
+		v.modHintLabel,
 	)
 
-	return widget.NewCard("Kick Connection", "Connects to Kick live chat & events via Pusher WebSocket", cardContent)
+	return widget.NewCard("Kick Connection", "Connects to Kick live chat & events via Pusher WebSocket + Official API v1", cardContent)
+}
+
+func (v *KickTabView) refreshOAuthState() {
+	hasTok := v.session != nil && v.session.KickOAuth() != nil && v.session.KickOAuth().HasToken()
+	var slug string
+	if hasTok {
+		if tok, err := v.session.KickOAuth().LoadToken(); err == nil && tok != nil {
+			slug = tok.Slug
+			if slug == "" {
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+					defer cancel()
+					if _, fetchedSlug, _, fErr := v.session.KickOAuth().FetchAuthenticatedChannel(ctx); fErr == nil && fetchedSlug != "" {
+						fyne.Do(v.refreshOAuthState)
+					}
+				}()
+			} else if v.channelEntry != nil && strings.TrimSpace(v.channelEntry.Text) == "" {
+				v.channelEntry.SetText(slug)
+			}
+		}
+	}
+
+	if v.channelRow != nil {
+		if hasTok {
+			v.channelRow.Hide()
+		} else {
+			v.channelRow.Show()
+		}
+	}
+	if v.hintLabel != nil {
+		if hasTok {
+			v.hintLabel.Hide()
+		} else {
+			v.hintLabel.Show()
+		}
+	}
+	if v.infoLink != nil {
+		if hasTok {
+			v.infoLink.Hide()
+		} else {
+			v.infoLink.Show()
+		}
+	}
+	if v.modHintLabel != nil {
+		if hasTok {
+			v.modHintLabel.SetText("✓ Authenticated Mode: Official Kick Public API v1 channel & live stream detection and Chat Log moderation (Delete, Timeout, Ban) are active.")
+		} else {
+			v.modHintLabel.SetText("🛡️ Optional OAuth: Sign in with Kick (OAuth 2.1 PKCE) to enable official Public API v1 channel/live detection and Chat Log moderation (Delete, Timeout, Ban).")
+		}
+	}
+	if v.oauthStatusLabel != nil {
+		if hasTok {
+			if slug != "" {
+				v.oauthStatusLabel.SetText("🟢 Kick OAuth: Connected (@" + slug + ")")
+			} else {
+				v.oauthStatusLabel.SetText("🟢 Kick OAuth: Connected")
+			}
+		} else {
+			v.oauthStatusLabel.SetText("⚪ Kick OAuth: Not Connected")
+		}
+	}
+	if v.oauthConnectBtn != nil {
+		if hasTok {
+			v.oauthConnectBtn.SetText("Reconnect Kick OAuth")
+			v.oauthConnectBtn.Importance = widget.MediumImportance
+		} else {
+			v.oauthConnectBtn.SetText("Connect Kick OAuth")
+			v.oauthConnectBtn.Importance = widget.HighImportance
+		}
+		v.oauthConnectBtn.Enable()
+		v.oauthConnectBtn.Refresh()
+	}
+	if v.oauthDisconnectBtn != nil {
+		if hasTok {
+			v.oauthDisconnectBtn.Show()
+		} else {
+			v.oauthDisconnectBtn.Hide()
+		}
+	}
+}
+
+func (v *KickTabView) startOAuthFlow() {
+	if v.session == nil || v.session.KickOAuth() == nil {
+		return
+	}
+	if v.oauthCancel != nil {
+		v.oauthCancel()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	v.oauthCancel = cancel
+
+	if v.oauthConnectBtn != nil {
+		v.oauthConnectBtn.SetText("Waiting for Kick Sign-In...")
+		v.oauthConnectBtn.Disable()
+	}
+	if v.oauthStatusLabel != nil {
+		v.oauthStatusLabel.SetText("🟡 Authorize TownCrier on Kick in browser...")
+	}
+
+	go func() {
+		defer cancel()
+		tok, err := v.session.KickOAuth().AuthenticatePKCE(ctx, func(authURL string) error {
+			u, err := url.Parse(authURL)
+			if err != nil {
+				return err
+			}
+			appInst := fyne.CurrentApp()
+			if appInst != nil {
+				return appInst.OpenURL(u)
+			}
+			return nil
+		})
+		fyne.Do(func() {
+			if err == nil && tok != nil && tok.Slug != "" && v.channelEntry != nil {
+				cur := strings.TrimSpace(v.channelEntry.Text)
+				if cur == "" || (!strings.EqualFold(cur, tok.Slug) && !strings.HasPrefix(strings.ToLower(cur), strings.ToLower(tok.Slug)+"#")) {
+					v.channelEntry.SetText(tok.Slug)
+				}
+			}
+			v.refreshOAuthState()
+			if err != nil {
+				if v.onStatus != nil {
+					v.onStatus("⚠️ Kick OAuth error: " + err.Error())
+				}
+				return
+			}
+			if v.onStatus != nil {
+				if tok != nil && tok.Slug != "" {
+					v.onStatus("✓ Kick OAuth connected (@" + tok.Slug + ").")
+				} else {
+					v.onStatus("✓ Kick OAuth connected.")
+				}
+			}
+		})
+	}()
 }
 
 func (v *KickTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.Card {

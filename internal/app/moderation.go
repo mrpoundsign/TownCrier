@@ -228,6 +228,12 @@ func (s *Session) ModerateDeleteMessage(ctx context.Context, entry eventlog.Entr
 				return err
 			}
 		}
+	case "kick":
+		if s.kickConnector != nil && s.kickOAuth != nil && s.kickOAuth.HasToken() {
+			if err := s.kickConnector.DeleteChatMessage(ctx, msgID); err != nil {
+				return err
+			}
+		}
 	}
 
 	if s.queue != nil {
@@ -262,6 +268,12 @@ func (s *Session) ModerateTimeoutUser(ctx context.Context, entry eventlog.Entry,
 				return err
 			}
 		}
+	case "kick":
+		if s.kickConnector != nil && s.kickOAuth != nil && s.kickOAuth.HasToken() {
+			if err := s.kickConnector.BanOrTimeoutUser(ctx, entry.UserID, durationSec, reason); err != nil {
+				return err
+			}
+		}
 	}
 
 	s.purgeUserSpeech(entry.Platform, entry.UserID, entry.UserName)
@@ -288,6 +300,12 @@ func (s *Session) ModerateBanUser(ctx context.Context, entry eventlog.Entry, rea
 	case "youtube":
 		if s.youtubeConnector != nil && s.youtubeOAuth != nil && s.youtubeOAuth.HasToken() {
 			if err := s.youtubeConnector.BanOrTimeoutUser(ctx, entry.UserID, 0); err != nil {
+				return err
+			}
+		}
+	case "kick":
+		if s.kickConnector != nil && s.kickOAuth != nil && s.kickOAuth.HasToken() {
+			if err := s.kickConnector.BanOrTimeoutUser(ctx, entry.UserID, 0, reason); err != nil {
 				return err
 			}
 		}

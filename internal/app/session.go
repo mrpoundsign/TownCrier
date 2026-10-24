@@ -57,6 +57,7 @@ type Session struct {
 	tiktokConnector   *tiktok.Connector
 	onTikTokStatus    func(status string, detail string)
 	kickConnector     *kick.Connector
+	kickOAuth         *kick.OAuthManager
 	onKickStatus      func(status string, detail string)
 	onEventDispatched func(event *chat.Event, voiceID string)
 
@@ -96,6 +97,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		bots:          matcher,
 		twitchOAuth:   twitch.NewOAuthManager("", store),
 		youtubeOAuth:  youtube.NewOAuthManager("", "", store),
+		kickOAuth:     kick.NewOAuthManager("", "", store),
 		livePlatforms: make(map[string]string),
 	}
 
@@ -185,6 +187,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 			}
 		},
 	)
+	s.kickConnector.SetOAuthManager(s.kickOAuth)
 	s.kickConnector.SetOnStreamStateChange(func(live bool) {
 		ch := ""
 		if s.kickConnector != nil {
@@ -477,6 +480,13 @@ func (s *Session) YouTubeOAuth() *youtube.OAuthManager {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.youtubeOAuth
+}
+
+// KickOAuth returns the Kick OAuth manager.
+func (s *Session) KickOAuth() *kick.OAuthManager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.kickOAuth
 }
 
 // SetOnTwitchStatus registers a callback for Twitch connection status changes.
