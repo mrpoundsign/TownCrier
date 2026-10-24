@@ -196,14 +196,16 @@ func TestEffectiveChatRules(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.GlobalChatRules.SpeakNames = true
 	cfg.GlobalChatRules.SpeakEmotes = false
+	cfg.GlobalChatRules.DeduplicateEmotes = true
+	cfg.GlobalChatRules.MaxDuplicateWords = 2
 	cfg.GlobalChatRules.DefaultVoice = "af_bella"
 	cfg.GlobalChatRules.DefaultSpeed = 1.0
 
 	// Case 1: Platform without overrides inherits global
-	names, emotes, platformName, voice, speed := cfg.EffectiveChatRules("twitch")
-	if !names || emotes || platformName || voice != "af_bella" || speed != 1.0 {
-		t.Errorf("unexpected global inheritance: names=%v, emotes=%v, platformName=%v, voice=%s, speed=%f",
-			names, emotes, platformName, voice, speed)
+	names, emotes, dedupe, maxDup, platformName, voice, speed := cfg.EffectiveChatRules("twitch")
+	if !names || emotes || !dedupe || maxDup != 2 || platformName || voice != "af_bella" || speed != 1.0 {
+		t.Errorf("unexpected global inheritance: names=%v, emotes=%v, dedupe=%v, maxDup=%d, platformName=%v, voice=%s, speed=%f",
+			names, emotes, dedupe, maxDup, platformName, voice, speed)
 	}
 
 	// Case 2: Platform with overrides enabled
@@ -211,14 +213,16 @@ func TestEffectiveChatRules(t *testing.T) {
 	p.Overrides.OverrideRules = true
 	p.Overrides.SpeakNames = false
 	p.Overrides.SpeakEmotes = true
+	p.Overrides.DeduplicateEmotes = false
+	p.Overrides.MaxDuplicateWords = 1
 	p.Overrides.DefaultVoice = "am_michael"
 	p.Overrides.DefaultSpeed = 1.25
 	cfg.Platforms["twitch"] = p
 
-	names, emotes, platformName, voice, speed = cfg.EffectiveChatRules("twitch")
-	if names || !emotes || platformName || voice != "am_michael" || speed != 1.25 {
-		t.Errorf("unexpected platform override: names=%v, emotes=%v, platformName=%v, voice=%s, speed=%f",
-			names, emotes, platformName, voice, speed)
+	names, emotes, dedupe, maxDup, platformName, voice, speed = cfg.EffectiveChatRules("twitch")
+	if names || !emotes || dedupe || maxDup != 1 || platformName || voice != "am_michael" || speed != 1.25 {
+		t.Errorf("unexpected platform override: names=%v, emotes=%v, dedupe=%v, maxDup=%d, platformName=%v, voice=%s, speed=%f",
+			names, emotes, dedupe, maxDup, platformName, voice, speed)
 	}
 }
 

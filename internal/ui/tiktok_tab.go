@@ -625,7 +625,7 @@ func (v *TikTokTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 	namesCheck.SetChecked(ov.SpeakNames)
 	v.namesCheck = namesCheck
 
-	emotesCheck := widget.NewCheck("Speak Emotes for TikTok Chat", func(b bool) {
+	emotesCheck := widget.NewCheck("Speak Emotes & Emojis for TikTok Chat", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
 			p := c.Platforms["tiktok"]
 			p.Overrides.SpeakEmotes = b
@@ -634,6 +634,29 @@ func (v *TikTokTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 	})
 	emotesCheck.SetChecked(ov.SpeakEmotes)
 	v.emotesCheck = emotesCheck
+
+	dedupeCheck := widget.NewCheck("Deduplicate Emotes & Emojis for TikTok Chat", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["tiktok"]
+			p.Overrides.DeduplicateEmotes = b
+			c.Platforms["tiktok"] = p
+		})
+	})
+	dedupeCheck.SetChecked(ov.DeduplicateEmotes)
+
+	dupWordsSelect := widget.NewSelect(DuplicateWordsOptions, func(s string) {
+		val := OptionToDuplicateWords(s)
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["tiktok"]
+			p.Overrides.MaxDuplicateWords = val
+			c.Platforms["tiktok"] = p
+		})
+	})
+	dupWordsSelect.SetSelected(DuplicateWordsToOption(ov.MaxDuplicateWords))
+	dupWordsRow := container.NewHBox(
+		widget.NewLabel("Max Consecutive Duplicate Words:"),
+		dupWordsSelect,
+	)
 
 	selectedVoice := ov.DefaultVoice
 	sp := ov.DefaultSpeed
@@ -662,6 +685,8 @@ func (v *TikTokTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 	v.overridesBox = container.NewVBox(
 		namesCheck,
 		emotesCheck,
+		dedupeCheck,
+		dupWordsRow,
 		voiceRow,
 	)
 

@@ -725,7 +725,7 @@ func (v *YouTubeTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.
 	namesCheck.SetChecked(ov.SpeakNames)
 	v.namesCheck = namesCheck
 
-	emotesCheck := widget.NewCheck("Speak Emotes for YouTube Chat", func(b bool) {
+	emotesCheck := widget.NewCheck("Speak Emotes & Emojis for YouTube Chat", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
 			p := c.Platforms["youtube"]
 			p.Overrides.SpeakEmotes = b
@@ -734,6 +734,29 @@ func (v *YouTubeTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.
 	})
 	emotesCheck.SetChecked(ov.SpeakEmotes)
 	v.emotesCheck = emotesCheck
+
+	dedupeCheck := widget.NewCheck("Deduplicate Emotes & Emojis for YouTube Chat", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["youtube"]
+			p.Overrides.DeduplicateEmotes = b
+			c.Platforms["youtube"] = p
+		})
+	})
+	dedupeCheck.SetChecked(ov.DeduplicateEmotes)
+
+	dupWordsSelect := widget.NewSelect(DuplicateWordsOptions, func(s string) {
+		val := OptionToDuplicateWords(s)
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["youtube"]
+			p.Overrides.MaxDuplicateWords = val
+			c.Platforms["youtube"] = p
+		})
+	})
+	dupWordsSelect.SetSelected(DuplicateWordsToOption(ov.MaxDuplicateWords))
+	dupWordsRow := container.NewHBox(
+		widget.NewLabel("Max Consecutive Duplicate Words:"),
+		dupWordsSelect,
+	)
 
 	selectedVoice := ov.DefaultVoice
 	sp := ov.DefaultSpeed
@@ -762,6 +785,8 @@ func (v *YouTubeTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.
 	v.overridesBox = container.NewVBox(
 		namesCheck,
 		emotesCheck,
+		dedupeCheck,
+		dupWordsRow,
 		voiceRow,
 	)
 

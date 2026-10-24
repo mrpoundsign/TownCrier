@@ -528,7 +528,7 @@ func (v *KickTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Car
 	namesCheck.SetChecked(ov.SpeakNames)
 	v.namesCheck = namesCheck
 
-	emotesCheck := widget.NewCheck("Speak Emotes for Kick Chat", func(b bool) {
+	emotesCheck := widget.NewCheck("Speak Emotes & Emojis for Kick Chat", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
 			p := c.Platforms["kick"]
 			p.Overrides.SpeakEmotes = b
@@ -537,6 +537,29 @@ func (v *KickTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Car
 	})
 	emotesCheck.SetChecked(ov.SpeakEmotes)
 	v.emotesCheck = emotesCheck
+
+	dedupeCheck := widget.NewCheck("Deduplicate Emotes & Emojis for Kick Chat", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["kick"]
+			p.Overrides.DeduplicateEmotes = b
+			c.Platforms["kick"] = p
+		})
+	})
+	dedupeCheck.SetChecked(ov.DeduplicateEmotes)
+
+	dupWordsSelect := widget.NewSelect(DuplicateWordsOptions, func(s string) {
+		val := OptionToDuplicateWords(s)
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["kick"]
+			p.Overrides.MaxDuplicateWords = val
+			c.Platforms["kick"] = p
+		})
+	})
+	dupWordsSelect.SetSelected(DuplicateWordsToOption(ov.MaxDuplicateWords))
+	dupWordsRow := container.NewHBox(
+		widget.NewLabel("Max Consecutive Duplicate Words:"),
+		dupWordsSelect,
+	)
 
 	selectedVoice := ov.DefaultVoice
 	sp := ov.DefaultSpeed
@@ -565,6 +588,8 @@ func (v *KickTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Car
 	v.overridesBox = container.NewVBox(
 		namesCheck,
 		emotesCheck,
+		dedupeCheck,
+		dupWordsRow,
 		voiceRow,
 	)
 

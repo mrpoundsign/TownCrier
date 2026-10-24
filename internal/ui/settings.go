@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -84,6 +85,8 @@ type SettingsView struct {
 	deviceRefreshBtn     *widget.Button
 	rulesNamesCheck      *widget.Check
 	rulesEmotesCheck     *widget.Check
+	rulesDedupeCheck     *widget.Check
+	rulesDupWordsSelect  *widget.Select
 	rulesPlatformCheck   *widget.Check
 	hotkeyCtrlCheck      *widget.Check
 	hotkeyShiftCheck     *widget.Check
@@ -1509,6 +1512,45 @@ func (v *SettingsView) reloadTTSEngine(onDoneUI func()) {
 	}()
 }
 
+var DuplicateWordsOptions = []string{"Off (Unlimited)", "1", "2 (Default)", "3"}
+
+func DuplicateWordsToOption(val int) string {
+	switch val {
+	case -1:
+		return "Off (Unlimited)"
+	case 1:
+		return "1"
+	case 2, 0:
+		return "2 (Default)"
+	case 3:
+		return "3"
+	default:
+		if val < 0 {
+			return "Off (Unlimited)"
+		}
+		return strconv.Itoa(val)
+	}
+}
+
+func OptionToDuplicateWords(opt string) int {
+	switch opt {
+	case "Off (Unlimited)":
+		return -1
+	case "1":
+		return 1
+	case "2 (Default)":
+		return 2
+	case "3":
+		return 3
+	default:
+		var n int
+		if _, err := fmt.Sscanf(opt, "%d", &n); err == nil && n >= 0 {
+			return n
+		}
+		return 2
+	}
+}
+
 func (v *SettingsView) buildRulesCard() *widget.Card {
 	checkNames := widget.NewCheck("Speak Chatter Names (e.g. 'User says...')", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
@@ -1518,13 +1560,34 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 	checkNames.SetChecked(v.cfg.GlobalChatRules.SpeakNames)
 	v.rulesNamesCheck = checkNames
 
-	checkEmotes := widget.NewCheck("Speak Platform Emotes (unchecked = strip emotes)", func(b bool) {
+	checkEmotes := widget.NewCheck("Speak Emotes & Emojis (unchecked = strip emotes & emojis)", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.SpeakEmotes = b
 		})
 	})
 	checkEmotes.SetChecked(v.cfg.GlobalChatRules.SpeakEmotes)
 	v.rulesEmotesCheck = checkEmotes
+
+	checkDedupe := widget.NewCheck("Deduplicate Emotes & Emojis (speak at most once per sentence)", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.DeduplicateEmotes = b
+		})
+	})
+	checkDedupe.SetChecked(v.cfg.GlobalChatRules.DeduplicateEmotes)
+	v.rulesDedupeCheck = checkDedupe
+
+	dupWordsSelect := widget.NewSelect(DuplicateWordsOptions, func(s string) {
+		val := OptionToDuplicateWords(s)
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.MaxDuplicateWords = val
+		})
+	})
+	dupWordsSelect.SetSelected(DuplicateWordsToOption(v.cfg.GlobalChatRules.MaxDuplicateWords))
+	v.rulesDupWordsSelect = dupWordsSelect
+	dupWordsRow := container.NewHBox(
+		widget.NewLabel("Max Consecutive Duplicate Words:"),
+		dupWordsSelect,
+	)
 
 	checkPlatform := widget.NewCheck("Speak Platform Name Prefix (e.g. '[Twitch]')", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
@@ -1537,6 +1600,8 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 	cardContent := container.NewVBox(
 		checkNames,
 		checkEmotes,
+		checkDedupe,
+		dupWordsRow,
 		checkPlatform,
 	)
 

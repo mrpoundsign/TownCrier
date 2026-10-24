@@ -45,21 +45,26 @@ func TestSanitizeEmotesWithUnicode(t *testing.T) {
 
 	// "👋 Hello Kappa ✨"
 	text := "👋 Hello Kappa ✨"
-	// Runes:
-	// 0: 👋
-	// 1: ' '
-	// 2..6: "Hello"
-	// 7: ' '
-	// 8..13: "Kappa"
-	// 14: ' '
-	// 15: ✨
 	spans := []EmoteSpan{
 		{Start: 8, End: 13, ID: "25", Name: "Kappa"},
 	}
 
+	// 1. Direct span stripper preserves surrounding Unicode characters
+	strippedSpans := stripEmoteSpans(text, spans)
+	if strippedSpans != "👋 Hello  ✨" {
+		t.Errorf("expected '👋 Hello  ✨', got %q", strippedSpans)
+	}
+
+	// 2. When SpeakEmotes is false, both platform emotes and Unicode emojis are stripped
 	cleaned := s.Sanitize(text, spans, false, nil)
-	if cleaned != "👋 Hello ✨" {
-		t.Errorf("expected '👋 Hello ✨', got %q", cleaned)
+	if cleaned != "Hello" {
+		t.Errorf("expected 'Hello', got %q", cleaned)
+	}
+
+	// 3. When SpeakEmotes is true, both platform emotes and Unicode emojis are kept
+	kept := s.Sanitize(text, spans, true, nil)
+	if kept != "👋 Hello Kappa ✨" {
+		t.Errorf("expected '👋 Hello Kappa ✨', got %q", kept)
 	}
 }
 
@@ -155,6 +160,118 @@ func TestDefaultBadWordsAndEffectiveBlockedWords(t *testing.T) {
 	expectedCustom := "What the fuck is ***?"
 	if gotCustom != expectedCustom {
 		t.Errorf("expected %q, got %q", expectedCustom, gotCustom)
+	}
+}
+
+func TestSanitizeDuplicateWords(t *testing.T) {
+	s := NewSanitizer(300)
+
+	tests := []struct {
+		name     string
+		input    string
+		maxDup   int
+		expected string
+	}{
+		{
+			name:     "consecutive 4 duplicate words default max 2",
+			input:    "what what what what",
+			maxDup:   2,
+			expected: "what what",
+		},
+		{
+			name:     "consecutive duplicates with punctuation",
+			input:    "what, what, what, what!",
+			maxDup:   2,
+			expected: "what, what!",
+		},
+		{
+			name:     "mixed casing duplicate words",
+			input:    "No NO no No no NO!",
+			maxDup:   2,
+			expected: "No NO!",
+		},
+		{
+			name:     "single duplicate limit",
+			input:    "stop stop stop stop",
+			maxDup:   1,
+			expected: "stop",
+		},
+		{
+			name:     "duplicate word limit disabled (0)",
+			input:    "what what what what",
+			maxDup:   0,
+			expected: "what what what what",
+		},
+		{
+			name:     "natural repeated words allowed under limit",
+			input:    "it is what it is",
+			maxDup:   2,
+			expected: "it is what it is",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s.SanitizeWithOptions(tt.input, SanitizeOptions{
+				SpeakEmotes:       true,
+				DeduplicateEmotes: false,
+				MaxDuplicateWords: tt.maxDup,
+			})
+			if got != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, got)
+			}
+		})
+	}
+}
+
+func TestSanitizeEmoteAndEmojiDeduplication(t *testing.T) {
+	s := NewSanitizer(300)
+
+	spans := []EmoteSpan{
+		{Start: 0, End: 5, ID: "25", Name: "Kappa"},
+		{Start: 6, End: 11, ID: "25", Name: "Kappa"},
+		{Start: 12, End: 17, ID: "25", Name: "Kappa"},
+		{Start: 18, End: 23, ID: "25", Name: "Kappa"},
+	}
+
+	// 1. Spammed identical emote collapsed to once per sentence
+	got := s.Sanitize("Kappa Kappa Kappa Kappa", spans, true, nil)
+	if got != "Kappa" {
+		t.Errorf("expected 'Kappa', got %q", got)
+	}
+
+	// 2. Spammed emoji burst collapsed to once
+	gotEmoji := s.Sanitize("😂😂😂😂😂😂", nil, true, nil)
+	if gotEmoji != "😂" {
+		t.Errorf("expected '😂', got %q", gotEmoji)
+	}
+
+	// 3. Alternating emoji pattern collapsed to once
+	gotPattern := s.Sanitize("😂🔥😂🔥😂🔥", nil, true, nil)
+	if gotPattern != "😂🔥" {
+		t.Errorf("expected '😂🔥', got %q", gotPattern)
+	}
+
+	// 4. Repeated emojis within single sentence with text
+	gotSentence := s.Sanitize("Hello 😂😂😂 how are you 😂😂😂", nil, true, nil)
+	if gotSentence != "Hello 😂 how are you" {
+		t.Errorf("expected 'Hello 😂 how are you', got %q", gotSentence)
+	}
+
+	// 5. Multiple sentences allow once per sentence
+	gotMultiSentence := s.Sanitize("Hello 😂! Good to see you 😂!", nil, true, nil)
+	if gotMultiSentence != "Hello 😂! Good to see you 😂!" {
+		t.Errorf("expected 'Hello 😂! Good to see you 😂!', got %q", gotMultiSentence)
+	}
+
+	// 6. Mixed emote and emoji deduplication
+	mixedSpans := []EmoteSpan{
+		{Start: 0, End: 5, ID: "25", Name: "Kappa"},
+		{Start: 9, End: 14, ID: "25", Name: "Kappa"},
+	}
+	gotMixed := s.Sanitize("Kappa 😂 Kappa 😂", mixedSpans, true, nil)
+	if gotMixed != "Kappa 😂" {
+		t.Errorf("expected 'Kappa 😂', got %q", gotMixed)
 	}
 }
 

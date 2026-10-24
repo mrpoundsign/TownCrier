@@ -144,6 +144,8 @@ type BotConfig struct {
 type GlobalChatRules struct {
 	SpeakNames        bool    `json:"speak_names"`
 	SpeakEmotes       bool    `json:"speak_emotes"`
+	DeduplicateEmotes bool    `json:"deduplicate_emotes"`
+	MaxDuplicateWords int     `json:"max_duplicate_words"`
 	SpeakPlatformName bool    `json:"speak_platform_name"`
 	DefaultVoice      string  `json:"default_voice"`
 	DefaultSpeed      float32 `json:"default_speed"`
@@ -153,6 +155,8 @@ type PlatformOverrides struct {
 	OverrideRules     bool    `json:"override_rules"`
 	SpeakNames        bool    `json:"speak_names"`
 	SpeakEmotes       bool    `json:"speak_emotes"`
+	DeduplicateEmotes bool    `json:"deduplicate_emotes"`
+	MaxDuplicateWords int     `json:"max_duplicate_words"`
 	SpeakPlatformName bool    `json:"speak_platform_name"`
 	DefaultVoice      string  `json:"default_voice"`
 	DefaultSpeed      float32 `json:"default_speed"`
@@ -371,6 +375,8 @@ func DefaultConfig() *Config {
 		GlobalChatRules: GlobalChatRules{
 			SpeakNames:        true,
 			SpeakEmotes:       false,
+			DeduplicateEmotes: true,
+			MaxDuplicateWords: 2,
 			SpeakPlatformName: false,
 			DefaultVoice:      "supertonic:f1",
 			DefaultSpeed:      1.0,
@@ -471,6 +477,8 @@ func DefaultConfig() *Config {
 					OverrideRules:     false,
 					SpeakNames:        true,
 					SpeakEmotes:       false,
+					DeduplicateEmotes: true,
+					MaxDuplicateWords: 2,
 					SpeakPlatformName: false,
 					DefaultVoice:      "",
 					DefaultSpeed:      1.0,
@@ -551,6 +559,8 @@ func DefaultConfig() *Config {
 					OverrideRules:     false,
 					SpeakNames:        true,
 					SpeakEmotes:       false,
+					DeduplicateEmotes: true,
+					MaxDuplicateWords: 2,
 					SpeakPlatformName: false,
 					DefaultVoice:      "",
 					DefaultSpeed:      1.0,
@@ -614,6 +624,8 @@ func DefaultConfig() *Config {
 					OverrideRules:     false,
 					SpeakNames:        true,
 					SpeakEmotes:       false,
+					DeduplicateEmotes: true,
+					MaxDuplicateWords: 2,
 					SpeakPlatformName: false,
 					DefaultVoice:      "",
 					DefaultSpeed:      1.0,
@@ -682,6 +694,8 @@ func DefaultConfig() *Config {
 					OverrideRules:     false,
 					SpeakNames:        true,
 					SpeakEmotes:       false,
+					DeduplicateEmotes: true,
+					MaxDuplicateWords: 2,
 					SpeakPlatformName: false,
 					DefaultVoice:      "",
 					DefaultSpeed:      1.0,
@@ -701,9 +715,11 @@ func ConfigPath() (string, error) {
 }
 
 // EffectiveChatRules returns effective chat rules for a platform, taking platform overrides into account.
-func (c *Config) EffectiveChatRules(platform string) (speakNames, speakEmotes, speakPlatformName bool, voice string, speed float32) {
+func (c *Config) EffectiveChatRules(platform string) (speakNames, speakEmotes, deduplicateEmotes bool, maxDuplicateWords int, speakPlatformName bool, voice string, speed float32) {
 	speakNames = c.GlobalChatRules.SpeakNames
 	speakEmotes = c.GlobalChatRules.SpeakEmotes
+	deduplicateEmotes = c.GlobalChatRules.DeduplicateEmotes
+	maxDuplicateWords = c.GlobalChatRules.MaxDuplicateWords
 	speakPlatformName = c.GlobalChatRules.SpeakPlatformName
 	voice = c.GlobalChatRules.DefaultVoice
 	speed = c.GlobalChatRules.DefaultSpeed
@@ -711,6 +727,8 @@ func (c *Config) EffectiveChatRules(platform string) (speakNames, speakEmotes, s
 	if p, ok := c.Platforms[platform]; ok && p.Overrides.OverrideRules {
 		speakNames = p.Overrides.SpeakNames
 		speakEmotes = p.Overrides.SpeakEmotes
+		deduplicateEmotes = p.Overrides.DeduplicateEmotes
+		maxDuplicateWords = p.Overrides.MaxDuplicateWords
 		speakPlatformName = p.Overrides.SpeakPlatformName
 		if p.Overrides.DefaultVoice != "" {
 			voice = p.Overrides.DefaultVoice
@@ -719,7 +737,7 @@ func (c *Config) EffectiveChatRules(platform string) (speakNames, speakEmotes, s
 			speed = p.Overrides.DefaultSpeed
 		}
 	}
-	return speakNames, speakEmotes, speakPlatformName, voice, speed
+	return speakNames, speakEmotes, deduplicateEmotes, maxDuplicateWords, speakPlatformName, voice, speed
 }
 
 // Clone creates a deep copy of the Config.
@@ -995,8 +1013,15 @@ func migrate(cfg *Config) error {
 					p.Notifications[evKey] = existing
 				}
 			}
+			if p.Overrides.MaxDuplicateWords == 0 {
+				p.Overrides.MaxDuplicateWords = 2
+			}
 			cfg.Platforms[platKey] = p
 		}
+	}
+
+	if cfg.GlobalChatRules.MaxDuplicateWords == 0 {
+		cfg.GlobalChatRules.MaxDuplicateWords = 2
 	}
 
 	return nil
