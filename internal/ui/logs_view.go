@@ -206,34 +206,21 @@ func (v *LogsView) SetTabActive(active bool) {
 
 func (v *LogsView) scheduleLiveRender() {
 	v.mu.Lock()
-	if !v.tabActive {
-		v.renderDirty = true
+	v.renderDirty = true
+	if !v.tabActive || v.renderTimer != nil {
 		v.mu.Unlock()
 		return
 	}
-	if v.renderTimer != nil {
-		v.renderDirty = true
-		v.mu.Unlock()
-		return
-	}
-	v.renderDirty = false
 	v.renderTimer = time.AfterFunc(liveRenderCoalesceDuration, func() {
 		v.mu.Lock()
-		active := v.tabActive
-		v.renderDirty = false
+		v.renderTimer = nil
+		active := v.tabActive && !v.closed
+		dirty := v.renderDirty
 		v.mu.Unlock()
-		if active {
+		if active && dirty {
 			fyne.Do(func() {
 				v.renderEntries()
 			})
-		}
-		v.mu.Lock()
-		dirty := v.renderDirty
-		activeNow := v.tabActive
-		v.renderTimer = nil
-		v.mu.Unlock()
-		if activeNow && dirty {
-			v.scheduleLiveRender()
 		}
 	})
 	v.mu.Unlock()
@@ -2002,90 +1989,99 @@ func (v *LogsView) renderEntries() {
 		return
 	}
 
-	v.mu.Lock()
-	if v.closed {
+	for {
+		v.mu.Lock()
+		if v.closed {
+			v.mu.Unlock()
+			return
+		}
+		v.renderDirty = false
+		v.renderCount++
+		entries := make([]eventlog.Entry, len(v.entries))
+		copy(entries, v.entries)
+		total := v.totalCount
+		page := v.currentPage
+		showSum := v.showSummary
+		summary := v.summary.Clone()
 		v.mu.Unlock()
-		return
-	}
-	v.renderCount++
-	entries := make([]eventlog.Entry, len(v.entries))
-	copy(entries, v.entries)
-	total := v.totalCount
-	page := v.currentPage
-	showSum := v.showSummary
-	summary := v.summary.Clone()
-	v.mu.Unlock()
 
-	v.renderHeldQueueLocked()
+		v.renderHeldQueueLocked()
 
-	if v.summaryLabel != nil {
-		if total == 0 || len(entries) == 0 {
-			v.summaryLabel.SetText("0 matching events")
-		} else {
-			startIdx := page*logsPageSize + 1
-			endIdx := startIdx + len(entries) - 1
-			v.summaryLabel.SetText(fmt.Sprintf("Showing %d–%d of %d matching events", startIdx, endIdx, total))
-		}
-	}
-
-	if v.summaryTotalsLabel != nil {
-		txt := formatSummaryTotals(summary)
-		if showSum && txt != "" {
-			v.summaryTotalsLabel.SetText(txt)
-			if v.summaryTotalsItemsBox != nil {
-				v.summaryTotalsItemsBox.Objects = v.buildSummaryTotalsObjects(summary)
-				v.summaryTotalsItemsBox.Refresh()
-			}
-			if v.summaryTotalsContainer != nil {
-				v.summaryTotalsContainer.Show()
-				v.summaryTotalsContainer.Refresh()
-			}
-		} else {
-			v.summaryTotalsLabel.SetText("")
-			if v.summaryTotalsItemsBox != nil {
-				v.summaryTotalsItemsBox.Objects = nil
-				v.summaryTotalsItemsBox.Refresh()
-			}
-			if v.summaryTotalsContainer != nil {
-				v.summaryTotalsContainer.Hide()
-				v.summaryTotalsContainer.Refresh()
+		if v.summaryLabel != nil {
+			if total == 0 || len(entries) == 0 {
+				v.summaryLabel.SetText("0 matching events")
+			} else {
+				startIdx := page*logsPageSize + 1
+				endIdx := startIdx + len(entries) - 1
+				v.summaryLabel.SetText(fmt.Sprintf("Showing %d–%d of %d matching events", startIdx, endIdx, total))
 			}
 		}
-	}
 
-	if v.prevPageBtn != nil {
-		if page > 0 {
-			v.prevPageBtn.Enable()
+		if v.summaryTotalsLabel != nil {
+			txt := formatSummaryTotals(summary)
+			if showSum && txt != "" {
+				v.summaryTotalsLabel.SetText(txt)
+				if v.summaryTotalsItemsBox != nil {
+					v.summaryTotalsItemsBox.Objects = v.buildSummaryTotalsObjects(summary)
+					v.summaryTotalsItemsBox.Refresh()
+				}
+				if v.summaryTotalsContainer != nil {
+					v.summaryTotalsContainer.Show()
+					v.summaryTotalsContainer.Refresh()
+				}
+			} else {
+				v.summaryTotalsLabel.SetText("")
+				if v.summaryTotalsItemsBox != nil {
+					v.summaryTotalsItemsBox.Objects = nil
+					v.summaryTotalsItemsBox.Refresh()
+				}
+				if v.summaryTotalsContainer != nil {
+					v.summaryTotalsContainer.Hide()
+					v.summaryTotalsContainer.Refresh()
+				}
+			}
+		}
+
+		if v.prevPageBtn != nil {
+			if page > 0 {
+				v.prevPageBtn.Enable()
+			} else {
+				v.prevPageBtn.Disable()
+			}
+		}
+		if v.nextPageBtn != nil {
+			if (page+1)*logsPageSize < total {
+				v.nextPageBtn.Enable()
+			} else {
+				v.nextPageBtn.Disable()
+			}
+		}
+
+		v.listBox.Objects = nil
+		if len(entries) == 0 {
+			v.listBox.Add(widget.NewLabelWithStyle("No matching log entries found.", fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
+			v.listBox.Refresh()
 		} else {
-			v.prevPageBtn.Disable()
+			lastDateKey := ""
+			for i, entry := range entries {
+				localTime := entry.CreatedAt.Local()
+				dateKey := localTime.Format("2006-01-02")
+				if dateKey != lastDateKey {
+					lastDateKey = dateKey
+					v.listBox.Add(v.buildDateSeparatorRow(localTime))
+				}
+				v.listBox.Add(v.buildLogRow(i, entry))
+			}
+			v.listBox.Refresh()
 		}
-	}
-	if v.nextPageBtn != nil {
-		if (page+1)*logsPageSize < total {
-			v.nextPageBtn.Enable()
-		} else {
-			v.nextPageBtn.Disable()
-		}
-	}
 
-	v.listBox.Objects = nil
-	if len(entries) == 0 {
-		v.listBox.Add(widget.NewLabelWithStyle("No matching log entries found.", fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
-		v.listBox.Refresh()
-		return
-	}
-
-	lastDateKey := ""
-	for i, entry := range entries {
-		localTime := entry.CreatedAt.Local()
-		dateKey := localTime.Format("2006-01-02")
-		if dateKey != lastDateKey {
-			lastDateKey = dateKey
-			v.listBox.Add(v.buildDateSeparatorRow(localTime))
+		v.mu.Lock()
+		stillDirty := v.renderDirty && v.tabActive && !v.closed
+		v.mu.Unlock()
+		if !stillDirty {
+			break
 		}
-		v.listBox.Add(v.buildLogRow(i, entry))
 	}
-	v.listBox.Refresh()
 }
 
 func (v *LogsView) buildDateSeparatorRow(t time.Time) fyne.CanvasObject {

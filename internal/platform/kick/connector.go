@@ -30,7 +30,8 @@ const (
 )
 
 const (
-	DefaultPusherWSURL      = "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0-rc2&flash=false"
+	DefaultPusherAppKey     = "34bf7a0ff419a2a775b9"
+	DefaultPusherWSURL      = "wss://ws-us2.pusher.com/app/" + DefaultPusherAppKey + "?protocol=7&client=js&version=8.4.0-rc2&flash=false"
 	DefaultKickAPIBase      = "https://kick.com"
 	DefaultFollowerCacheTTL = 30 * time.Minute
 	defaultReconnect        = 5 * time.Second
@@ -499,6 +500,7 @@ func (c *Connector) runLoop(ctx context.Context, slug string, directInfo Channel
 			resolved, err := ResolveChannelInfo(ctx, c.httpClient, c.apiBaseURL, slug)
 			if err != nil {
 				log.Printf("[Kick] Failed to resolve chatroom_id for %q: %v (tip: you can also enter slug#chatroom_id)", slug, err)
+				c.updateStatus(StatusDisconnected, "Channel lookup failed — enter "+slug+"#chatroom_id")
 				if !c.sleepOrCancel(ctx, backoff) {
 					return
 				}

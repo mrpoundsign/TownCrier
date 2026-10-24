@@ -659,6 +659,8 @@ func TestLogsViewLiveTailSummaryTotalsUpdate(t *testing.T) {
 	}
 
 	time.Sleep(150 * time.Millisecond)
+	uiRenderMu.Lock()
+	uiRenderMu.Unlock() //nolint:staticcheck // wait for in-flight coalesced render to complete
 
 	lv.mu.Lock()
 	sum := lv.summary.Clone()

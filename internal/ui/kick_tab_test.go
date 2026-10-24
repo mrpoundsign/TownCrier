@@ -41,4 +41,19 @@ func TestKickTabViewBuild(t *testing.T) {
 	}
 	kickView.roleGatedCheck.SetChecked(true)
 	folChk.SetChecked(true)
+
+	if kickView.infoLink == nil || kickView.infoLink.URL == nil || kickView.infoLink.URL.String() != kickChannelInfoLookupURL {
+		t.Fatalf("expected Kick infoLink to point to %q, got %+v", kickChannelInfoLookupURL, kickView.infoLink)
+	}
+
+	kickView.enableCheck.SetChecked(true)
+	kickView.channelEntry.SetText("nanaseriously#4014200")
+	kickView.UpdateStatus("disconnected", "Channel lookup failed — enter nanaseriously#chatroom_id")
+	if kickView.statusBadge.Text != "🔴 Disconnected (Channel lookup failed — enter nanaseriously#chatroom_id)" {
+		t.Errorf("unexpected statusBadge on disconnected error: %q", kickView.statusBadge.Text)
+	}
+	kickView.UpdateStatus("waiting", "nanaseriously")
+	if kickView.statusBadge.Text != "🟡 Connected to Chat (Waiting for Stream)..." {
+		t.Errorf("unexpected statusBadge on waiting: %q", kickView.statusBadge.Text)
+	}
 }

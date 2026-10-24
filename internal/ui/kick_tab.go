@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
+const kickChannelInfoLookupURL = "https://b3ck.com/kick/info/"
+
 // KickTabView provides the Fyne UI controls for Kick Pusher WebSocket integration.
 type KickTabView struct {
 	window  fyne.Window
@@ -19,6 +22,7 @@ type KickTabView struct {
 
 	channelEntry       *ScrollPassEntry
 	statusBadge        *widget.Label
+	infoLink           *widget.Hyperlink
 	enableCheck        *widget.Check
 	allChatCheck       *widget.Check
 	ignorePrefixCheck  *widget.Check
@@ -156,6 +160,15 @@ func (v *KickTabView) UpdateStatus(status string, detail string) {
 			v.statusBadge.SetText("🟡 Connected to Chat (Waiting for Stream)...")
 		case "connecting":
 			v.statusBadge.SetText("🟡 Connecting (" + detail + ")...")
+		case "disconnected":
+			switch {
+			case v.enableCheck != nil && v.enableCheck.Checked && detail != "" && detail != "Stopped":
+				v.statusBadge.SetText("🔴 Disconnected (" + detail + ")")
+			case v.enableCheck != nil && v.enableCheck.Checked && v.channelEntry != nil && v.channelEntry.Text != "" && detail == "":
+				v.statusBadge.SetText("🟡 Waiting for Stream (" + v.channelEntry.Text + ")...")
+			default:
+				v.statusBadge.SetText("⚪ Disconnected")
+			}
 		default:
 			if v.enableCheck != nil && v.enableCheck.Checked && v.channelEntry != nil && v.channelEntry.Text != "" {
 				v.statusBadge.SetText("🟡 Waiting for Stream (" + v.channelEntry.Text + ")...")
@@ -170,7 +183,7 @@ func (v *KickTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.Ca
 	v.statusBadge = widget.NewLabelWithStyle("⚪ Disconnected", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
 	v.channelEntry = NewScrollPassEntry()
-	v.channelEntry.SetPlaceHolder("e.g. channelname, https://kick.com/channelname, or channelname#chatroom_id")
+	v.channelEntry.SetPlaceHolder("e.g. channelname, channelname#chatroom_id, or channelname#channel_id:chatroom_id")
 	v.channelEntry.SetText(pCfg.AccountName)
 
 	v.enableCheck = widget.NewCheck("Enable Kick Integration", nil)
@@ -214,17 +227,21 @@ func (v *KickTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.Ca
 	})
 
 	hintLabel := widget.NewLabelWithStyle(
-		"⚠️ Unofficial Pusher WebSocket Connector (may break if Kick changes internal schema): Enter your Kick channel name or URL. Chat, subscriptions, gifted subs, and moderation deletions stream with zero OAuth required. Tip: If Cloudflare blocks automatic channel lookup, enter channelname#chatroom_id.",
+		"⚠️ Unofficial Pusher WebSocket Connector (may break if Kick changes internal schema): Enter your Kick channel name or URL. Chat, subscriptions, gifted subs, and moderation deletions stream with zero OAuth required. Tip: If Cloudflare blocks automatic channel lookup, enter channelname#chatroom_id (or channelname#channel_id:chatroom_id).",
 		fyne.TextAlignLeading,
 		fyne.TextStyle{Italic: true},
 	)
 	hintLabel.Wrapping = fyne.TextWrapWord
+
+	lookupURL, _ := url.Parse(kickChannelInfoLookupURL)
+	v.infoLink = widget.NewHyperlink("🔍 Look up Kick Channel & Chatroom ID (b3ck.com/kick/info)", lookupURL)
 
 	cardContent := container.NewVBox(
 		v.enableCheck,
 		container.NewBorder(nil, nil, widget.NewLabel("Kick Channel or URL:"), nil, v.channelEntry),
 		v.statusBadge,
 		hintLabel,
+		v.infoLink,
 	)
 
 	return widget.NewCard("Kick Connection", "Connects to Kick live chat & events via Pusher WebSocket", cardContent)
