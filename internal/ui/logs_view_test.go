@@ -658,7 +658,7 @@ func TestLogsViewLiveTailSummaryTotalsUpdate(t *testing.T) {
 		t.Fatalf("Append superchat: %v", err)
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	lv.mu.Lock()
 	sum := lv.summary.Clone()
@@ -701,7 +701,7 @@ func TestLogsViewLiveTailSummaryTotalsUpdate(t *testing.T) {
 		t.Fatalf("Append message: %v", err)
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	lv.mu.Lock()
 	sumAfterMsg := lv.summary.Clone()
@@ -786,6 +786,7 @@ func TestLogsViewLatestSessionAutoSwitchAndThemeContrast(t *testing.T) {
 
 	// Select "Latest Session" -> should resolve to Session #1
 	lv.sessionSel.SetSelected(sessionOptionLatest)
+	time.Sleep(40 * time.Millisecond)
 	lv.mu.Lock()
 	c1 := len(lv.entries)
 	lv.mu.Unlock()
@@ -898,6 +899,7 @@ func TestLiveLogPresetsAndZeroChromePopOutWindow(t *testing.T) {
 	lv := NewLogsView(w, sess)
 	defer lv.Close()
 	_ = lv.Build()
+	time.Sleep(40 * time.Millisecond)
 
 	if len(lv.liveLogsCardsBox.Objects) != 2 {
 		t.Fatalf("expected 2 Live Log cards rendered initially, got %d", len(lv.liveLogsCardsBox.Objects))
@@ -944,7 +946,7 @@ func TestLiveLogPresetsAndZeroChromePopOutWindow(t *testing.T) {
 		Outcome:   eventlog.OutcomeSpoken,
 	})
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	openLW.view.mu.Lock()
 	popCount2 := len(openLW.view.entries)
@@ -1021,6 +1023,7 @@ func TestLogsViewChatPanelScaling(t *testing.T) {
 	defer lv.Close()
 	w.SetContent(lv.Build())
 	w.Resize(fyne.NewSize(960, 640))
+	time.Sleep(40 * time.Millisecond)
 
 	if lv.effectiveChatScalePct() != 100 {
 		t.Fatalf("expected initial effective chat scale 100%%, got %d%%", lv.effectiveChatScalePct())
@@ -1175,6 +1178,7 @@ func TestLogsViewModerationAndHeldQueueFIFO(t *testing.T) {
 		Status:    "PENDING",
 		HeldAt:    now.Add(-5 * time.Second),
 	})
+	time.Sleep(150 * time.Millisecond)
 
 	held := sess.HeldMessages()
 	if len(held) != 2 || held[0].MessageID != "hold-msg-1" || held[1].MessageID != "hold-msg-2" {
@@ -1204,6 +1208,7 @@ func TestLogsViewModerationAndHeldQueueFIFO(t *testing.T) {
 	if err := sess.ResolveHeldMessage(context.Background(), "hold-msg-1", "ALLOW"); err != nil {
 		t.Fatalf("ResolveHeldMessage ALLOW: %v", err)
 	}
+	time.Sleep(150 * time.Millisecond)
 	if len(sess.HeldMessages()) != 1 || sess.HeldMessages()[0].MessageID != "hold-msg-2" {
 		t.Fatalf("expected only hold-msg-2 remaining after resolving hold-msg-1, got %+v", sess.HeldMessages())
 	}
@@ -1211,6 +1216,7 @@ func TestLogsViewModerationAndHeldQueueFIFO(t *testing.T) {
 	if err := sess.ResolveHeldMessage(context.Background(), "hold-msg-2", "DENY"); err != nil {
 		t.Fatalf("ResolveHeldMessage DENY: %v", err)
 	}
+	time.Sleep(150 * time.Millisecond)
 	lv.renderHeldQueue()
 	if lv.heldQueueContainer.Visible() {
 		t.Error("expected heldQueueContainer to auto-hide once all held messages are resolved")
@@ -1265,6 +1271,106 @@ func TestLogsViewModerationAndHeldQueueFIFO(t *testing.T) {
 	ytAuthBox := lv.modControlIcons(ytEntry).Objects[0].(*fyne.Container)
 	if len(ytAuthBox.Objects) != 4 {
 		t.Errorf("expected all 4 icons (Delete, Timeout, Ban, Mute TTS) for YouTube row when OAuth is connected, got %d", len(ytAuthBox.Objects))
+	}
+}
+
+func TestLogsViewCoalescedLiveRenderAndTabDeferral(t *testing.T) {
+	testApp := test.NewApp()
+	defer testApp.Quit()
+
+	w := testApp.NewWindow("Coalesce & Tab Deferral Test")
+	defer w.Close()
+
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
+
+	backend, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	mgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, backend)
+	sess.SetEventLogger(mgr)
+
+	lv := NewLogsView(w, sess)
+	defer lv.Close()
+	w.SetContent(lv.Build())
+
+	// 1. Mark Logs tab inactive (e.g. user is on Dashboard tab)
+	lv.SetTabActive(false)
+	lv.mu.Lock()
+	rendersBeforeHiddenBurst := lv.renderCount
+	lv.mu.Unlock()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for i := range 15 {
+		_ = mgr.Append(ctx, &eventlog.Entry{
+			ID:            filepath.Join("hidden", string(rune('a'+i))),
+			CreatedAt:     now.Add(time.Duration(i) * time.Millisecond),
+			Platform:      "twitch",
+			Kind:          "message",
+			UserName:      "viewer",
+			RawText:       "message while logs tab is hidden",
+			PassedFilters: true,
+			Spoken:        true,
+			Outcome:       eventlog.OutcomeSpoken,
+		})
+	}
+	time.Sleep(80 * time.Millisecond)
+
+	lv.mu.Lock()
+	rendersAfterHiddenBurst := lv.renderCount
+	entriesCount := len(lv.entries)
+	isDirty := lv.renderDirty
+	lv.mu.Unlock()
+
+	if entriesCount != 15 {
+		t.Fatalf("expected 15 entries buffered while hidden, got %d", entriesCount)
+	}
+	if rendersAfterHiddenBurst != rendersBeforeHiddenBurst {
+		t.Fatalf("expected 0 UI renders while tab is hidden, got %d (before=%d, after=%d)",
+			rendersAfterHiddenBurst-rendersBeforeHiddenBurst, rendersBeforeHiddenBurst, rendersAfterHiddenBurst)
+	}
+	if !isDirty {
+		t.Fatal("expected renderDirty=true after hidden live-tail updates")
+	}
+
+	// 2. Activate Logs tab -> should trigger a single catch-up render
+	lv.SetTabActive(true)
+	lv.mu.Lock()
+	rendersAfterActivate := lv.renderCount
+	lv.mu.Unlock()
+	if rendersAfterActivate != rendersBeforeHiddenBurst+1 {
+		t.Fatalf("expected exactly 1 catch-up render when activating dirty tab, got %d", rendersAfterActivate-rendersBeforeHiddenBurst)
+	}
+
+	// 3. Burst 20 events while tab is active -> should coalesce into at most 2 renders (leading + trailing)
+	for i := range 20 {
+		_ = mgr.Append(ctx, &eventlog.Entry{
+			ID:            filepath.Join("active", string(rune('a'+i))),
+			CreatedAt:     now.Add(time.Duration(100+i) * time.Millisecond),
+			Platform:      "twitch",
+			Kind:          "message",
+			UserName:      "viewer",
+			RawText:       "burst message while logs tab is active",
+			PassedFilters: true,
+			Spoken:        true,
+			Outcome:       eventlog.OutcomeSpoken,
+		})
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	lv.mu.Lock()
+	rendersAfterActiveBurst := lv.renderCount
+	lv.mu.Unlock()
+
+	deltaRenders := rendersAfterActiveBurst - rendersAfterActivate
+	if deltaRenders < 1 || deltaRenders > 3 {
+		t.Fatalf("expected 20 rapid live updates to coalesce into 1–3 renders, got %d renders", deltaRenders)
 	}
 }
 

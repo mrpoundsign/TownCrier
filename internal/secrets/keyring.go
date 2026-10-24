@@ -60,26 +60,56 @@ func (m *MemoryStore) Delete(key string) error {
 	return nil
 }
 
+// keyringProvider abstracts the underlying OS credential manager for testability.
+type keyringProvider interface {
+	Set(service, user, password string) error
+	Get(service, user string) (string, error)
+	Delete(service, user string) error
+}
+
+type osKeyringProvider struct{}
+
+func (osKeyringProvider) Set(service, user, password string) error {
+	return keyring.Set(service, user, password)
+}
+
+func (osKeyringProvider) Get(service, user string) (string, error) {
+	return keyring.Get(service, user)
+}
+
+func (osKeyringProvider) Delete(service, user string) error {
+	return keyring.Delete(service, user)
+}
+
 // KeyringStore interacts with the OS credential manager with memory fallback.
 type KeyringStore struct {
 	service  string
+	provider keyringProvider
 	fallback *MemoryStore
 }
 
 // NewKeyringStore creates a new KeyringStore with an in-memory fallback.
 func NewKeyringStore(service string) *KeyringStore {
+	return newKeyringStoreWithProvider(service, osKeyringProvider{})
+}
+
+func newKeyringStoreWithProvider(service string, provider keyringProvider) *KeyringStore {
 	if service == "" {
 		service = ServiceName
 	}
+	if provider == nil {
+		provider = osKeyringProvider{}
+	}
 	return &KeyringStore{
 		service:  service,
+		provider: provider,
 		fallback: NewMemoryStore(),
 	}
 }
 
 // Set saves a secret into the system keyring, falling back to memory on error.
 func (k *KeyringStore) Set(key, secret string) error {
-	err := keyring.Set(k.service, key, secret)
+	err := k.provider.Set(k.service, key, secret)
 	if err != nil {
 		// Store in fallback if OS keyring fails
 		_ = k.fallback.Set(key, secret)
@@ -90,16 +120,16 @@ func (k *KeyringStore) Set(key, secret string) error {
 
 // Get retrieves a secret from the system keyring or the fallback store.
 func (k *KeyringStore) Get(key string) (string, error) {
-	val, err := keyring.Get(k.service, key)
+	val, err := k.provider.Get(k.service, key)
 	if err == nil {
 		return val, nil
 	}
 
 	// If using the default service name and not found, check legacy service name for seamless migration
 	if k.service == ServiceName && errors.Is(err, keyring.ErrNotFound) {
-		if legacyVal, legErr := keyring.Get(LegacyServiceName, key); legErr == nil {
+		if legacyVal, legErr := k.provider.Get(LegacyServiceName, key); legErr == nil {
 			// Migrate secret to new service name
-			_ = keyring.Set(k.service, key, legacyVal)
+			_ = k.provider.Set(k.service, key, legacyVal)
 			return legacyVal, nil
 		}
 	}
@@ -118,7 +148,7 @@ func (k *KeyringStore) Get(key string) (string, error) {
 // Delete removes a secret from both the system keyring and the fallback store.
 func (k *KeyringStore) Delete(key string) error {
 	_ = k.fallback.Delete(key)
-	err := keyring.Delete(k.service, key)
+	err := k.provider.Delete(k.service, key)
 	if err != nil && !errors.Is(err, keyring.ErrNotFound) {
 		// Ignore not found errors on deletion
 		return nil

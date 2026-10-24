@@ -12,10 +12,17 @@ import (
 
 func TestMainWindowCreation(t *testing.T) {
 	appObj := test.NewApp()
+	defer appObj.Quit()
 	cfg := config.DefaultConfig()
 	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = session.Close() }()
 
 	mw := NewMainWindow(appObj, session)
+	defer func() {
+		if mw.hotkeyMgr != nil {
+			mw.hotkeyMgr.Close()
+		}
+	}()
 	if mw == nil || mw.Window == nil {
 		t.Fatal("expected non-nil MainWindow and Window")
 	}
@@ -50,8 +57,10 @@ func TestMainWindowCreation(t *testing.T) {
 
 func TestMainWindowCloseIntercept(t *testing.T) {
 	appObj := test.NewApp()
+	defer appObj.Quit()
 	cfg := config.DefaultConfig()
 	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = session.Close() }()
 	_ = session.Start()
 
 	mw := NewMainWindow(appObj, session)
@@ -69,8 +78,10 @@ func TestMainWindowCloseIntercept(t *testing.T) {
 
 func TestMainWindowPanicToggle(t *testing.T) {
 	appObj := test.NewApp()
+	defer appObj.Quit()
 	cfg := config.DefaultConfig()
 	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = session.Close() }()
 	_ = session.Start()
 
 	mw := NewMainWindow(appObj, session)
@@ -116,6 +127,7 @@ func TestMainWindowPanicToggle(t *testing.T) {
 
 func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 	appObj := test.NewApp()
+	defer appObj.Quit()
 	cfg := config.DefaultConfig()
 	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 	defer func() { _ = session.Close() }()

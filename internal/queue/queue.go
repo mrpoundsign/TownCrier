@@ -143,7 +143,7 @@ func (q *Queue) Pause() {
 	q.mu.Unlock()
 
 	if fn != nil {
-		go fn(true, panicked)
+		fn(true, panicked)
 	}
 }
 
@@ -161,7 +161,7 @@ func (q *Queue) Resume() {
 	q.mu.Unlock()
 
 	if fn != nil {
-		go fn(false, false)
+		fn(false, false)
 	}
 }
 
@@ -237,7 +237,7 @@ func (q *Queue) Panic() {
 		go depthFn(0)
 	}
 	if stateFn != nil {
-		go stateFn(true, true)
+		stateFn(true, true)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"log"
 	"sync"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -98,6 +99,9 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	mw.syncLoggingState(session.Config().Logging.Enabled)
 	log.Println("[MainWindow] Setting window content...")
 
+	uiRenderMu.Lock()
+	defer uiRenderMu.Unlock()
+
 	mainContent := container.NewBorder(
 		mw.headerBar,
 		mw.statusBar,
@@ -139,12 +143,28 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	}
 
 	w.SetCloseIntercept(func() {
-		cleanup()
+		if mw.chatLogsTab != nil {
+			mw.chatLogsTab.Close()
+		}
+		w.Hide()
+		done := make(chan struct{})
+		go func() {
+			cleanup()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			log.Println("[MainWindow] Warning: subsystem shutdown timed out after 3s; forcing window close")
+		}
 		w.Close()
 		fyneApp.Quit()
 	})
 
 	w.SetOnClosed(func() {
+		if mw.chatLogsTab != nil {
+			mw.chatLogsTab.Close()
+		}
 		cleanup()
 	})
 
@@ -346,6 +366,9 @@ func (mw *MainWindow) initViews() {
 // SelectTab activates the specified main view (Dashboard, Viewers, Logs, or Settings).
 func (mw *MainWindow) SelectTab(index int) {
 	mw.currentTab = index
+	if mw.chatLogsTab != nil {
+		mw.chatLogsTab.SetTabActive(index == TabIndexLogs)
+	}
 
 	if mw.dashboardObj != nil {
 		mw.dashboardObj.Hide()
@@ -519,6 +542,8 @@ func (mw *MainWindow) initHeader() {
 	)
 
 	mw.Session.SetOnTwitchStatus(func(status string, detail string) {
+		uiRenderMu.Lock()
+		defer uiRenderMu.Unlock()
 		if mw.twitchTab != nil {
 			mw.twitchTab.UpdateStatus(status, detail)
 		}
@@ -541,6 +566,8 @@ func (mw *MainWindow) initHeader() {
 	)
 
 	mw.Session.SetOnYouTubeStatus(func(status string, detail string) {
+		uiRenderMu.Lock()
+		defer uiRenderMu.Unlock()
 		if mw.youtubeTab != nil {
 			mw.youtubeTab.UpdateStatus(status, detail)
 		}
@@ -563,6 +590,8 @@ func (mw *MainWindow) initHeader() {
 	)
 
 	mw.Session.SetOnTikTokStatus(func(status string, detail string) {
+		uiRenderMu.Lock()
+		defer uiRenderMu.Unlock()
 		if mw.tiktokTab != nil {
 			mw.tiktokTab.UpdateStatus(status, detail)
 		}
@@ -585,6 +614,8 @@ func (mw *MainWindow) initHeader() {
 	)
 
 	mw.Session.SetOnKickStatus(func(status string, detail string) {
+		uiRenderMu.Lock()
+		defer uiRenderMu.Unlock()
 		if mw.kickTab != nil {
 			mw.kickTab.UpdateStatus(status, detail)
 		}
@@ -647,11 +678,9 @@ func (mw *MainWindow) triggerTogglePanic() {
 	}
 	panicked := mw.Session.TogglePanic()
 	q := mw.Session.Queue()
-	paused := false
-	if q != nil {
-		paused = q.IsPaused()
+	if q == nil {
+		mw.syncPanicUI(false, panicked)
 	}
-	mw.syncPanicUI(paused, panicked)
 	hk := mw.currentHotkeyLabel()
 	if panicked {
 		mw.SetStatus(fmt.Sprintf("🚨 PANIC MUTE ACTIVE — Speech halted and queue cleared. Click Unmute or press Esc / %s to resume.", hk))

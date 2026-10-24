@@ -99,9 +99,11 @@ run_lint() {
 }
 
 run_test() {
-    echo "==> Running unit tests..."
-    go test -timeout 60s -count=1 -v ./...
-    echo "✓ All tests passed!"
+    echo "==> Running unit tests with race detector..."
+    go test -race -timeout 180s -count=1 -v ./...
+    echo "==> Running multi-count race stress tests (-count=5) on concurrent core packages..."
+    go test -race -timeout 180s -count=5 ./internal/app/... ./internal/queue/... ./internal/platform/... ./internal/eventlog/...
+    echo "✓ All unit and race tests passed!"
 }
 
 build_win() {

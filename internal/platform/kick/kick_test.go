@@ -2,12 +2,14 @@ package kick
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -414,6 +416,97 @@ func TestKickLiveStreamStateTransitions(t *testing.T) {
 	defer stateMu.Unlock()
 	if len(states) < 3 || !states[0] || states[1] || !states[2] {
 		t.Fatalf("expected live transitions [true, false, true, ...], got %v", states)
+	}
+}
+
+func TestParsePusherErrorFrame(t *testing.T) {
+	raw := []byte(`{"event":"pusher:error","data":{"code":4001,"message":"App key 32cbd69e4b950bf97679 not in this cluster. Did you forget to specify the cluster?"}}`)
+	ev, mod, evName, err := ParsePusherFrame(raw)
+	if ev != nil || mod != nil {
+		t.Fatalf("expected nil event/mod for pusher:error, got ev=%v mod=%v", ev, mod)
+	}
+	if evName != "pusher:error" {
+		t.Fatalf("expected evName 'pusher:error', got %q", evName)
+	}
+	pusherErr, ok := errors.AsType[*PusherError](err)
+	if !ok {
+		t.Fatalf("expected *PusherError, got %v", err)
+	}
+	if pusherErr.Code != 4001 || !pusherErr.IsFatal() {
+		t.Errorf("expected fatal code 4001, got code=%d fatal=%v", pusherErr.Code, pusherErr.IsFatal())
+	}
+	if !strings.Contains(pusherErr.Message, "32cbd69e4b950bf97679") {
+		t.Errorf("unexpected error message: %q", pusherErr.Message)
+	}
+}
+
+func TestConnectorPusherErrorBackoffAndStatusDedup(t *testing.T) {
+	var wsAttempts atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v2/channels/retiredkey", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id": 111222, "chatroom": {"id": 27670567}}`))
+	})
+	mux.Handle("/pusher", websocket.Handler(func(ws *websocket.Conn) {
+		wsAttempts.Add(1)
+		errFrame := `{"event":"pusher:error","data":{"code":4001,"message":"App key 32cbd69e4b950bf97679 not in this cluster."}}`
+		_ = websocket.Message.Send(ws, errFrame)
+		_ = ws.Close()
+	}))
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	type statusUpdate struct {
+		status ConnectionStatus
+		detail string
+	}
+	var statusMu sync.Mutex
+	var statuses []statusUpdate
+
+	conn := NewConnector(nil, nil, func(status ConnectionStatus, detail string) {
+		statusMu.Lock()
+		statuses = append(statuses, statusUpdate{status: status, detail: detail})
+		statusMu.Unlock()
+	})
+	conn.apiBaseURL = srv.URL
+	conn.wsURL = "ws" + strings.TrimPrefix(srv.URL, "http") + "/pusher"
+	conn.reconnectDelay = 15 * time.Millisecond
+
+	if err := conn.Start("retiredkey"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Wait long enough for initial attempt + fatal backoff (12 * 15ms = 180ms)
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		if wsAttempts.Load() >= 2 {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	_ = conn.Stop()
+	time.Sleep(20 * time.Millisecond)
+
+	statusMu.Lock()
+	defer statusMu.Unlock()
+
+	for _, s := range statuses {
+		if s.status == StatusConnected || s.status == StatusWaitingForStream {
+			t.Fatalf("expected never to enter %s on Pusher 4001 error, got statuses=%+v", s.status, statuses)
+		}
+	}
+
+	// Verify status transitioned to Disconnected with the 4001 error message and did not spam duplicate Disconnected updates
+	var fatalDisconnectedCount int
+	for _, s := range statuses {
+		if s.status == StatusDisconnected && strings.Contains(s.detail, "4001") {
+			fatalDisconnectedCount++
+		}
+	}
+	if fatalDisconnectedCount != 1 {
+		t.Fatalf("expected exactly 1 deduplicated StatusDisconnected (4001) update across multiple retries, got %d (statuses=%+v)", fatalDisconnectedCount, statuses)
 	}
 }
 

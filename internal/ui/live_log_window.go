@@ -133,6 +133,8 @@ func (v *LogsView) buildLiveLogsTab() fyne.CanvasObject {
 }
 
 func (v *LogsView) refreshLiveLogCards() {
+	uiRenderMu.Lock()
+	defer uiRenderMu.Unlock()
 	if v.liveLogsCardsBox == nil {
 		return
 	}
@@ -262,7 +264,9 @@ func (v *LogsView) OpenLiveLogWindow(preset config.LiveLogPreset) fyne.Window {
 	popView.SetOnAssignVoice(v.onAssignVoice)
 
 	content := popView.buildZeroChrome(preset)
+	uiRenderMu.Lock()
 	win.SetContent(content)
+	uiRenderMu.Unlock()
 
 	lw := &liveLogWindow{
 		preset: preset,
@@ -324,7 +328,9 @@ func (v *LogsView) buildZeroChrome(preset config.LiveLogPreset) fyne.CanvasObjec
 		nil,
 		listScroll,
 	)
+	uiRenderMu.Lock()
 	v.chatPanelThemeOverride = container.NewThemeOverride(mainLayout, NewScaledChatTheme(v.chatScaleFactor()))
+	uiRenderMu.Unlock()
 
 	return container.NewStack(v.chatPanelThemeOverride, v.tooltipLayer)
 }
@@ -378,8 +384,10 @@ func (v *LogsView) applyLivePreset(preset config.LiveLogPreset) {
 	v.mu.Unlock()
 
 	if v.chatPanelThemeOverride != nil {
+		uiRenderMu.Lock()
 		v.chatPanelThemeOverride.Theme = NewScaledChatTheme(v.chatScaleFactor())
 		v.chatPanelThemeOverride.Refresh()
+		uiRenderMu.Unlock()
 	}
 
 	v.initializing = false

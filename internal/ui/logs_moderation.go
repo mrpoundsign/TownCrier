@@ -27,6 +27,8 @@ func (v *LogsView) buildHeldQueueBanner() *fyne.Container {
 	v.heldQueueItemsBox = container.NewVBox()
 
 	v.heldQueueToggleBtn = widget.NewButton("▾ Collapse", func() {
+		uiRenderMu.Lock()
+		defer uiRenderMu.Unlock()
 		v.mu.Lock()
 		v.heldQueueExpanded = !v.heldQueueExpanded
 		expanded := v.heldQueueExpanded
@@ -79,7 +81,20 @@ func (v *LogsView) buildHeldQueueBanner() *fyne.Container {
 }
 
 func (v *LogsView) renderHeldQueue() {
-	if v.heldQueueContainer == nil || v.heldQueueItemsBox == nil || v.heldQueueHeaderLbl == nil {
+	uiRenderMu.Lock()
+	defer func() {
+		v.mu.Lock()
+		v.mu.Unlock() //nolint:staticcheck // establishes happens-before edge after Fyne cache updates
+		uiRenderMu.Unlock()
+	}()
+	v.renderHeldQueueLocked()
+}
+
+func (v *LogsView) renderHeldQueueLocked() {
+	v.mu.Lock()
+	closed := v.closed
+	v.mu.Unlock()
+	if closed || v.heldQueueContainer == nil || v.heldQueueItemsBox == nil || v.heldQueueHeaderLbl == nil {
 		return
 	}
 

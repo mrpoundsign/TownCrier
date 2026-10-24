@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -1094,6 +1095,130 @@ func TestSessionDispatchEventTTSDisabled(t *testing.T) {
 	if entry.Spoken {
 		t.Error("expected Spoken to be false")
 	}
+}
+
+func TestSessionStopAndCloseDeadlockRegression(t *testing.T) {
+	cfg := config.DefaultConfig()
+	sqlStore, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend failed: %v", err)
+	}
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, sqlStore)
+
+	session := NewSession(cfg, nil, config.NewMemoryStore(cfg))
+	session.SetEventLogger(logMgr)
+
+	// Simulate Kick connector reporting live stream state, then verify Stop() and Close()
+	// never self-deadlock on Session.mu when connector callbacks invoke UpdatePlatformStreamState.
+	session.KickConnector().SetCheckLiveFn(func(_ context.Context, _ string) (bool, error) {
+		return true, nil
+	})
+	if err := session.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	session.UpdatePlatformStreamState("kick", "mrpoundsign", true)
+
+	done := make(chan struct{})
+	go func() {
+		// Trigger Kick stream state callback during Stop/Close lifecycle
+		_ = session.Stop()
+		_ = session.Start()
+		_ = session.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Session.Stop/Close deadlocked!")
+	}
+}
+
+func TestSessionConcurrentLifecycleAndDispatch(t *testing.T) {
+	cfg := config.DefaultConfig()
+	sqlStore, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend failed: %v", err)
+	}
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, sqlStore)
+
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	session.SetEventLogger(logMgr)
+	session.Queue().Pause()
+
+	if err := session.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for j := range 10 {
+				evID := fmt.Sprintf("conc-%d-%d", worker, j)
+				_ = session.DispatchEvent(&chat.Event{
+					ID:          evID,
+					Platform:    "twitch",
+					Channel:     "mrpoundsign",
+					UserID:      fmt.Sprintf("u-%d", worker),
+					UserName:    fmt.Sprintf("user_%d", worker),
+					DisplayName: fmt.Sprintf("User%d", worker),
+					Kind:        chat.EventKindMessage,
+					Text:        "concurrent test message",
+				})
+				if j%3 == 0 {
+					session.DispatchModeration(&chat.ModerationEvent{
+						Platform:        "twitch",
+						Action:          chat.ModActionDeleteMessage,
+						TargetMessageID: evID,
+					})
+				}
+				if j%4 == 0 {
+					session.UpdatePlatformStreamState("twitch", "mrpoundsign", j%8 == 0)
+				}
+				if j%5 == 0 {
+					c := session.Config()
+					c.GlobalChatRules.DefaultSpeed = 1.1
+					_ = session.ReloadConfig(c)
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+}
+
+func TestSingleInstanceLock(t *testing.T) {
+	lockName := fmt.Sprintf("TownCrier_TestLock_%d", time.Now().UnixNano())
+
+	release1, err := AcquireInstanceLock(lockName)
+	if err != nil {
+		t.Fatalf("first AcquireInstanceLock failed: %v", err)
+	}
+	defer release1()
+
+	if _, err := AcquireInstanceLock(lockName); !errors.Is(err, ErrInstanceAlreadyRunning) {
+		t.Fatalf("expected ErrInstanceAlreadyRunning on duplicate lock, got %v", err)
+	}
+
+	// Release first lock and verify a subsequent acquisition succeeds
+	release1()
+
+	release2, err := AcquireInstanceLock(lockName)
+	if err != nil {
+		t.Fatalf("AcquireInstanceLock after release failed: %v", err)
+	}
+	release2()
 }
 
 

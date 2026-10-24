@@ -21,6 +21,28 @@ type PusherEnvelope struct {
 	Channel string          `json:"channel,omitempty"`
 }
 
+// PusherError represents a protocol-level error frame ("pusher:error") sent by the Pusher server.
+type PusherError struct {
+	Code    int
+	Message string
+}
+
+func (e *PusherError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Code != 0 {
+		return fmt.Sprintf("pusher error %d: %s", e.Code, e.Message)
+	}
+	return "pusher error: " + e.Message
+}
+
+// IsFatal reports whether the Pusher error code is in the 4000–4099 range,
+// which Pusher defines as permanent application/configuration errors (such as 4001 retired app key).
+func (e *PusherError) IsFatal() bool {
+	return e != nil && e.Code >= 4000 && e.Code < 4100
+}
+
 // ParseKickEmotes replaces Kick's inline [emote:<id>:<name>] tags with <name> and returns
 // rune-accurate EmoteSpans so the Sanitizer can strip or speak emotes cleanly (D34, D35).
 func ParseKickEmotes(raw string) (string, []chat.EmoteSpan) {
@@ -75,6 +97,17 @@ func ParsePusherFrame(raw []byte) (*chat.Event, *chat.ModerationEvent, string, e
 	var env PusherEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, nil, "", fmt.Errorf("unmarshal pusher envelope: %w", err)
+	}
+
+	if env.Event == "pusher:error" {
+		payloadMap, err := decodePermissiveData(env.Data)
+		if err != nil {
+			return nil, nil, env.Event, &PusherError{Message: strings.TrimSpace(string(env.Data))}
+		}
+		return nil, nil, env.Event, &PusherError{
+			Code:    asInt(payloadMap["code"]),
+			Message: asString(payloadMap["message"]),
+		}
 	}
 
 	if strings.HasPrefix(env.Event, "pusher:") || strings.HasPrefix(env.Event, "pusher_internal:") {

@@ -77,7 +77,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		cfg = config.DefaultConfig()
 	}
 	if store == nil {
-		store = secrets.NewKeyringStore("")
+		store = secrets.NewMemoryStore()
 	}
 	if configStore == nil {
 		configStore = config.NewMemoryStore(cfg)
@@ -215,15 +215,24 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 // Start transitions the session to running state and initializes active subsystems.
 func (s *Session) Start() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.running {
+		s.mu.Unlock()
 		return ErrAlreadyStarted
 	}
 
 	s.running = true
-	s.queue.Resume()
-	s.syncConnectorsLocked()
+	q := s.queue
+	cfg := s.cfg.Clone()
+	tw := s.twitchConnector
+	yt := s.youtubeConnector
+	tt := s.tiktokConnector
+	kk := s.kickConnector
+	s.mu.Unlock()
+
+	if q != nil {
+		q.Resume()
+	}
+	syncConnectors(cfg, tw, yt, tt, kk)
 	return nil
 }
 
@@ -236,20 +245,28 @@ func (s *Session) Stop() error {
 	}
 
 	s.running = false
-	s.queue.Pause()
-	if s.twitchConnector != nil {
-		_ = s.twitchConnector.Stop()
-	}
-	if s.youtubeConnector != nil {
-		_ = s.youtubeConnector.Stop()
-	}
-	if s.tiktokConnector != nil {
-		_ = s.tiktokConnector.Stop()
-	}
-	if s.kickConnector != nil {
-		_ = s.kickConnector.Stop()
-	}
+	q := s.queue
+	tw := s.twitchConnector
+	yt := s.youtubeConnector
+	tt := s.tiktokConnector
+	kk := s.kickConnector
 	s.mu.Unlock()
+
+	if q != nil {
+		q.Pause()
+	}
+	if tw != nil {
+		_ = tw.Stop()
+	}
+	if yt != nil {
+		_ = yt.Stop()
+	}
+	if tt != nil {
+		_ = tt.Stop()
+	}
+	if kk != nil {
+		_ = kk.Stop()
+	}
 
 	s.endActiveStreamSession()
 	return nil
@@ -259,22 +276,32 @@ func (s *Session) Stop() error {
 func (s *Session) Close() error {
 	s.mu.Lock()
 	s.running = false
-	if s.twitchConnector != nil {
-		_ = s.twitchConnector.Stop()
-	}
-	if s.youtubeConnector != nil {
-		_ = s.youtubeConnector.Stop()
-	}
-	if s.tiktokConnector != nil {
-		_ = s.tiktokConnector.Stop()
-	}
-	if s.kickConnector != nil {
-		_ = s.kickConnector.Stop()
-	}
-	if s.queue != nil {
-		s.queue.Close()
-	}
+	s.onTwitchStatus = nil
+	s.onYouTubeStatus = nil
+	s.onTikTokStatus = nil
+	s.onKickStatus = nil
+	tw := s.twitchConnector
+	yt := s.youtubeConnector
+	tt := s.tiktokConnector
+	kk := s.kickConnector
+	q := s.queue
 	s.mu.Unlock()
+
+	if tw != nil {
+		_ = tw.Stop()
+	}
+	if yt != nil {
+		_ = yt.Stop()
+	}
+	if tt != nil {
+		_ = tt.Stop()
+	}
+	if kk != nil {
+		_ = kk.Stop()
+	}
+	if q != nil {
+		q.Close()
+	}
 
 	s.endActiveStreamSession()
 
@@ -318,11 +345,18 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 
 	s.mu.Lock()
 	s.cfg = newCfg.Clone()
+	cfgSnap := s.cfg.Clone()
 	elog := s.eventLog
-	if s.running {
-		s.syncConnectorsLocked()
-	}
+	running := s.running
+	tw := s.twitchConnector
+	yt := s.youtubeConnector
+	tt := s.tiktokConnector
+	kk := s.kickConnector
 	s.mu.Unlock()
+
+	if running {
+		syncConnectors(cfgSnap, tw, yt, tt, kk)
+	}
 
 	if elog != nil {
 		elog.SetEnabled(newCfg.Logging.Enabled)
@@ -362,40 +396,43 @@ func (s *Session) UpdateConfig(fn func(c *config.Config)) error {
 	return nil
 }
 
-func (s *Session) syncConnectorsLocked() {
-	if s.twitchConnector != nil {
-		p, ok := s.cfg.Platforms["twitch"]
+func syncConnectors(cfg *config.Config, tw *twitch.Connector, ytConn *youtube.Connector, ttConn *tiktok.Connector, kkConn *kick.Connector) {
+	if cfg == nil {
+		return
+	}
+	if tw != nil {
+		p, ok := cfg.Platforms["twitch"]
 		if ok && p.Enabled && p.AccountName != "" {
-			_ = s.twitchConnector.Start(p.AccountName)
+			_ = tw.Start(p.AccountName)
 		} else {
-			_ = s.twitchConnector.Stop()
+			_ = tw.Stop()
 		}
 	}
 
-	if s.youtubeConnector != nil {
-		yt, ok := s.cfg.Platforms["youtube"]
+	if ytConn != nil {
+		yt, ok := cfg.Platforms["youtube"]
 		if ok && yt.Enabled && yt.AccountName != "" {
-			_ = s.youtubeConnector.Start(yt.AccountName)
+			_ = ytConn.Start(yt.AccountName)
 		} else {
-			_ = s.youtubeConnector.Stop()
+			_ = ytConn.Stop()
 		}
 	}
 
-	if s.tiktokConnector != nil {
-		tt, ok := s.cfg.Platforms["tiktok"]
+	if ttConn != nil {
+		tt, ok := cfg.Platforms["tiktok"]
 		if ok && tt.Enabled && tt.AccountName != "" {
-			_ = s.tiktokConnector.Start(tt.AccountName)
+			_ = ttConn.Start(tt.AccountName)
 		} else {
-			_ = s.tiktokConnector.Stop()
+			_ = ttConn.Stop()
 		}
 	}
 
-	if s.kickConnector != nil {
-		kc, ok := s.cfg.Platforms["kick"]
+	if kkConn != nil {
+		kc, ok := cfg.Platforms["kick"]
 		if ok && kc.Enabled && kc.AccountName != "" {
-			_ = s.kickConnector.Start(kc.AccountName)
+			_ = kkConn.Start(kc.AccountName)
 		} else {
-			_ = s.kickConnector.Stop()
+			_ = kkConn.Stop()
 		}
 	}
 }
@@ -445,48 +482,52 @@ func (s *Session) YouTubeOAuth() *youtube.OAuthManager {
 // SetOnTwitchStatus registers a callback for Twitch connection status changes.
 func (s *Session) SetOnTwitchStatus(fn func(status string, detail string)) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.onTwitchStatus = fn
-	if s.twitchConnector != nil && fn != nil {
-		curStatus := s.twitchConnector.Status()
-		curChannel := s.twitchConnector.Channel()
-		go fn(string(curStatus), curChannel)
+	tw := s.twitchConnector
+	s.mu.Unlock()
+	if tw != nil && fn != nil {
+		curStatus := tw.Status()
+		curChannel := tw.Channel()
+		fn(string(curStatus), curChannel)
 	}
 }
 
 // SetOnYouTubeStatus registers a callback for YouTube connection status changes.
 func (s *Session) SetOnYouTubeStatus(fn func(status string, detail string)) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.onYouTubeStatus = fn
-	if s.youtubeConnector != nil && fn != nil {
-		curStatus := s.youtubeConnector.Status()
-		curTarget := s.youtubeConnector.Target()
-		go fn(string(curStatus), curTarget)
+	yt := s.youtubeConnector
+	s.mu.Unlock()
+	if yt != nil && fn != nil {
+		curStatus := yt.Status()
+		curTarget := yt.Target()
+		fn(string(curStatus), curTarget)
 	}
 }
 
 // SetOnTikTokStatus registers a callback for TikTok connection status changes.
 func (s *Session) SetOnTikTokStatus(fn func(status string, detail string)) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.onTikTokStatus = fn
-	if s.tiktokConnector != nil && fn != nil {
-		curStatus := s.tiktokConnector.Status()
-		curUser := s.tiktokConnector.Username()
-		go fn(string(curStatus), curUser)
+	tt := s.tiktokConnector
+	s.mu.Unlock()
+	if tt != nil && fn != nil {
+		curStatus := tt.Status()
+		curUser := tt.Username()
+		fn(string(curStatus), curUser)
 	}
 }
 
 // SetOnKickStatus registers a callback for Kick connection status changes.
 func (s *Session) SetOnKickStatus(fn func(status string, detail string)) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.onKickStatus = fn
-	if s.kickConnector != nil && fn != nil {
-		curStatus := s.kickConnector.Status()
-		curChan := s.kickConnector.Channel()
-		go fn(string(curStatus), curChan)
+	kk := s.kickConnector
+	s.mu.Unlock()
+	if kk != nil && fn != nil {
+		curStatus := kk.Status()
+		curChan := kk.Channel()
+		fn(string(curStatus), curChan)
 	}
 }
 
@@ -808,8 +849,11 @@ func (s *Session) syncAndEnrichFollowerRole(event *chat.Event) {
 	if slices.ContainsFunc(event.Roles, func(r string) bool { return strings.EqualFold(r, "follower") }) {
 		return
 	}
+	if s.bots != nil && s.bots.ShouldIgnore(event, s.Config()) {
+		return
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	isFol := false

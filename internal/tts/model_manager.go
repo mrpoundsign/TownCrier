@@ -431,13 +431,15 @@ func DownloadKokoroModelForModeWithContext(parentCtx context.Context, destDir st
 	totalAtomic.Store(totalBytes)
 
 	reportProgress := func(delta int64) {
+		if onProgress == nil {
+			downloadedBytes.Add(delta)
+			return
+		}
+		progMu.Lock()
 		cur := downloadedBytes.Add(delta)
 		tot := max(cur, totalAtomic.Load())
-		if onProgress != nil {
-			progMu.Lock()
-			onProgress(cur, tot)
-			progMu.Unlock()
-		}
+		onProgress(cur, tot)
+		progMu.Unlock()
 	}
 
 	for _, task := range tasks {

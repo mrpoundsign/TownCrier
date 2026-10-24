@@ -156,14 +156,10 @@ type SQLiteBackend struct {
 }
 
 // NewSQLiteBackend opens or initializes the SQLite event log database at dbPath.
-// If dbPath is empty, DefaultDBPath() is used. Use ":memory:" for an in-memory database.
+// Pass an explicit file path (e.g. from DefaultDBPath()) or ":memory:" for an in-memory database.
 func NewSQLiteBackend(dbPath string) (*SQLiteBackend, error) {
 	if strings.TrimSpace(dbPath) == "" {
-		p, err := DefaultDBPath()
-		if err != nil {
-			return nil, err
-		}
-		dbPath = p
+		return nil, errors.New("sqlite dbPath is required; pass an explicit path or ':memory:'")
 	}
 
 	cleanFile := cleanDBFilePath(dbPath)

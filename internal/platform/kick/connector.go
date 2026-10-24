@@ -239,6 +239,7 @@ type Connector struct {
 	followerCacheTTL    time.Duration
 	channel             string
 	status              ConnectionStatus
+	statusDetail        string
 	running             bool
 	isLive              bool
 	cancelFn            context.CancelFunc
@@ -462,7 +463,11 @@ func (c *Connector) updateStatus(status ConnectionStatus, detail string) {
 }
 
 func (c *Connector) updateStatusLocked(status ConnectionStatus, detail string) {
+	if c.status == status && c.statusDetail == detail {
+		return
+	}
 	c.status = status
+	c.statusDetail = detail
 	if fn := c.onStatusChange; fn != nil {
 		go fn(status, detail)
 	}
@@ -470,34 +475,68 @@ func (c *Connector) updateStatusLocked(status ConnectionStatus, detail string) {
 
 func (c *Connector) runLoop(ctx context.Context, slug string, directInfo ChannelInfo) {
 	info := directInfo
+	baseDelay := c.reconnectDelay
+	if baseDelay <= 0 {
+		baseDelay = defaultReconnect
+	}
+	maxBackoff := 12 * baseDelay
+	if baseDelay >= time.Second && maxBackoff < 60*time.Second {
+		maxBackoff = 60 * time.Second
+	}
+	backoff := baseDelay
+	hadFatalError := false
 
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 
-		c.updateStatus(StatusConnecting, slug)
+		if !hadFatalError {
+			c.updateStatus(StatusConnecting, slug)
+		}
 
 		if info.ChatroomID <= 0 {
 			resolved, err := ResolveChannelInfo(ctx, c.httpClient, c.apiBaseURL, slug)
 			if err != nil {
 				log.Printf("[Kick] Failed to resolve chatroom_id for %q: %v (tip: you can also enter slug#chatroom_id)", slug, err)
-				if !c.sleepOrCancel(ctx, c.reconnectDelay) {
+				if !c.sleepOrCancel(ctx, backoff) {
 					return
 				}
+				backoff = min(backoff*2, maxBackoff)
 				continue
 			}
 			info = resolved
 		}
 
+		connStart := time.Now()
 		err := c.connectAndStream(ctx, slug, info)
-		if err != nil && ctx.Err() == nil {
+		if ctx.Err() != nil {
+			return
+		}
+
+		if pusherErr, ok := errors.AsType[*PusherError](err); ok && pusherErr.IsFatal() {
+			hadFatalError = true
+			backoff = maxBackoff
+			c.updateStatus(StatusDisconnected, pusherErr.Error())
+			log.Printf("[Kick] Fatal Pusher error for %q: %v (backing off for %v)", slug, pusherErr, backoff)
+			if !c.sleepOrCancel(ctx, backoff) {
+				return
+			}
+			continue
+		}
+
+		hadFatalError = false
+		if err != nil {
 			log.Printf("[Kick] WebSocket session ended for %q: %v", slug, err)
 		}
 
-		if !c.sleepOrCancel(ctx, c.reconnectDelay) {
+		if time.Since(connStart) >= 3*baseDelay {
+			backoff = baseDelay
+		}
+		if !c.sleepOrCancel(ctx, backoff) {
 			return
 		}
+		backoff = min(backoff*2, maxBackoff)
 	}
 }
 
@@ -555,8 +594,9 @@ func (c *Connector) connectAndStream(ctx context.Context, slug string, info Chan
 	}
 
 	// 2. Subscribe to channel.<id> for followers, subscriptions, gifted subs, hosts, and gifts
+	var chTopic string
 	if info.ChannelID > 0 {
-		chTopic := fmt.Sprintf("channel.%d", info.ChannelID)
+		chTopic = fmt.Sprintf("channel.%d", info.ChannelID)
 		chSubPayload := map[string]any{
 			"event": "pusher:subscribe",
 			"data": map[string]string{
@@ -567,17 +607,8 @@ func (c *Connector) connectAndStream(ctx context.Context, slug string, info Chan
 		chSubBytes, _ := json.Marshal(chSubPayload)
 		if err := websocket.Message.Send(conn, string(chSubBytes)); err != nil {
 			log.Printf("[Kick] Warning: failed to subscribe to %s: %v", chTopic, err)
-		} else {
-			log.Printf("[Kick] Subscribed to Pusher channel events %s for %s", chTopic, slug)
+			chTopic = ""
 		}
-	}
-
-	log.Printf("[Kick] Connected to Pusher %s for %s", chatroomTopic, slug)
-	if info.IsLive {
-		c.updateStatus(StatusConnected, slug)
-		c.setStreamLive(true)
-	} else {
-		c.updateStatus(StatusWaitingForStream, slug)
 	}
 
 	c.mu.Lock()
@@ -586,45 +617,69 @@ func (c *Connector) connectAndStream(ctx context.Context, slug string, info Chan
 	hasCheckFn := c.checkLiveFn != nil
 	c.mu.Unlock()
 
-	// Start periodic ping and live status polling goroutines
-	loopDone := make(chan struct{})
-	defer close(loopDone)
-	go func() {
-		ticker := time.NewTicker(pingInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-loopDone:
-				return
-			case <-ticker.C:
-				_ = websocket.Message.Send(conn, `{"event":"pusher:ping","data":{}}`)
-			}
+	var loopDone chan struct{}
+	defer func() {
+		if loopDone != nil {
+			close(loopDone)
 		}
 	}()
 
-	go func() {
-		if !info.IsLive || hasCheckFn {
-			if live, err := c.checkChannelLive(ctx, slug); err == nil {
-				c.setStreamLive(live)
-			}
+	established := false
+	ensureEstablished := func() {
+		if established {
+			return
 		}
-		ticker := time.NewTicker(livePollInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-loopDone:
-				return
-			case <-ticker.C:
+		established = true
+		if chTopic != "" {
+			log.Printf("[Kick] Subscribed to Pusher channel events %s for %s", chTopic, slug)
+		}
+		log.Printf("[Kick] Connected to Pusher %s for %s", chatroomTopic, slug)
+		if info.IsLive {
+			c.updateStatus(StatusConnected, slug)
+			c.setStreamLive(true)
+		} else {
+			c.updateStatus(StatusWaitingForStream, slug)
+		}
+
+		loopDone = make(chan struct{})
+		doneCh := loopDone
+		go func() {
+			ticker := time.NewTicker(pingInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-doneCh:
+					return
+				case <-ticker.C:
+					_ = websocket.Message.Send(conn, `{"event":"pusher:ping","data":{}}`)
+				}
+			}
+		}()
+
+		go func() {
+			if !info.IsLive || hasCheckFn {
 				if live, err := c.checkChannelLive(ctx, slug); err == nil {
 					c.setStreamLive(live)
 				}
 			}
-		}
-	}()
+			ticker := time.NewTicker(livePollInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-doneCh:
+					return
+				case <-ticker.C:
+					if live, err := c.checkChannelLive(ctx, slug); err == nil {
+						c.setStreamLive(live)
+					}
+				}
+			}
+		}()
+	}
 
 	for {
 		if ctx.Err() != nil {
@@ -638,9 +693,14 @@ func (c *Connector) connectAndStream(ctx context.Context, slug string, info Chan
 
 		ev, mod, evName, err := ParsePusherFrame([]byte(rawMsg))
 		if err != nil {
+			if pusherErr, ok := errors.AsType[*PusherError](err); ok {
+				return pusherErr
+			}
 			log.Printf("[Kick] Permissive parse warning: %v", err)
 			continue
 		}
+
+		ensureEstablished()
 
 		if evName == "pusher:ping" {
 			_ = websocket.Message.Send(conn, `{"event":"pusher:pong","data":{}}`)

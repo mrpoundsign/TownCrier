@@ -25,10 +25,17 @@ import (
 )
 
 const (
-	logsPageSize           = 50
-	maxLiveTailRows        = 150
-	searchDebounceDuration = 200 * time.Millisecond
+	logsPageSize               = 50
+	maxLiveTailRows            = 150
+	searchDebounceDuration     = 200 * time.Millisecond
+	liveRenderCoalesceDuration = 15 * time.Millisecond
 )
+
+// uiRenderMu serializes background-goroutine UI render batches across views.
+// In Fyne's headless test driver, fyne.Do(fn) executes directly on the calling
+// goroutine without an event loop, so concurrent timer/status callbacks would
+// otherwise access Fyne's process-wide font/theme caches in parallel.
+var uiRenderMu sync.Mutex
 
 const (
 	datePresetAllTime = "All Time"
@@ -76,6 +83,7 @@ type LogsView struct {
 	session *app.Session
 
 	mu           sync.Mutex
+	closed       bool
 	entries      []eventlog.Entry
 	totalCount   int
 	currentPage  int
@@ -87,6 +95,10 @@ type LogsView struct {
 	unsubLive    func()
 	unsubHeld    func()
 	searchTimer  *time.Timer
+	renderTimer  *time.Timer
+	tabActive    bool
+	renderDirty  bool
+	renderCount  uint64
 	queryCancel  context.CancelFunc
 	querySeq     uint64
 	initializing bool
@@ -164,9 +176,67 @@ func NewLogsView(w fyne.Window, session *app.Session) *LogsView {
 		liveTail:          true,
 		hideBots:          true,
 		showSummary:       true,
+		tabActive:         true,
 		heldQueueExpanded: true,
 		listBox:           container.NewVBox(),
 	}
+}
+
+// SetTabActive notifies LogsView whether its containing tab is currently visible in the main window.
+// While inactive, live-tail UI rebuilds are deferred until the tab becomes active again.
+func (v *LogsView) SetTabActive(active bool) {
+	v.mu.Lock()
+	wasActive := v.tabActive
+	v.tabActive = active
+	dirty := v.renderDirty
+	if active {
+		v.renderDirty = false
+	} else if v.renderTimer != nil {
+		v.renderTimer.Stop()
+		v.renderTimer = nil
+	}
+	v.mu.Unlock()
+
+	if active && !wasActive && dirty {
+		fyne.Do(func() {
+			v.renderEntries()
+		})
+	}
+}
+
+func (v *LogsView) scheduleLiveRender() {
+	v.mu.Lock()
+	if !v.tabActive {
+		v.renderDirty = true
+		v.mu.Unlock()
+		return
+	}
+	if v.renderTimer != nil {
+		v.renderDirty = true
+		v.mu.Unlock()
+		return
+	}
+	v.renderDirty = false
+	v.renderTimer = time.AfterFunc(liveRenderCoalesceDuration, func() {
+		v.mu.Lock()
+		active := v.tabActive
+		v.renderDirty = false
+		v.mu.Unlock()
+		if active {
+			fyne.Do(func() {
+				v.renderEntries()
+			})
+		}
+		v.mu.Lock()
+		dirty := v.renderDirty
+		activeNow := v.tabActive
+		v.renderTimer = nil
+		v.mu.Unlock()
+		if activeNow && dirty {
+			v.scheduleLiveRender()
+		}
+	})
+	v.mu.Unlock()
 }
 
 // SetEmoteCache overrides the EmoteCache used for inline emote rendering (useful in tests).
@@ -216,8 +286,10 @@ func (v *LogsView) ApplyChatScale() {
 	fyne.Do(func() {
 		s := v.chatScaleFactor()
 		if v.chatPanelThemeOverride != nil {
+			uiRenderMu.Lock()
 			v.chatPanelThemeOverride.Theme = NewScaledChatTheme(s)
 			v.chatPanelThemeOverride.Refresh()
+			uiRenderMu.Unlock()
 		}
 		v.renderEntries()
 		v.refreshLiveLogCards()
@@ -345,6 +417,7 @@ func (v *LogsView) showTooltipForObject(obj fyne.CanvasObject, tip string, hover
 // Close unsubscribes any active Live Tail listener, closes any open pop-out windows, and cancels any pending search timer or query.
 func (v *LogsView) Close() {
 	v.mu.Lock()
+	v.closed = true
 	unsub := v.unsubLive
 	v.unsubLive = nil
 	unsubHeld := v.unsubHeld
@@ -352,6 +425,10 @@ func (v *LogsView) Close() {
 	if v.searchTimer != nil {
 		v.searchTimer.Stop()
 		v.searchTimer = nil
+	}
+	if v.renderTimer != nil {
+		v.renderTimer.Stop()
+		v.renderTimer = nil
 	}
 	if v.queryCancel != nil {
 		v.queryCancel()
@@ -375,10 +452,15 @@ func (v *LogsView) Close() {
 	for _, lw := range toClose {
 		lw.Close()
 	}
+	uiRenderMu.Lock()
+	uiRenderMu.Unlock() //nolint:staticcheck // barrier ensuring any in-flight renderEntries completes before Close returns
 }
 
 // Build constructs the Chat Logs UI canvas object with Live Logs and Search History sub-tabs.
 func (v *LogsView) Build() fyne.CanvasObject {
+	v.mu.Lock()
+	v.closed = false
+	v.mu.Unlock()
 	v.initializing = true
 	defer func() { v.initializing = false }()
 
@@ -1544,11 +1626,11 @@ func (v *LogsView) currentFilter() eventlog.QueryFilter {
 
 	userQ := ""
 	if v.userSearchEntry != nil {
-		userQ = strings.TrimSpace(v.userSearchEntry.Text)
+		userQ = strings.TrimSpace(v.userSearchEntry.GetText())
 	}
 	textQ := ""
 	if v.textSearchEntry != nil {
-		textQ = strings.TrimSpace(v.textSearchEntry.Text)
+		textQ = strings.TrimSpace(v.textSearchEntry.GetText())
 	}
 
 	var excludedUsers []string
@@ -1649,6 +1731,10 @@ func (v *LogsView) RefreshQuery() {
 		v.searchTimer.Stop()
 		v.searchTimer = nil
 	}
+	if v.renderTimer != nil {
+		v.renderTimer.Stop()
+		v.renderTimer = nil
+	}
 	if v.queryCancel != nil {
 		v.queryCancel()
 		v.queryCancel = nil
@@ -1686,6 +1772,9 @@ func (v *LogsView) RefreshQuery() {
 
 func (v *LogsView) subscribeLiveTail() {
 	v.Close()
+	v.mu.Lock()
+	v.closed = false
+	v.mu.Unlock()
 	if v.session == nil || v.session.EventLogger() == nil {
 		return
 	}
@@ -1737,9 +1826,7 @@ func (v *LogsView) subscribeLiveTail() {
 			}
 			v.mu.Unlock()
 
-			fyne.Do(func() {
-				v.renderEntries()
-			})
+			v.scheduleLiveRender()
 
 		case eventlog.LiveUpdateOutcome:
 			v.mu.Lock()
@@ -1765,9 +1852,7 @@ func (v *LogsView) subscribeLiveTail() {
 					v.RefreshQuery()
 					return
 				}
-				fyne.Do(func() {
-					v.renderEntries()
-				})
+				v.scheduleLiveRender()
 			} else if filter.OutcomeMode == eventlog.FilterOutcomeSpokenOnly || filter.OutcomeMode == eventlog.FilterOutcomeDroppedQueue {
 				v.RefreshQuery()
 			}
@@ -1906,13 +1991,23 @@ func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
 }
 
 func (v *LogsView) renderEntries() {
+	uiRenderMu.Lock()
+	defer func() {
+		v.mu.Lock()
+		v.mu.Unlock() //nolint:staticcheck // establishes happens-before edge after Fyne cache updates
+		uiRenderMu.Unlock()
+	}()
+
 	if v.listBox == nil {
 		return
 	}
 
-	v.renderHeldQueue()
-
 	v.mu.Lock()
+	if v.closed {
+		v.mu.Unlock()
+		return
+	}
+	v.renderCount++
 	entries := make([]eventlog.Entry, len(v.entries))
 	copy(entries, v.entries)
 	total := v.totalCount
@@ -1920,6 +2015,8 @@ func (v *LogsView) renderEntries() {
 	showSum := v.showSummary
 	summary := v.summary.Clone()
 	v.mu.Unlock()
+
+	v.renderHeldQueueLocked()
 
 	if v.summaryLabel != nil {
 		if total == 0 || len(entries) == 0 {
@@ -1975,10 +2072,6 @@ func (v *LogsView) renderEntries() {
 	if len(entries) == 0 {
 		v.listBox.Add(widget.NewLabelWithStyle("No matching log entries found.", fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
 		v.listBox.Refresh()
-		if v.chatPanelThemeOverride != nil {
-			v.chatPanelThemeOverride.Theme = NewScaledChatTheme(v.chatScaleFactor())
-			v.chatPanelThemeOverride.Refresh()
-		}
 		return
 	}
 
@@ -1993,10 +2086,6 @@ func (v *LogsView) renderEntries() {
 		v.listBox.Add(v.buildLogRow(i, entry))
 	}
 	v.listBox.Refresh()
-	if v.chatPanelThemeOverride != nil {
-		v.chatPanelThemeOverride.Theme = NewScaledChatTheme(v.chatScaleFactor())
-		v.chatPanelThemeOverride.Refresh()
-	}
 }
 
 func (v *LogsView) buildDateSeparatorRow(t time.Time) fyne.CanvasObject {
