@@ -44,27 +44,30 @@ Audio routes directly to any selected playback device—such as a virtual audio 
   <img src="assets/screenshots/tts-hardware-presets.png" alt="TownCrier Voice Packs and Hardware Presets" width="750">
 </p>
 
-### Logs, Stream Sessions & Live Overlay Pop-Outs
-- **Live Logs**: Dedicated sub-tab under **Logs** with savable filter cards and real-time live tail updates.
-- **Streamlined Pop-Out Windows**: Launch distraction-free floating windows stripped of toolbars and filter panels—displaying only the live event feed and summary totals, ideal for a second monitor or OBS window capture.
-- **Broadcast Stream Sessions**: Automatic broadcast session tracking for Twitch and Kick streams with session start/end timestamps, elapsed `HH:MM:SS` time range filtering, and sticky summary metrics (message volume, alert totals, unique chatter counts).
-- **Search History**: Instant SQLite FTS5 trigram full-text search, multi-session selection, date-range filtering, and configurable retention limits.
-- **Inline Emotes & Badges**: Rich inline rendering of Twitch, YouTube, and Kick emotes, TikTok gifts, YouTube stickers, and hoverable role badges.
+### Chat Logging, Stream Sessions & Live Overlay Pop-Outs
+- **Centralized Live Logs**: High-performance unified live tail feed aggregating Twitch, YouTube Live, Kick, and TikTok into a single chronological stream.
+- **Rich Inline Emotes, Stickers & Badges**: Native inline rendering of Twitch emotes, YouTube custom emotes and Super Stickers, Kick emotes, and animated TikTok gifts (with automatic rapid combo grouping). Chatter badges (Broadcaster, Mod, VIP, Subscriber, Founder, Fan Club) appear alongside usernames.
+- **Independent Chat Scaling**: Custom zoom and font scaling for the chat feed with instant one-click presets (**80%**, **100%**, **125%**, **150%**) and a smooth percentage slider to match any monitor DPI or streaming setup.
+- **Streamlined Pop-Out Windows**: Launch distraction-free floating windows stripped of toolbars and filter panels—displaying only the live event feed and sticky session totals. Perfect for placing on a secondary monitor or window-capturing directly in OBS Studio.
+- **Broadcast Stream Sessions**: Automatic session tracking for live broadcasts with session start/end timestamps, elapsed `HH:MM:SS` duration counters, and sticky summary metrics (total message volume, alert counts, and unique chatter counts).
+- **Session-Bound Filtering**: Instantly filter live logs to the current broadcast session or isolate specific elapsed time ranges.
 
 <p align="center">
   <img src="assets/screenshots/live-popout.png" alt="TownCrier Streamlined Live Log Pop-Out Window" width="700">
 </p>
 
-### Voice Routing, Reading Rules & Stream Safety
-- **Voice Assignment Hierarchy**: Priority-based voice resolution: `Viewer Override` → `Event Alert Voice` → `Platform Override Voice` → `Global Default Voice`.
-- **Interactive Template Help**: Centered `(?)` reference modal next to speech templates with click-to-insert variables (`{user}`, `{streak}`, `{recipient}`, `{amount}`, `{cause}`, `{tier}`) and clipboard copy.
-- **Role-Gated TTS**: Restrict speech to Broadcaster, Moderators, VIPs, Subscribers, or Followers (Twitch and Kick on-demand follower status with 30-minute TTL cache) and TikTok Fan Club levels.
-- **Instant Emergency Stop**: Click **EMERGENCY STOP**, press `Esc` inside the app, or trigger the global hotkey (`Ctrl+Shift+M` default on Windows, customizable in **Settings**) to cut audio buffers instantly (<50µs) and flush the speech queue.
-- **Live Moderation Sync**: Message deletions or timeouts/bans on Twitch and Kick immediately purge queued messages and halt playback mid-sentence.
-- **Smart Priority Queue**:
-  - Subscriptions, Bits, Super Chats, Gifts, Follows, and Raids jump ahead of regular chat with zero queue expiration.
-  - Chat messages waiting longer than 30 seconds during fast chat bursts are dropped so TTS stays current with live stream events.
-  - Fast catchup mode automatically accelerates speech (`1.3x`) whenever the queue backs up past 5 messages.
+### Search History & Local SQLite Database
+- **Instant FTS5 Trigram Full-Text Search**: Embedded local SQLite database with full-text search indexing across millions of chat messages and stream events with instant, typo-tolerant search results.
+- **Multi-Session Selection & Date Ranges**: Filter historical chat records by calendar date ranges, multi-session broadcast selections, specific streaming services, event kinds (chat, subscriptions, raids, bits/super chats), or specific usernames.
+- **Automated Retention Management**: Configurable local retention policies with automatic pruning by age (e.g. 30, 60, 90 days) or max database row counts to preserve disk space while retaining essential stream records.
+- **Zero Cloud Storage**: Chat logs, sessions, and search indexes remain strictly on your local PC in `%LOCALAPPDATA%\com.github.mrpoundsign.towncrier\` (Windows) or `~/.local/share/towncrier/` (Linux).
+
+### In-Log Streamer Moderation & Safety Controls
+- **Inline Moderation Actions**: Moderate your stream directly from the chat feed with one-click message deletion and user timeout/ban for Twitch and YouTube Live (via secure OAuth 2.0 PKCE).
+- **Local TTS Mute**: Instantly silence irritating or spammy chatters from text-to-speech with a single click—without having to ban or timeout the viewer on the stream platform.
+- **Twitch Held-for-Review AutoMod Queue**: Review AutoMod held messages in a dedicated real-time queue with one-click approval or denial before messages reach the stream.
+- **Instant Emergency Panic Stop**: Click **EMERGENCY STOP**, press `Esc` inside the app, or trigger the global hotkey (`Ctrl+Shift+M` default on Windows) to immediately zero audio output buffers in under 50µs and flush all pending speech.
+- **Live Moderation Sync**: Message deletions or timeouts/bans on Twitch and Kick immediately purge queued speech items and halt audio playback mid-sentence.
 - **Bot & Profanity Filtering**: Built-in one-click profanity filter toggle ("Block common profanity & slurs"), custom blocked words/phrases, and known stream bot filtering (`Nightbot`, `StreamElements`, `Fossabot`, `Moobot`, `Sery_Bot`, etc.) with per-viewer allow/ignore overrides.
 
 <p align="center">
@@ -89,6 +92,9 @@ Audio routes directly to any selected playback device—such as a virtual audio 
 
 ---
 
-## License
+## License & Legal
 
 TownCrier is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See [`LICENSE`](LICENSE) for the full license text and [`THIRDPARTY_NOTICES.md`](THIRDPARTY_NOTICES.md) for third-party library and model attributions.
+
+- [Privacy Policy](https://mrpoundsign.github.io/TownCrier/privacy.html)
+- [Terms of Service](https://mrpoundsign.github.io/TownCrier/terms.html)
