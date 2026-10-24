@@ -2,7 +2,31 @@
 
 ## Unreleased
 
+### Added
+- **Duplicate Word Limit & Once-Per-Sentence Emote/Emoji Spam Protection (#100)**:
+  - Grouped Unicode emojis under the "Speak Emotes & Emojis" rule (`SpeakEmotes`); disabling it strips both platform emotes and Unicode emojis from TTS.
+  - Enforced strict once-per-sentence deduplication for emotes and emojis to collapse bursts (`"😂😂😂😂"`) and repeating patterns (`"😂🔥😂🔥"`, `"Kappa LUL Kappa LUL"`) to a single occurrence while allowing fresh occurrences in subsequent sentences.
+  - Added consecutive duplicate words capping (default max 2 repeats, e.g. `"what what what what"` &rarr; `"what what"`), preserving sentence punctuation.
+  - Added `DeduplicateEmotes` and `MaxDuplicateWords` controls in Settings > Global Chat Rules with full per-platform override support across Twitch, Kick, YouTube, and TikTok tabs.
+- **Chat Log Moderation Controls across Twitch, YouTube & Kick (Epic #90, #91, #92, #93)**:
+  - **Twitch**: Added Delete Message, Timeout Chatter (1m, 5m, 10m, 1h, 24h), and Permanent Ban actions directly from Chat Log hover icons and context menus. Integrated Twitch AutoMod Held-for-Review queue with Approve/Deny buttons, automatic local TTS speech purging, and auto-disconnection on 401 token invalidation.
+  - **YouTube**: Added YouTube Desktop OAuth 2.0 PKCE with local loopback callback, multi-profile selector with Google avatar and channel name display, and Chat Log moderation (Delete Message, Timeout 5m, Permanent Ban/Hide Chatter).
+  - **Kick**: Added Kick OAuth 2.1 PKCE authorization with PKCE code challenge and token persistence in Windows Credential Manager. Added Kick Public API v1 channel and live stream detection (`/public/v1/channels/{slug}` and `/public/v1/livestreams`), plus Chat Log moderation (Delete Message, Timeout Chatter, Ban User).
+  - **Local TTS Mute**: Added a one-click local TTS mute toggle per chatter to immediately silence and drop future speech without affecting platform moderation.
+- **Twitch Full Helix & EventSub WebSocket Mode (#95)**:
+  - Added authenticated Twitch Helix API integration and EventSub WebSocket connection when OAuth is connected, automatically resolving broadcaster channel name and hiding manual channel input.
+- **YouTube Gifts (Jewels) Support (#94)**:
+  - Added YouTube Gift (Jewels) detection and parsing in the InnerTube chat parser (`liveChatSponsorshipsGiftPurchaseAnnouncementRenderer` / jewels payload), with notification alerts, speech templating, and live log rendering.
+- **Independent Chat Panel Scaling (#89)**:
+  - Added independent chat panel scaling controls (`ChatScale`) with quick presets (`80%`, `100%`, `125%`, `150%`) and custom percentage adjustment for Dashboard and Pop-out Live Log windows.
+
 ### Fixed
+- **Shutdown Deadlock, UI Live-Tail Storm & Single-Instance Guard (#96)**:
+  - Released `Session.mu` before invoking connector and queue `Start`/`Stop`/`Close` methods to eliminate lock-inversion deadlocks during application shutdown and config reloads.
+  - Coalesced live-tail UI rebuilds with a 15ms debounce window and deferred widget rebuilds while the Logs tab is hidden to eliminate UI thread lockups during chat bursts.
+  - Added a 3-second shutdown watchdog in `MainWindow.SetCloseIntercept` to guarantee window close never hangs.
+  - Added an OS-level single-instance process guard (`Local\TownCrier_SingleInstance_Mutex` on Windows, flock on Unix) to prevent accidental duplicate running instances.
+  - Fixed Kick Pusher error 4001 loops with exponential backoff, updated Pusher app key, and added channel ID lookup link.
 - **Strict Configuration Test Isolation & Explicit Locations (#87)**:
   - Replaced implicit empty string (`""`) path fallbacks with an explicit `config.Store` interface and `config.Locations` type (`ProductionLocations()`, `TestLocations()`, `NewMemoryStore()`).
   - Added strict test-time protections preventing tests from ever accessing or overwriting the host user's production configuration in `%APPDATA%` / `~/.config`.
