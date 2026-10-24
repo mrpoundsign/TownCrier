@@ -52,6 +52,7 @@ type Session struct {
 	twitchOAuth       *twitch.OAuthManager
 	onTwitchStatus    func(status string, detail string)
 	youtubeConnector  *youtube.Connector
+	youtubeOAuth      *youtube.OAuthManager
 	onYouTubeStatus   func(status string, detail string)
 	tiktokConnector   *tiktok.Connector
 	onTikTokStatus    func(status string, detail string)
@@ -94,6 +95,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		sanitizer:     sanitizer,
 		bots:          matcher,
 		twitchOAuth:   twitch.NewOAuthManager("", store),
+		youtubeOAuth:  youtube.NewOAuthManager("", "", store),
 		livePlatforms: make(map[string]string),
 	}
 
@@ -145,6 +147,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 			}
 		},
 	)
+	s.youtubeConnector.SetOAuthManager(s.youtubeOAuth)
 
 	s.tiktokConnector = tiktok.NewConnector(
 		func(event *chat.Event) {
@@ -430,6 +433,13 @@ func (s *Session) TwitchOAuth() *twitch.OAuthManager {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.twitchOAuth
+}
+
+// YouTubeOAuth returns the YouTube OAuth manager.
+func (s *Session) YouTubeOAuth() *youtube.OAuthManager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.youtubeOAuth
 }
 
 // SetOnTwitchStatus registers a callback for Twitch connection status changes.

@@ -15,6 +15,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 	"github.com/mrpoundsign/TownCrier/internal/platform/twitch"
+	"github.com/mrpoundsign/TownCrier/internal/platform/youtube"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
 )
 
@@ -1239,6 +1240,31 @@ func TestLogsViewModerationAndHeldQueueFIFO(t *testing.T) {
 	}
 	if !strings.Contains(lastStatus, "Unmuted @noisy_chatter") {
 		t.Errorf("unexpected status after unmute: %q", lastStatus)
+	}
+
+	// 7. Verify modControlIcons hides Delete/Timeout/Ban when platform lacks moderation support or OAuth is disconnected
+	ttEntry := eventlog.Entry{
+		ID:       "tt-msg-1",
+		Platform: "tiktok",
+		UserID:   "tt_123",
+		UserName: "tiktok_viewer",
+		Kind:     "message",
+	}
+	ttIconsBox := lv.modControlIcons(ttEntry).Objects[0].(*fyne.Container)
+	if len(ttIconsBox.Objects) != 1 {
+		t.Errorf("expected only 1 icon (Mute TTS) for TikTok row, got %d", len(ttIconsBox.Objects))
+	}
+	ytUnauthBox := lv.modControlIcons(ytEntry).Objects[0].(*fyne.Container)
+	if len(ytUnauthBox.Objects) != 1 {
+		t.Errorf("expected only 1 icon (Mute TTS) for YouTube row when OAuth is disconnected, got %d", len(ytUnauthBox.Objects))
+	}
+	_ = sess.YouTubeOAuth().SaveToken(&youtube.TokenData{
+		AccessToken:  "yt-tok",
+		RefreshToken: "yt-ref",
+	})
+	ytAuthBox := lv.modControlIcons(ytEntry).Objects[0].(*fyne.Container)
+	if len(ytAuthBox.Objects) != 4 {
+		t.Errorf("expected all 4 icons (Delete, Timeout, Ban, Mute TTS) for YouTube row when OAuth is connected, got %d", len(ytAuthBox.Objects))
 	}
 }
 

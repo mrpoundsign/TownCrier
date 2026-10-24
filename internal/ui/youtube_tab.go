@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"context"
+	"net/url"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -19,6 +22,15 @@ type YouTubeTabView struct {
 	channelEntry       *ScrollPassEntry
 	statusBadge        *widget.Label
 	enableCheck        *widget.Check
+	hintLabel          *widget.Label
+	modHintLabel       *widget.Label
+	profileSelect      *widget.Select
+	profileRow         *fyne.Container
+	oauthStatusLabel   *widget.Label
+	oauthConnectBtn    *widget.Button
+	oauthDisconnectBtn *widget.Button
+	oauthCancel        context.CancelFunc
+	syncingProfile     bool
 	allChatCheck       *widget.Check
 	ignorePrefixCheck  *widget.Check
 	ignorePrefixEntry  *ScrollPassEntry
@@ -111,6 +123,7 @@ func (v *YouTubeTabView) SyncFromConfig() {
 	}
 	v.initializing = false
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
+	v.refreshOAuthState()
 	v.SyncTTSState(v.session.Config().TTS.Enabled)
 }
 
@@ -212,21 +225,243 @@ func (v *YouTubeTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget
 		v.UpdateStatus(status, detail)
 	})
 
-	hintLabel := widget.NewLabelWithStyle(
+	v.hintLabel = widget.NewLabelWithStyle(
 		"✓ Zero-Config Mode: Enter your YouTube channel name, channel URL, or live video URL (no @ required). Public chat, Super Chats, Super Stickers, Gifts (Jewels), and Memberships work automatically with no OAuth or API key needed.",
 		fyne.TextAlignLeading,
 		fyne.TextStyle{Italic: true},
 	)
-	hintLabel.Wrapping = fyne.TextWrapWord
+	v.hintLabel.Wrapping = fyne.TextWrapWord
+
+	v.modHintLabel = widget.NewLabelWithStyle(
+		"🛡️ Optional OAuth: Sign in with Google/YouTube to enable direct broadcast detection (including Unlisted streams) and Chat Log moderation (Delete, Timeout, Ban).",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	v.modHintLabel.Wrapping = fyne.TextWrapWord
+
+	v.oauthStatusLabel = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	v.oauthConnectBtn = widget.NewButton("Connect YouTube OAuth", func() {
+		v.startOAuthFlow()
+	})
+	v.oauthConnectBtn.Importance = widget.HighImportance
+
+	v.oauthDisconnectBtn = widget.NewButton("Disconnect Profile", func() {
+		if v.oauthCancel != nil {
+			v.oauthCancel()
+			v.oauthCancel = nil
+		}
+		if v.session != nil && v.session.YouTubeOAuth() != nil {
+			_ = v.session.YouTubeOAuth().Disconnect()
+			if nextTok, err := v.session.YouTubeOAuth().LoadToken(); err == nil && nextTok != nil && v.channelEntry != nil {
+				target := strings.TrimPrefix(nextTok.ChannelHandle, "@")
+				if target == "" {
+					target = nextTok.ChannelID
+				}
+				if target != "" {
+					v.channelEntry.SetText(target)
+				}
+			}
+		}
+		v.refreshOAuthState()
+		if v.onStatus != nil {
+			v.onStatus("✓ Disconnected YouTube profile.")
+		}
+	})
+
+	v.profileSelect = widget.NewSelect(nil, func(selected string) {
+		if v.syncingProfile || v.initializing || selected == "" {
+			return
+		}
+		if v.session == nil || v.session.YouTubeOAuth() == nil {
+			return
+		}
+		prof, err := v.session.YouTubeOAuth().SelectProfile(selected)
+		if err != nil || prof == nil {
+			return
+		}
+		if v.channelEntry != nil {
+			target := strings.TrimPrefix(prof.ChannelHandle, "@")
+			if target == "" {
+				target = prof.ChannelID
+			}
+			if target != "" {
+				v.channelEntry.SetText(target)
+			}
+		}
+		v.refreshOAuthState()
+		if v.onStatus != nil {
+			v.onStatus("✓ Switched YouTube profile to " + prof.DisplayLabel())
+		}
+	})
+	v.profileRow = container.NewBorder(nil, nil, widget.NewLabel("Connected Profile:"), nil, v.profileSelect)
+
+	v.refreshOAuthState()
+
+	oauthRow := container.NewHBox(v.oauthStatusLabel, v.oauthConnectBtn, v.oauthDisconnectBtn)
 
 	cardContent := container.NewVBox(
 		v.enableCheck,
 		container.NewBorder(nil, nil, widget.NewLabel("Channel Name or Video URL:"), nil, v.channelEntry),
 		v.statusBadge,
-		hintLabel,
+		v.hintLabel,
+		widget.NewSeparator(),
+		oauthRow,
+		v.profileRow,
+		v.modHintLabel,
 	)
 
 	return widget.NewCard("YouTube Live Connection", "Auto-detects live broadcasts and reads chat & paid events", cardContent)
+}
+
+func (v *YouTubeTabView) refreshOAuthState() {
+	hasTok := v.session != nil && v.session.YouTubeOAuth() != nil && v.session.YouTubeOAuth().HasToken()
+	var channelIdent string
+	var activeLabel string
+	var profileLabels []string
+	if hasTok {
+		if tok, err := v.session.YouTubeOAuth().LoadToken(); err == nil && tok != nil {
+			activeLabel = tok.DisplayLabel()
+			switch {
+			case tok.ChannelHandle != "":
+				channelIdent = tok.ChannelHandle
+			case tok.ChannelTitle != "":
+				channelIdent = tok.ChannelTitle
+			default:
+				// Backfill channel identity asynchronously for tokens saved before channel metadata was stored
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+					defer cancel()
+					if _, _, handle, fErr := v.session.YouTubeOAuth().FetchAuthenticatedChannel(ctx); fErr == nil && handle != "" {
+						fyne.Do(v.refreshOAuthState)
+					}
+				}()
+			}
+			if v.channelEntry != nil && strings.TrimSpace(v.channelEntry.Text) == "" && tok.ChannelHandle != "" {
+				v.channelEntry.SetText(strings.TrimPrefix(tok.ChannelHandle, "@"))
+			}
+		}
+		for _, p := range v.session.YouTubeOAuth().ListProfiles() {
+			profileLabels = append(profileLabels, p.DisplayLabel())
+		}
+	}
+
+	if v.profileSelect != nil {
+		v.syncingProfile = true
+		v.profileSelect.Options = profileLabels
+		if activeLabel != "" {
+			v.profileSelect.SetSelected(activeLabel)
+		} else {
+			v.profileSelect.ClearSelected()
+		}
+		v.profileSelect.Refresh()
+		v.syncingProfile = false
+	}
+	if v.profileRow != nil {
+		if hasTok && len(profileLabels) > 0 {
+			v.profileRow.Show()
+		} else {
+			v.profileRow.Hide()
+		}
+	}
+
+	if v.hintLabel != nil {
+		if hasTok {
+			v.hintLabel.Hide()
+		} else {
+			v.hintLabel.Show()
+		}
+	}
+	if v.modHintLabel != nil {
+		if hasTok {
+			v.modHintLabel.SetText("✓ Authenticated Mode: Direct broadcast & Unlisted stream detection, automatic liveChatId resolution, and Chat Log moderation (Delete, Timeout, Ban) are active.")
+		} else {
+			v.modHintLabel.SetText("🛡️ Optional OAuth: Sign in with Google/YouTube to enable direct broadcast detection (including Unlisted streams) and Chat Log moderation (Delete, Timeout, Ban).")
+		}
+	}
+	if v.oauthStatusLabel != nil {
+		if hasTok {
+			if channelIdent != "" {
+				v.oauthStatusLabel.SetText("🟢 YouTube OAuth: Connected (" + channelIdent + ")")
+			} else {
+				v.oauthStatusLabel.SetText("🟢 YouTube OAuth: Connected")
+			}
+		} else {
+			v.oauthStatusLabel.SetText("⚪ YouTube OAuth: Not Connected")
+		}
+	}
+	if v.oauthConnectBtn != nil {
+		if hasTok {
+			v.oauthConnectBtn.SetText("Add / Switch Profile (OAuth)")
+			v.oauthConnectBtn.Importance = widget.MediumImportance
+		} else {
+			v.oauthConnectBtn.SetText("Connect YouTube OAuth")
+			v.oauthConnectBtn.Importance = widget.HighImportance
+		}
+		v.oauthConnectBtn.Enable()
+		v.oauthConnectBtn.Refresh()
+	}
+	if v.oauthDisconnectBtn != nil {
+		if hasTok {
+			v.oauthDisconnectBtn.Show()
+		} else {
+			v.oauthDisconnectBtn.Hide()
+		}
+	}
+}
+
+func (v *YouTubeTabView) startOAuthFlow() {
+	if v.session == nil || v.session.YouTubeOAuth() == nil {
+		return
+	}
+	if v.oauthCancel != nil {
+		v.oauthCancel()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	v.oauthCancel = cancel
+
+	if v.oauthConnectBtn != nil {
+		v.oauthConnectBtn.SetText("Waiting for Google Sign-In...")
+		v.oauthConnectBtn.Disable()
+	}
+	if v.oauthStatusLabel != nil {
+		v.oauthStatusLabel.SetText("🟡 Select your Google account & YouTube profile in browser...")
+	}
+
+	go func() {
+		defer cancel()
+		tok, err := v.session.YouTubeOAuth().AuthenticatePKCE(ctx, func(authURL string) error {
+			u, err := url.Parse(authURL)
+			if err != nil {
+				return err
+			}
+			appInst := fyne.CurrentApp()
+			if appInst != nil {
+				return appInst.OpenURL(u)
+			}
+			return nil
+		})
+		fyne.Do(func() {
+			if err == nil && tok != nil && v.channelEntry != nil {
+				target := strings.TrimPrefix(tok.ChannelHandle, "@")
+				if target == "" {
+					target = tok.ChannelID
+				}
+				if target != "" {
+					v.channelEntry.SetText(target)
+				}
+			}
+			v.refreshOAuthState()
+			if err != nil {
+				if v.onStatus != nil {
+					v.onStatus("⚠️ YouTube OAuth error: " + err.Error())
+				}
+				return
+			}
+			if v.onStatus != nil {
+				v.onStatus("✓ Connected YouTube profile!")
+			}
+		})
+	}()
 }
 
 func (v *YouTubeTabView) buildReadRulesCard(pCfg config.PlatformConfig) *widget.Card {

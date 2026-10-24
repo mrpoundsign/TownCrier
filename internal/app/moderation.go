@@ -208,16 +208,25 @@ func (s *Session) ResolveHeldMessage(ctx context.Context, msgID string, action s
 	return nil
 }
 
-// ModerateDeleteMessage deletes a chat message on Twitch (if OAuth is connected) and immediately purges it from the TTS speech queue.
+// ModerateDeleteMessage deletes a chat message on the source platform (if OAuth is connected) and immediately purges it from the TTS speech queue.
 func (s *Session) ModerateDeleteMessage(ctx context.Context, entry eventlog.Entry) error {
 	msgID := strings.TrimSpace(entry.ID)
 	if msgID == "" {
 		return errors.New("empty message ID")
 	}
 
-	if strings.EqualFold(entry.Platform, "twitch") && s.twitchConnector != nil && s.twitchOAuth != nil && s.twitchOAuth.HasToken() {
-		if err := s.twitchConnector.DeleteChatMessage(ctx, msgID); err != nil {
-			return err
+	switch strings.ToLower(strings.TrimSpace(entry.Platform)) {
+	case "twitch":
+		if s.twitchConnector != nil && s.twitchOAuth != nil && s.twitchOAuth.HasToken() {
+			if err := s.twitchConnector.DeleteChatMessage(ctx, msgID); err != nil {
+				return err
+			}
+		}
+	case "youtube":
+		if s.youtubeConnector != nil && s.youtubeOAuth != nil && s.youtubeOAuth.HasToken() {
+			if err := s.youtubeConnector.DeleteChatMessage(ctx, msgID); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -235,18 +244,27 @@ func (s *Session) ModerateDeleteMessage(ctx context.Context, entry eventlog.Entr
 	return nil
 }
 
-// ModerateTimeoutUser times out a user on Twitch (for durationSec seconds), purges their queued TTS speech, and updates the log outcome.
+// ModerateTimeoutUser times out a user on the source platform (for durationSec seconds), purges their queued TTS speech, and updates the log outcome.
 func (s *Session) ModerateTimeoutUser(ctx context.Context, entry eventlog.Entry, durationSec int, reason string) error {
 	if durationSec <= 0 {
 		durationSec = 600
 	}
-	if strings.EqualFold(entry.Platform, "twitch") && s.twitchConnector != nil && s.twitchOAuth != nil && s.twitchOAuth.HasToken() {
-		if err := s.twitchConnector.BanOrTimeoutUser(ctx, entry.UserID, entry.UserName, durationSec, reason); err != nil {
-			return err
+	switch strings.ToLower(strings.TrimSpace(entry.Platform)) {
+	case "twitch":
+		if s.twitchConnector != nil && s.twitchOAuth != nil && s.twitchOAuth.HasToken() {
+			if err := s.twitchConnector.BanOrTimeoutUser(ctx, entry.UserID, entry.UserName, durationSec, reason); err != nil {
+				return err
+			}
+		}
+	case "youtube":
+		if s.youtubeConnector != nil && s.youtubeOAuth != nil && s.youtubeOAuth.HasToken() {
+			if err := s.youtubeConnector.BanOrTimeoutUser(ctx, entry.UserID, durationSec); err != nil {
+				return err
+			}
 		}
 	}
 
-	s.purgeUserSpeech("twitch", entry.UserID, entry.UserName)
+	s.purgeUserSpeech(entry.Platform, entry.UserID, entry.UserName)
 	if elog := s.EventLogger(); elog != nil && entry.ID != "" {
 		_ = elog.UpdateOutcome(ctx, entry.ID, eventlog.OutcomeUpdate{
 			Spoken:        false,
@@ -258,11 +276,20 @@ func (s *Session) ModerateTimeoutUser(ctx context.Context, entry eventlog.Entry,
 	return nil
 }
 
-// ModerateBanUser permanently bans a user on Twitch, purges their queued TTS speech, and marks them Ignored in TownCrier.
+// ModerateBanUser permanently bans a user on the source platform, purges their queued TTS speech, and marks them Ignored in TownCrier.
 func (s *Session) ModerateBanUser(ctx context.Context, entry eventlog.Entry, reason string) error {
-	if strings.EqualFold(entry.Platform, "twitch") && s.twitchConnector != nil && s.twitchOAuth != nil && s.twitchOAuth.HasToken() {
-		if err := s.twitchConnector.BanOrTimeoutUser(ctx, entry.UserID, entry.UserName, 0, reason); err != nil {
-			return err
+	switch strings.ToLower(strings.TrimSpace(entry.Platform)) {
+	case "twitch":
+		if s.twitchConnector != nil && s.twitchOAuth != nil && s.twitchOAuth.HasToken() {
+			if err := s.twitchConnector.BanOrTimeoutUser(ctx, entry.UserID, entry.UserName, 0, reason); err != nil {
+				return err
+			}
+		}
+	case "youtube":
+		if s.youtubeConnector != nil && s.youtubeOAuth != nil && s.youtubeOAuth.HasToken() {
+			if err := s.youtubeConnector.BanOrTimeoutUser(ctx, entry.UserID, 0); err != nil {
+				return err
+			}
 		}
 	}
 

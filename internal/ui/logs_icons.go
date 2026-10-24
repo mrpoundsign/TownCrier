@@ -778,8 +778,9 @@ func (v *LogsView) ttsStatusIcons(e eventlog.Entry) *fyne.Container {
 	))
 }
 
-// modControlIcons builds the 4 compact 20x20 vector icon buttons for a chat row:
-// [0] Delete Message | [1] Timeout User | [2] Ban User | [3] Mute User in TTS Only
+// modControlIcons builds the compact 20x20 vector icon buttons for a chat row:
+// Delete Message, Timeout User, and Ban User are only rendered when the row's platform
+// supports moderation and has an active OAuth connection; Mute User in TTS Only is always shown for chatters.
 func (v *LogsView) modControlIcons(e eventlog.Entry) *fyne.Container {
 	s := v.chatScaleFactor()
 	iconSz := fyne.NewSize(20*s, 20*s)
@@ -788,42 +789,65 @@ func (v *LogsView) modControlIcons(e eventlog.Entry) *fyne.Container {
 	if uName == "" {
 		uName = e.DisplayName
 	}
-	isTwitch := strings.EqualFold(e.Platform, "twitch") && uName != "" && e.Kind != "moderation"
-
-	var delTap, toTap, banTap, ttsTap func()
-	delTip := "Delete Message (Twitch Chat only)"
-	toTip := "Timeout User (Twitch Chat only)"
-	banTip := "Ban User (Twitch Chat only)"
-	ttsTip := "Mute User in Local TTS Only"
-
-	if isTwitch && e.ID != "" && !strings.HasPrefix(e.ID, "held-") {
-		entryCopy := e
-		delTap = func() { v.confirmDeleteMessage(entryCopy) }
-		delTip = "Delete Message on Twitch & Purge TTS"
+	if uName == "" || e.Kind == "moderation" {
+		return container.NewCenter(container.NewHBox())
 	}
-	if isTwitch && (e.UserID != "" || uName != "") {
-		entryCopy := e
-		toTap = func() { v.confirmTimeoutUser(entryCopy) }
-		banTap = func() { v.confirmBanUser(entryCopy) }
-		toTip = "Timeout @" + uName + " on Twitch (1m / 5m / 10m / 1h / 24h)"
-		banTip = "Permanently Ban @" + uName + " on Twitch & Ignore in TTS"
-	}
-	if uName != "" && e.Kind != "moderation" {
-		entryCopy := e
-		ttsTap = func() { v.toggleMuteUserTTS(entryCopy) }
-		if v.session != nil && v.session.IsUserLocallyMutedTTS(e.Platform, e.UserID, uName) {
-			ttsTip = "Unmute @" + uName + " in Local TTS (Currently Ignored)"
-		} else {
-			ttsTip = "Mute @" + uName + " in Local TTS Only"
+
+	platLower := strings.ToLower(strings.TrimSpace(e.Platform))
+	hasTwitchMod := platLower == "twitch" && v.session != nil && v.session.TwitchOAuth() != nil && v.session.TwitchOAuth().HasToken()
+	hasYouTubeMod := platLower == "youtube" && v.session != nil && v.session.YouTubeOAuth() != nil && v.session.YouTubeOAuth().HasToken()
+
+	var icons []fyne.CanvasObject
+
+	switch {
+	case hasTwitchMod:
+		if e.ID != "" && !strings.HasPrefix(e.ID, "held-") {
+			entryCopy := e
+			icons = append(icons, v.newHoverIcon(resModDelete, iconSz, "Delete Message on Twitch & Purge TTS", func() {
+				v.confirmDeleteMessage(entryCopy)
+			}))
+		}
+		if e.UserID != "" || uName != "" {
+			entryCopy := e
+			icons = append(icons,
+				v.newHoverIcon(resModTimeout, iconSz, "Timeout @"+uName+" on Twitch (1m / 5m / 10m / 1h / 24h)", func() {
+					v.confirmTimeoutUser(entryCopy)
+				}),
+				v.newHoverIcon(resModBan, iconSz, "Permanently Ban @"+uName+" on Twitch & Ignore in TTS", func() {
+					v.confirmBanUser(entryCopy)
+				}),
+			)
+		}
+	case hasYouTubeMod:
+		if e.ID != "" {
+			entryCopy := e
+			icons = append(icons, v.newHoverIcon(resModDelete, iconSz, "Delete Message on YouTube & Purge TTS", func() {
+				v.confirmDeleteMessage(entryCopy)
+			}))
+		}
+		if e.UserID != "" {
+			entryCopy := e
+			icons = append(icons,
+				v.newHoverIcon(resModTimeout, iconSz, "Timeout @"+uName+" on YouTube (1m / 5m / 10m / 1h / 24h)", func() {
+					v.confirmTimeoutUser(entryCopy)
+				}),
+				v.newHoverIcon(resModBan, iconSz, "Permanently Ban @"+uName+" on YouTube & Ignore in TTS", func() {
+					v.confirmBanUser(entryCopy)
+				}),
+			)
 		}
 	}
 
-	delIcon := v.newHoverIcon(resModDelete, iconSz, delTip, delTap)
-	toIcon := v.newHoverIcon(resModTimeout, iconSz, toTip, toTap)
-	banIcon := v.newHoverIcon(resModBan, iconSz, banTip, banTap)
-	ttsIcon := v.newHoverIcon(resModMuteTTS, iconSz, ttsTip, ttsTap)
+	entryCopy := e
+	ttsTip := "Mute @" + uName + " in Local TTS Only"
+	if v.session != nil && v.session.IsUserLocallyMutedTTS(e.Platform, e.UserID, uName) {
+		ttsTip = "Unmute @" + uName + " in Local TTS (Currently Ignored)"
+	}
+	icons = append(icons, v.newHoverIcon(resModMuteTTS, iconSz, ttsTip, func() {
+		v.toggleMuteUserTTS(entryCopy)
+	}))
 
-	return container.NewCenter(container.NewHBox(delIcon, toIcon, banIcon, ttsIcon))
+	return container.NewCenter(container.NewHBox(icons...))
 }
 
 // buildTooltipBubble constructs the floating non-interactive tooltip box and returns its container and text element.

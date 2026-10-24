@@ -90,11 +90,18 @@ func NormalizeTarget(input string) (liveURL string, display string) {
 // ExtractVideoDetails parses the videoDetails JSON object from YouTube HTML if present,
 // returning whether the stream is actively live and whether videoDetails was found.
 func ExtractVideoDetails(html string) (isLive bool, found bool) {
+	_, isLive, found = ExtractVideoIDAndDetails(html)
+	return isLive, found
+}
+
+// ExtractVideoIDAndDetails parses the videoDetails JSON object from YouTube HTML if present,
+// returning the videoId, whether the stream is actively live, and whether videoDetails was found.
+func ExtractVideoIDAndDetails(html string) (videoID string, isLive bool, found bool) {
 	search := html
 	for {
 		idx := strings.Index(search, `"videoDetails"`)
 		if idx == -1 {
-			return false, false
+			return "", false, false
 		}
 
 		rest := search[idx+len(`"videoDetails"`):]
@@ -140,11 +147,12 @@ func ExtractVideoDetails(html string) (isLive bool, found bool) {
 
 		if end != -1 {
 			var details struct {
-				IsLive        bool `json:"isLive"`
-				IsLiveContent bool `json:"isLiveContent"`
+				VideoID       string `json:"videoId"`
+				IsLive        bool   `json:"isLive"`
+				IsLiveContent bool   `json:"isLiveContent"`
 			}
 			if err := json.Unmarshal([]byte(rest[start:end]), &details); err == nil {
-				return details.IsLive, true
+				return strings.TrimSpace(details.VideoID), details.IsLive, true
 			}
 		}
 

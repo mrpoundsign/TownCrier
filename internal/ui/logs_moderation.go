@@ -244,6 +244,19 @@ func (v *LogsView) toggleMuteUserTTS(e eventlog.Entry) {
 	})
 }
 
+func modPlatformDisplayName(platform string) string {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "youtube":
+		return "YouTube"
+	case "kick":
+		return "Kick"
+	case "tiktok":
+		return "TikTok"
+	default:
+		return "Twitch"
+	}
+}
+
 func (v *LogsView) confirmDeleteMessage(e eventlog.Entry) {
 	if v.window == nil || v.session == nil {
 		return
@@ -252,12 +265,13 @@ func (v *LogsView) confirmDeleteMessage(e eventlog.Entry) {
 	if uName == "" {
 		uName = e.UserName
 	}
+	platName := modPlatformDisplayName(e.Platform)
 	preview := strings.TrimSpace(e.RawText)
 	if len(preview) > 140 {
 		preview = preview[:140] + "…"
 	}
 
-	infoLbl := widget.NewLabel(fmt.Sprintf("Delete message from @%s on Twitch and immediately abort/purge it from the TTS speech queue?", uName))
+	infoLbl := widget.NewLabel(fmt.Sprintf("Delete message from @%s on %s and immediately abort/purge it from the TTS speech queue?", uName, platName))
 	infoLbl.Wrapping = fyne.TextWrapWord
 
 	quoteLbl := widget.NewLabelWithStyle(fmt.Sprintf("“%s”", preview), fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
@@ -349,9 +363,10 @@ func (v *LogsView) showTimeoutDialog(e eventlog.Entry, heldEv *twitch.AutoModHol
 	reasonEntry := widget.NewEntry()
 	reasonEntry.SetPlaceHolder("Optional timeout reason...")
 
-	desc := fmt.Sprintf("Timeout @%s on Twitch and purge all queued TTS messages from this user:", uName)
+	platName := modPlatformDisplayName(e.Platform)
+	desc := fmt.Sprintf("Timeout @%s on %s and purge all queued TTS messages from this user:", uName, platName)
 	if heldEv != nil {
-		desc = fmt.Sprintf("Deny held message and timeout @%s on Twitch:", uName)
+		desc = fmt.Sprintf("Deny held message and timeout @%s on %s:", uName, platName)
 	}
 	descLbl := widget.NewLabel(desc)
 	descLbl.Wrapping = fyne.TextWrapWord
@@ -428,9 +443,10 @@ func (v *LogsView) showBanDialog(e eventlog.Entry, heldEv *twitch.AutoModHoldEve
 	reasonEntry := widget.NewEntry()
 	reasonEntry.SetPlaceHolder("Optional ban reason...")
 
-	desc := fmt.Sprintf("Permanently ban @%s from Twitch chat, purge their queued TTS speech, and mark them Ignored in TownCrier?", uName)
+	platName := modPlatformDisplayName(e.Platform)
+	desc := fmt.Sprintf("Permanently ban @%s from %s chat, purge their queued TTS speech, and mark them Ignored in TownCrier?", uName, platName)
 	if heldEv != nil {
-		desc = fmt.Sprintf("Deny held message, permanently ban @%s from Twitch chat, and mark them Ignored in TownCrier?", uName)
+		desc = fmt.Sprintf("Deny held message, permanently ban @%s from %s chat, and mark them Ignored in TownCrier?", uName, platName)
 	}
 	descLbl := widget.NewLabel(desc)
 	descLbl.Wrapping = fyne.TextWrapWord
