@@ -66,6 +66,9 @@ func (c *Connector) DeleteChatMessage(ctx context.Context, messageID string) err
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized {
+			c.handleUnauthorized(ctx)
+		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("youtube delete message HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
@@ -142,6 +145,9 @@ func (c *Connector) BanOrTimeoutUser(ctx context.Context, targetChannelID string
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		if resp.StatusCode == http.StatusUnauthorized {
+			c.handleUnauthorized(ctx)
+		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("youtube ban/timeout HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
@@ -245,6 +251,15 @@ func fetchLiveChatIDByVideo(ctx context.Context, httpClient *http.Client, apiBas
 	return chatID, nil
 }
 
+func (c *Connector) handleUnauthorized(ctx context.Context) {
+	c.mu.Lock()
+	oauth := c.oauth
+	c.mu.Unlock()
+	if oauth != nil {
+		_, _ = oauth.HandleUnauthorized(ctx)
+	}
+}
+
 // discoverAuthenticatedBroadcast checks the authenticated user's active YouTube broadcasts via
 // GET /liveBroadcasts?part=id,snippet&broadcastStatus=active&broadcastType=all (1 quota unit).
 // This enables discovering Unlisted or newly-transitioned broadcasts that /@handle/live does not redirect to.
@@ -253,7 +268,11 @@ func (c *Connector) discoverAuthenticatedBroadcast(ctx context.Context) (videoID
 	if err != nil {
 		return "", "", err
 	}
-	return fetchActiveBroadcastVideoAndChatID(ctx, httpClient, apiBase, token)
+	vid, chatID, err := fetchActiveBroadcastVideoAndChatID(ctx, httpClient, apiBase, token)
+	if err != nil && strings.Contains(err.Error(), "HTTP 401") {
+		c.handleUnauthorized(ctx)
+	}
+	return vid, chatID, err
 }
 
 func fetchActiveBroadcastVideoAndChatID(ctx context.Context, httpClient *http.Client, apiBase, token string) (videoID, liveChatID string, err error) {

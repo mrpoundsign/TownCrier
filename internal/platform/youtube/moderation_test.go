@@ -22,6 +22,21 @@ func TestYouTubeOAuthPKCEAndRefresh(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/channels" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"items": []map[string]any{
+					{
+						"id": "UC_TEST_1",
+						"snippet": map[string]any{
+							"title":     "MrPoundSign",
+							"customUrl": "@mrpoundsign",
+						},
+					},
+				},
+			})
+			return
+		}
 		if r.URL.Path != "/token" {
 			http.NotFound(w, r)
 			return
@@ -65,6 +80,7 @@ func TestYouTubeOAuthPKCEAndRefresh(t *testing.T) {
 	defer srv.Close()
 
 	mgr.SetEndpoints(srv.URL+"/auth", srv.URL+"/token")
+	mgr.SetAPIBaseURL(srv.URL)
 	mgr.SetHTTPClient(srv.Client())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -213,15 +213,19 @@ func TestEventSubEndToEndWebSocket(t *testing.T) {
 	subs := append([]string(nil), createdSubs...)
 	subMu.Unlock()
 
-	if len(subs) != 7 ||
-		subs[0] != "channel.follow:2" ||
-		subs[1] != "channel.channel_points_custom_reward_redemption.add:1" ||
-		subs[2] != "channel.chat.notification:1" ||
-		subs[3] != "automod.message.hold:2" ||
-		subs[4] != "automod.message.update:2" ||
-		subs[5] != "stream.online:1" ||
-		subs[6] != "stream.offline:1" {
-		t.Fatalf("expected 7 subscriptions, got %v", subs)
+	if len(subs) != 11 ||
+		subs[0] != "channel.chat.message:1" ||
+		subs[1] != "channel.chat.message_delete:1" ||
+		subs[2] != "channel.chat.clear_user_messages:1" ||
+		subs[3] != "channel.chat.clear:1" ||
+		subs[4] != "channel.follow:2" ||
+		subs[5] != "channel.channel_points_custom_reward_redemption.add:1" ||
+		subs[6] != "channel.chat.notification:1" ||
+		subs[7] != "automod.message.hold:2" ||
+		subs[8] != "automod.message.update:2" ||
+		subs[9] != "stream.online:1" ||
+		subs[10] != "stream.offline:1" {
+		t.Fatalf("expected 11 subscriptions, got %v", subs)
 	}
 
 	evMu.Lock()
@@ -427,6 +431,48 @@ func TestParseEventSubChatNotifications(t *testing.T) {
 	}
 	if cEv.Kind != chat.EventKindCharityDonation || cEv.Amount != 50 || cEv.Currency != "USD" || cEv.RewardTitle != "Direct Relief" {
 		t.Errorf("unexpected charity_donation event: %+v", cEv)
+	}
+
+	// 3. Chat Message + Emote + Cheer via channel.chat.message
+	chatMsgRaw := json.RawMessage(`{
+		"broadcaster_user_id": "1001",
+		"broadcaster_user_login": "mrpoundsign",
+		"chatter_user_id": "4004",
+		"chatter_user_login": "alice",
+		"chatter_user_name": "Alice",
+		"message_id": "msg-uuid-123",
+		"message_type": "text",
+		"message": {
+			"text": "Hello Kappa cheer100",
+			"fragments": [
+				{"type": "text", "text": "Hello "},
+				{"type": "emote", "text": "Kappa", "emote": {"id": "25"}},
+				{"type": "text", "text": " cheer100"}
+			]
+		},
+		"badges": [{"set_id": "subscriber", "id": "1"}],
+		"cheer": {"bits": 100}
+	}`)
+	mEv, err := ParseEventSubNotification("channel.chat.message", "env-3", chatMsgRaw, "mrpoundsign")
+	if err != nil || mEv == nil {
+		t.Fatalf("ParseEventSubNotification(channel.chat.message) err=%v ev=%v", err, mEv)
+	}
+	if mEv.ID != "msg-uuid-123" || mEv.Kind != chat.EventKindCheer || mEv.Amount != 100 || len(mEv.EmoteSpans) != 1 || mEv.EmoteSpans[0].Name != "Kappa" {
+		t.Errorf("unexpected channel.chat.message event: %+v", mEv)
+	}
+
+	// 4. Moderation events via ParseEventSubModeration
+	delMod, err := ParseEventSubModeration("channel.chat.message_delete", json.RawMessage(`{"broadcaster_user_login":"mrpoundsign","message_id":"msg-uuid-123"}`), "mrpoundsign")
+	if err != nil || delMod == nil || delMod.Action != chat.ModActionDeleteMessage || delMod.TargetMessageID != "msg-uuid-123" {
+		t.Errorf("unexpected message_delete mod event: %+v err=%v", delMod, err)
+	}
+	banMod, err := ParseEventSubModeration("channel.chat.clear_user_messages", json.RawMessage(`{"broadcaster_user_login":"mrpoundsign","target_user_login":"troll"}`), "mrpoundsign")
+	if err != nil || banMod == nil || banMod.Action != chat.ModActionBanUser || banMod.TargetUserID != "troll" {
+		t.Errorf("unexpected clear_user_messages mod event: %+v err=%v", banMod, err)
+	}
+	clearMod, err := ParseEventSubModeration("channel.chat.clear", json.RawMessage(`{"broadcaster_user_login":"mrpoundsign"}`), "mrpoundsign")
+	if err != nil || clearMod == nil || clearMod.Action != chat.ModActionClearChat {
+		t.Errorf("unexpected chat.clear mod event: %+v err=%v", clearMod, err)
 	}
 }
 

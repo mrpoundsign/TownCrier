@@ -20,6 +20,7 @@ type YouTubeTabView struct {
 	session *app.Session
 
 	channelEntry       *ScrollPassEntry
+	channelRow         *fyne.Container
 	statusBadge        *widget.Label
 	enableCheck        *widget.Check
 	hintLabel          *widget.Label
@@ -294,6 +295,13 @@ func (v *YouTubeTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget
 		}
 	})
 	v.profileRow = container.NewBorder(nil, nil, widget.NewLabel("Connected Profile:"), nil, v.profileSelect)
+	v.channelRow = container.NewBorder(nil, nil, widget.NewLabel("Channel Name or Video URL:"), nil, v.channelEntry)
+
+	if v.session != nil && v.session.YouTubeOAuth() != nil {
+		v.session.YouTubeOAuth().SetOnAuthChange(func() {
+			fyne.Do(v.refreshOAuthState)
+		})
+	}
 
 	v.refreshOAuthState()
 
@@ -301,7 +309,7 @@ func (v *YouTubeTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget
 
 	cardContent := container.NewVBox(
 		v.enableCheck,
-		container.NewBorder(nil, nil, widget.NewLabel("Channel Name or Video URL:"), nil, v.channelEntry),
+		v.channelRow,
 		v.statusBadge,
 		v.hintLabel,
 		widget.NewSeparator(),
@@ -364,6 +372,13 @@ func (v *YouTubeTabView) refreshOAuthState() {
 		}
 	}
 
+	if v.channelRow != nil {
+		if hasTok {
+			v.channelRow.Hide()
+		} else {
+			v.channelRow.Show()
+		}
+	}
 	if v.hintLabel != nil {
 		if hasTok {
 			v.hintLabel.Hide()

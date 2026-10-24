@@ -40,8 +40,8 @@ func TestYouTubeTabViewBuild(t *testing.T) {
 	if ytView.oauthDisconnectBtn.Visible() {
 		t.Error("expected oauthDisconnectBtn to be hidden when no YouTube OAuth token is stored")
 	}
-	if !ytView.hintLabel.Visible() {
-		t.Error("expected Zero-Config hintLabel to be visible when no YouTube OAuth token is stored")
+	if !ytView.hintLabel.Visible() || !ytView.channelRow.Visible() {
+		t.Error("expected Zero-Config hintLabel and channelRow to be visible when no YouTube OAuth token is stored")
 	}
 	_ = session.YouTubeOAuth().SaveToken(&youtube.TokenData{
 		AccessToken:   "yt-test-tok",
@@ -54,8 +54,8 @@ func TestYouTubeTabViewBuild(t *testing.T) {
 	if !ytView.oauthDisconnectBtn.Visible() {
 		t.Error("expected oauthDisconnectBtn to be visible when YouTube OAuth token is present")
 	}
-	if ytView.hintLabel.Visible() {
-		t.Error("expected Zero-Config hintLabel to be hidden when YouTube OAuth is connected")
+	if ytView.hintLabel.Visible() || ytView.channelRow.Visible() {
+		t.Error("expected Zero-Config hintLabel and channelRow to be hidden when YouTube OAuth is connected")
 	}
 	if ytView.oauthStatusLabel.Text != "🟢 YouTube OAuth: Connected (@mrpoundsign)" {
 		t.Errorf("oauthStatusLabel.Text = %q, want %q", ytView.oauthStatusLabel.Text, "🟢 YouTube OAuth: Connected (@mrpoundsign)")
@@ -99,7 +99,7 @@ func TestYouTubeTabViewBuild(t *testing.T) {
 	if session.YouTubeOAuth().HasToken() {
 		t.Error("expected YouTube OAuth token to be cleared after disconnecting last profile")
 	}
-	if !ytView.hintLabel.Visible() {
-		t.Error("expected Zero-Config hintLabel to be visible again after disconnecting OAuth")
+	if !ytView.hintLabel.Visible() || !ytView.channelRow.Visible() {
+		t.Error("expected Zero-Config hintLabel and channelRow to be visible again after disconnecting OAuth")
 	}
 }

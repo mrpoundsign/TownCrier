@@ -96,6 +96,23 @@ type OAuthManager struct {
 	apiBaseURL   string
 	httpClient   *http.Client
 	secrets      secrets.Store
+	onAuthChange func()
+}
+
+// SetOnAuthChange registers a callback invoked whenever OAuth state changes (e.g., token revoked or disconnected).
+func (m *OAuthManager) SetOnAuthChange(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onAuthChange = fn
+}
+
+func (m *OAuthManager) notifyAuthChange() {
+	m.mu.Lock()
+	fn := m.onAuthChange
+	m.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // NewOAuthManager creates a new YouTube OAuthManager backed by the given secret store.
@@ -329,13 +346,35 @@ func (m *OAuthManager) Disconnect() error {
 				if raw, err := store.Get(secretPrefixYouTubeProf + nextKey); err == nil && strings.TrimSpace(raw) != "" {
 					var nextTok TokenData
 					if json.Unmarshal([]byte(raw), &nextTok) == nil {
-						return store.Set(secretKeyYouTubeOAuth, raw)
+						err := store.Set(secretKeyYouTubeOAuth, raw)
+						m.notifyAuthChange()
+						return err
 					}
 				}
 			}
 		}
 	}
-	return store.Delete(secretKeyYouTubeOAuth)
+	err := store.Delete(secretKeyYouTubeOAuth)
+	m.notifyAuthChange()
+	return err
+}
+
+// HandleUnauthorized is called when a YouTube Data API v3 call receives HTTP 401 Unauthorized.
+// It attempts a single token refresh if a refresh token is available; if refresh fails or is unavailable,
+// it disconnects the invalid profile token and notifies UI listeners.
+func (m *OAuthManager) HandleUnauthorized(ctx context.Context) (string, error) {
+	tok, err := m.LoadToken()
+	if err != nil || tok == nil {
+		_ = m.Disconnect()
+		return "", errors.New("youtube oauth token unauthorized and disconnected")
+	}
+	if strings.TrimSpace(tok.RefreshToken) != "" {
+		if refreshed, refErr := m.RefreshToken(ctx, tok.RefreshToken); refErr == nil && refreshed != nil && refreshed.AccessToken != "" {
+			return refreshed.AccessToken, nil
+		}
+	}
+	_ = m.Disconnect()
+	return "", errors.New("youtube oauth session expired or revoked; disconnected")
 }
 
 // GetValidAccessToken returns a valid access token, automatically refreshing via the refresh token if expired.
@@ -408,6 +447,9 @@ func (m *OAuthManager) RefreshToken(ctx context.Context, refreshToken string) (*
 		return nil, fmt.Errorf("decode token response (HTTP %d): %w", resp.StatusCode, err)
 	}
 	if resp.StatusCode != http.StatusOK || tr.AccessToken == "" {
+		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized || strings.EqualFold(tr.Error, "invalid_grant") {
+			_ = m.Disconnect()
+		}
 		if tr.ErrorDescription != "" {
 			return nil, fmt.Errorf("youtube token refresh failed: %s (%s)", tr.Error, tr.ErrorDescription)
 		}
@@ -686,6 +728,9 @@ func (m *OAuthManager) FetchAuthenticatedChannel(ctx context.Context) (channelID
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized {
+			_, _ = m.HandleUnauthorized(ctx)
+		}
 		return "", "", "", fmt.Errorf("youtube channels.list HTTP %d", resp.StatusCode)
 	}
 
