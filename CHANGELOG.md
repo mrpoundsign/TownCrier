@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.0.7 — 2026-10-25
+
+### Added
+- **Live Stream Detection & Session Resumption (#102)**:
+  - Added proactive live stream checking on startup across Twitch, Kick, and YouTube with a 5-second launch timeout.
+  - Automatically resumes recent stream log sessions if within a configurable window (default 60 minutes) of the last recorded log entry.
+  - Automatically finalizes dangling / crashed sessions older than 1 hour upon stream offline confirmation.
+
+### Changed & Optimized
+- **Chat Log Row Rendering Widget Caching (#103)**:
+  - Cached parsed row widgets in the Live Log panel to eliminate redundant widget allocations and UI thread lag during chat bursts.
+
+---
+
 ## v0.0.6 — 2026-10-25
 
 ### Added
@@ -8,10 +22,6 @@
   - Added `DYLD_LIBRARY_PATH` runtime library resolution to the standalone single-file launcher (`cmd/launcher/main.go`).
   - Implemented dynamic, sorted checksum generation matching `InkAnim` (`checksums.txt` and `SHA256SUMS.txt`).
   - Added automated GitHub Pages (`docs/`) deployment on merges to `main` (`.github/workflows/pages.yml`).
-- **Live Stream Detection & Session Resumption (#102)**:
-  - Added proactive live stream checking on startup across Twitch, Kick, and YouTube with a 5-second launch timeout.
-  - Automatically resumes recent stream log sessions if within a configurable window (default 60 minutes) of the last recorded log entry.
-  - Automatically finalizes dangling / crashed sessions older than 1 hour upon stream offline confirmation.
 - **Duplicate Word Limit & Once-Per-Sentence Emote/Emoji Spam Protection (#100)**:
   - Grouped Unicode emojis under the "Speak Emotes & Emojis" rule (`SpeakEmotes`); disabling it strips both platform emotes and Unicode emojis from TTS.
   - Enforced strict once-per-sentence deduplication for emotes and emojis to collapse bursts (`"😂😂😂😂"`) and repeating patterns (`"😂🔥😂🔥"`, `"Kappa LUL Kappa LUL"`) to a single occurrence while allowing fresh occurrences in subsequent sentences.
