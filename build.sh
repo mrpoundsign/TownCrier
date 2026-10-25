@@ -18,7 +18,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
 BIN_DIR="$BUILD_DIR/bin"
 DIST_DIR="$ROOT_DIR/dist"
-VERSION="${VERSION:-0.0.5}"
+VERSION="${VERSION:-0.0.6}"
 
 mkdir -p "$BUILD_DIR" "$BIN_DIR" "$DIST_DIR" "$ROOT_DIR/cmd/launcher/payload"
 touch "$ROOT_DIR/cmd/launcher/payload/placeholder.txt"

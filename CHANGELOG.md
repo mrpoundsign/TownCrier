@@ -1,8 +1,17 @@
 # Changelog
 
-## Unreleased
+## v0.0.6 — 2026-10-25
 
 ### Added
+- **Cross-Platform macOS (OSX) Support (#105)**:
+  - Added native macOS build automation (`./build.sh mac` and `./build.sh package-mac`) and GitHub Actions release jobs on `macos-latest` (arm64 Apple Silicon and x86_64 Intel) using `github.com/k2-fsa/sherpa-onnx-go-macos`.
+  - Added `DYLD_LIBRARY_PATH` runtime library resolution to the standalone single-file launcher (`cmd/launcher/main.go`).
+  - Implemented dynamic, sorted checksum generation matching `InkAnim` (`checksums.txt` and `SHA256SUMS.txt`).
+  - Added automated GitHub Pages (`docs/`) deployment on merges to `main` (`.github/workflows/pages.yml`).
+- **Live Stream Detection & Session Resumption (#102)**:
+  - Added proactive live stream checking on startup across Twitch, Kick, and YouTube with a 5-second launch timeout.
+  - Automatically resumes recent stream log sessions if within a configurable window (default 60 minutes) of the last recorded log entry.
+  - Automatically finalizes dangling / crashed sessions older than 1 hour upon stream offline confirmation.
 - **Duplicate Word Limit & Once-Per-Sentence Emote/Emoji Spam Protection (#100)**:
   - Grouped Unicode emojis under the "Speak Emotes & Emojis" rule (`SpeakEmotes`); disabling it strips both platform emotes and Unicode emojis from TTS.
   - Enforced strict once-per-sentence deduplication for emotes and emojis to collapse bursts (`"😂😂😂😂"`) and repeating patterns (`"😂🔥😂🔥"`, `"Kappa LUL Kappa LUL"`) to a single occurrence while allowing fresh occurrences in subsequent sentences.
@@ -21,6 +30,8 @@
   - Added independent chat panel scaling controls (`ChatScale`) with quick presets (`80%`, `100%`, `125%`, `150%`) and custom percentage adjustment for Dashboard and Pop-out Live Log windows.
 
 ### Fixed
+- **Thread Safety in Emote Widgets (#105)**:
+  - Added read-write mutex synchronization to `emoteInlineWidget` to eliminate data races between asynchronous emote downloads and concurrent Fyne widget layout passes.
 - **Shutdown Deadlock, UI Live-Tail Storm & Single-Instance Guard (#96)**:
   - Released `Session.mu` before invoking connector and queue `Start`/`Stop`/`Close` methods to eliminate lock-inversion deadlocks during application shutdown and config reloads.
   - Coalesced live-tail UI rebuilds with a 15ms debounce window and deferred widget rebuilds while the Logs tab is hidden to eliminate UI thread lockups during chat bursts.
