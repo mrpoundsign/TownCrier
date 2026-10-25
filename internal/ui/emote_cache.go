@@ -235,6 +235,7 @@ func (c *EmoteCache) downloadAndNormalizePNG(rawURL string) ([]byte, error) {
 // with a mouse-over tooltip displaying the emote code.
 type emoteInlineWidget struct {
 	widget.BaseWidget
+	mu sync.RWMutex
 
 	name     string
 	imageURL string
@@ -260,12 +261,25 @@ func newScaledEmoteInlineWidget(cache *EmoteCache, name, imageURL string, scale 
 	}
 	w.ExtendBaseWidget(w)
 	if imageURL != "" {
-		w.res = cache.GetOrFetch(imageURL, func(loaded fyne.Resource) {
-			w.res = loaded
+		initialRes := cache.GetOrFetch(imageURL, func(loaded fyne.Resource) {
+			w.setResource(loaded)
 			w.Refresh()
 		})
+		w.setResource(initialRes)
 	}
 	return w
+}
+
+func (w *emoteInlineWidget) getResource() fyne.Resource {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.res
+}
+
+func (w *emoteInlineWidget) setResource(res fyne.Resource) {
+	w.mu.Lock()
+	w.res = res
+	w.mu.Unlock()
 }
 
 func (w *emoteInlineWidget) effectiveScale() float32 {
@@ -314,7 +328,7 @@ func (w *emoteInlineWidget) fallbackLabelText() string {
 func (w *emoteInlineWidget) CreateRenderer() fyne.WidgetRenderer {
 	s := w.effectiveScale()
 	sz := emoteInlineSize * s
-	img := canvas.NewImageFromResource(w.res)
+	img := canvas.NewImageFromResource(w.getResource())
 	img.FillMode = canvas.ImageFillContain
 	img.ScaleMode = canvas.ImageScaleSmooth
 	img.SetMinSize(fyne.NewSize(sz, sz))
@@ -340,7 +354,7 @@ type emoteInlineRenderer struct {
 
 func (r *emoteInlineRenderer) Layout(size fyne.Size) {
 	sz := emoteInlineSize * r.w.effectiveScale()
-	if r.w.res != nil {
+	if r.w.getResource() != nil {
 		r.img.Resize(fyne.NewSize(sz, sz))
 		r.img.Move(fyne.NewPos(
 			(size.Width-sz)/2,
@@ -355,7 +369,7 @@ func (r *emoteInlineRenderer) Layout(size fyne.Size) {
 
 func (r *emoteInlineRenderer) MinSize() fyne.Size {
 	sz := emoteInlineSize * r.w.effectiveScale()
-	if r.w.res != nil {
+	if r.w.getResource() != nil {
 		return fyne.NewSize(sz, sz)
 	}
 	fbMin := r.fallback.MinSize()
@@ -363,8 +377,8 @@ func (r *emoteInlineRenderer) MinSize() fyne.Size {
 }
 
 func (r *emoteInlineRenderer) Refresh() {
-	if r.w.res != nil {
-		r.img.Resource = r.w.res
+	if res := r.w.getResource(); res != nil {
+		r.img.Resource = res
 		r.img.Show()
 		r.fallback.Hide()
 		r.img.Refresh()

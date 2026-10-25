@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths:
       - '**.go'
       - 'go.mod'
@@ -14,6 +15,7 @@ on:
   pull_request:
     branches:
       - main
+      - dev
     paths:
       - '**.go'
       - 'go.mod'
@@ -57,11 +59,10 @@ jobs:
             ${{ runner.os }}-go-1.27-
           save-always: true
 
-      - name: Install Build & Cross-Compilation Dependencies
+      - name: Install Test Dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
             libgl1-mesa-dev xorg-dev libxcursor-dev libxrandr-dev \
             libxinerama-dev libxi-dev libxxf86vm-dev libasound2-dev \
             libwayland-dev libxkbcommon-dev
@@ -69,7 +70,6 @@ jobs:
       - name: Download Go Modules
         run: |
           go mod download
-          go mod download github.com/k2-fsa/sherpa-onnx-go-windows
           go mod download github.com/k2-fsa/sherpa-onnx-go-linux
 
       - name: Install golangci-lint-v2 (Cached)
@@ -84,8 +84,3 @@ jobs:
           chmod +x ./build.sh
           ./build.sh lint
           ./build.sh test
-
-      - name: Build Windows & Linux Binaries
-        run: |
-          ./build.sh win
-          ./build.sh linux
