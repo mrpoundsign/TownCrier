@@ -15,9 +15,33 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build & Publish Windows Release
+  meta:
+    name: Determine Release Metadata
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - name: Compute Version & Tag
+        id: meta
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            RAW_VER="${GITHUB_REF#refs/tags/v}"
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          else
+            RAW_VER="${{ github.event.inputs.version || '0.0.5' }}"
+            RAW_VER="${RAW_VER#v}"
+            TAG_NAME="v${RAW_VER}"
+          fi
+          echo "version=${RAW_VER}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+
+  build-linux-windows:
+    name: Build & Package Desktop GUI (Windows & Linux)
+    needs: meta
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -41,7 +65,7 @@ jobs:
             ${{ runner.os }}-go-1.27-
           save-always: true
 
-      - name: Install Cross-Compilation & Test Dependencies
+      - name: Install Cross-Compilation & Packaging Dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
@@ -63,42 +87,83 @@ jobs:
             mv -f "$HOME/go/bin/golangci-lint" "$HOME/go/bin/golangci-lint-v2"
           fi
 
-      - name: Determine Release Version
-        id: meta
+      - name: Run Quality Gate (go fix --diff, golangci-lint-v2, go test)
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            RAW_VER="${GITHUB_REF#refs/tags/v}"
-            TAG_NAME="${GITHUB_REF#refs/tags/}"
-          else
-            RAW_VER="${{ github.event.inputs.version || '0.0.5' }}"
-            RAW_VER="${RAW_VER#v}"
-            TAG_NAME="v${RAW_VER}"
-          fi
-          echo "version=${RAW_VER}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          chmod +x ./build.sh
+          ./build.sh lint
+          ./build.sh test
 
-      - name: Build & Package Windows and Linux Releases
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
+      - name: Build & Package Windows and Linux Distributions
         run: |
           chmod +x ./build.sh
           ./build.sh all
 
-      - name: Generate SHA256 Checksum
+      - name: Upload Windows & Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-windows
+          path: dist/
+
+  build-macos:
+    name: Build & Package Desktop GUI (macOS)
+    needs: meta
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+
+      - name: Download Go Modules
+        run: |
+          go mod download
+          go mod download github.com/k2-fsa/sherpa-onnx-go-macos
+
+      - name: Build & Package macOS Distribution
+        run: |
+          chmod +x ./build.sh
+          ./build.sh mac
+          ./build.sh package-mac
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos
+          path: dist/
+
+  release:
+    name: Consolidate Artifacts & Publish Release
+    needs: [meta, build-linux-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      - name: Update and Consolidate Checksums
         run: |
           cd dist
-          sha256sum \
-            TownCrier-v${{ steps.meta.outputs.version }}-windows-amd64.zip \
-            TownCrier-v${{ steps.meta.outputs.version }}-linux-amd64.tar.gz > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          rm -f checksums.txt SHA256SUMS.txt
+          sha256sum * >> checksums.txt
+          sort -k2 -o checksums.txt checksums.txt
+          cp -f checksums.txt SHA256SUMS.txt
+          echo "=== Final Consolidated Checksums ==="
+          cat checksums.txt
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: TownCrier ${{ steps.meta.outputs.tag }}
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: TownCrier ${{ needs.meta.outputs.tag }}
           generate_release_notes: true
           files: |
-            dist/TownCrier-v${{ steps.meta.outputs.version }}-windows-amd64.zip
-            dist/TownCrier-v${{ steps.meta.outputs.version }}-linux-amd64.tar.gz
-            dist/SHA256SUMS.txt
+            dist/*

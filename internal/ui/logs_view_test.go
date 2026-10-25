@@ -1021,7 +1021,10 @@ func TestLogsViewChatPanelScaling(t *testing.T) {
 		Outcome:       eventlog.OutcomeSpoken,
 	})
 
+	cache := NewEmoteCache(t.TempDir(), nil)
+	cache.Put("https://static-cdn.jtvnw.net/emoticons/v2/25/static/dark/1.0", resPlatformTwitch)
 	lv := NewLogsView(w, sess)
+	lv.SetEmoteCache(cache)
 	defer lv.Close()
 	w.SetContent(lv.Build())
 	w.Resize(fyne.NewSize(960, 640))
@@ -1297,7 +1300,10 @@ func TestLogsViewCoalescedLiveRenderAndTabDeferral(t *testing.T) {
 	}, backend)
 	sess.SetEventLogger(mgr)
 
+	cache := NewEmoteCache(t.TempDir(), nil)
+	cache.Put("https://static-cdn.jtvnw.net/emoticons/v2/25/static/dark/1.0", resPlatformTwitch)
 	lv := NewLogsView(w, sess)
+	lv.SetEmoteCache(cache)
 	defer lv.Close()
 	w.SetContent(lv.Build())
 

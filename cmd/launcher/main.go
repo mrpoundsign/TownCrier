@@ -70,7 +70,7 @@ func run() (int, error) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	// Prepend runtime directory to PATH / LD_LIBRARY_PATH so shared libraries are always resolved
+	// Prepend runtime directory to PATH / LD_LIBRARY_PATH / DYLD_LIBRARY_PATH so shared libraries are always resolved
 	if runtime.GOOS == "windows" {
 		cmd.Env = append(os.Environ(), "PATH="+runtimeDir+";"+os.Getenv("PATH"))
 	} else {
@@ -78,9 +78,14 @@ func run() (int, error) {
 		if existing := os.Getenv("LD_LIBRARY_PATH"); existing != "" {
 			ldPath = runtimeDir + ":" + existing
 		}
+		dyldPath := runtimeDir
+		if existing := os.Getenv("DYLD_LIBRARY_PATH"); existing != "" {
+			dyldPath = runtimeDir + ":" + existing
+		}
 		cmd.Env = append(os.Environ(),
 			"PATH="+runtimeDir+":"+os.Getenv("PATH"),
 			"LD_LIBRARY_PATH="+ldPath,
+			"DYLD_LIBRARY_PATH="+dyldPath,
 		)
 	}
 

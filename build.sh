@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# TownCrier Build Script (Windows & Linux)
+# TownCrier Build Script (Windows, Linux & macOS)
 # Usage:
 #   ./build.sh          # Run lint, test, build Windows & Linux binaries, and package into dist/
 #   ./build.sh win      # Build Windows GUI executable into build/bin/TownCrier.exe
 #   ./build.sh linux    # Build Linux GUI executable into build/bin/towncrier
+#   ./build.sh mac      # Build macOS GUI executable into build/bin/towncrier
 #   ./build.sh lint     # Run go fix --diff and golangci-lint-v2
 #   ./build.sh test     # Run unit tests
 #   ./build.sh package  # Package zip/tar.gz distributions into dist/
+#   ./build.sh package-mac # Package macOS distribution into dist/
 #   ./build.sh clean    # Clean build and dist outputs
 
 TARGET="${1:-all}"
@@ -64,6 +66,30 @@ fetch_linux_libs() {
         fi
     else
         echo "✓ Linux runtime shared libraries present."
+    fi
+}
+
+fetch_mac_libs() {
+    echo "==> Verifying macOS runtime shared libraries in $BIN_DIR..."
+    if [ ! -f "$BIN_DIR/libonnxruntime.dylib" ] || [ ! -f "$BIN_DIR/libsherpa-onnx-c-api.dylib" ]; then
+        echo "--> Fetching sherpa-onnx macOS shared libraries from Go module cache..."
+        go mod download github.com/k2-fsa/sherpa-onnx-go-macos 2>/dev/null || true
+        local mac_mod_dir
+        mac_mod_dir=$(go list -m -f '{{.Dir}}' github.com/k2-fsa/sherpa-onnx-go-macos 2>/dev/null || true)
+        local arch
+        arch="$(uname -m)"
+        local mac_subdir="aarch64-apple-darwin"
+        if [ "$arch" = "x86_64" ]; then
+            mac_subdir="x86_64-apple-darwin"
+        fi
+        if [ -n "$mac_mod_dir" ] && [ -d "$mac_mod_dir/lib/$mac_subdir" ]; then
+            cp -f "$mac_mod_dir/lib/$mac_subdir/"*.dylib "$BIN_DIR/"
+            echo "✓ Copied macOS ($mac_subdir) shared libraries from $mac_mod_dir to $BIN_DIR"
+        else
+            echo "Warning: Could not locate sherpa-onnx-go-macos module cache for $mac_subdir."
+        fi
+    else
+        echo "✓ macOS runtime shared libraries present."
     fi
 }
 
@@ -129,8 +155,8 @@ build_win() {
     echo "==> Staging Windows payload for single-file launcher..."
     local payload_dir="$ROOT_DIR/cmd/launcher/payload"
     mkdir -p "$payload_dir"
-    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so
-    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso"' RETURN
+    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
+    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/launcher/payload/"*.dylib "$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso"' RETURN
     cp -f "$BIN_DIR/towncrier-core.exe" "$payload_dir/"
     cp -f "$BIN_DIR/onnxruntime.dll" "$payload_dir/"
     cp -f "$BIN_DIR/sherpa-onnx-c-api.dll" "$payload_dir/"
@@ -142,7 +168,7 @@ build_win() {
         -o "$BIN_DIR/TownCrier.exe" ./cmd/launcher
 
     # Clean staged payload and temporary .syso from source tree
-    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so "$core_syso" "$launcher_syso"
+    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib "$core_syso" "$launcher_syso"
     trap - RETURN
 
     echo "✓ Successfully built standalone single-file $BIN_DIR/TownCrier.exe"
@@ -160,8 +186,8 @@ build_linux() {
     echo "==> Staging Linux payload for single-file launcher..."
     local payload_dir="$ROOT_DIR/cmd/launcher/payload"
     mkdir -p "$payload_dir"
-    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so
-    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so' RETURN
+    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
+    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/launcher/payload/"*.dylib' RETURN
     cp -f "$BIN_DIR/towncrier-core" "$payload_dir/"
     cp -f "$BIN_DIR/libonnxruntime.so" "$payload_dir/"
     cp -f "$BIN_DIR/libsherpa-onnx-c-api.so" "$payload_dir/"
@@ -173,10 +199,77 @@ build_linux() {
         -o "$BIN_DIR/towncrier" ./cmd/launcher
     chmod +x "$BIN_DIR/towncrier"
 
-    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so
+    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
     trap - RETURN
 
     echo "✓ Successfully built standalone single-file $BIN_DIR/towncrier"
+}
+
+build_mac() {
+    fetch_mac_libs
+
+    local arch
+    arch="$(uname -m)"
+    local goarch="arm64"
+    if [ "$arch" = "x86_64" ]; then
+        goarch="amd64"
+    fi
+
+    echo "==> Building towncrier-core v${VERSION} (macOS ${goarch} CGO)..."
+    CGO_ENABLED=1 GOOS=darwin GOARCH=${goarch} \
+        go build -trimpath -ldflags="-s -w -X github.com/mrpoundsign/TownCrier/internal/ui.AppVersion=v${VERSION} -extldflags '-Wl,-rpath,@executable_path'" \
+        -o "$BIN_DIR/towncrier-core" ./cmd/towncrier
+    echo "✓ Built $BIN_DIR/towncrier-core"
+
+    echo "==> Staging macOS payload for single-file launcher..."
+    local payload_dir="$ROOT_DIR/cmd/launcher/payload"
+    mkdir -p "$payload_dir"
+    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
+    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/launcher/payload/"*.dylib' RETURN
+    cp -f "$BIN_DIR/towncrier-core" "$payload_dir/"
+    cp -f "$BIN_DIR/libonnxruntime.dylib" "$payload_dir/"
+    cp -f "$BIN_DIR/libsherpa-onnx-c-api.dylib" "$payload_dir/"
+    cp -f "$BIN_DIR/libsherpa-onnx-cxx-api.dylib" "$payload_dir/"
+
+    echo "==> Building standalone towncrier v${VERSION} (macOS ${goarch})..."
+    CGO_ENABLED=0 GOOS=darwin GOARCH=${goarch} \
+        go build -trimpath -ldflags="-s -w -X main.AppVersion=${VERSION}" \
+        -o "$BIN_DIR/towncrier" ./cmd/launcher
+    chmod +x "$BIN_DIR/towncrier"
+
+    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
+    trap - RETURN
+
+    echo "✓ Successfully built standalone single-file $BIN_DIR/towncrier"
+}
+
+package_mac() {
+    if [ ! -f "$BIN_DIR/towncrier" ]; then
+        build_mac
+    fi
+
+    local arch
+    arch="$(uname -m)"
+    local pkg_arch="arm64"
+    if [ "$arch" = "x86_64" ]; then
+        pkg_arch="amd64"
+    fi
+
+    local tar_file="$DIST_DIR/TownCrier-v${VERSION}-darwin-${pkg_arch}.tar.gz"
+    echo "==> Packaging macOS (${pkg_arch}) distribution into $tar_file..."
+    rm -f "$tar_file"
+
+    local staging="$BUILD_DIR/package_staging_mac"
+    rm -rf "$staging"
+    mkdir -p "$staging"
+    cp "$BIN_DIR/towncrier" "$staging/"
+    chmod +x "$staging/towncrier"
+    [ -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" ] && cp "$ROOT_DIR/THIRDPARTY_NOTICES.md" "$staging/"
+    [ -f "$ROOT_DIR/LICENSE" ] && cp "$ROOT_DIR/LICENSE" "$staging/"
+    [ -f "$ROOT_DIR/FyneApp.toml" ] && cp "$ROOT_DIR/FyneApp.toml" "$staging/"
+    (cd "$staging" && tar -czf "$tar_file" .)
+    rm -rf "$staging"
+    echo "✓ Successfully packaged $tar_file"
 }
 
 package_dist() {
@@ -249,6 +342,9 @@ case "$TARGET" in
     linux)
         build_linux
         ;;
+    mac|osx)
+        build_mac
+        ;;
     lint)
         run_lint
         ;;
@@ -258,6 +354,9 @@ case "$TARGET" in
     package)
         package_dist
         ;;
+    package-mac)
+        package_mac
+        ;;
     fetch-dlls)
         fetch_dlls
         ;;
@@ -266,7 +365,7 @@ case "$TARGET" in
         ;;
     *)
         echo "Unknown target: $TARGET"
-        echo "Valid targets: all, win, linux, lint, test, package, fetch-dlls, clean"
+        echo "Valid targets: all, win, linux, mac, lint, test, package, package-mac, fetch-dlls, clean"
         exit 1
         ;;
 esac
