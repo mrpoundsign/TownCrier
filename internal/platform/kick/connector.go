@@ -352,6 +352,32 @@ func (c *Connector) IsLive() bool {
 	return c.isLive
 }
 
+// CheckLiveChannel checks whether the specified Kick channel (or configured channel if empty) is live.
+func (c *Connector) CheckLiveChannel(ctx context.Context, slug string) (bool, error) {
+	if slug == "" {
+		slug = c.Channel()
+	}
+	if slug == "" {
+		return false, nil
+	}
+	if c.IsLive() && (c.Channel() == "" || strings.EqualFold(c.Channel(), slug)) {
+		return true, nil
+	}
+	live, err := c.checkChannelLive(ctx, slug)
+	if err != nil {
+		return false, err
+	}
+	if live && (c.Channel() == "" || strings.EqualFold(c.Channel(), slug)) {
+		c.setStreamLive(true)
+	}
+	return live, nil
+}
+
+// CheckLive performs an immediate live status check for the configured Kick channel and updates stream state.
+func (c *Connector) CheckLive(ctx context.Context) (bool, error) {
+	return c.CheckLiveChannel(ctx, "")
+}
+
 func (c *Connector) setStreamLive(live bool) {
 	c.mu.Lock()
 	if (!c.running && live) || c.isLive == live {
@@ -471,7 +497,7 @@ func (c *Connector) stopLoopLocked() {
 func (c *Connector) updateStatus(status ConnectionStatus, detail string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.running && status != StatusDisconnected {
+	if !c.running {
 		return
 	}
 	c.updateStatusLocked(status, detail)

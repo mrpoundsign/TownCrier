@@ -163,9 +163,19 @@ type LogsView struct {
 	tooltipText   *canvas.Text
 	emoteCache    *EmoteCache
 
+	rowCache map[string]*cachedLogRow
+
 	onStatus           func(msg string)
 	onAssignVoice      func(platform, username string)
 	onChatScaleChanged func(pct int)
+}
+
+type cachedLogRow struct {
+	entry         eventlog.Entry
+	root          fyne.CanvasObject
+	rowBg         *canvas.Rectangle
+	rowCols       *fyne.Container
+	ttsStatusCell *fyne.Container
 }
 
 // NewLogsView constructs a new LogsView bound to the active Session.
@@ -178,6 +188,7 @@ func NewLogsView(w fyne.Window, session *app.Session) *LogsView {
 		showSummary:       true,
 		tabActive:         true,
 		heldQueueExpanded: true,
+		rowCache:          make(map[string]*cachedLogRow),
 		listBox:           container.NewVBox(),
 	}
 }
@@ -278,6 +289,9 @@ func (v *LogsView) ApplyChatScale() {
 			v.chatPanelThemeOverride.Refresh()
 			uiRenderMu.Unlock()
 		}
+		v.mu.Lock()
+		clear(v.rowCache)
+		v.mu.Unlock()
 		v.renderEntries()
 		v.refreshLiveLogCards()
 
@@ -1817,6 +1831,7 @@ func (v *LogsView) subscribeLiveTail() {
 
 		case eventlog.LiveUpdateOutcome:
 			v.mu.Lock()
+			tabActive := v.tabActive && !v.closed
 			updated := false
 			for i := range v.entries {
 				if v.entries[i].ID == ev.EventID {
@@ -1832,6 +1847,13 @@ func (v *LogsView) subscribeLiveTail() {
 				}
 			}
 			v.mu.Unlock()
+
+			if !tabActive {
+				v.mu.Lock()
+				v.renderDirty = true
+				v.mu.Unlock()
+				return
+			}
 
 			if updated {
 				// If an outcome filter is active (e.g. Spoken Only), re-run query so newly spoken items appear
@@ -2057,23 +2079,78 @@ func (v *LogsView) renderEntries() {
 			}
 		}
 
-		v.listBox.Objects = nil
+		v.mu.Lock()
+		if v.rowCache == nil {
+			v.rowCache = make(map[string]*cachedLogRow)
+		}
+		v.mu.Unlock()
+
+		newObjects := make([]fyne.CanvasObject, 0, len(entries)+10)
+		activeIDs := make(map[string]bool, len(entries))
+
 		if len(entries) == 0 {
-			v.listBox.Add(widget.NewLabelWithStyle("No matching log entries found.", fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
-			v.listBox.Refresh()
+			v.mu.Lock()
+			clear(v.rowCache)
+			v.mu.Unlock()
+			newObjects = append(newObjects, widget.NewLabelWithStyle("No matching log entries found.", fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
 		} else {
 			lastDateKey := ""
 			for i, entry := range entries {
+				activeIDs[entry.ID] = true
 				localTime := entry.CreatedAt.Local()
 				dateKey := localTime.Format("2006-01-02")
 				if dateKey != lastDateKey {
 					lastDateKey = dateKey
-					v.listBox.Add(v.buildDateSeparatorRow(localTime))
+					newObjects = append(newObjects, v.buildDateSeparatorRow(localTime))
 				}
-				v.listBox.Add(v.buildLogRow(i, entry))
+
+				var targetBg color.Color = colorObsidianSlate
+				if i%2 == 1 {
+					targetBg = color.NRGBA{R: 0x15, G: 0x20, B: 0x33, A: 0xFF}
+				}
+
+				v.mu.Lock()
+				cached, ok := v.rowCache[entry.ID]
+				v.mu.Unlock()
+
+				var rowObj fyne.CanvasObject
+				if ok && cached != nil && cached.root != nil {
+					// In-place update of TTS status icon if outcome changed
+					if cached.entry.Spoken != entry.Spoken || cached.entry.Outcome != entry.Outcome || cached.entry.OutcomeDetail != entry.OutcomeDetail || cached.entry.Speed != entry.Speed {
+						cached.entry = entry
+						if cached.rowCols != nil && len(cached.rowCols.Objects) > 4 {
+							cached.rowCols.Objects[4] = v.ttsStatusIcons(entry)
+							cached.rowCols.Refresh()
+						}
+					}
+					// Update alternating background if needed
+					if cached.rowBg != nil && cached.rowBg.FillColor != targetBg {
+						cached.rowBg.FillColor = targetBg
+						cached.rowBg.Refresh()
+					}
+					rowObj = cached.root
+				} else {
+					var ref *cachedLogRow
+					rowObj, ref = v.buildLogRowWithRef(i, entry)
+					v.mu.Lock()
+					v.rowCache[entry.ID] = ref
+					v.mu.Unlock()
+				}
+				newObjects = append(newObjects, rowObj)
 			}
-			v.listBox.Refresh()
+
+			// Prune dead rows from cache
+			v.mu.Lock()
+			for id := range v.rowCache {
+				if !activeIDs[id] {
+					delete(v.rowCache, id)
+				}
+			}
+			v.mu.Unlock()
 		}
+
+		v.listBox.Objects = newObjects
+		v.listBox.Refresh()
 
 		v.mu.Lock()
 		stillDirty := v.renderDirty && v.tabActive && !v.closed
@@ -2099,6 +2176,11 @@ func (v *LogsView) buildDateSeparatorRow(t time.Time) fyne.CanvasObject {
 }
 
 func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
+	obj, _ := v.buildLogRowWithRef(rowIdx, e)
+	return obj
+}
+
+func (v *LogsView) buildLogRowWithRef(rowIdx int, e eventlog.Entry) (fyne.CanvasObject, *cachedLogRow) {
 	s := v.chatScaleFactor()
 	iconSz := fyne.NewSize(20*s, 20*s)
 
@@ -2196,10 +2278,20 @@ func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
 	divider := canvas.NewRectangle(color.NRGBA{R: 0x1E, G: 0x29, B: 0x3B, A: 0xFF})
 	divider.SetMinSize(fyne.NewSize(1, 1))
 
-	return container.NewStack(
+	root := container.NewStack(
 		rowBg,
 		container.NewBorder(nil, divider, nil, nil, rowCols),
 	)
+
+	cached := &cachedLogRow{
+		entry:         e,
+		root:          root,
+		rowBg:         rowBg,
+		rowCols:       rowCols,
+		ttsStatusCell: ttsStatusCell,
+	}
+
+	return root, cached
 }
 
 func (v *LogsView) showAssignVoiceDialog(platform, username string) {

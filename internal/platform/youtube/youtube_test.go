@@ -1,6 +1,7 @@
 package youtube
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -347,6 +348,12 @@ func TestConnectorLifecycleAndStream(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for YouTube live chat event")
+	}
+
+	// Verify CheckLive returns true when connected
+	isLive, err := conn.CheckLive(context.Background())
+	if err != nil || !isLive {
+		t.Fatalf("expected CheckLive=true, got isLive=%v err=%v", isLive, err)
 	}
 }
 

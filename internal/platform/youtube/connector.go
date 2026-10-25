@@ -141,6 +141,45 @@ func (c *Connector) Target() string {
 	return c.target
 }
 
+// CheckLiveTarget checks whether the specified YouTube target (or configured target if empty) is live.
+func (c *Connector) CheckLiveTarget(ctx context.Context, target string) (bool, error) {
+	if target == "" {
+		c.mu.Lock()
+		target = c.target
+		c.mu.Unlock()
+	}
+	if target == "" {
+		return false, nil
+	}
+	if c.Status() == StatusConnected && (c.Target() == "" || strings.EqualFold(c.Target(), target)) {
+		return true, nil
+	}
+
+	c.mu.Lock()
+	baseURL := c.baseURL
+	c.mu.Unlock()
+
+	liveURL, display := NormalizeTarget(target)
+	if baseURL != "https://www.youtube.com" && !strings.HasPrefix(target, "http") {
+		liveURL = strings.TrimRight(baseURL, "/") + "/" + strings.TrimPrefix(display, "@") + "/live"
+	}
+
+	apiKey, continuation, err := c.discoverStream(ctx, liveURL)
+	if err != nil || apiKey == "" || continuation == "" {
+		return false, nil
+	}
+
+	if c.Target() == "" || strings.EqualFold(c.Target(), target) {
+		c.updateStatus(StatusConnected, display)
+	}
+	return true, nil
+}
+
+// CheckLive performs an immediate check to determine whether the configured YouTube target is live.
+func (c *Connector) CheckLive(ctx context.Context) (bool, error) {
+	return c.CheckLiveTarget(ctx, "")
+}
+
 func (c *Connector) stopLoopLocked() {
 	if c.cancelFn != nil {
 		c.cancelFn()

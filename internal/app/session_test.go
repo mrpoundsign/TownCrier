@@ -654,6 +654,139 @@ func TestUnifiedStreamSessionLifecycleAcrossPlatforms(t *testing.T) {
 	if res.Summary.TotalBits != 500 {
 		t.Errorf("expected TotalBits=500 in session summary, got %+v", res.Summary)
 	}
+
+	// 6. Within 1 hour (event was logged moments ago), Twitch goes live again -> resumes session #1
+	session.UpdatePlatformStreamState("twitch", "mrpoundsign", true)
+	if session.ActiveSessionID() != sid {
+		t.Fatalf("expected session %d to be resumed within 1 hour, got %d", sid, session.ActiveSessionID())
+	}
+	session.UpdatePlatformStreamState("twitch", "mrpoundsign", false)
+}
+
+func TestSessionResumeWindowAndCrashCleanup(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.DefaultConfig()
+	cfg.Logging.Enabled = true
+	cfg.Logging.SessionResumeWindowMinutes = 60
+
+	sqlStore, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	defer func() { _ = sqlStore.Close() }()
+
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{}, sqlStore)
+	defer func() { _ = logMgr.Close() }()
+
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = session.Close() }()
+	session.SetEventLogger(logMgr)
+
+	// Scenario 1: Dangling session from 3 hours ago (e.g. previous crash)
+	tOld := time.Now().UTC().Add(-3 * time.Hour)
+	oldSess, err := sqlStore.StartSession(ctx, tOld, "twitch", "streamer")
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	// Log entry in old session 2.5 hours ago (> 60m)
+	_ = sqlStore.Append(ctx, &eventlog.Entry{
+		ID:        "old-msg",
+		SessionID: oldSess.ID,
+		CreatedAt: tOld.Add(30 * time.Minute),
+		Platform:  "twitch",
+		Channel:   "streamer",
+		Kind:      "message",
+		UserID:    "u1",
+		UserName:  "user1",
+		Outcome:   eventlog.OutcomeSpoken,
+	})
+
+	// Stream goes live now -> old session is > 1 hour old -> should close dangling old session and start brand new session
+	session.UpdatePlatformStreamState("twitch", "streamer", true)
+	newSID := session.ActiveSessionID()
+	if newSID == 0 || newSID == oldSess.ID {
+		t.Fatalf("expected new session distinct from old dangling session %d, got %d", oldSess.ID, newSID)
+	}
+
+	// Verify old session was cleanly closed
+	sList, _ := logMgr.ListSessions(ctx, 5)
+	for _, s := range sList {
+		if s.ID == oldSess.ID && s.EndedAt.IsZero() {
+			t.Errorf("expected old dangling session %d to be marked ended, but EndedAt is zero", oldSess.ID)
+		}
+	}
+
+	// Log message in new session
+	_ = session.DispatchEvent(&chat.Event{
+		ID:       "new-msg-1",
+		Platform: "twitch",
+		Channel:  "streamer",
+		Kind:     chat.EventKindMessage,
+		UserID:   "u2",
+		UserName: "user2",
+		Text:     "Hello from new session!",
+	})
+
+	// Simulate disconnect / shutdown
+	session.UpdatePlatformStreamState("twitch", "streamer", false)
+	if session.ActiveSessionID() != 0 {
+		t.Fatalf("expected ActiveSessionID=0 after disconnect, got %d", session.ActiveSessionID())
+	}
+
+	// Scenario 2: Reconnect within 1 hour (last message was seconds ago) -> should resume newSID
+	session.UpdatePlatformStreamState("twitch", "streamer", true)
+	if session.ActiveSessionID() != newSID {
+		t.Fatalf("expected resumed session %d, got %d", newSID, session.ActiveSessionID())
+	}
+}
+
+func TestSessionDetectLiveStatus(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Logging.Enabled = true
+	cfg.Platforms["twitch"] = config.PlatformConfig{
+		Enabled:     true,
+		AccountName: "twitchuser",
+	}
+	cfg.Platforms["kick"] = config.PlatformConfig{
+		Enabled:     true,
+		AccountName: "kickuser",
+	}
+
+	sqlStore, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	defer func() { _ = sqlStore.Close() }()
+
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{}, sqlStore)
+	defer func() { _ = logMgr.Close() }()
+
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = session.Close() }()
+	session.SetEventLogger(logMgr)
+
+	// Mock Twitch connector CheckLive to return live=true
+	session.TwitchConnector().SetCheckLiveFn(func(ctx context.Context, channel string) (bool, error) {
+		return channel == "twitchuser", nil
+	})
+	session.TwitchConnector().SetOnStreamStateChange(func(live bool) {
+		session.UpdatePlatformStreamState("twitch", "twitchuser", live)
+	})
+
+	// Mock Kick connector CheckLive to return live=false
+	session.KickConnector().SetCheckLiveFn(func(ctx context.Context, slug string) (bool, error) {
+		return false, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	session.DetectLiveStatus(ctx)
+
+	sid := session.ActiveSessionID()
+	if sid <= 0 {
+		t.Fatalf("expected active session started via DetectLiveStatus, got %d", sid)
+	}
 }
 
 func TestSession_InlineGiftAndStickerLogFormatting(t *testing.T) {

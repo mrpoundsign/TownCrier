@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1186,5 +1187,97 @@ func BenchmarkSQLiteQuerySearch(b *testing.B) {
 		}
 	}
 }
+
+func TestResumeSessionAndLatestSessionLastActive(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "resume_test.db")
+	backend, err := NewSQLiteBackend(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+
+	// 1. Empty DB
+	latest, lastActive, err := backend.LatestSessionLastActive(ctx)
+	if err != nil {
+		t.Fatalf("LatestSessionLastActive on empty db: %v", err)
+	}
+	if latest != nil || !lastActive.IsZero() {
+		t.Errorf("expected nil latest and zero time on empty db, got %v, %v", latest, lastActive)
+	}
+
+	// 2. Start session with no messages
+	tStart := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	sess, err := backend.StartSession(ctx, tStart, "twitch", "streamer")
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+
+	latest, lastActive, err = backend.LatestSessionLastActive(ctx)
+	if err != nil {
+		t.Fatalf("LatestSessionLastActive: %v", err)
+	}
+	if latest == nil || latest.ID != sess.ID {
+		t.Fatalf("expected session ID %d, got %v", sess.ID, latest)
+	}
+	if !lastActive.Equal(tStart) {
+		t.Errorf("expected lastActive to fallback to StartedAt %v, got %v", tStart, lastActive)
+	}
+
+	// 3. Append entry in session
+	tMsg := tStart.Add(12 * time.Minute)
+	if err := backend.Append(ctx, &Entry{
+		ID:        "msg-1",
+		SessionID: sess.ID,
+		CreatedAt: tMsg,
+		Platform:  "twitch",
+		Channel:   "streamer",
+		Kind:      "message",
+		UserID:    "u1",
+		UserName:  "user1",
+		Outcome:   OutcomeSpoken,
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	latest, lastActive, err = backend.LatestSessionLastActive(ctx)
+	if err != nil {
+		t.Fatalf("LatestSessionLastActive after message: %v", err)
+	}
+	if latest == nil || latest.ID != sess.ID {
+		t.Fatalf("expected session ID %d, got %v", sess.ID, latest)
+	}
+	if !lastActive.Equal(tMsg) {
+		t.Errorf("expected lastActive to be %v, got %v", tMsg, lastActive)
+	}
+
+	// 4. End session
+	tEnd := tStart.Add(30 * time.Minute)
+	if err := backend.EndSession(ctx, sess.ID, tEnd); err != nil {
+		t.Fatalf("EndSession: %v", err)
+	}
+
+	sList, _ := backend.ListSessions(ctx, 1)
+	if len(sList) == 0 || sList[0].EndedAt.IsZero() {
+		t.Fatalf("expected session to be ended, got %v", sList)
+	}
+
+	// 5. Resume session
+	if err := backend.ResumeSession(ctx, sess.ID, "kick", "kickstreamer"); err != nil {
+		t.Fatalf("ResumeSession: %v", err)
+	}
+
+	sList, _ = backend.ListSessions(ctx, 1)
+	if len(sList) == 0 || !sList[0].EndedAt.IsZero() {
+		t.Fatalf("expected resumed session to have ended_at=0, got %v", sList[0].EndedAt)
+	}
+	if !slices.Contains(sList[0].Platforms, "kick") {
+		t.Errorf("expected platforms to contain kick, got %v", sList[0].Platforms)
+	}
+	if !slices.Contains(sList[0].Channels, "kickstreamer") {
+		t.Errorf("expected channels to contain kickstreamer, got %v", sList[0].Channels)
+	}
+}
+
 
 

@@ -29,13 +29,14 @@ type Config struct {
 }
 
 type LoggingConfig struct {
-	Enabled            bool            `json:"enabled"`
-	Backend            string          `json:"backend"`
-	DBPath             string          `json:"db_path,omitempty"`
-	ChatRetentionDays  int             `json:"chat_retention_days"`
-	EventRetentionDays int             `json:"event_retention_days"`
-	ChatScale          int             `json:"chat_scale,omitempty"`
-	LiveLogs           []LiveLogPreset `json:"live_logs,omitempty"`
+	Enabled                    bool            `json:"enabled"`
+	Backend                    string          `json:"backend"`
+	DBPath                     string          `json:"db_path,omitempty"`
+	ChatRetentionDays          int             `json:"chat_retention_days"`
+	EventRetentionDays         int             `json:"event_retention_days"`
+	ChatScale                  int             `json:"chat_scale,omitempty"`
+	SessionResumeWindowMinutes int             `json:"session_resume_window_minutes,omitempty"`
+	LiveLogs                   []LiveLogPreset `json:"live_logs,omitempty"`
 }
 
 // LiveLogPreset represents a saved Live Log filter card that can be opened as a zero-chrome pop-out window.
@@ -364,13 +365,14 @@ func DefaultConfig() *Config {
 			AutoUpdate:      false,
 		},
 		Logging: LoggingConfig{
-			Enabled:            true,
-			Backend:            "sqlite",
-			DBPath:             "",
-			ChatRetentionDays:  30,
-			EventRetentionDays: 90,
-			ChatScale:          100,
-			LiveLogs:           DefaultLiveLogPresets(),
+			Enabled:                    true,
+			Backend:                    "sqlite",
+			DBPath:                     "",
+			ChatRetentionDays:          30,
+			EventRetentionDays:         90,
+			ChatScale:                  100,
+			SessionResumeWindowMinutes: 60,
+			LiveLogs:                   DefaultLiveLogPresets(),
 		},
 		GlobalChatRules: GlobalChatRules{
 			SpeakNames:        true,

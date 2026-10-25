@@ -305,6 +305,14 @@ func TestTwitchCheckChannelLiveHelixAndGQL(t *testing.T) {
 	if err != nil || !live {
 		t.Fatalf("expected Helix livechannel=true, got live=%v err=%v", live, err)
 	}
+
+	// Also verify exported CheckLive method with channel configured
+	conn.channel = "livechannel"
+	conn.running = true
+	isLiveNow, err := conn.CheckLive(ctx)
+	if err != nil || !isLiveNow || !conn.IsLive() {
+		t.Fatalf("expected CheckLive=true, got live=%v, isLive=%v, err=%v", isLiveNow, conn.IsLive(), err)
+	}
 }
 
 func TestCheckUserFollowingAndTTLCache(t *testing.T) {

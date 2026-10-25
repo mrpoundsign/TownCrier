@@ -1,6 +1,7 @@
 package kick
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -413,9 +414,20 @@ func TestKickLiveStreamStateTransitions(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 
 	stateMu.Lock()
-	defer stateMu.Unlock()
-	if len(states) < 3 || !states[0] || states[1] || !states[2] {
-		t.Fatalf("expected live transitions [true, false, true, ...], got %v", states)
+	validTransitions := len(states) >= 3 && states[0] && !states[1] && states[2]
+	savedStates := append([]bool(nil), states...)
+	stateMu.Unlock()
+
+	if !validTransitions {
+		t.Fatalf("expected live transitions [true, false, true, ...], got %v", savedStates)
+	}
+
+	// Verify CheckLive on live channel
+	conn.channel = "livekick"
+	conn.running = true
+	isLive, err := conn.CheckLive(context.Background())
+	if err != nil || !isLive || !conn.IsLive() {
+		t.Fatalf("expected CheckLive=true, got isLive=%v, conn.IsLive()=%v, err=%v", isLive, conn.IsLive(), err)
 	}
 }
 
@@ -452,6 +464,7 @@ func TestConnectorPusherErrorBackoffAndStatusDedup(t *testing.T) {
 		wsAttempts.Add(1)
 		errFrame := `{"event":"pusher:error","data":{"code":4001,"message":"App key 32cbd69e4b950bf97679 not in this cluster."}}`
 		_ = websocket.Message.Send(ws, errFrame)
+		time.Sleep(20 * time.Millisecond)
 		_ = ws.Close()
 	}))
 

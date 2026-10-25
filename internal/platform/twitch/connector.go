@@ -191,6 +191,34 @@ func (c *Connector) IsLive() bool {
 	return c.isLive
 }
 
+// CheckLiveChannel checks whether the specified channel (or configured channel if empty) is live.
+func (c *Connector) CheckLiveChannel(ctx context.Context, channel string) (bool, error) {
+	if channel == "" {
+		c.mu.Lock()
+		channel = c.channel
+		c.mu.Unlock()
+	}
+	if channel == "" {
+		return false, nil
+	}
+	if c.IsLive() && (c.Channel() == "" || strings.EqualFold(c.Channel(), channel)) {
+		return true, nil
+	}
+	live, err := c.checkChannelLive(ctx, channel)
+	if err != nil {
+		return false, err
+	}
+	if live && (c.Channel() == "" || strings.EqualFold(c.Channel(), channel)) {
+		c.setStreamLive(true)
+	}
+	return live, nil
+}
+
+// CheckLive performs an immediate live status check for the configured channel and updates stream state.
+func (c *Connector) CheckLive(ctx context.Context) (bool, error) {
+	return c.CheckLiveChannel(ctx, "")
+}
+
 // SetOAuthManager attaches the Twitch OAuth manager for EventSub WebSocket subscriptions.
 func (c *Connector) SetOAuthManager(oauth *OAuthManager) {
 	c.mu.Lock()

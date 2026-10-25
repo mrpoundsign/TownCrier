@@ -21,8 +21,10 @@ type Backend interface {
 	Summarize(ctx context.Context, filter QueryFilter) (*QuerySummary, error)
 	StartSession(ctx context.Context, startedAt time.Time, platform, channel string) (*StreamSession, error)
 	AddSessionPlatform(ctx context.Context, sessionID int64, platform, channel string) error
+	ResumeSession(ctx context.Context, sessionID int64, platform, channel string) error
 	EndSession(ctx context.Context, sessionID int64, endedAt time.Time) error
 	ListSessions(ctx context.Context, limit int) ([]StreamSession, error)
+	LatestSessionLastActive(ctx context.Context) (*StreamSession, time.Time, error)
 	DistinctChannels(ctx context.Context, platform string) ([]string, error)
 	Prune(ctx context.Context, policy RetentionPolicy) (int64, error)
 	Close() error
@@ -57,6 +59,11 @@ func (BaseSink) AddSessionPlatform(context.Context, int64, string, string) error
 	return nil
 }
 
+// ResumeSession is a no-op returning nil error for non-session sinks.
+func (BaseSink) ResumeSession(context.Context, int64, string, string) error {
+	return nil
+}
+
 // EndSession is a no-op returning nil error for non-session sinks.
 func (BaseSink) EndSession(context.Context, int64, time.Time) error {
 	return nil
@@ -65,6 +72,11 @@ func (BaseSink) EndSession(context.Context, int64, time.Time) error {
 // ListSessions is a no-op returning nil and nil error for non-session sinks.
 func (BaseSink) ListSessions(context.Context, int) ([]StreamSession, error) {
 	return nil, nil
+}
+
+// LatestSessionLastActive is a no-op returning nil, zero time, and nil error for non-session sinks.
+func (BaseSink) LatestSessionLastActive(context.Context) (*StreamSession, time.Time, error) {
+	return nil, time.Time{}, nil
 }
 
 // DistinctChannels is a no-op returning nil and nil error for non-queryable sinks.
@@ -386,6 +398,19 @@ func (m *Manager) AddSessionPlatform(ctx context.Context, sessionID int64, platf
 	return primary.AddSessionPlatform(ctx, sessionID, platform, channel)
 }
 
+// ResumeSession clears ended_at on an existing StreamSession and merges platform and channel.
+func (m *Manager) ResumeSession(ctx context.Context, sessionID int64, platform, channel string) error {
+	m.mu.RLock()
+	if m.closed || !m.enabled || len(m.backends) == 0 {
+		m.mu.RUnlock()
+		return nil
+	}
+	primary := m.backends[0]
+	m.mu.RUnlock()
+
+	return primary.ResumeSession(ctx, sessionID, platform, channel)
+}
+
 // EndSession marks a StreamSession as ended at endedAt.
 func (m *Manager) EndSession(ctx context.Context, sessionID int64, endedAt time.Time) error {
 	m.mu.RLock()
@@ -410,6 +435,19 @@ func (m *Manager) ListSessions(ctx context.Context, limit int) ([]StreamSession,
 	m.mu.RUnlock()
 
 	return primary.ListSessions(ctx, limit)
+}
+
+// LatestSessionLastActive queries the primary backend for the most recent session and the timestamp of its last activity.
+func (m *Manager) LatestSessionLastActive(ctx context.Context) (*StreamSession, time.Time, error) {
+	m.mu.RLock()
+	if m.closed || !m.enabled || len(m.backends) == 0 {
+		m.mu.RUnlock()
+		return nil, time.Time{}, nil
+	}
+	primary := m.backends[0]
+	m.mu.RUnlock()
+
+	return primary.LatestSessionLastActive(ctx)
 }
 
 // DistinctChannels returns the sorted list of distinct channel names recorded in the primary backend.

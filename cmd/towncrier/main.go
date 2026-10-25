@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"log"
@@ -306,6 +307,13 @@ func run() error {
 				log.Printf("Warning: session.Start() error: %v", startErr)
 			}
 
+			// Proactively detect live stream status on launch across configured platforms
+			tracker.SetStatus("Checking live stream status...")
+			detectCtx, detectCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			session.DetectLiveStatus(detectCtx)
+			detectCancel()
+
+			tracker.SetStatus("Ready! Opening main interface...")
 			fyne.Do(func() {
 				defer logging.RecoverAndExit("ui-init")
 				log.Println("Creating MainWindow and rendering tabs...")

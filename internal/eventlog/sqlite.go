@@ -784,6 +784,30 @@ func (s *SQLiteBackend) AddSessionPlatform(ctx context.Context, sessionID int64,
 	return err
 }
 
+// ResumeSession reopens a StreamSession (clearing ended_at to 0) and merges platform and channel into it.
+func (s *SQLiteBackend) ResumeSession(ctx context.Context, sessionID int64, platform, channel string) error {
+	if sessionID <= 0 {
+		return nil
+	}
+
+	s.mu.Lock()
+	if s.db == nil {
+		s.mu.Unlock()
+		return errors.New("sqlite backend is closed")
+	}
+
+	_, err := s.db.ExecContext(ctx, `UPDATE stream_sessions SET ended_at = 0 WHERE id = ?;`, sessionID)
+	s.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("resume stream session: %w", err)
+	}
+
+	if platform != "" || channel != "" {
+		return s.AddSessionPlatform(ctx, sessionID, platform, channel)
+	}
+	return nil
+}
+
 // EndSession marks a StreamSession as ended at endedAt.
 func (s *SQLiteBackend) EndSession(ctx context.Context, sessionID int64, endedAt time.Time) error {
 	if sessionID <= 0 {
@@ -866,6 +890,62 @@ func (s *SQLiteBackend) ListSessions(ctx context.Context, limit int) ([]StreamSe
 		out = append(out, sess)
 	}
 	return out, rows.Err()
+}
+
+// LatestSessionLastActive queries the most recent stream session and the timestamp of its latest log entry.
+// If the session has no log entries, its StartedAt timestamp is returned as the fallback activity time.
+func (s *SQLiteBackend) LatestSessionLastActive(ctx context.Context) (*StreamSession, time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return nil, time.Time{}, errors.New("sqlite backend is closed")
+	}
+
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, started_at, ended_at, platforms_json, channels_json
+		 FROM stream_sessions
+		 ORDER BY started_at DESC, id DESC
+		 LIMIT 1;`,
+	)
+
+	var (
+		sess      StreamSession
+		startMs   int64
+		endMs     int64
+		platsJSON string
+		chansJSON string
+	)
+	if err := row.Scan(&sess.ID, &startMs, &endMs, &platsJSON, &chansJSON); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, time.Time{}, nil
+		}
+		return nil, time.Time{}, fmt.Errorf("query latest stream session: %w", err)
+	}
+
+	sess.StartedAt = time.UnixMilli(startMs).UTC()
+	if endMs > 0 {
+		sess.EndedAt = time.UnixMilli(endMs).UTC()
+	}
+	if platsJSON != "" && platsJSON != "[]" {
+		_ = json.Unmarshal([]byte(platsJSON), &sess.Platforms)
+	}
+	if chansJSON != "" && chansJSON != "[]" {
+		_ = json.Unmarshal([]byte(chansJSON), &sess.Channels)
+	}
+
+	var maxCreated sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT MAX(created_at) FROM event_logs WHERE session_id = ?;`, sess.ID).Scan(&maxCreated)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return &sess, sess.StartedAt, fmt.Errorf("query max created_at for session %d: %w", sess.ID, err)
+	}
+
+	if maxCreated.Valid && maxCreated.Int64 > 0 {
+		return &sess, time.UnixMilli(maxCreated.Int64).UTC(), nil
+	}
+
+	return &sess, sess.StartedAt, nil
 }
 
 // Append inserts or replaces an Entry in the SQLite event_logs table.
