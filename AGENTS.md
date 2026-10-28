@@ -18,6 +18,8 @@
 > 9. **Always Link PRs, Issues, and CI Runs**: Whenever creating or referencing GitHub Pull Requests, Issues, or Actions CI runs, always include clickable Markdown links so the user can watch or inspect them directly.
 > 10. **GitHub CLI Issue & PR Bodies via Files**: PowerShell mangles markdown backticks and escapes (e.g., `\t`, `\f`) when passing strings inline to `gh`. NEVER pass multiline issue or PR descriptions inline via `--body`. ALWAYS write markdown content to a temporary file in `build/` and pass `--body-file`, then clean up the temporary file.
 > 11. **Strict Test Configuration & Directory Isolation**: NEVER write tests that use or default to real configuration locations (`%APPDATA%`, `~/.config`, etc.). Tests must ALWAYS use `config.NewMemoryStore()` or `config.TestLocations(t.TempDir())`. Attempting to load or save default/production config locations during test execution is strictly forbidden and will fail immediately.
+> 12. **Explicit Approval for Pull Requests**: Never open a Pull Request without explicit user approval. 1 commit per ticket is an aspirational goal, not a hard requirement, and multiple commits or tickets can live on the same branch or be merged directly into `dev`.
+> 13. **Release Merges to Main via Pull Request**: Releasing from `dev` to `main` always occurs via a GitHub Pull Request (`dev` → `main`) listing `Closes #<id>` for all completed issues. This leverages GitHub's native closing automation without external scripts and seamlessly updates GitHub Projects Kanban cards to Done.
 
 ---
 
