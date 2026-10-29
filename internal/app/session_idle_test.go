@@ -2,6 +2,7 @@ package app
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +11,24 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/queue"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
 )
+
+type alertCapturePlayer struct {
+	playCount atomic.Int32
+}
+
+func (p *alertCapturePlayer) Play(samples []float32, sampleRate int) error {
+	p.playCount.Add(1)
+	return nil
+}
+func (p *alertCapturePlayer) Stop()                                {}
+func (p *alertCapturePlayer) PanicStop()                           {}
+func (p *alertCapturePlayer) ResetPanic()                          {}
+func (p *alertCapturePlayer) SwitchDevice(dev string) error        { return nil }
+func (p *alertCapturePlayer) SetVolume(vol float32)                {}
+func (p *alertCapturePlayer) Volume() float32                      { return 1.0 }
+func (p *alertCapturePlayer) IsPlaying() bool                      { return false }
+func (p *alertCapturePlayer) Close() error                         { return nil }
+func (p *alertCapturePlayer) SetFallbackListener(fn func(string)) {}
 
 type mockIdleProvider struct {
 	mu  sync.Mutex
@@ -163,3 +182,61 @@ func TestSessionAutoIdleTransitionsAndFlush(t *testing.T) {
 		t.Fatalf("expected queue flushed when switching to always_off, got %d", q.Depth())
 	}
 }
+
+func TestSessionAlertSoundAndCooldown(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.TTS.OutputMode = config.TTSModeAlwaysOff
+	cfg.TTS.PlayAlertWhenDisabled = true
+	cfg.TTS.AlertCooldownMs = 5000 // 5s cooldown for test
+
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = session.Close() }()
+
+	player := &alertCapturePlayer{}
+	session.SetPlayer(player)
+
+	// 1. First message in Always Off mode -> triggers alert chime (playCount == 1)
+	if err := session.DispatchEvent(&chat.Event{
+		ID:       "alert-1",
+		Platform: "twitch",
+		Kind:     chat.EventKindMessage,
+		UserName: "alice",
+		Text:     "message one",
+	}); err != nil {
+		t.Fatalf("DispatchEvent failed: %v", err)
+	}
+	if got := player.playCount.Load(); got != 1 {
+		t.Fatalf("expected 1 alert chime played, got %d", got)
+	}
+
+	// 2. Second message immediately within 5s cooldown -> suppressed by cooldown (playCount still 1)
+	if err := session.DispatchEvent(&chat.Event{
+		ID:       "alert-2",
+		Platform: "twitch",
+		Kind:     chat.EventKindMessage,
+		UserName: "bob",
+		Text:     "message two within cooldown",
+	}); err != nil {
+		t.Fatalf("DispatchEvent failed: %v", err)
+	}
+	if got := player.playCount.Load(); got != 1 {
+		t.Fatalf("expected second alert chime suppressed by cooldown, got %d", got)
+	}
+
+	// 3. Force preview bypasses cooldown (playCount == 2)
+	if err := session.PlayAlertSound(true); err != nil {
+		t.Fatalf("PlayAlertSound(true) failed: %v", err)
+	}
+	if got := player.playCount.Load(); got != 2 {
+		t.Fatalf("expected forced alert preview to play (count=2), got %d", got)
+	}
+
+	// 4. Panic mute blocks even forced alert preview
+	session.Panic()
+	_ = session.PlayAlertSound(true)
+	if got := player.playCount.Load(); got != 2 {
+		t.Fatalf("expected panic mute to block alert sound, got %d", got)
+	}
+	session.ClearPanic()
+}
+

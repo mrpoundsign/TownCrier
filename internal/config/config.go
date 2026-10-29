@@ -94,6 +94,7 @@ const (
 
 	DefaultIdleTimeoutSeconds = 15
 	DefaultModeToggleHotkey   = "Ctrl+Shift+T"
+	DefaultAlertCooldownMs    = 1500
 )
 
 // NormalizeTTSOutputMode returns a valid canonical TTSOutputMode, defaulting to TTSModeAlwaysOn.
@@ -121,10 +122,13 @@ func NextTTSOutputMode(current string) string {
 }
 
 type TTSConfig struct {
-	Enabled            bool     `json:"enabled"`
-	OutputMode         string   `json:"output_mode,omitempty"`          // "always_on", "auto_idle", "always_off"
-	IdleTimeoutSeconds int      `json:"idle_timeout_seconds,omitempty"` // seconds of keyboard/mouse inactivity before enabling TTS in auto_idle mode
-	Preset             string   `json:"preset,omitempty"`               // "ultra_low", "fast_lean", "balanced", "beefy", "custom"
+	Enabled               bool     `json:"enabled"`
+	OutputMode            string   `json:"output_mode,omitempty"`          // "always_on", "auto_idle", "always_off"
+	IdleTimeoutSeconds    int      `json:"idle_timeout_seconds,omitempty"` // seconds of keyboard/mouse inactivity before enabling TTS in auto_idle mode
+	PlayAlertWhenDisabled bool     `json:"play_alert_when_disabled"`       // play chime/WAV/MP3 alert when TTS output is inactive
+	AlertSoundPath        string   `json:"alert_sound_path,omitempty"`     // optional custom .wav or .mp3 file path (empty = built-in chime)
+	AlertCooldownMs       int      `json:"alert_cooldown_ms,omitempty"`    // minimum interval between alert sounds in ms (default 1500)
+	Preset                string   `json:"preset,omitempty"`               // "ultra_low", "fast_lean", "balanced", "beefy", "custom"
 	EnabledModels      []string `json:"enabled_models,omitempty"`       // ["kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper"]
 	ModelFamily        string   `json:"model_family"`                   // "kokoro"
 	ModelPath          string   `json:"model_path"`
@@ -377,10 +381,13 @@ func DefaultConfig() *Config {
 			Volume:     1.0,
 		},
 		TTS: TTSConfig{
-			Enabled:            true,
-			OutputMode:         TTSModeAlwaysOn,
-			IdleTimeoutSeconds: DefaultIdleTimeoutSeconds,
-			Preset:             "fast_lean",
+			Enabled:               true,
+			OutputMode:            TTSModeAlwaysOn,
+			IdleTimeoutSeconds:    DefaultIdleTimeoutSeconds,
+			PlayAlertWhenDisabled: true,
+			AlertSoundPath:        "",
+			AlertCooldownMs:       DefaultAlertCooldownMs,
+			Preset:                "fast_lean",
 			EnabledModels:      []string{"supertonic"},
 			ModelFamily:        "supertonic",
 			ModelPath:          "",
@@ -974,6 +981,10 @@ func migrate(cfg *Config) error {
 	cfg.TTS.OutputMode = NormalizeTTSOutputMode(cfg.TTS.OutputMode)
 	if cfg.TTS.IdleTimeoutSeconds <= 0 {
 		cfg.TTS.IdleTimeoutSeconds = DefaultIdleTimeoutSeconds
+	}
+	if cfg.TTS.AlertCooldownMs <= 0 {
+		cfg.TTS.AlertCooldownMs = DefaultAlertCooldownMs
+		cfg.TTS.PlayAlertWhenDisabled = true
 	}
 	if strings.TrimSpace(cfg.Safety.ModeToggleHotkey) == "" {
 		cfg.Safety.ModeToggleHotkey = DefaultModeToggleHotkey

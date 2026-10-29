@@ -68,6 +68,8 @@ type Session struct {
 	lastSpeakActive bool
 	idleStopCh      chan struct{}
 	idleWg          sync.WaitGroup
+	alertCache      *audio.AlertSoundCache
+	lastAlertAt     time.Time
 
 	streamMu        sync.Mutex
 	livePlatforms   map[string]string
@@ -112,6 +114,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		idleProvider:    SystemIdleDuration,
 		lastOutputMode:  initMode,
 		lastSpeakActive: cfgClone.TTS.Enabled && initMode == config.TTSModeAlwaysOn,
+		alertCache:      audio.NewAlertSoundCache(),
 	}
 
 	s.twitchConnector = twitch.NewConnector(
@@ -997,12 +1000,66 @@ func (s *Session) EvaluateIdleState() {
 		flushed := q.FlushPendingForActivity()
 		if flushed > 0 {
 			log.Printf("[Session] Flushed %d pending speech items on transition to TTS inactive (mode=%s, idle=%v)", flushed, mode, nowIdle)
+			_ = s.PlayAlertSound(false)
 		}
 	}
 
 	if changed && cb != nil {
 		cb(mode, nowSpeakActive, nowIdle)
 	}
+}
+
+// PlayAlertSound plays the configured alert chime or custom .wav/.mp3 sound through the active audio player.
+// When force is false, it enforces PlayAlertWhenDisabled, Panic Mute state, and AlertCooldownMs.
+func (s *Session) PlayAlertSound(force bool) error {
+	if s.IsPanicked() {
+		return nil
+	}
+
+	s.mu.Lock()
+	cfg := s.cfg
+	player := s.player
+	cache := s.alertCache
+	if cfg == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	if !force {
+		if !cfg.TTS.PlayAlertWhenDisabled {
+			s.mu.Unlock()
+			return nil
+		}
+		cooldownMs := cfg.TTS.AlertCooldownMs
+		if cooldownMs <= 0 {
+			cooldownMs = config.DefaultAlertCooldownMs
+		}
+		now := time.Now()
+		if !s.lastAlertAt.IsZero() && now.Sub(s.lastAlertAt) < time.Duration(cooldownMs)*time.Millisecond {
+			s.mu.Unlock()
+			return nil
+		}
+		s.lastAlertAt = now
+	}
+	customPath := cfg.TTS.AlertSoundPath
+	s.mu.Unlock()
+
+	if cache == nil {
+		cache = audio.NewAlertSoundCache()
+	}
+
+	samples, rate, err := cache.Resolve(customPath)
+	if err != nil {
+		if force {
+			return err
+		}
+		log.Printf("[Session] Warning: failed to load custom alert sound %q (%v); falling back to built-in chime", customPath, err)
+		samples, rate = audio.DefaultChimeSamples()
+	}
+
+	if player == nil {
+		return nil
+	}
+	return player.Play(samples, rate)
 }
 
 func (s *Session) startIdleMonitor() {
@@ -1590,6 +1647,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		}
 		log.Printf("[Session] Event passed filters but TTS output is inactive (%s): user=%q", mode, event.UserName)
 		s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, sanitizedText, resolved.VoiceID, resolved.Speed, true, eventlog.OutcomeTTSDisabled, reason))
+		_ = s.PlayAlertSound(false)
 
 		s.mu.RLock()
 		onDispatched := s.onEventDispatched

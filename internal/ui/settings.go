@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -78,6 +79,11 @@ type SettingsView struct {
 	ttsOutputModeSelect  *widget.Select
 	idleTimeoutSelect    *widget.Select
 	ttsModeStatusLabel   *widget.Label
+	playAlertCheck       *widget.Check
+	alertSoundEntry      *ScrollPassEntry
+	alertBrowseBtn       *widget.Button
+	alertClearBtn        *widget.Button
+	alertTestBtn         *widget.Button
 	generalBox           *fyne.Container
 	enableTTSCheck       *widget.Check
 	enableLogCheck       *widget.Check
@@ -428,6 +434,12 @@ func (v *SettingsView) SyncFromConfig() {
 	if v.idleTimeoutSelect != nil {
 		v.idleTimeoutSelect.SetSelected(FormatIdleTimeoutLabel(v.cfg.TTS.IdleTimeoutSeconds))
 	}
+	if v.playAlertCheck != nil {
+		v.playAlertCheck.SetChecked(v.cfg.TTS.PlayAlertWhenDisabled)
+	}
+	if v.alertSoundEntry != nil {
+		v.alertSoundEntry.SetText(v.cfg.TTS.AlertSoundPath)
+	}
 	if v.logsView != nil {
 		v.logsView.SyncFromConfig()
 		v.logsView.RefreshQuery()
@@ -751,13 +763,91 @@ func (v *SettingsView) buildTTSOutputModeCard() *widget.Card {
 	)
 	descLabel.Wrapping = fyne.TextWrapWord
 
+	v.playAlertCheck = widget.NewCheck("Play alert sound for incoming messages when TTS output is inactive (At Computer / Always Off)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.TTS.PlayAlertWhenDisabled = checked
+		})
+	})
+	v.playAlertCheck.SetChecked(cfg.TTS.PlayAlertWhenDisabled)
+
+	alertEntry := NewScrollPassEntry()
+	alertEntry.SetPlaceHolder("Built-in two-tone harmonic chime (or select a custom .wav / .mp3 file)")
+	alertEntry.SetText(cfg.TTS.AlertSoundPath)
+	alertEntry.OnChanged = func(text string) {
+		if v.initializing {
+			return
+		}
+		trimmed := strings.TrimSpace(text)
+		v.updateConfig(func(c *config.Config) {
+			c.TTS.AlertSoundPath = trimmed
+		})
+	}
+	v.alertSoundEntry = alertEntry
+
+	browseBtn := widget.NewButtonWithIcon("Browse...", theme.FolderOpenIcon(), func() {
+		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil {
+				v.setStatus("⚠️ Failed to open file: " + err.Error())
+				return
+			}
+			if reader == nil {
+				return
+			}
+			_ = reader.Close()
+			chosen := reader.URI().Path()
+			alertEntry.SetText(chosen)
+			v.setStatus("✓ Custom alert sound set to " + chosen)
+		}, v.window)
+		fd.SetFilter(storage.NewExtensionFileFilter([]string{".wav", ".wave", ".mp3"}))
+		fd.Show()
+	})
+	v.alertBrowseBtn = browseBtn
+
+	clearBtn := widget.NewButtonWithIcon("Use Built-in Chime", theme.ContentClearIcon(), func() {
+		alertEntry.SetText("")
+		v.setStatus("✓ Reset alert sound to built-in harmonic chime.")
+	})
+	v.alertClearBtn = clearBtn
+
+	testBtn := widget.NewButtonWithIcon("Test Alert Sound", theme.MediaPlayIcon(), func() {
+		go func() {
+			var err error
+			if v.session != nil {
+				err = v.session.PlayAlertSound(true)
+			} else if v.player != nil {
+				cache := audio.NewAlertSoundCache()
+				samples, rate, loadErr := cache.Resolve(strings.TrimSpace(alertEntry.Text))
+				if loadErr != nil {
+					err = loadErr
+				} else {
+					err = v.player.Play(samples, rate)
+				}
+			}
+			if err != nil {
+				v.setStatus("⚠️ Alert sound error: " + err.Error())
+			} else {
+				v.setStatus("🔊 Played alert sound preview.")
+			}
+		}()
+	})
+	v.alertTestBtn = testBtn
+
+	alertBtns := container.NewHBox(browseBtn, clearBtn, testBtn)
+	alertFileRow := container.NewBorder(nil, nil, widget.NewLabel("Alert Sound:"), alertBtns, alertEntry)
+
 	cardContent := container.NewVBox(
 		modeRow,
 		v.ttsModeStatusLabel,
 		descLabel,
+		widget.NewSeparator(),
+		v.playAlertCheck,
+		alertFileRow,
 	)
 
-	return widget.NewCard("TTS Output Mode & Auto-AFK", "Control when chat is spoken aloud vs. suppressed while at your computer", cardContent)
+	return widget.NewCard("TTS Output Mode & Auto-AFK", "Control when chat is spoken aloud vs. alerted with a chime while at your computer", cardContent)
 }
 
 func (v *SettingsView) buildServicesCard() *widget.Card {
