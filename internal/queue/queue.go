@@ -209,6 +209,35 @@ func (q *Queue) Clear() {
 	}
 }
 
+// FlushPendingForActivity flushes all pending items in both tiers without interrupting
+// the currently speaking item, recording a TTS-disabled/activity outcome for each flushed item.
+// It returns the number of pending items that were flushed.
+func (q *Queue) FlushPendingForActivity() int {
+	q.mu.Lock()
+	flushed := make([]*Item, 0, len(q.eventsQueue)+len(q.chatQueue))
+	flushed = append(flushed, q.eventsQueue...)
+	flushed = append(flushed, q.chatQueue...)
+	q.eventsQueue = q.eventsQueue[:0]
+	q.chatQueue = q.chatQueue[:0]
+	depthFn := q.onDepthChanged
+	outcomeFn := q.onItemOutcome
+	q.mu.Unlock()
+
+	if len(flushed) == 0 {
+		return 0
+	}
+
+	if outcomeFn != nil {
+		for _, it := range flushed {
+			outcomeFn(it, false, "tts_disabled", "Flushed on user activity (TTS mode inactive)")
+		}
+	}
+	if depthFn != nil {
+		go depthFn(0)
+	}
+	return len(flushed)
+}
+
 // Panic executes Emergency Panic Mute (<50ms, D28): latches Panic Mode, flushes all queues, and halts audio instantly.
 func (q *Queue) Panic() {
 	q.mu.Lock()

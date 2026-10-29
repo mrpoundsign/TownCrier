@@ -34,11 +34,13 @@ type SettingsView struct {
 	reloadSeq         uint64
 	deviceEnum        func() ([]audio.DeviceInfo, error)
 	statusLabel       *widget.Label
-	onStatus          func(msg string)
-	onHotkeyChanged   func(hotkey string) error
-	onServicesChanged func()
-	onModelsChanged   func()
-	onAssignVoice     func(platform, username string)
+	onStatus                  func(msg string)
+	onHotkeyChanged           func(hotkey string) error
+	onModeToggleHotkeyChanged func(hotkey string) error
+	onTTSOutputModeChanged    func(mode string)
+	onServicesChanged         func()
+	onModelsChanged           func()
+	onAssignVoice             func(platform, username string)
 	subTabs           *container.AppTabs
 	generalTabItem    *container.TabItem
 	ttsTabItem        *container.TabItem
@@ -72,6 +74,10 @@ type SettingsView struct {
 	onLoggingChanged     func(enabled bool)
 	onChatScaleChanged   func(pct int)
 	featuresCard         *widget.Card
+	ttsOutputModeCard    *widget.Card
+	ttsOutputModeSelect  *widget.Select
+	idleTimeoutSelect    *widget.Select
+	ttsModeStatusLabel   *widget.Label
 	generalBox           *fyne.Container
 	enableTTSCheck       *widget.Check
 	enableLogCheck       *widget.Check
@@ -94,6 +100,12 @@ type SettingsView struct {
 	hotkeyKeySelect      *widget.Select
 	hotkeyRecordBtn      *widget.Button
 	hotkeyResetBtn       *widget.Button
+	modeHotkeyCtrlCheck  *widget.Check
+	modeHotkeyShiftCheck *widget.Check
+	modeHotkeyAltCheck   *widget.Check
+	modeHotkeyKeySelect  *widget.Select
+	modeHotkeyRecordBtn  *widget.Button
+	modeHotkeyResetBtn   *widget.Button
 	defaultBadWordsCheck *widget.Check
 	newWordEntry         *ScrollPassEntry
 	addWordBtn           *widget.Button
@@ -163,6 +175,16 @@ func (v *SettingsView) SetStatusHandler(fn func(msg string)) {
 // SetHotkeyChangedHandler registers a callback invoked when the user changes the global Panic Mute hotkey.
 func (v *SettingsView) SetHotkeyChangedHandler(fn func(hotkey string) error) {
 	v.onHotkeyChanged = fn
+}
+
+// SetModeToggleHotkeyChangedHandler registers a callback invoked when the user changes the global TTS Mode Toggle hotkey.
+func (v *SettingsView) SetModeToggleHotkeyChangedHandler(fn func(hotkey string) error) {
+	v.onModeToggleHotkeyChanged = fn
+}
+
+// SetTTSOutputModeChangedHandler registers a callback invoked when the TTS Output Mode is updated in Settings.
+func (v *SettingsView) SetTTSOutputModeChangedHandler(fn func(mode string)) {
+	v.onTTSOutputModeChanged = fn
 }
 
 // SetServicesChangedHandler registers a callback invoked when streaming services are enabled or disabled.
@@ -306,6 +328,13 @@ func (v *SettingsView) SyncTTSState(enabled bool) {
 				v.globalVoiceCard.Hide()
 			}
 		}
+		if v.ttsOutputModeCard != nil {
+			if enabled {
+				v.ttsOutputModeCard.Show()
+			} else {
+				v.ttsOutputModeCard.Hide()
+			}
+		}
 		if v.audioCard != nil {
 			if enabled {
 				v.audioCard.Show()
@@ -317,6 +346,35 @@ func (v *SettingsView) SyncTTSState(enabled bool) {
 			v.generalBox.Refresh()
 		}
 		v.SyncPlatformTabVisibility()
+	})
+}
+
+// SyncTTSModeState synchronizes the Settings TTS Output Mode controls and live status indicator.
+func (v *SettingsView) SyncTTSModeState(mode string, speakingActive bool, userIdle bool) {
+	fyne.Do(func() {
+		cfg := v.currentConfig()
+		v.initializing = true
+		defer func() { v.initializing = false }()
+
+		if v.ttsOutputModeSelect != nil {
+			target := FormatTTSOutputModeLabel(mode)
+			if v.ttsOutputModeSelect.Selected != target {
+				v.ttsOutputModeSelect.SetSelected(target)
+			}
+		}
+		timeoutSec := config.DefaultIdleTimeoutSeconds
+		if cfg != nil && cfg.TTS.IdleTimeoutSeconds > 0 {
+			timeoutSec = cfg.TTS.IdleTimeoutSeconds
+		}
+		if v.idleTimeoutSelect != nil {
+			targetIdle := FormatIdleTimeoutLabel(timeoutSec)
+			if v.idleTimeoutSelect.Selected != targetIdle {
+				v.idleTimeoutSelect.SetSelected(targetIdle)
+			}
+		}
+		if v.ttsModeStatusLabel != nil {
+			v.ttsModeStatusLabel.SetText(FormatTTSModeStatusSummary(mode, speakingActive, userIdle, timeoutSec))
+		}
 	})
 }
 
@@ -363,6 +421,12 @@ func (v *SettingsView) SyncFromConfig() {
 	}
 	if v.globalVoiceField != nil {
 		v.globalVoiceField.SetVoiceAndSpeed(v.cfg.GlobalChatRules.DefaultVoice, v.cfg.GlobalChatRules.DefaultSpeed)
+	}
+	if v.ttsOutputModeSelect != nil {
+		v.ttsOutputModeSelect.SetSelected(FormatTTSOutputModeLabel(v.cfg.TTS.OutputMode))
+	}
+	if v.idleTimeoutSelect != nil {
+		v.idleTimeoutSelect.SetSelected(FormatIdleTimeoutLabel(v.cfg.TTS.IdleTimeoutSeconds))
 	}
 	if v.logsView != nil {
 		v.logsView.SyncFromConfig()
@@ -412,6 +476,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	}
 
 	v.featuresCard = v.buildFeaturesCard()
+	v.ttsOutputModeCard = v.buildTTSOutputModeCard()
 	servicesCard := v.buildServicesCard()
 	v.globalVoiceCard = v.buildGlobalVoiceCard()
 	v.audioCard = v.buildAudioCard()
@@ -422,12 +487,14 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	safetyCard := v.buildSafetyCard()
 
 	if !v.ttsEnabled {
+		v.ttsOutputModeCard.Hide()
 		v.globalVoiceCard.Hide()
 		v.audioCard.Hide()
 	}
 
 	v.generalBox = container.NewVBox(
 		v.featuresCard,
+		v.ttsOutputModeCard,
 		servicesCard,
 		v.globalVoiceCard,
 		v.audioCard,
@@ -489,6 +556,13 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 			c.TTS.Enabled = checked
 		})
 		v.ttsEnabled = checked
+		if v.ttsOutputModeCard != nil {
+			if checked {
+				v.ttsOutputModeCard.Show()
+			} else {
+				v.ttsOutputModeCard.Hide()
+			}
+		}
 		if v.globalVoiceCard != nil {
 			if checked {
 				v.globalVoiceCard.Show()
@@ -550,6 +624,140 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 	)
 
 	return widget.NewCard("Application Features", "Enable or disable core system features", cardContent)
+}
+
+// IdleTimeoutOptions lists selectable keyboard/mouse inactivity thresholds for Auto-AFK mode.
+var IdleTimeoutOptions = []string{
+	"5 seconds",
+	"10 seconds",
+	"15 seconds",
+	"30 seconds",
+	"60 seconds",
+	"120 seconds",
+	"300 seconds",
+}
+
+// FormatIdleTimeoutLabel returns the UI dropdown label for a timeout in seconds.
+func FormatIdleTimeoutLabel(sec int) string {
+	switch sec {
+	case 5:
+		return "5 seconds"
+	case 10:
+		return "10 seconds"
+	case 15:
+		return "15 seconds"
+	case 30:
+		return "30 seconds"
+	case 60:
+		return "60 seconds"
+	case 120:
+		return "120 seconds"
+	case 300:
+		return "300 seconds"
+	default:
+		if sec <= 0 {
+			return "15 seconds"
+		}
+		return fmt.Sprintf("%d seconds", sec)
+	}
+}
+
+// ParseIdleTimeoutLabel parses a UI dropdown label into seconds.
+func ParseIdleTimeoutLabel(label string) int {
+	var sec int
+	if _, err := fmt.Sscanf(label, "%d", &sec); err == nil && sec > 0 {
+		return sec
+	}
+	return config.DefaultIdleTimeoutSeconds
+}
+
+func (v *SettingsView) buildTTSOutputModeCard() *widget.Card {
+	cfg := v.currentConfig()
+	initialMode := config.NormalizeTTSOutputMode(cfg.TTS.OutputMode)
+	initialTimeout := cfg.TTS.IdleTimeoutSeconds
+	if initialTimeout <= 0 {
+		initialTimeout = config.DefaultIdleTimeoutSeconds
+	}
+
+	speakingActive := initialMode == config.TTSModeAlwaysOn
+	userIdle := false
+	if v.session != nil {
+		speakingActive = v.session.IsTTSSpeakingActive()
+		userIdle = v.session.IsUserIdle()
+	}
+
+	v.ttsModeStatusLabel = widget.NewLabelWithStyle(
+		FormatTTSModeStatusSummary(initialMode, speakingActive, userIdle, initialTimeout),
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Bold: true},
+	)
+
+	v.ttsOutputModeSelect = widget.NewSelect(TTSOutputModeOptions, func(selected string) {
+		if v.initializing {
+			return
+		}
+		mode := ParseTTSOutputModeLabel(selected)
+		if v.session != nil {
+			_ = v.session.SetTTSOutputMode(mode)
+			v.cfg = v.session.Config()
+		} else {
+			v.updateConfig(func(c *config.Config) {
+				c.TTS.OutputMode = mode
+			})
+		}
+		if v.onTTSOutputModeChanged != nil {
+			v.onTTSOutputModeChanged(mode)
+		}
+		v.setStatus("✓ TTS Output Mode set to " + FormatTTSOutputModeLabel(mode))
+	})
+	v.ttsOutputModeSelect.SetSelected(FormatTTSOutputModeLabel(initialMode))
+
+	v.idleTimeoutSelect = widget.NewSelect(IdleTimeoutOptions, func(selected string) {
+		if v.initializing {
+			return
+		}
+		sec := ParseIdleTimeoutLabel(selected)
+		v.updateConfig(func(c *config.Config) {
+			c.TTS.IdleTimeoutSeconds = sec
+		})
+		if v.session != nil {
+			v.session.EvaluateIdleState()
+		}
+		if v.ttsModeStatusLabel != nil {
+			curMode := config.NormalizeTTSOutputMode(v.currentConfig().TTS.OutputMode)
+			active := curMode == config.TTSModeAlwaysOn
+			idle := false
+			if v.session != nil {
+				active = v.session.IsTTSSpeakingActive()
+				idle = v.session.IsUserIdle()
+			}
+			v.ttsModeStatusLabel.SetText(FormatTTSModeStatusSummary(curMode, active, idle, sec))
+		}
+		v.setStatus(fmt.Sprintf("✓ Auto-AFK inactivity timeout set to %d seconds.", sec))
+	})
+	v.idleTimeoutSelect.SetSelected(FormatIdleTimeoutLabel(initialTimeout))
+
+	modeRow := container.NewHBox(
+		widget.NewLabel("Output Mode:"),
+		v.ttsOutputModeSelect,
+		widget.NewLabel("Auto-AFK Timeout:"),
+		v.idleTimeoutSelect,
+	)
+
+	descLabel := widget.NewLabelWithStyle(
+		"Keeps neural TTS models warm in RAM for instant 0ms switching. In Auto-AFK mode, TownCrier stays quiet while you use your keyboard/mouse and automatically reads chat aloud after inactivity.",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	descLabel.Wrapping = fyne.TextWrapWord
+
+	cardContent := container.NewVBox(
+		modeRow,
+		v.ttsModeStatusLabel,
+		descLabel,
+	)
+
+	return widget.NewCard("TTS Output Mode & Auto-AFK", "Control when chat is spoken aloud vs. suppressed while at your computer", cardContent)
 }
 
 func (v *SettingsView) buildServicesCard() *widget.Card {
@@ -1710,6 +1918,108 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 		resetHotkeyBtn,
 	)
 
+	// --- System-Wide TTS Mode Toggle Hotkey ---
+	curModeHotkey := v.cfg.Safety.ModeToggleHotkey
+	if curModeHotkey == "" {
+		curModeHotkey = config.DefaultModeToggleHotkey
+	}
+	parsedModeSpec, parseModeErr := ParseHotkey(curModeHotkey)
+	if parseModeErr != nil {
+		parsedModeSpec, _ = ParseHotkey(config.DefaultModeToggleHotkey)
+	}
+
+	modeHotkeyDisplay := widget.NewLabelWithStyle(
+		fmt.Sprintf("System-Wide TTS Mode Toggle Hotkey: %s (cycles Always On → Auto-AFK → Always Off)", parsedModeSpec.String()),
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Bold: true},
+	)
+	modeHotkeyDisplay.Wrapping = fyne.TextWrapWord
+
+	var syncingModeHotkeyUI bool
+
+	modeCtrlCheck := widget.NewCheck("Ctrl", nil)
+	modeShiftCheck := widget.NewCheck("Shift", nil)
+	modeAltCheck := widget.NewCheck("Alt", nil)
+	modeKeySelect := widget.NewSelect(SupportedHotkeyKeys, nil)
+
+	v.modeHotkeyCtrlCheck = modeCtrlCheck
+	v.modeHotkeyShiftCheck = modeShiftCheck
+	v.modeHotkeyAltCheck = modeAltCheck
+	v.modeHotkeyKeySelect = modeKeySelect
+
+	syncModeWidgetsFromSpec := func(spec HotkeySpec) {
+		syncingModeHotkeyUI = true
+		modeCtrlCheck.SetChecked(spec.Ctrl)
+		modeShiftCheck.SetChecked(spec.Shift)
+		modeAltCheck.SetChecked(spec.Alt)
+		modeKeySelect.SetSelected(spec.Key)
+		modeHotkeyDisplay.SetText(fmt.Sprintf("System-Wide TTS Mode Toggle Hotkey: %s (cycles Always On → Auto-AFK → Always Off)", spec.String()))
+		syncingModeHotkeyUI = false
+	}
+
+	applyNewModeHotkey := func(candidate string) {
+		spec, err := ParseHotkey(candidate)
+		if err != nil {
+			v.setStatus("⚠️ Invalid mode toggle hotkey: " + err.Error())
+			return
+		}
+		canonical := spec.String()
+		v.updateConfig(func(c *config.Config) {
+			c.Safety.ModeToggleHotkey = canonical
+		})
+		syncModeWidgetsFromSpec(spec)
+		if v.onModeToggleHotkeyChanged != nil {
+			if regErr := v.onModeToggleHotkeyChanged(canonical); regErr != nil {
+				v.setStatus(fmt.Sprintf("⚠️ Mode hotkey saved (%s), but OS registration failed: %v", canonical, regErr))
+				return
+			}
+		}
+		v.setStatus("✓ Global TTS Mode Toggle hotkey set to " + canonical)
+	}
+
+	onModeComboChanged := func() {
+		if v.initializing || syncingModeHotkeyUI {
+			return
+		}
+		tempSpec := HotkeySpec{
+			Ctrl:  modeCtrlCheck.Checked,
+			Shift: modeShiftCheck.Checked,
+			Alt:   modeAltCheck.Checked,
+			Key:   modeKeySelect.Selected,
+		}
+		applyNewModeHotkey(tempSpec.String())
+	}
+
+	syncModeWidgetsFromSpec(parsedModeSpec)
+
+	modeCtrlCheck.OnChanged = func(bool) { onModeComboChanged() }
+	modeShiftCheck.OnChanged = func(bool) { onModeComboChanged() }
+	modeAltCheck.OnChanged = func(bool) { onModeComboChanged() }
+	modeKeySelect.OnChanged = func(string) { onModeComboChanged() }
+
+	modeRecordBtn := widget.NewButtonWithIcon("Record Keypress...", theme.MediaRecordIcon(), func() {
+		v.showRecordHotkeyDialog(parsedModeSpec, func(recorded string) {
+			applyNewModeHotkey(recorded)
+		})
+	})
+	v.modeHotkeyRecordBtn = modeRecordBtn
+
+	modeResetHotkeyBtn := widget.NewButtonWithIcon("Reset Default", theme.ViewRefreshIcon(), func() {
+		applyNewModeHotkey(config.DefaultModeToggleHotkey)
+	})
+	v.modeHotkeyResetBtn = modeResetHotkeyBtn
+
+	modeHotkeyControlsRow := container.NewHBox(
+		widget.NewLabel("Modifiers:"),
+		modeCtrlCheck,
+		modeShiftCheck,
+		modeAltCheck,
+		widget.NewLabel("Key:"),
+		modeKeySelect,
+		modeRecordBtn,
+		modeResetHotkeyBtn,
+	)
+
 	wordListContainer := container.NewVBox()
 
 	var refreshWords func()
@@ -1779,6 +2089,9 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 	cardContent := container.NewVBox(
 		hotkeyDisplay,
 		hotkeyControlsRow,
+		widget.NewSeparator(),
+		modeHotkeyDisplay,
+		modeHotkeyControlsRow,
 		widget.NewSeparator(),
 		defaultBadWordsCheck,
 		widget.NewLabel("Custom Blocked Words (masked with '***' before TTS):"),

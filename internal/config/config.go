@@ -86,16 +86,52 @@ type AudioConfig struct {
 	Volume     float32 `json:"volume"` // 0.0 to 1.0
 }
 
+// TTS operational output modes while the TTS engine remains warm in memory.
+const (
+	TTSModeAlwaysOn  = "always_on"
+	TTSModeAutoIdle  = "auto_idle"
+	TTSModeAlwaysOff = "always_off"
+
+	DefaultIdleTimeoutSeconds = 15
+	DefaultModeToggleHotkey   = "Ctrl+Shift+T"
+)
+
+// NormalizeTTSOutputMode returns a valid canonical TTSOutputMode, defaulting to TTSModeAlwaysOn.
+func NormalizeTTSOutputMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case TTSModeAutoIdle, "auto", "idle", "afk":
+		return TTSModeAutoIdle
+	case TTSModeAlwaysOff, "off", "disabled", "muted":
+		return TTSModeAlwaysOff
+	default:
+		return TTSModeAlwaysOn
+	}
+}
+
+// NextTTSOutputMode cycles through Always On -> Auto (AFK Idle) -> Always Off -> Always On.
+func NextTTSOutputMode(current string) string {
+	switch NormalizeTTSOutputMode(current) {
+	case TTSModeAlwaysOn:
+		return TTSModeAutoIdle
+	case TTSModeAutoIdle:
+		return TTSModeAlwaysOff
+	default:
+		return TTSModeAlwaysOn
+	}
+}
+
 type TTSConfig struct {
-	Enabled           bool     `json:"enabled"`
-	Preset            string   `json:"preset,omitempty"`         // "ultra_low", "fast_lean", "balanced", "beefy", "custom"
-	EnabledModels     []string `json:"enabled_models,omitempty"` // ["kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper"]
-	ModelFamily       string   `json:"model_family"`             // "kokoro"
-	ModelPath         string   `json:"model_path"`
-	NumThreads        int      `json:"num_threads"`
-	UseGPU            bool     `json:"use_gpu"`
-	MaxClauseWords    int      `json:"max_clause_words,omitempty"`
-	IdleUnloadMinutes int      `json:"idle_unload_minutes,omitempty"`
+	Enabled            bool     `json:"enabled"`
+	OutputMode         string   `json:"output_mode,omitempty"`          // "always_on", "auto_idle", "always_off"
+	IdleTimeoutSeconds int      `json:"idle_timeout_seconds,omitempty"` // seconds of keyboard/mouse inactivity before enabling TTS in auto_idle mode
+	Preset             string   `json:"preset,omitempty"`               // "ultra_low", "fast_lean", "balanced", "beefy", "custom"
+	EnabledModels      []string `json:"enabled_models,omitempty"`       // ["kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper"]
+	ModelFamily        string   `json:"model_family"`                   // "kokoro"
+	ModelPath          string   `json:"model_path"`
+	NumThreads         int      `json:"num_threads"`
+	UseGPU             bool     `json:"use_gpu"`
+	MaxClauseWords     int      `json:"max_clause_words,omitempty"`
+	IdleUnloadMinutes  int      `json:"idle_unload_minutes,omitempty"`
 }
 
 // EffectiveEnabledModels returns the non-empty list of enabled TTS model families.
@@ -126,6 +162,7 @@ func (t TTSConfig) EffectiveEnabledModels() []string {
 
 type SafetyConfig struct {
 	PanicHotkey          string   `json:"panic_hotkey"`
+	ModeToggleHotkey     string   `json:"mode_toggle_hotkey,omitempty"`
 	BlockDefaultBadWords bool     `json:"block_default_bad_words"`
 	BlockedWords         []string `json:"blocked_words"`
 }
@@ -340,18 +377,21 @@ func DefaultConfig() *Config {
 			Volume:     1.0,
 		},
 		TTS: TTSConfig{
-			Enabled:           true,
-			Preset:            "fast_lean",
-			EnabledModels:     []string{"supertonic"},
-			ModelFamily:       "supertonic",
-			ModelPath:         "",
-			NumThreads:        4,
-			UseGPU:            false,
-			MaxClauseWords:    12,
-			IdleUnloadMinutes: 0,
+			Enabled:            true,
+			OutputMode:         TTSModeAlwaysOn,
+			IdleTimeoutSeconds: DefaultIdleTimeoutSeconds,
+			Preset:             "fast_lean",
+			EnabledModels:      []string{"supertonic"},
+			ModelFamily:        "supertonic",
+			ModelPath:          "",
+			NumThreads:         4,
+			UseGPU:             false,
+			MaxClauseWords:     12,
+			IdleUnloadMinutes:  0,
 		},
 		Safety: SafetyConfig{
 			PanicHotkey:          "Ctrl+Shift+M",
+			ModeToggleHotkey:     DefaultModeToggleHotkey,
 			BlockDefaultBadWords: true,
 			BlockedWords:         []string{},
 		},
@@ -930,6 +970,13 @@ func migrate(cfg *Config) error {
 	}
 	if cfg.TTS.MaxClauseWords <= 0 {
 		cfg.TTS.MaxClauseWords = 12
+	}
+	cfg.TTS.OutputMode = NormalizeTTSOutputMode(cfg.TTS.OutputMode)
+	if cfg.TTS.IdleTimeoutSeconds <= 0 {
+		cfg.TTS.IdleTimeoutSeconds = DefaultIdleTimeoutSeconds
+	}
+	if strings.TrimSpace(cfg.Safety.ModeToggleHotkey) == "" {
+		cfg.Safety.ModeToggleHotkey = DefaultModeToggleHotkey
 	}
 
 	if strings.TrimSpace(cfg.UIScale) == "" {
