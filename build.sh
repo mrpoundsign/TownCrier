@@ -19,7 +19,7 @@ BUILD_DIR="$ROOT_DIR/build"
 BIN_DIR="$BUILD_DIR/bin"
 DIST_DIR="$ROOT_DIR/dist"
 DEFAULT_VER=$(grep -E '^[[:space:]]*Version[[:space:]]*=' "$ROOT_DIR/FyneApp.toml" 2>/dev/null | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
-VERSION="${VERSION:-${DEFAULT_VER:-0.0.7}}"
+VERSION="${VERSION:-${DEFAULT_VER:-0.0.8}}"
 
 mkdir -p "$BUILD_DIR" "$BIN_DIR" "$DIST_DIR" "$ROOT_DIR/cmd/launcher/payload" "$ROOT_DIR/cmd/installer/payload"
 touch "$ROOT_DIR/cmd/launcher/payload/placeholder.txt" "$ROOT_DIR/cmd/installer/payload/placeholder.txt"
