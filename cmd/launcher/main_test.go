@@ -45,3 +45,27 @@ func TestExtractPayloadIfNeeded(t *testing.T) {
 		t.Fatalf("extractPayloadIfNeeded failed: %v", err)
 	}
 }
+
+func TestCleanupOldVersions(t *testing.T) {
+	baseDir := t.TempDir()
+	oldDir := filepath.Join(baseDir, "0.0.5")
+	curDir := filepath.Join(baseDir, "0.0.7")
+
+	if err := os.MkdirAll(oldDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(curDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cleanupOldVersions(baseDir, "0.0.7"); err != nil {
+		t.Fatalf("cleanupOldVersions failed: %v", err)
+	}
+
+	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
+		t.Errorf("expected old version directory 0.0.5 to be removed")
+	}
+	if _, err := os.Stat(curDir); err != nil {
+		t.Errorf("expected current version directory 0.0.7 to remain: %v", err)
+	}
+}

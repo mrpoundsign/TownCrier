@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"image/color"
 	"log"
 	"sync"
+	"testing"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -14,6 +16,8 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/mrpoundsign/appinstaller/pkg/updater"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/internal/config"
@@ -69,6 +73,8 @@ type MainWindow struct {
 	tooltipText    *canvas.Text
 	volumeSlider       *widget.Slider
 	volContainer       *fyne.Container
+	updateBtn          *widget.Button
+	pendingRelease     *updater.ReleaseInfo
 	panicBtn           *widget.Button
 	hotkeyMgr          *GlobalHotkeyManager
 	activeShortcut     *desktop.CustomShortcut
@@ -173,7 +179,52 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 		cleanup()
 	})
 
+	mw.startStartupUpdateCheck()
+
 	return mw
+}
+
+func (mw *MainWindow) startStartupUpdateCheck() {
+	if testing.Testing() || mw.Session == nil {
+		return
+	}
+	cfg := mw.Session.Config()
+	if cfg == nil || !cfg.Update.CheckOnStartup {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+
+		checker := NewTownCrierUpdater()
+		rel, isNewer, err := checker.CheckLatest(ctx, AppVersion)
+		if err != nil || !isNewer || rel == nil {
+			return
+		}
+
+		fyne.Do(func() {
+			mw.pendingRelease = rel
+			if mw.updateBtn != nil {
+				mw.updateBtn.SetText("⬆ Update v" + rel.Version)
+				mw.updateBtn.Show()
+			}
+			if mw.headerBar != nil {
+				mw.headerBar.Refresh()
+			}
+			mw.SetStatus("⬆ Update available: TownCrier v" + rel.Version + " — click 'Update' in the top bar.")
+
+			// Never interrupt an active broadcast with a modal update dialog
+			if mw.Session.IsStreamLive() {
+				return
+			}
+			curCfg := mw.Session.Config()
+			if curCfg != nil && curCfg.Update.SkippedVersion == rel.Version {
+				return
+			}
+			ShowTownCrierUpdateDialog(mw.Window, mw.Session, rel)
+		})
+	}()
 }
 
 func (mw *MainWindow) initStatusBar() {
@@ -671,8 +722,18 @@ func (mw *MainWindow) initHeader() {
 	volContainer := container.NewBorder(nil, nil, volLabel, nil, container.NewStack(volSliderSpacer, mw.volumeSlider))
 	mw.volContainer = volContainer
 
+	mw.updateBtn = widget.NewButtonWithIcon("⬆ Update", theme.DownloadIcon(), func() {
+		if mw.pendingRelease != nil {
+			ShowTownCrierUpdateDialog(mw.Window, mw.Session, mw.pendingRelease)
+		} else {
+			TriggerManualUpdateCheck(mw.Window, mw.Session, mw.SetStatus)
+		}
+	})
+	mw.updateBtn.Importance = widget.HighImportance
+	mw.updateBtn.Hide()
+
 	aboutBtn := widget.NewButtonWithIcon("About", theme.InfoIcon(), func() {
-		ShowAboutDialog(mw.Window)
+		ShowAboutDialog(mw.Window, mw.Session)
 	})
 
 	navButtons := container.NewHBox(
@@ -689,7 +750,7 @@ func (mw *MainWindow) initHeader() {
 		widget.NewSeparator(),
 		navButtons,
 	)
-	rightSide := container.NewHBox(volContainer, aboutBtn)
+	rightSide := container.NewHBox(volContainer, mw.updateBtn, aboutBtn)
 
 	mw.headerBar = container.NewVBox(
 		container.NewHBox(leftSide, layout.NewSpacer(), rightSide),

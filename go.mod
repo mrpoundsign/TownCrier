@@ -7,7 +7,14 @@ require (
 	github.com/gempir/go-twitch-irc/v4 v4.4.1
 	github.com/gen2brain/malgo v0.11.26
 	github.com/k2-fsa/sherpa-onnx-go v1.13.8
+	github.com/mrpoundsign/appinstaller v0.0.1
+	github.com/steampoweredtaco/gotiktoklive v0.0.4
+	github.com/yatagai-mm/byrd v0.2.1
 	github.com/zalando/go-keyring v0.2.8
+	golang.org/x/image v0.24.0
+	golang.org/x/net v0.35.0
+	google.golang.org/protobuf v1.33.0
+	modernc.org/sqlite v1.60.1
 )
 
 require (
@@ -53,19 +60,13 @@ require (
 	github.com/rymdport/portal v0.4.2 // indirect
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c // indirect
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef // indirect
-	github.com/steampoweredtaco/gotiktoklive v0.0.4 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	github.com/yatagai-mm/byrd v0.2.1 // indirect
 	github.com/yuin/goldmark v1.8.2 // indirect
 	go.uber.org/ratelimit v0.3.1 // indirect
-	golang.org/x/image v0.24.0 // indirect
-	golang.org/x/net v0.35.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
-	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.77.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.60.1 // indirect
 )

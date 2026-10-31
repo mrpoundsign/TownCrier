@@ -48,6 +48,7 @@ TownCrier/
 ├── build/                # Local build output and temporary binaries (gitignored)
 │   └── bin/              # Cross-compiled executables and runtime DLLs
 ├── cmd/
+│   ├── installer/        # Fyne GUI installer & uninstaller (-tags nosherpa, via appinstaller)
 │   ├── launcher/         # Single-file portable executable self-extracting launcher
 │   ├── spike/            # Technical spike & audio engine validation CLI
 │   └── towncrier/        # Main desktop application GUI entry point (main.go)
@@ -97,3 +98,7 @@ TownCrier/
    - Never run Windows `.exe` GUI binaries interactively in WSL bash (causes terminal hang). Let the user launch `build/bin/TownCrier.exe` from Windows.
 8. **Frequency-Gated Audio Cache (Issue #21)**:
    - Chat messages follow a long-tail distribution. Never cache one-offs. Use frequency gating (promote to disk in `%LOCALAPPDATA%\com.github.mrpoundsign.towncrier\cache\audio\` only when count ≥ 2 or for alert templates) to maintain near-zero RAM usage.
+9. **Unified Installer, Portable Launcher & Self-Updater (`@skill:goreleaser-installer-updater`)**:
+   - Uses `github.com/mrpoundsign/appinstaller` (`../appinstaller`) and `.goreleaser.yaml` (GoReleaser v2 OSS).
+   - `cmd/installer` is compiled with `-tags nosherpa` so `TownCrier-Setup.exe` runs as a standalone Fyne setup wizard with zero external DLL dependencies while still reusing `internal/tts` to optionally pre-download Supertonic/Kokoro model packs.
+   - Startup update checks suppress modal dialogs whenever `session.IsStreamLive()` is true, showing only the header bar `"⬆ Update"` badge and status message.

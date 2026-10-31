@@ -17,6 +17,7 @@ const CurrentVersion = 1
 type Config struct {
 	Version         int                       `json:"version"`
 	UIScale         string                    `json:"ui_scale,omitempty"`
+	Update          UpdateConfig              `json:"update"`
 	Audio           AudioConfig               `json:"audio"`
 	TTS             TTSConfig                 `json:"tts"`
 	Safety          SafetyConfig              `json:"safety"`
@@ -26,6 +27,12 @@ type Config struct {
 	GlobalChatRules GlobalChatRules           `json:"global_chat_rules"`
 	Viewers         map[string]ViewerConfig   `json:"viewers"`
 	Platforms       map[string]PlatformConfig `json:"platforms"`
+}
+
+// UpdateConfig configures application version checking and self-update preferences.
+type UpdateConfig struct {
+	CheckOnStartup bool   `json:"check_on_startup"`
+	SkippedVersion string `json:"skipped_version,omitempty"`
 }
 
 type LoggingConfig struct {
@@ -375,6 +382,9 @@ func DefaultConfig() *Config {
 	return &Config{
 		Version: CurrentVersion,
 		UIScale: "1.0",
+		Update: UpdateConfig{
+			CheckOnStartup: true,
+		},
 		Audio: AudioConfig{
 			DeviceID:   "",
 			DeviceName: "",

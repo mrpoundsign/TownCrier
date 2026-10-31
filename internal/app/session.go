@@ -673,6 +673,13 @@ func (s *Session) ActiveSessionID() int64 {
 	return s.activeSessionID
 }
 
+// IsStreamLive reports whether any configured streaming platform is currently broadcasting live.
+func (s *Session) IsStreamLive() bool {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	return len(s.livePlatforms) > 0
+}
+
 // UpdatePlatformStreamState transitions a platform's live stream state and opens or closes the unified StreamSession accordingly.
 func (s *Session) UpdatePlatformStreamState(platform, channel string, live bool) {
 	platform = strings.ToLower(strings.TrimSpace(platform))

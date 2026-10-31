@@ -87,6 +87,7 @@ type SettingsView struct {
 	generalBox           *fyne.Container
 	enableTTSCheck       *widget.Check
 	enableLogCheck       *widget.Check
+	checkUpdatesCheck    *widget.Check
 	globalVoiceCard      *widget.Card
 	audioCard            *widget.Card
 	presetSelect         *widget.Select
@@ -630,9 +631,31 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 	})
 	v.enableLogCheck.SetChecked(cfg.Logging.Enabled)
 
+	v.checkUpdatesCheck = widget.NewCheck("Automatically check for updates on startup", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.Update.CheckOnStartup = checked
+		})
+		if checked {
+			v.setStatus("✓ Startup update checks enabled.")
+		} else {
+			v.setStatus("Startup update checks disabled.")
+		}
+	})
+	v.checkUpdatesCheck.SetChecked(cfg.Update.CheckOnStartup)
+
+	checkNowBtn := widget.NewButtonWithIcon("Check for Updates Now", theme.ViewRefreshIcon(), func() {
+		TriggerManualUpdateCheck(v.window, v.session, v.setStatus)
+	})
+
+	updateRow := container.NewHBox(v.checkUpdatesCheck, checkNowBtn)
+
 	cardContent := container.NewVBox(
 		v.enableTTSCheck,
 		v.enableLogCheck,
+		updateRow,
 	)
 
 	return widget.NewCard("Application Features", "Enable or disable core system features", cardContent)
