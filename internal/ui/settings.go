@@ -84,6 +84,12 @@ type SettingsView struct {
 	alertBrowseBtn       *widget.Button
 	alertClearBtn        *widget.Button
 	alertTestBtn         *widget.Button
+	wsControlCard        *widget.Card
+	wsEnabledCheck       *widget.Check
+	wsHostEntry          *ScrollPassEntry
+	wsPortEntry          *ScrollPassEntry
+	wsTokenEntry         *ScrollPassEntry
+	wsStatusLabel        *widget.Label
 	generalBox           *fyne.Container
 	enableTTSCheck       *widget.Check
 	enableLogCheck       *widget.Check
@@ -441,6 +447,22 @@ func (v *SettingsView) SyncFromConfig() {
 	if v.alertSoundEntry != nil {
 		v.alertSoundEntry.SetText(v.cfg.TTS.AlertSoundPath)
 	}
+	if v.wsEnabledCheck != nil {
+		v.wsEnabledCheck.SetChecked(v.cfg.WebSocket.Enabled)
+	}
+	if v.wsHostEntry != nil {
+		v.wsHostEntry.SetText(v.cfg.WebSocket.Host)
+	}
+	if v.wsPortEntry != nil {
+		v.wsPortEntry.SetText(strconv.Itoa(v.cfg.WebSocket.Port))
+	}
+	if v.wsTokenEntry != nil {
+		v.wsTokenEntry.SetText(v.cfg.WebSocket.AuthToken)
+	}
+	if v.checkUpdatesCheck != nil {
+		v.checkUpdatesCheck.SetChecked(v.cfg.Update.CheckOnStartup)
+	}
+	v.refreshWSStatusLabel()
 	if v.logsView != nil {
 		v.logsView.SyncFromConfig()
 		v.logsView.RefreshQuery()
@@ -490,6 +512,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 
 	v.featuresCard = v.buildFeaturesCard()
 	v.ttsOutputModeCard = v.buildTTSOutputModeCard()
+	v.wsControlCard = v.buildWSControlCard()
 	servicesCard := v.buildServicesCard()
 	v.globalVoiceCard = v.buildGlobalVoiceCard()
 	v.audioCard = v.buildAudioCard()
@@ -508,6 +531,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	v.generalBox = container.NewVBox(
 		v.featuresCard,
 		v.ttsOutputModeCard,
+		v.wsControlCard,
 		servicesCard,
 		v.globalVoiceCard,
 		v.audioCard,
@@ -638,11 +662,6 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 		v.updateConfig(func(c *config.Config) {
 			c.Update.CheckOnStartup = checked
 		})
-		if checked {
-			v.setStatus("✓ Startup update checks enabled.")
-		} else {
-			v.setStatus("Startup update checks disabled.")
-		}
 	})
 	v.checkUpdatesCheck.SetChecked(cfg.Update.CheckOnStartup)
 
@@ -871,6 +890,125 @@ func (v *SettingsView) buildTTSOutputModeCard() *widget.Card {
 	)
 
 	return widget.NewCard("TTS Output Mode & Auto-AFK", "Control when chat is spoken aloud vs. alerted with a chime while at your computer", cardContent)
+}
+
+func (v *SettingsView) refreshWSStatusLabel() {
+	if v.wsStatusLabel == nil {
+		return
+	}
+	cfg := v.currentConfig()
+	if cfg == nil || !cfg.WebSocket.Enabled {
+		v.wsStatusLabel.SetText("⚪ Control Server Disabled")
+		return
+	}
+	host := strings.TrimSpace(cfg.WebSocket.Host)
+	if host == "" {
+		host = config.DefaultWebSocketHost
+	}
+	port := cfg.WebSocket.Port
+	if port <= 0 || port > 65535 {
+		port = config.DefaultWebSocketPort
+	}
+	if v.session != nil && v.session.WSServer() != nil && v.session.WSServer().IsRunning() {
+		addr := v.session.WSServer().Addr()
+		clients := v.session.WSServer().ClientCount()
+		v.wsStatusLabel.SetText(fmt.Sprintf("🟢 Listening on ws://%s/ws & http://%s/api/* (%d connected clients)", addr, addr, clients))
+		return
+	}
+	v.wsStatusLabel.SetText(fmt.Sprintf("🟢 Configured for ws://%s:%d/ws & http://%s:%d/api/*", host, port, host, port))
+}
+
+func (v *SettingsView) buildWSControlCard() *widget.Card {
+	cfg := v.currentConfig()
+
+	v.wsStatusLabel = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+
+	v.wsEnabledCheck = widget.NewCheck("Enable Local WebSocket & HTTP Control Server (Stream Deck, Streamer.bot, TouchPortal)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.WebSocket.Enabled = checked
+		})
+		v.refreshWSStatusLabel()
+		if checked {
+			v.setStatus("✓ Local WebSocket & HTTP Control Server enabled.")
+		} else {
+			v.setStatus("Local WebSocket & HTTP Control Server disabled.")
+		}
+	})
+	v.wsEnabledCheck.SetChecked(cfg.WebSocket.Enabled)
+
+	hostEntry := NewScrollPassEntry()
+	hostEntry.SetPlaceHolder(config.DefaultWebSocketHost)
+	host := strings.TrimSpace(cfg.WebSocket.Host)
+	if host == "" {
+		host = config.DefaultWebSocketHost
+	}
+	hostEntry.SetText(host)
+	v.wsHostEntry = hostEntry
+
+	portEntry := NewScrollPassEntry()
+	portEntry.SetPlaceHolder(strconv.Itoa(config.DefaultWebSocketPort))
+	port := cfg.WebSocket.Port
+	if port <= 0 || port > 65535 {
+		port = config.DefaultWebSocketPort
+	}
+	portEntry.SetText(strconv.Itoa(port))
+	v.wsPortEntry = portEntry
+
+	tokenEntry := NewScrollPassEntry()
+	tokenEntry.Password = true
+	tokenEntry.SetPlaceHolder("Optional shared secret token (leave blank for localhost no-auth)")
+	tokenEntry.SetText(cfg.WebSocket.AuthToken)
+	v.wsTokenEntry = tokenEntry
+
+	applyNetBtn := widget.NewButtonWithIcon("Apply Network Settings", theme.ConfirmIcon(), func() {
+		newHost := strings.TrimSpace(hostEntry.Text)
+		if newHost == "" {
+			newHost = config.DefaultWebSocketHost
+			hostEntry.SetText(newHost)
+		}
+		newPort, err := strconv.Atoi(strings.TrimSpace(portEntry.Text))
+		if err != nil || newPort <= 0 || newPort > 65535 {
+			v.setStatus("⚠️ Invalid port number (must be 1..65535)")
+			return
+		}
+		newToken := strings.TrimSpace(tokenEntry.Text)
+		v.updateConfig(func(c *config.Config) {
+			c.WebSocket.Host = newHost
+			c.WebSocket.Port = newPort
+			c.WebSocket.AuthToken = newToken
+		})
+		v.refreshWSStatusLabel()
+		v.setStatus(fmt.Sprintf("✓ Control Server settings updated (%s:%d).", newHost, newPort))
+	})
+
+	netRow := container.NewGridWithColumns(3,
+		container.NewBorder(nil, nil, widget.NewLabel("Host:"), nil, hostEntry),
+		container.NewBorder(nil, nil, widget.NewLabel("Port:"), nil, portEntry),
+		applyNetBtn,
+	)
+	tokenRow := container.NewBorder(nil, nil, widget.NewLabel("Auth Token:"), nil, tokenEntry)
+
+	v.refreshWSStatusLabel()
+
+	infoLabel := widget.NewLabelWithStyle(
+		"Supports binary Protocol Buffers (proto/control/v1/control.proto) and JSON over WebSocket (/ws), plus HTTP REST webhooks (/api/status, /api/speak, /api/mode, /api/panic, /api/queue, /api/volume).",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	infoLabel.Wrapping = fyne.TextWrapWord
+
+	cardContent := container.NewVBox(
+		v.wsEnabledCheck,
+		v.wsStatusLabel,
+		netRow,
+		tokenRow,
+		infoLabel,
+	)
+
+	return widget.NewCard("WebSocket & HTTP Control API", "External automation, Elgato Stream Deck, and webhook integration", cardContent)
 }
 
 func (v *SettingsView) buildServicesCard() *widget.Card {

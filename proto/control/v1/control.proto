@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package towncrier.control.v1;
+
+option go_package = "github.com/mrpoundsign/TownCrier/internal/ws/controlv1;controlv1";
+
+enum TTSOutputMode {
+  TTS_OUTPUT_MODE_UNSPECIFIED = 0;
+  TTS_OUTPUT_MODE_ALWAYS_ON = 1;
+  TTS_OUTPUT_MODE_AUTO_IDLE = 2;
+  TTS_OUTPUT_MODE_ALWAYS_OFF = 3;
+}
+
+message ClientEnvelope {
+  string request_id = 1;
+  oneof command {
+    GetStateCommand get_state = 2;
+    SetTTSModeCommand set_tts_mode = 3;
+    CycleTTSModeCommand cycle_tts_mode = 4;
+    SpeakCommand speak = 5;
+    PanicCommand panic = 6;
+    QueueActionCommand queue_action = 7;
+    SetVolumeCommand set_volume = 8;
+  }
+}
+
+message GetStateCommand {}
+
+message SetTTSModeCommand {
+  TTSOutputMode mode = 1;
+  optional int32 idle_timeout_seconds = 2;
+}
+
+message CycleTTSModeCommand {}
+
+message SpeakCommand {
+  string text = 1;
+  string voice_id = 2;
+  float speed = 3;
+  int32 priority = 4;
+  string username = 5;
+}
+
+enum PanicAction {
+  PANIC_ACTION_UNSPECIFIED = 0;
+  PANIC_ACTION_TOGGLE = 1;
+  PANIC_ACTION_MUTE = 2;
+  PANIC_ACTION_CLEAR = 3;
+}
+
+message PanicCommand {
+  PanicAction action = 1;
+}
+
+enum QueueAction {
+  QUEUE_ACTION_UNSPECIFIED = 0;
+  QUEUE_ACTION_PAUSE = 1;
+  QUEUE_ACTION_RESUME = 2;
+  QUEUE_ACTION_SKIP = 3;
+  QUEUE_ACTION_CLEAR = 4;
+}
+
+message QueueActionCommand {
+  QueueAction action = 1;
+}
+
+message SetVolumeCommand {
+  optional float volume = 1; // 0.0 to 1.0
+  optional float delta = 2;  // e.g. +0.05 / -0.05 for Stream Deck+ rotary dials
+}
+
+message StateSnapshot {
+  bool tts_enabled = 1;
+  TTSOutputMode output_mode = 2;
+  bool user_idle = 3;
+  int64 idle_seconds = 4;
+  int32 idle_timeout_seconds = 5;
+  bool speaking_active = 6;
+  bool paused = 7;
+  bool panicked = 8;
+  int32 queue_depth = 9;
+  float volume = 10;
+  string current_voice = 11;
+  string currently_speaking = 12;
+}
+
+message SpeechEvent {
+  string id = 1;
+  string text = 2;
+  string voice_id = 3;
+  string username = 4;
+  string platform = 5;
+  bool finished = 6;
+}
+
+message ServerEnvelope {
+  string request_id = 1;
+  bool ok = 2;
+  string error = 3;
+  oneof payload {
+    StateSnapshot state = 4;
+    SpeechEvent speech_event = 5;
+  }
+}

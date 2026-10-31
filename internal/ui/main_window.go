@@ -706,16 +706,32 @@ func (mw *MainWindow) initHeader() {
 	volLabel := widget.NewLabel(fmt.Sprintf("Vol: %d%%", int(vol*100)))
 	mw.volumeSlider = widget.NewSlider(0, 100)
 	mw.volumeSlider.SetValue(float64(vol * 100))
+	var syncingVolumeSlider bool
 	mw.volumeSlider.OnChanged = func(val float64) {
 		gain := float32(val / 100.0)
 		volLabel.SetText(fmt.Sprintf("Vol: %d%%", int(val)))
+		if syncingVolumeSlider {
+			return
+		}
 		if p := mw.Session.Player(); p != nil {
 			p.SetVolume(gain)
 		}
 		_ = mw.Session.UpdateConfig(func(c *config.Config) {
 			c.Audio.Volume = gain
 		})
+		if wsSrv := mw.Session.WSServer(); wsSrv != nil {
+			wsSrv.BroadcastState()
+		}
 	}
+	mw.Session.SetOnVolumeChanged(func(newVol float32) {
+		fyne.Do(func() {
+			syncingVolumeSlider = true
+			pct := float64(int(newVol*100 + 0.5))
+			volLabel.SetText(fmt.Sprintf("Vol: %d%%", int(pct)))
+			mw.volumeSlider.SetValue(pct)
+			syncingVolumeSlider = false
+		})
+	})
 
 	volSliderSpacer := canvas.NewRectangle(color.Transparent)
 	volSliderSpacer.SetMinSize(fyne.NewSize(90, 1))

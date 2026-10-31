@@ -24,6 +24,8 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/queue"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
 	"github.com/mrpoundsign/TownCrier/internal/tts"
+	"github.com/mrpoundsign/TownCrier/internal/ws"
+	"github.com/mrpoundsign/TownCrier/internal/ws/controlv1"
 )
 
 var (
@@ -61,6 +63,8 @@ type Session struct {
 	onKickStatus      func(status string, detail string)
 	onEventDispatched func(event *chat.Event, voiceID string)
 	onTTSModeState    func(mode string, speakingActive bool, userIdle bool)
+	onVolumeChanged   func(vol float32)
+	wsServer          *ws.Server
 
 	idleProvider    func() time.Duration
 	userIdle        bool
@@ -228,6 +232,51 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 			Speed:         item.Speed,
 		})
 	})
+
+	s.wsServer = ws.NewServer(s)
+	s.queue.AddOnItemStarted(func(item *queue.Item) {
+		if item == nil {
+			return
+		}
+		var user, plat string
+		if item.Event != nil {
+			user = item.Event.UserName
+			plat = item.Event.Platform
+		}
+		s.wsServer.BroadcastSpeechEvent(&controlv1.SpeechEvent{
+			Id:       item.ID,
+			Text:     item.Text,
+			VoiceId:  item.VoiceID,
+			Username: user,
+			Platform: plat,
+			Finished: false,
+		})
+		s.wsServer.BroadcastState()
+	})
+	s.queue.AddOnItemFinished(func(item *queue.Item) {
+		if item != nil {
+			var user, plat string
+			if item.Event != nil {
+				user = item.Event.UserName
+				plat = item.Event.Platform
+			}
+			s.wsServer.BroadcastSpeechEvent(&controlv1.SpeechEvent{
+				Id:       item.ID,
+				Text:     item.Text,
+				VoiceId:  item.VoiceID,
+				Username: user,
+				Platform: plat,
+				Finished: true,
+			})
+		}
+		s.wsServer.BroadcastState()
+	})
+	s.queue.AddOnQueueDepthChanged(func(_ int) {
+		s.wsServer.BroadcastState()
+	})
+	s.queue.AddOnStateChanged(func(_, _ bool) {
+		s.wsServer.BroadcastState()
+	})
 	return s
 }
 
@@ -253,6 +302,7 @@ func (s *Session) Start() error {
 	}
 	s.startIdleMonitor()
 	s.EvaluateIdleState()
+	s.syncWSServer(cfg)
 	syncConnectors(cfg, tw, yt, tt, kk)
 	return nil
 }
@@ -274,6 +324,9 @@ func (s *Session) Stop() error {
 	s.mu.Unlock()
 
 	s.stopIdleMonitor()
+	if s.wsServer != nil {
+		_ = s.wsServer.Stop()
+	}
 
 	if q != nil {
 		q.Pause()
@@ -304,14 +357,19 @@ func (s *Session) Close() error {
 	s.onTikTokStatus = nil
 	s.onKickStatus = nil
 	s.onTTSModeState = nil
+	s.onVolumeChanged = nil
 	tw := s.twitchConnector
 	yt := s.youtubeConnector
 	tt := s.tiktokConnector
 	kk := s.kickConnector
 	q := s.queue
+	wsSrv := s.wsServer
 	s.mu.Unlock()
 
 	s.stopIdleMonitor()
+	if wsSrv != nil {
+		_ = wsSrv.Stop()
+	}
 
 	if tw != nil {
 		_ = tw.Stop()
@@ -381,6 +439,7 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 	s.mu.Unlock()
 
 	if running {
+		s.syncWSServer(cfgSnap)
 		syncConnectors(cfgSnap, tw, yt, tt, kk)
 	}
 
@@ -1014,6 +1073,245 @@ func (s *Session) EvaluateIdleState() {
 	if changed && cb != nil {
 		cb(mode, nowSpeakActive, nowIdle)
 	}
+	if changed && s.wsServer != nil {
+		s.wsServer.BroadcastState()
+	}
+}
+
+// WSServer returns the local WebSocket and HTTP REST control server.
+func (s *Session) WSServer() *ws.Server {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.wsServer
+}
+
+// SetOnVolumeChanged registers a callback invoked when master volume is updated via WebSocket/HTTP control.
+func (s *Session) SetOnVolumeChanged(fn func(vol float32)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onVolumeChanged = fn
+}
+
+func (s *Session) syncWSServer(cfg *config.Config) {
+	if s.wsServer == nil || cfg == nil {
+		return
+	}
+	if !cfg.WebSocket.Enabled {
+		if s.wsServer.IsRunning() {
+			_ = s.wsServer.Stop()
+		}
+		return
+	}
+
+	host := strings.TrimSpace(cfg.WebSocket.Host)
+	if host == "" {
+		host = config.DefaultWebSocketHost
+	}
+	port := cfg.WebSocket.Port
+	if port <= 0 || port > 65535 {
+		port = config.DefaultWebSocketPort
+	}
+	wantAddr := fmt.Sprintf("%s:%d", host, port)
+	if s.wsServer.IsRunning() {
+		if s.wsServer.Addr() == wantAddr {
+			return
+		}
+		_ = s.wsServer.Stop()
+	}
+	if err := s.wsServer.Start(host, port, cfg.WebSocket.AuthToken); err != nil {
+		log.Printf("[Session] Warning: failed to start WebSocket control server on %s: %v", wantAddr, err)
+	}
+}
+
+// SnapshotState implements ws.Controller, returning the current StateSnapshot for WebSocket/HTTP clients.
+func (s *Session) SnapshotState() *controlv1.StateSnapshot {
+	cfg := s.Config()
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+	idleDur := s.CurrentIdleDuration()
+	q := s.Queue()
+	var (
+		paused     bool
+		panicked   bool
+		queueDepth int
+		curText    string
+	)
+	if q != nil {
+		paused = q.IsPaused()
+		panicked = q.IsPanicked()
+		queueDepth = q.Depth()
+		if cur := q.CurrentItem(); cur != nil {
+			curText = cur.Text
+		}
+	}
+	vol := cfg.Audio.Volume
+	if p := s.Player(); p != nil {
+		vol = p.Volume()
+	}
+	timeoutSec := cfg.TTS.IdleTimeoutSeconds
+	if timeoutSec <= 0 {
+		timeoutSec = config.DefaultIdleTimeoutSeconds
+	}
+	return &controlv1.StateSnapshot{
+		TtsEnabled:         cfg.TTS.Enabled,
+		OutputMode:         ws.ModeToProto(cfg.TTS.OutputMode),
+		UserIdle:           s.IsUserIdle(),
+		IdleSeconds:        int64(idleDur.Seconds()),
+		IdleTimeoutSeconds: int32(timeoutSec),
+		SpeakingActive:     s.IsTTSSpeakingActive(),
+		Paused:             paused,
+		Panicked:           panicked,
+		QueueDepth:         int32(queueDepth),
+		Volume:             vol,
+		CurrentVoice:       cfg.GlobalChatRules.DefaultVoice,
+		CurrentlySpeaking:  curText,
+	}
+}
+
+// SetControlTTSMode implements ws.Controller, updating OutputMode and optionally IdleTimeoutSeconds.
+func (s *Session) SetControlTTSMode(mode string, idleTimeoutSec *int32) error {
+	norm := config.NormalizeTTSOutputMode(mode)
+	return s.UpdateConfig(func(c *config.Config) {
+		c.TTS.OutputMode = norm
+		if idleTimeoutSec != nil && *idleTimeoutSec > 0 {
+			c.TTS.IdleTimeoutSeconds = int(*idleTimeoutSec)
+		}
+	})
+}
+
+// CycleControlTTSMode implements ws.Controller, cycling OutputMode and returning the new mode.
+func (s *Session) CycleControlTTSMode() string {
+	return s.CycleTTSOutputMode()
+}
+
+// SpeakCustom implements ws.Controller, enqueuing a direct custom TTS command from WebSocket/HTTP.
+func (s *Session) SpeakCustom(req ws.SpeakRequest) error {
+	text := strings.TrimSpace(req.Text)
+	if text == "" {
+		return errors.New("speak text cannot be empty")
+	}
+	cfg := s.Config()
+	if cfg == nil || !cfg.TTS.Enabled {
+		return errors.New("TTS is disabled")
+	}
+	q := s.Queue()
+	if q == nil {
+		return errors.New("speech queue unavailable")
+	}
+
+	voiceID := strings.TrimSpace(req.VoiceID)
+	if voiceID == "" {
+		voiceID = cfg.GlobalChatRules.DefaultVoice
+	}
+	speed := req.Speed
+	if speed <= 0 {
+		speed = cfg.GlobalChatRules.DefaultSpeed
+		if speed <= 0 {
+			speed = 1.0
+		}
+	}
+	user := strings.TrimSpace(req.Username)
+	if user == "" {
+		user = "RemoteControl"
+	}
+
+	ev := &chat.Event{
+		ID:          fmt.Sprintf("ws-%d-%d", time.Now().UTC().UnixNano(), s.eventSeq.Add(1)),
+		Platform:    "websocket",
+		Kind:        chat.EventKindMessage,
+		Timestamp:   time.Now().UTC(),
+		UserName:    user,
+		DisplayName: user,
+		Text:        text,
+	}
+
+	return q.Enqueue(&queue.Item{
+		ID:         ev.ID,
+		Event:      ev,
+		Text:       text,
+		VoiceID:    voiceID,
+		Speed:      speed,
+		EnqueuedAt: time.Now(),
+		Priority:   req.Priority,
+	})
+}
+
+// ExecutePanicAction implements ws.Controller, executing Toggle, Mute, or Clear panic actions.
+func (s *Session) ExecutePanicAction(action controlv1.PanicAction) error {
+	switch action {
+	case controlv1.PanicAction_PANIC_ACTION_MUTE:
+		s.Panic()
+	case controlv1.PanicAction_PANIC_ACTION_CLEAR:
+		s.ClearPanic()
+	default:
+		s.TogglePanic()
+	}
+	return nil
+}
+
+// ExecuteQueueAction implements ws.Controller, executing Pause, Resume, Skip, or Clear queue actions.
+func (s *Session) ExecuteQueueAction(action controlv1.QueueAction) error {
+	q := s.Queue()
+	if q == nil {
+		return errors.New("speech queue unavailable")
+	}
+	switch action {
+	case controlv1.QueueAction_QUEUE_ACTION_PAUSE:
+		q.Pause()
+	case controlv1.QueueAction_QUEUE_ACTION_RESUME:
+		q.Resume()
+	case controlv1.QueueAction_QUEUE_ACTION_SKIP:
+		q.Skip()
+	case controlv1.QueueAction_QUEUE_ACTION_CLEAR:
+		q.Clear()
+	default:
+		return errors.New("unsupported queue action")
+	}
+	return nil
+}
+
+// AdjustVolume implements ws.Controller, setting an absolute volume or applying a relative delta.
+func (s *Session) AdjustVolume(volume *float32, delta *float32) error {
+	if volume == nil && delta == nil {
+		return errors.New("either volume or delta must be specified")
+	}
+	cfg := s.Config()
+	curVol := float32(1.0)
+	if cfg != nil && cfg.Audio.Volume > 0 {
+		curVol = cfg.Audio.Volume
+	}
+	if p := s.Player(); p != nil {
+		curVol = p.Volume()
+	}
+
+	target := curVol
+	if volume != nil {
+		target = *volume
+	}
+	if delta != nil {
+		target += *delta
+	}
+	if target < 0.0 {
+		target = 0.0
+	} else if target > 1.0 {
+		target = 1.0
+	}
+
+	if p := s.Player(); p != nil {
+		p.SetVolume(target)
+	}
+	err := s.UpdateConfig(func(c *config.Config) {
+		c.Audio.Volume = target
+	})
+
+	s.mu.RLock()
+	volCb := s.onVolumeChanged
+	s.mu.RUnlock()
+	if volCb != nil {
+		volCb(target)
+	}
+	return err
 }
 
 // PlayAlertSound plays the configured alert chime or custom .wav/.mp3 sound through the active audio player.

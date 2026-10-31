@@ -24,6 +24,7 @@ type Config struct {
 	Queue           QueueConfig               `json:"queue"`
 	Bots            BotConfig                 `json:"bots"`
 	Logging         LoggingConfig             `json:"logging"`
+	WebSocket       WebSocketConfig           `json:"websocket"`
 	GlobalChatRules GlobalChatRules           `json:"global_chat_rules"`
 	Viewers         map[string]ViewerConfig   `json:"viewers"`
 	Platforms       map[string]PlatformConfig `json:"platforms"`
@@ -33,6 +34,19 @@ type Config struct {
 type UpdateConfig struct {
 	CheckOnStartup bool   `json:"check_on_startup"`
 	SkippedVersion string `json:"skipped_version,omitempty"`
+}
+
+const (
+	DefaultWebSocketHost = "127.0.0.1"
+	DefaultWebSocketPort = 8765
+)
+
+// WebSocketConfig configures the local dual-mode (Protobuf + JSON) WebSocket and HTTP REST control server.
+type WebSocketConfig struct {
+	Enabled   bool   `json:"enabled"`
+	Host      string `json:"host"`
+	Port      int    `json:"port"`
+	AuthToken string `json:"auth_token,omitempty"`
 }
 
 type LoggingConfig struct {
@@ -430,6 +444,12 @@ func DefaultConfig() *Config {
 			ChatScale:                  100,
 			SessionResumeWindowMinutes: 60,
 			LiveLogs:                   DefaultLiveLogPresets(),
+		},
+		WebSocket: WebSocketConfig{
+			Enabled:   false,
+			Host:      DefaultWebSocketHost,
+			Port:      DefaultWebSocketPort,
+			AuthToken: "",
 		},
 		GlobalChatRules: GlobalChatRules{
 			SpeakNames:        true,
@@ -998,6 +1018,12 @@ func migrate(cfg *Config) error {
 	}
 	if strings.TrimSpace(cfg.Safety.ModeToggleHotkey) == "" {
 		cfg.Safety.ModeToggleHotkey = DefaultModeToggleHotkey
+	}
+	if strings.TrimSpace(cfg.WebSocket.Host) == "" {
+		cfg.WebSocket.Host = DefaultWebSocketHost
+	}
+	if cfg.WebSocket.Port <= 0 || cfg.WebSocket.Port > 65535 {
+		cfg.WebSocket.Port = DefaultWebSocketPort
 	}
 
 	if strings.TrimSpace(cfg.UIScale) == "" {
