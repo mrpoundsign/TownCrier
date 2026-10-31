@@ -32,7 +32,15 @@ const (
 	StatusConnected        ConnectionStatus = "connected"
 )
 
-const defaultStreamWaitPoll = 15 * time.Second
+const (
+	defaultStreamWaitPoll    = 15 * time.Second
+	defaultStreamIdleTimeout = 90 * time.Second
+	defaultHeartbeatInterval = 60 * time.Second
+	offlinePollLogEveryN     = 20
+)
+
+// ErrStreamNotLive indicates that the target TikTok user is not currently broadcasting live.
+var ErrStreamNotLive = errors.New("livestream is not currently live")
 
 // NormalizeUsername extracts the clean TikTok uniqueId from a @handle, username, or TikTok URL.
 func NormalizeUsername(raw string) string {
@@ -51,20 +59,41 @@ func NormalizeUsername(raw string) string {
 	return strings.TrimPrefix(trimmed, "@")
 }
 
+type streamSessionStats struct {
+	connectedAt    time.Time
+	lastEventAt    time.Time
+	totalEvents    int
+	chatEvents     int
+	giftEvents     int
+	followEvents   int
+	shareEvents    int
+	viewerEvents   int
+	likeEvents     int
+	roomEvents     int
+	controlEvents  int
+	historySkipped int
+	latestViewers  int
+}
+
 // Connector manages zero-config TikTok Live WebCast tracking and gift streak debouncing.
 type Connector struct {
-	mu             sync.Mutex
-	waitInterval   time.Duration
-	debounceWindow time.Duration
-	username       string
-	status         ConnectionStatus
-	running        bool
-	cancelFn       context.CancelFunc
-	debouncer      *GiftDebouncer
-	catalog        *GiftCatalog
-	trackUserFn    func(username string) (<-chan gotiktoklive.Event, func(), error)
-	onEvent        func(event *chat.Event)
-	onStatusChange func(status ConnectionStatus, detail string)
+	mu                sync.Mutex
+	clientMu          sync.Mutex
+	ttClient          *gotiktoklive.TikTok
+	waitInterval      time.Duration
+	debounceWindow    time.Duration
+	streamIdleTimeout time.Duration
+	heartbeatInterval time.Duration
+	username          string
+	status            ConnectionStatus
+	running           bool
+	cancelFn          context.CancelFunc
+	debouncer         *GiftDebouncer
+	catalog           *GiftCatalog
+	trackUserFn       func(username string) (<-chan gotiktoklive.Event, func(), error)
+	checkLiveFn       func(ctx context.Context, username string) (bool, error)
+	onEvent           func(event *chat.Event)
+	onStatusChange    func(status ConnectionStatus, detail string)
 }
 
 // NewConnector creates a new TikTok Live connector.
@@ -73,14 +102,17 @@ func NewConnector(
 	onStatusChange func(status ConnectionStatus, detail string),
 ) *Connector {
 	c := &Connector{
-		waitInterval:   defaultStreamWaitPoll,
-		debounceWindow: DefaultGiftDebounceWindow,
-		status:         StatusDisconnected,
-		catalog:        NewGiftCatalog(),
-		onEvent:        onEvent,
-		onStatusChange: onStatusChange,
+		waitInterval:      defaultStreamWaitPoll,
+		debounceWindow:    DefaultGiftDebounceWindow,
+		streamIdleTimeout: defaultStreamIdleTimeout,
+		heartbeatInterval: defaultHeartbeatInterval,
+		status:            StatusDisconnected,
+		catalog:           NewGiftCatalog(),
+		onEvent:           onEvent,
+		onStatusChange:    onStatusChange,
 	}
 	c.trackUserFn = c.defaultTrackUser
+	c.checkLiveFn = c.defaultCheckLiveUser
 	return c
 }
 
@@ -91,14 +123,27 @@ func (c *Connector) Catalog() *GiftCatalog {
 	return c.catalog
 }
 
-func (c *Connector) defaultTrackUser(username string) (<-chan gotiktoklive.Event, func(), error) {
-	tt, err := gotiktoklive.NewTikTok()
+func (c *Connector) ensureClient() (*gotiktoklive.TikTok, error) {
+	c.clientMu.Lock()
+	defer c.clientMu.Unlock()
+
+	if c.ttClient != nil {
+		return c.ttClient, nil
+	}
+
+	// DisableSigningLimitsValidation prevents gotiktoklive from querying EulerStream's
+	// /webcast/rate_limits endpoint on initialization; we also reuse this single instance
+	// across polls so gotiktoklive does not leak OS signal-handler goroutines every 15s.
+	tt, err := gotiktoklive.NewTikTok(gotiktoklive.DisableSigningLimitsValidation)
 	if err != nil {
-		return nil, nil, err
+		return nil, fmt.Errorf("init gotiktoklive client: %w", err)
 	}
 	tt.Debug = true
 	tt.SetDebugHandler(func(args ...any) {
 		c.handleDebugArgs(args...)
+	})
+	tt.SetInfoHandler(func(args ...any) {
+		log.Printf("[TikTok] WebCast info: %v", args)
 	})
 	tt.SetErrorHandler(func(args ...any) {
 		log.Printf("[TikTok] WebCast warning/error: %v", args)
@@ -107,18 +152,157 @@ func (c *Connector) defaultTrackUser(username string) (<-chan gotiktoklive.Event
 		log.Printf("[TikTok] WebCast warn: %v", args)
 	})
 
-	live, err := tt.TrackUser(username)
+	c.ttClient = tt
+	log.Printf("[TikTok] Initialized persistent WebCast client (signingLimitsValidation=disabled)")
+	return tt, nil
+}
+
+// CheckLiveUser checks whether the given TikTok username is currently live without consuming
+// any EulerStream signing quota.
+func (c *Connector) CheckLiveUser(ctx context.Context, username string) (bool, error) {
+	cleanUser := NormalizeUsername(username)
+	if cleanUser == "" {
+		return false, errors.New("empty TikTok username")
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	c.mu.Lock()
+	fn := c.checkLiveFn
+	c.mu.Unlock()
+	if fn == nil {
+		fn = c.defaultCheckLiveUser
+	}
+	return fn(ctx, cleanUser)
+}
+
+func (c *Connector) defaultCheckLiveUser(ctx context.Context, username string) (bool, error) {
+	if ctx != nil && ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	tt, err := c.ensureClient()
+	if err != nil {
+		return false, err
+	}
+	info, roomID, userStatus, roomStatus, err := fetchLiveRoomPreCheck(tt, username)
+	if err != nil {
+		if isOfflineError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	alive, aliveErr := tt.IsLive(info)
+	if aliveErr != nil {
+		log.Printf("[TikTok] CheckLiveUser room/check_alive warning for @%s (roomID=%s, userStatus=%d, roomStatus=%d): %v", username, roomID, userStatus, roomStatus, aliveErr)
+		return userStatus == 2 || roomStatus == 2, nil
+	}
+	log.Printf("[TikTok] CheckLiveUser for @%s: roomID=%s, userStatus=%d, roomStatus=%d, alive=%v", username, roomID, userStatus, roomStatus, alive)
+	return alive, nil
+}
+
+func fetchLiveRoomPreCheck(tt *gotiktoklive.TikTok, username string) (gotiktoklive.LiveRoomUserInfo, string, int, int, error) {
+	info, err := tt.GetLiveRoomUserInfo(username)
+	if err != nil {
+		if errors.Is(err, gotiktoklive.ErrUserNotFound) {
+			return info, "", 0, 0, fmt.Errorf("%w: no active liveRoom in page state for @%s", ErrStreamNotLive, username)
+		}
+		return info, "", 0, 0, fmt.Errorf("fetch live page for @%s: %w", username, err)
+	}
+
+	var roomID string
+	var userStatus int
+	var roomStatus int
+	if info.LiveRoomUser != nil {
+		roomID = strings.TrimSpace(info.LiveRoomUser.RoomID)
+		userStatus = info.LiveRoomUser.Status
+	}
+	if info.LiveRoom != nil {
+		roomStatus = info.LiveRoom.Status
+	}
+
+	if roomID == "" {
+		return info, "", userStatus, roomStatus, fmt.Errorf("%w: empty roomID for @%s (userStatus=%d, roomStatus=%d)", ErrStreamNotLive, username, userStatus, roomStatus)
+	}
+	if userStatus != 2 && roomStatus != 2 {
+		return info, roomID, userStatus, roomStatus, fmt.Errorf("%w: @%s is offline (roomID=%s, userStatus=%d, roomStatus=%d)", ErrStreamNotLive, username, roomID, userStatus, roomStatus)
+	}
+	return info, roomID, userStatus, roomStatus, nil
+}
+
+func (c *Connector) defaultTrackUser(username string) (<-chan gotiktoklive.Event, func(), error) {
+	tt, err := c.ensureClient()
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// Step 1: Pre-check HTML page state directly against TikTok (0 EulerStream signing calls).
+	// Even when a user is offline, SIGI_STATE often retains their old RoomID with Status=4,
+	// and aged-out rooms return Status=0 from /webcast/room/info/, which previously tricked
+	// gotiktoklive.TrackUser into burning EulerStream signing quota on every 15s offline poll.
+	info, roomID, userStatus, roomStatus, err := fetchLiveRoomPreCheck(tt, username)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	log.Printf("[TikTok] HTML page reports @%s is LIVE (roomID=%s, userStatus=%d, roomStatus=%d); verifying with room/check_alive...", username, roomID, userStatus, roomStatus)
+
+	// Step 2: Confirm with TikTok's un-signed /webcast/room/check_alive/ endpoint (0 EulerStream calls).
+	alive, aliveErr := tt.IsLive(info)
+	if aliveErr != nil {
+		log.Printf("[TikTok] Warning: room/check_alive failed for @%s (roomID=%s): %v; proceeding with TrackRoom", username, roomID, aliveErr)
+	} else if !alive {
+		log.Printf("[TikTok] room/check_alive reported alive=false for @%s (roomID=%s); skipping EulerStream TrackRoom", username, roomID)
+		return nil, nil, fmt.Errorf("%w: room/check_alive returned alive=false for @%s (roomID=%s)", ErrStreamNotLive, username, roomID)
+	}
+
+	// Step 3: Stream is confirmed live — now connect to the room (uses 1 EulerStream signing request).
+	log.Printf("[TikTok] Connecting to live WebCast room %s for @%s (requesting EulerStream signature & WebSocket upgrade)...", roomID, username)
+	live, err := tt.TrackRoom(roomID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("track live room %s for @%s: %w", roomID, username, err)
+	}
 	if live.Info != nil && live.Info.Status != 2 {
+		st := live.Info.Status
 		live.Close()
-		return nil, nil, errors.New("livestream is not currently live")
+		log.Printf("[TikTok] Room %s for @%s returned non-live RoomInfo.Status=%.0f; closing connection", roomID, username, st)
+		return nil, nil, fmt.Errorf("%w: room %s RoomInfo.Status=%.0f", ErrStreamNotLive, roomID, st)
 	}
 	if live.GiftInfo != nil && c.catalog != nil {
 		c.catalog.PopulateFromGiftInfo(live.GiftInfo)
 	}
+	if live.Info != nil {
+		log.Printf("[TikTok] WebCast room %s handshake complete for @%s (status=%.0f, viewers=%d, title=%q)", roomID, username, live.Info.Status, live.Info.UserCount, live.Info.Title)
+	}
 	return live.Events, live.Close, nil
+}
+
+func isOfflineError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, ErrStreamNotLive) ||
+		errors.Is(err, gotiktoklive.ErrUserOffline) ||
+		errors.Is(err, gotiktoklive.ErrLiveHasEnded) ||
+		errors.Is(err, gotiktoklive.ErrUserNotFound)
+}
+
+func summarizePollError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, gotiktoklive.ErrRateLimitExceeded) {
+		return "Rate limit exceeded, retrying..."
+	}
+	if _, ok := errors.AsType[*gotiktoklive.ErrIPBlockedOrBanned](err); ok {
+		return "Blocked or CAPTCHA by TikTok/Signer, retrying..."
+	}
+	if _, ok := errors.AsType[gotiktoklive.UserNotFound](err); ok {
+		return "TikTok user not found"
+	}
+	return "Connection error, retrying..."
 }
 
 // Start begins watching the given TikTok @username or live URL.
@@ -135,12 +319,16 @@ func (c *Connector) Start(target string) error {
 		return nil
 	}
 
+	log.Printf("[TikTok] Starting connector for @%s (rawInput=%q, pollInterval=%v, debounceWindow=%v, idleTimeout=%v)", cleanUser, target, c.waitInterval, c.debounceWindow, c.streamIdleTimeout)
 	c.stopLoopLocked()
 	c.username = cleanUser
 	c.running = true
 	c.debouncer = NewGiftDebouncer(c.debounceWindow, func(ev *chat.Event) {
 		if ev != nil && ev.Channel == "" {
 			ev.Channel = cleanUser
+		}
+		if ev != nil {
+			log.Printf("[TikTok] Emitting debounced gift event on @%s: user=@%s gift=%q count=%d diamonds=%.0f (id=%s)", cleanUser, ev.UserName, ev.ItemName, ev.Count, ev.Amount, ev.ID)
 		}
 		if c.onEvent != nil {
 			c.onEvent(ev)
@@ -159,9 +347,16 @@ func (c *Connector) Stop() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	wasRunning := c.running
+	prevStatus := c.status
+	if wasRunning || c.username != "" {
+		log.Printf("[TikTok] Stopping connector for @%s", c.username)
+	}
 	c.running = false
 	c.stopLoopLocked()
-	c.updateStatusLocked(StatusDisconnected, "Stopped")
+	if wasRunning || prevStatus != StatusDisconnected {
+		c.updateStatusLocked(StatusDisconnected, "Stopped")
+	}
 	return nil
 }
 
@@ -208,17 +403,41 @@ func (c *Connector) updateStatusLocked(status ConnectionStatus, detail string) {
 
 func (c *Connector) runLoop(ctx context.Context, username string) {
 	display := "@" + username
+	var (
+		pollCount         int
+		consecutiveErrors int
+		lastOfflineReason string
+	)
 	for {
 		if ctx.Err() != nil {
+			log.Printf("[TikTok] Poll loop exiting for %s (context canceled)", display)
 			return
 		}
 
+		pollCount++
 		c.updateStatus(StatusWaitingForStream, display)
 		eventsCh, closeFn, err := c.trackUserFn(username)
 		if err != nil || eventsCh == nil {
 			if ctx.Err() != nil {
 				return
 			}
+			if err == nil {
+				err = ErrStreamNotLive
+			}
+			if isOfflineError(err) {
+				consecutiveErrors = 0
+				reason := err.Error()
+				if pollCount == 1 || reason != lastOfflineReason || pollCount%offlinePollLogEveryN == 0 {
+					log.Printf("[TikTok] Poll #%d for %s: %v (next check in %v)", pollCount, display, err, c.waitInterval)
+					lastOfflineReason = reason
+				}
+			} else {
+				consecutiveErrors++
+				lastOfflineReason = ""
+				log.Printf("[TikTok] ERROR polling/connecting %s on poll #%d (consecutiveErrors=%d): %v (retrying in %v)", display, pollCount, consecutiveErrors, err, c.waitInterval)
+				c.updateStatus(StatusWaitingForStream, fmt.Sprintf("%s — %s", display, summarizePollError(err)))
+			}
+
 			select {
 			case <-ctx.Done():
 				return
@@ -227,29 +446,93 @@ func (c *Connector) runLoop(ctx context.Context, username string) {
 			}
 		}
 
-		log.Printf("[TikTok] Connected to live WebCast for %s", display)
+		consecutiveErrors = 0
+		lastOfflineReason = ""
+		log.Printf("[TikTok] Connected to live WebCast for %s (after %d poll(s))", display, pollCount)
 		c.updateStatus(StatusConnected, display)
 
-		c.consumeStreamEvents(ctx, eventsCh, closeFn)
+		c.consumeStreamEvents(ctx, username, eventsCh, closeFn)
 	}
 }
 
-func (c *Connector) consumeStreamEvents(ctx context.Context, eventsCh <-chan gotiktoklive.Event, closeFn func()) {
+func (c *Connector) consumeStreamEvents(ctx context.Context, username string, eventsCh <-chan gotiktoklive.Event, closeFn func()) {
+	stats := &streamSessionStats{
+		connectedAt: time.Now(),
+		lastEventAt: time.Now(),
+	}
+
+	idleTimeout := c.streamIdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = defaultStreamIdleTimeout
+	}
+	idleTimer := time.NewTimer(idleTimeout)
+	defer idleTimer.Stop()
+
+	hbInterval := c.heartbeatInterval
+	if hbInterval <= 0 {
+		hbInterval = defaultHeartbeatInterval
+	}
+	hbTicker := time.NewTicker(hbInterval)
+	defer hbTicker.Stop()
+
 	defer func() {
 		if closeFn != nil {
 			closeFn()
 		}
+		log.Printf("[TikTok] Disconnected WebCast session for @%s: duration=%v, totalEvents=%d (chat=%d, gifts=%d, follows=%d, shares=%d, viewers=%d, likes=%d, room=%d, control=%d, historySkipped=%d)",
+			username,
+			time.Since(stats.connectedAt).Round(time.Millisecond),
+			stats.totalEvents,
+			stats.chatEvents,
+			stats.giftEvents,
+			stats.followEvents,
+			stats.shareEvents,
+			stats.viewerEvents,
+			stats.likeEvents,
+			stats.roomEvents,
+			stats.controlEvents,
+			stats.historySkipped,
+		)
 	}()
 
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("[TikTok] Context canceled for @%s WebCast stream; closing connection", username)
 			return
+		case <-idleTimer.C:
+			log.Printf("[TikTok] WARNING: WebCast idle watchdog triggered for @%s — no events received for %v (uptime=%v, totalEvents=%d); forcing reconnect",
+				username, idleTimeout, time.Since(stats.connectedAt).Round(time.Second), stats.totalEvents)
+			return
+		case <-hbTicker.C:
+			log.Printf("[TikTok] WebCast heartbeat for @%s: uptime=%v, viewers=%d, totalEvents=%d (chat=%d, gifts=%d, follows=%d, shares=%d, historySkipped=%d), lastEventAgo=%v",
+				username,
+				time.Since(stats.connectedAt).Round(time.Second),
+				stats.latestViewers,
+				stats.totalEvents,
+				stats.chatEvents,
+				stats.giftEvents,
+				stats.followEvents,
+				stats.shareEvents,
+				stats.historySkipped,
+				time.Since(stats.lastEventAt).Round(time.Millisecond),
+			)
 		case rawEv, ok := <-eventsCh:
 			if !ok {
+				log.Printf("[TikTok] WebCast events channel closed for @%s", username)
 				return
 			}
-			if shouldDisconnect := c.handleRawEvent(rawEv); shouldDisconnect {
+			stats.lastEventAt = time.Now()
+			stats.totalEvents++
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(idleTimeout)
+
+			if shouldDisconnect := c.handleRawEventWithStats(rawEv, stats); shouldDisconnect {
 				return
 			}
 		}
@@ -257,6 +540,10 @@ func (c *Connector) consumeStreamEvents(ctx context.Context, eventsCh <-chan got
 }
 
 func (c *Connector) handleRawEvent(rawEv gotiktoklive.Event) bool {
+	return c.handleRawEventWithStats(rawEv, nil)
+}
+
+func (c *Connector) handleRawEventWithStats(rawEv gotiktoklive.Event, stats *streamSessionStats) bool {
 	if rawEv == nil {
 		return false
 	}
@@ -264,13 +551,21 @@ func (c *Connector) handleRawEvent(rawEv gotiktoklive.Event) bool {
 	switch e := rawEv.(type) {
 	case gotiktoklive.ChatEvent:
 		if e.IsHistory() {
+			if stats != nil {
+				stats.historySkipped++
+			}
 			return false
+		}
+		if stats != nil {
+			stats.chatEvents++
 		}
 		ev := mapChatEvent(e)
 		if ev != nil {
 			if ev.Channel == "" {
 				ev.Channel = c.Username()
 			}
+			log.Printf("[TikTok] Inbound chat on @%s from @%s (%s): %q (id=%s, roles=%v, fanClubLv=%d)",
+				ev.Channel, ev.UserName, ev.DisplayName, ev.Text, ev.ID, ev.Roles, ev.FanClubLevel)
 			if c.onEvent != nil {
 				c.onEvent(ev)
 			}
@@ -278,9 +573,17 @@ func (c *Connector) handleRawEvent(rawEv gotiktoklive.Event) bool {
 
 	case gotiktoklive.GiftEvent:
 		if e.IsHistory() {
+			if stats != nil {
+				stats.historySkipped++
+			}
 			return false
 		}
+		if stats != nil {
+			stats.giftEvents++
+		}
 		in := c.mapGiftEvent(e)
+		log.Printf("[TikTok] Inbound gift frame on @%s from @%s: gift=%q (id=%d) repeat=%d repeatEnd=%v streakable=%v unitDiamonds=%d",
+			c.Username(), in.UserName, in.GiftName, in.GiftID, in.RepeatCount, in.RepeatEnd, in.IsStreakable, in.UnitDiamonds)
 		c.mu.Lock()
 		deb := c.debouncer
 		c.mu.Unlock()
@@ -290,25 +593,67 @@ func (c *Connector) handleRawEvent(rawEv gotiktoklive.Event) bool {
 
 	case gotiktoklive.UserEvent:
 		if e.IsHistory() {
+			if stats != nil {
+				stats.historySkipped++
+			}
 			return false
 		}
 		ev := mapUserEvent(e)
 		if ev != nil {
+			if stats != nil {
+				switch ev.Kind {
+				case chat.EventKindFollow:
+					stats.followEvents++
+				case chat.EventKindShare:
+					stats.shareEvents++
+				}
+			}
 			if ev.Channel == "" {
 				ev.Channel = c.Username()
 			}
+			log.Printf("[TikTok] Inbound user event (%s) on @%s from @%s (%s) (id=%s)",
+				ev.Kind, ev.Channel, ev.UserName, ev.DisplayName, ev.ID)
 			if c.onEvent != nil {
 				c.onEvent(ev)
 			}
 		}
 
+	case gotiktoklive.ViewersEvent:
+		if stats != nil {
+			stats.viewerEvents++
+			stats.latestViewers = e.Viewers
+		}
+
+	case gotiktoklive.LikeEvent:
+		if stats != nil {
+			stats.likeEvents++
+		}
+
+	case gotiktoklive.RoomEvent:
+		if stats != nil {
+			stats.roomEvents++
+		}
+		if !e.IsHistory() {
+			log.Printf("[TikTok] RoomEvent on @%s: type=%s msg=%q", c.Username(), e.Type, e.Message)
+		}
+
 	case gotiktoklive.ControlEvent:
+		if stats != nil {
+			stats.controlEvents++
+		}
+		log.Printf("[TikTok] ControlEvent on @%s: action=%d description=%q", c.Username(), e.Action, e.Description)
 		// Action == 3 indicates the livestream has ended
 		if e.Action == 3 {
+			log.Printf("[TikTok] Stream ended (ControlEvent Action=3) for @%s; disconnecting WebCast", c.Username())
 			return true
 		}
 
 	case gotiktoklive.DisconnectEvent:
+		log.Printf("[TikTok] WebSocket DisconnectEvent received for @%s; reconnecting...", c.Username())
+		return true
+
+	case *gotiktoklive.DisconnectEvent:
+		log.Printf("[TikTok] WebSocket *DisconnectEvent received for @%s; reconnecting...", c.Username())
 		return true
 	}
 
@@ -493,6 +838,8 @@ func (c *Connector) emitEvent(ev *chat.Event) {
 	if ev.Channel == "" {
 		ev.Channel = c.Username()
 	}
+	log.Printf("[TikTok] Emitting proto event (%s) on @%s: user=@%s (%s) text=%q count=%d months=%d (id=%s)",
+		ev.Kind, ev.Channel, ev.UserName, ev.DisplayName, ev.Text, ev.Count, ev.Months, ev.ID)
 	if c.onEvent != nil {
 		c.onEvent(ev)
 	}

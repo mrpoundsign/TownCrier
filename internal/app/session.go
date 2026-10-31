@@ -180,6 +180,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 			if s.tiktokConnector != nil && s.tiktokConnector.Username() != "" {
 				user = s.tiktokConnector.Username()
 			}
+			log.Printf("[Session] TikTok status update: status=%s detail=%q user=%q", status, detail, user)
 			s.UpdatePlatformStreamState("tiktok", user, status == tiktok.StatusConnected)
 
 			s.mu.RLock()
@@ -853,6 +854,7 @@ func (s *Session) DetectLiveStatus(ctx context.Context) {
 	tw := s.twitchConnector
 	kk := s.kickConnector
 	yt := s.youtubeConnector
+	tt := s.tiktokConnector
 	s.mu.RUnlock()
 
 	var wg sync.WaitGroup
@@ -888,6 +890,18 @@ func (s *Session) DetectLiveStatus(ctx context.Context) {
 				defer wg.Done()
 				if live, err := yt.CheckLiveTarget(ctx, ch); err == nil && live {
 					s.UpdatePlatformStreamState("youtube", ch, true)
+				}
+			}(p.AccountName)
+		}
+	}
+
+	if tt != nil {
+		if p, ok := cfg.Platforms["tiktok"]; ok && p.Enabled && strings.TrimSpace(p.AccountName) != "" {
+			wg.Add(1)
+			go func(ch string) {
+				defer wg.Done()
+				if live, err := tt.CheckLiveUser(ctx, ch); err == nil && live {
+					s.UpdatePlatformStreamState("tiktok", tiktok.NormalizeUsername(ch), true)
 				}
 			}(p.AccountName)
 		}
