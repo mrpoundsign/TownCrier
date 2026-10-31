@@ -21,9 +21,10 @@ var (
 )
 
 const (
-	wmHotkey uint32 = 0x0312
-	wmQuit   uint32 = 0x0012
-	hotkeyID uintptr = 1
+	wmHotkey             uint32  = 0x0312
+	wmQuit               uint32  = 0x0012
+	HotkeyIDPanic        uintptr = 1
+	HotkeyIDModeToggle   uintptr = 2
 )
 
 type winPoint struct {
@@ -41,15 +42,25 @@ type winMsg struct {
 
 // GlobalHotkeyManager manages an OS-wide global hotkey on Windows via Win32 RegisterHotKey.
 type GlobalHotkeyManager struct {
-	mu       sync.Mutex
-	threadID uint32
-	stopDone chan struct{}
+	mu        sync.Mutex
+	hotkeyID  uintptr
+	threadID  uint32
+	stopDone  chan struct{}
 	onTrigger func()
 }
 
-// NewGlobalHotkeyManager creates a new Windows global hotkey manager.
+// NewGlobalHotkeyManager creates a new Windows global hotkey manager with the default Panic hotkey ID.
 func NewGlobalHotkeyManager(onTrigger func()) *GlobalHotkeyManager {
+	return NewGlobalHotkeyManagerWithID(HotkeyIDPanic, onTrigger)
+}
+
+// NewGlobalHotkeyManagerWithID creates a new Windows global hotkey manager with a specific Win32 hotkey ID.
+func NewGlobalHotkeyManagerWithID(id uintptr, onTrigger func()) *GlobalHotkeyManager {
+	if id == 0 {
+		id = HotkeyIDPanic
+	}
 	return &GlobalHotkeyManager{
+		hotkeyID:  id,
 		onTrigger: onTrigger,
 	}
 }
@@ -65,6 +76,7 @@ func (m *GlobalHotkeyManager) Register(hotkeyStr string) error {
 	m.stopLocked()
 	doneCh := make(chan struct{})
 	m.stopDone = doneCh
+	hkID := m.hotkeyID
 	m.mu.Unlock()
 
 	go func() {
@@ -76,24 +88,24 @@ func (m *GlobalHotkeyManager) Register(hotkeyStr string) error {
 
 		ret, _, regErr := procRegisterHotKey.Call(
 			0,
-			hotkeyID,
+			hkID,
 			uintptr(spec.WinMod),
 			uintptr(spec.WinVK),
 		)
 		if ret == 0 {
-			log.Printf("[Hotkey] win32 RegisterHotKey(%q) failed: %v", spec.String(), regErr)
+			log.Printf("[Hotkey] win32 RegisterHotKey(%q, id=%d) failed: %v", spec.String(), hkID, regErr)
 			return
 		}
 		defer func() {
-			_, _, _ = procUnregisterHotKey.Call(0, hotkeyID)
+			_, _, _ = procUnregisterHotKey.Call(0, hkID)
 		}()
 
 		m.mu.Lock()
 		m.threadID = uint32(tid)
 		m.mu.Unlock()
 
-		log.Printf("[Hotkey] Registered system-wide Windows hotkey: %s (mod=0x%x, vk=0x%x, tid=%d)",
-			spec.String(), spec.WinMod, spec.WinVK, tid)
+		log.Printf("[Hotkey] Registered system-wide Windows hotkey: %s (id=%d, mod=0x%x, vk=0x%x, tid=%d)",
+			spec.String(), hkID, spec.WinMod, spec.WinVK, tid)
 
 		var msg winMsg
 		for {
@@ -107,7 +119,7 @@ func (m *GlobalHotkeyManager) Register(hotkeyStr string) error {
 			if int32(r) <= 0 {
 				break
 			}
-			if msg.Message == wmHotkey && msg.WParam == hotkeyID {
+			if msg.Message == wmHotkey && msg.WParam == hkID {
 				if m.onTrigger != nil {
 					go m.onTrigger()
 				}

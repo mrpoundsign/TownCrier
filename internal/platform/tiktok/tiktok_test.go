@@ -1,10 +1,13 @@
 package tiktok
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -483,6 +486,165 @@ func TestMapUserEventShare(t *testing.T) {
 		t.Errorf("unexpected share event: %+v", ev)
 	}
 }
+
+func TestIsOfflineErrorAndSummarizePollError(t *testing.T) {
+	offlineErrs := []error{
+		ErrStreamNotLive,
+		fmt.Errorf("wrap: %w", ErrStreamNotLive),
+		gotiktoklive.ErrUserOffline,
+		gotiktoklive.ErrLiveHasEnded,
+		gotiktoklive.ErrUserNotFound,
+	}
+	for _, err := range offlineErrs {
+		if !isOfflineError(err) {
+			t.Errorf("expected isOfflineError(%v) = true", err)
+		}
+	}
+
+	realErrs := []struct {
+		err     error
+		wantSub string
+	}{
+		{gotiktoklive.ErrRateLimitExceeded, "Rate limit exceeded"},
+		{&gotiktoklive.ErrIPBlockedOrBanned{}, "Blocked or CAPTCHA"},
+		{gotiktoklive.UserNotFound{}, "TikTok user not found"},
+		{errors.New("dial tcp timeout"), "Connection error"},
+	}
+	for _, tc := range realErrs {
+		if isOfflineError(tc.err) {
+			t.Errorf("expected isOfflineError(%v) = false", tc.err)
+		}
+		got := summarizePollError(tc.err)
+		if !strings.Contains(got, tc.wantSub) {
+			t.Errorf("summarizePollError(%v) = %q, want substring %q", tc.err, got, tc.wantSub)
+		}
+	}
+}
+
+func TestHandleRawEvent_PointerAndValueDisconnectEvent(t *testing.T) {
+	c := NewConnector(nil, nil)
+
+	if !c.handleRawEvent(gotiktoklive.DisconnectEvent{}) {
+		t.Error("expected value gotiktoklive.DisconnectEvent to trigger disconnect")
+	}
+	if !c.handleRawEvent(&gotiktoklive.DisconnectEvent{}) {
+		t.Error("expected pointer *gotiktoklive.DisconnectEvent to trigger disconnect")
+	}
+}
+
+func TestConnector_IdleWatchdogForcesReconnect(t *testing.T) {
+	var connectAttempts atomic.Int32
+	var closeCalls atomic.Int32
+
+	c := NewConnector(nil, nil)
+	c.waitInterval = 15 * time.Millisecond
+	c.streamIdleTimeout = 40 * time.Millisecond
+	c.heartbeatInterval = 25 * time.Millisecond
+
+	c.trackUserFn = func(_ string) (<-chan gotiktoklive.Event, func(), error) {
+		connectAttempts.Add(1)
+		// Stalled channel that never sends events nor closes on its own
+		ch := make(chan gotiktoklive.Event)
+		var once sync.Once
+		return ch, func() {
+			once.Do(func() {
+				closeCalls.Add(1)
+			})
+		}, nil
+	}
+
+	if err := c.Start("@stalledstream"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = c.Stop() }()
+
+	deadline := time.Now().Add(600 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if connectAttempts.Load() >= 2 && closeCalls.Load() >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if connectAttempts.Load() < 2 {
+		t.Fatalf("expected watchdog to force at least 2 connect attempts, got %d", connectAttempts.Load())
+	}
+	if closeCalls.Load() < 1 {
+		t.Fatalf("expected closeFn to be called on stalled stream, got %d", closeCalls.Load())
+	}
+}
+
+func TestConnector_SurfacesPollErrorAndRecovers(t *testing.T) {
+	var mu sync.Mutex
+	var details []string
+	var statuses []ConnectionStatus
+
+	c := NewConnector(nil, func(s ConnectionStatus, detail string) {
+		mu.Lock()
+		statuses = append(statuses, s)
+		details = append(details, detail)
+		mu.Unlock()
+	})
+	c.waitInterval = 15 * time.Millisecond
+
+	var calls atomic.Int32
+	c.trackUserFn = func(_ string) (<-chan gotiktoklive.Event, func(), error) {
+		n := calls.Add(1)
+		if n == 1 {
+			return nil, nil, fmt.Errorf("signer: %w", gotiktoklive.ErrRateLimitExceeded)
+		}
+		ch := make(chan gotiktoklive.Event, 1)
+		return ch, func() {}, nil
+	}
+
+	if err := c.Start("@recoveruser"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = c.Stop() }()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if c.Status() == StatusConnected {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if c.Status() != StatusConnected {
+		t.Fatalf("expected connector to recover to StatusConnected, got %s", c.Status())
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	foundRateLimitDetail := false
+	for _, d := range details {
+		if strings.Contains(d, "Rate limit exceeded") {
+			foundRateLimitDetail = true
+			break
+		}
+	}
+	if !foundRateLimitDetail {
+		t.Errorf("expected status detail to surface rate limit error, got details=%v", details)
+	}
+}
+
+func TestConnector_CheckLiveUser(t *testing.T) {
+	c := NewConnector(nil, nil)
+	c.checkLiveFn = func(_ context.Context, username string) (bool, error) {
+		return username == "livestreamer", nil
+	}
+
+	live, err := c.CheckLiveUser(context.Background(), "https://www.tiktok.com/@livestreamer/live")
+	if err != nil || !live {
+		t.Errorf("CheckLiveUser(livestreamer) = %v, %v; want true, nil", live, err)
+	}
+
+	live, err = c.CheckLiveUser(context.Background(), "@offlinestreamer")
+	if err != nil || live {
+		t.Errorf("CheckLiveUser(offlinestreamer) = %v, %v; want false, nil", live, err)
+	}
+}
+
 
 
 

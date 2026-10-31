@@ -17,15 +17,36 @@ const CurrentVersion = 1
 type Config struct {
 	Version         int                       `json:"version"`
 	UIScale         string                    `json:"ui_scale,omitempty"`
+	Update          UpdateConfig              `json:"update"`
 	Audio           AudioConfig               `json:"audio"`
 	TTS             TTSConfig                 `json:"tts"`
 	Safety          SafetyConfig              `json:"safety"`
 	Queue           QueueConfig               `json:"queue"`
 	Bots            BotConfig                 `json:"bots"`
 	Logging         LoggingConfig             `json:"logging"`
+	WebSocket       WebSocketConfig           `json:"websocket"`
 	GlobalChatRules GlobalChatRules           `json:"global_chat_rules"`
 	Viewers         map[string]ViewerConfig   `json:"viewers"`
 	Platforms       map[string]PlatformConfig `json:"platforms"`
+}
+
+// UpdateConfig configures application version checking and self-update preferences.
+type UpdateConfig struct {
+	CheckOnStartup bool   `json:"check_on_startup"`
+	SkippedVersion string `json:"skipped_version,omitempty"`
+}
+
+const (
+	DefaultWebSocketHost = "127.0.0.1"
+	DefaultWebSocketPort = 8765
+)
+
+// WebSocketConfig configures the local dual-mode (Protobuf + JSON) WebSocket and HTTP REST control server.
+type WebSocketConfig struct {
+	Enabled   bool   `json:"enabled"`
+	Host      string `json:"host"`
+	Port      int    `json:"port"`
+	AuthToken string `json:"auth_token,omitempty"`
 }
 
 type LoggingConfig struct {
@@ -86,16 +107,56 @@ type AudioConfig struct {
 	Volume     float32 `json:"volume"` // 0.0 to 1.0
 }
 
+// TTS operational output modes while the TTS engine remains warm in memory.
+const (
+	TTSModeAlwaysOn  = "always_on"
+	TTSModeAutoIdle  = "auto_idle"
+	TTSModeAlwaysOff = "always_off"
+
+	DefaultIdleTimeoutSeconds = 15
+	DefaultModeToggleHotkey   = "Ctrl+Shift+T"
+	DefaultAlertCooldownMs    = 1500
+)
+
+// NormalizeTTSOutputMode returns a valid canonical TTSOutputMode, defaulting to TTSModeAlwaysOn.
+func NormalizeTTSOutputMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case TTSModeAutoIdle, "auto", "idle", "afk":
+		return TTSModeAutoIdle
+	case TTSModeAlwaysOff, "off", "disabled", "muted":
+		return TTSModeAlwaysOff
+	default:
+		return TTSModeAlwaysOn
+	}
+}
+
+// NextTTSOutputMode cycles through Always On -> Auto (AFK Idle) -> Always Off -> Always On.
+func NextTTSOutputMode(current string) string {
+	switch NormalizeTTSOutputMode(current) {
+	case TTSModeAlwaysOn:
+		return TTSModeAutoIdle
+	case TTSModeAutoIdle:
+		return TTSModeAlwaysOff
+	default:
+		return TTSModeAlwaysOn
+	}
+}
+
 type TTSConfig struct {
-	Enabled           bool     `json:"enabled"`
-	Preset            string   `json:"preset,omitempty"`         // "ultra_low", "fast_lean", "balanced", "beefy", "custom"
-	EnabledModels     []string `json:"enabled_models,omitempty"` // ["kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper"]
-	ModelFamily       string   `json:"model_family"`             // "kokoro"
-	ModelPath         string   `json:"model_path"`
-	NumThreads        int      `json:"num_threads"`
-	UseGPU            bool     `json:"use_gpu"`
-	MaxClauseWords    int      `json:"max_clause_words,omitempty"`
-	IdleUnloadMinutes int      `json:"idle_unload_minutes,omitempty"`
+	Enabled               bool     `json:"enabled"`
+	OutputMode            string   `json:"output_mode,omitempty"`          // "always_on", "auto_idle", "always_off"
+	IdleTimeoutSeconds    int      `json:"idle_timeout_seconds,omitempty"` // seconds of keyboard/mouse inactivity before enabling TTS in auto_idle mode
+	PlayAlertWhenDisabled bool     `json:"play_alert_when_disabled"`       // play chime/WAV/MP3 alert when TTS output is inactive
+	AlertSoundPath        string   `json:"alert_sound_path,omitempty"`     // optional custom .wav or .mp3 file path (empty = built-in chime)
+	AlertCooldownMs       int      `json:"alert_cooldown_ms,omitempty"`    // minimum interval between alert sounds in ms (default 1500)
+	Preset                string   `json:"preset,omitempty"`               // "ultra_low", "fast_lean", "balanced", "beefy", "custom"
+	EnabledModels      []string `json:"enabled_models,omitempty"`       // ["kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper"]
+	ModelFamily        string   `json:"model_family"`                   // "kokoro"
+	ModelPath          string   `json:"model_path"`
+	NumThreads         int      `json:"num_threads"`
+	UseGPU             bool     `json:"use_gpu"`
+	MaxClauseWords     int      `json:"max_clause_words,omitempty"`
+	IdleUnloadMinutes  int      `json:"idle_unload_minutes,omitempty"`
 }
 
 // EffectiveEnabledModels returns the non-empty list of enabled TTS model families.
@@ -126,6 +187,7 @@ func (t TTSConfig) EffectiveEnabledModels() []string {
 
 type SafetyConfig struct {
 	PanicHotkey          string   `json:"panic_hotkey"`
+	ModeToggleHotkey     string   `json:"mode_toggle_hotkey,omitempty"`
 	BlockDefaultBadWords bool     `json:"block_default_bad_words"`
 	BlockedWords         []string `json:"blocked_words"`
 }
@@ -334,24 +396,33 @@ func DefaultConfig() *Config {
 	return &Config{
 		Version: CurrentVersion,
 		UIScale: "1.0",
+		Update: UpdateConfig{
+			CheckOnStartup: true,
+		},
 		Audio: AudioConfig{
 			DeviceID:   "",
 			DeviceName: "",
 			Volume:     1.0,
 		},
 		TTS: TTSConfig{
-			Enabled:           true,
-			Preset:            "fast_lean",
-			EnabledModels:     []string{"supertonic"},
-			ModelFamily:       "supertonic",
-			ModelPath:         "",
-			NumThreads:        4,
-			UseGPU:            false,
-			MaxClauseWords:    12,
-			IdleUnloadMinutes: 0,
+			Enabled:               true,
+			OutputMode:            TTSModeAlwaysOn,
+			IdleTimeoutSeconds:    DefaultIdleTimeoutSeconds,
+			PlayAlertWhenDisabled: true,
+			AlertSoundPath:        "",
+			AlertCooldownMs:       DefaultAlertCooldownMs,
+			Preset:                "fast_lean",
+			EnabledModels:      []string{"supertonic"},
+			ModelFamily:        "supertonic",
+			ModelPath:          "",
+			NumThreads:         4,
+			UseGPU:             false,
+			MaxClauseWords:     12,
+			IdleUnloadMinutes:  0,
 		},
 		Safety: SafetyConfig{
 			PanicHotkey:          "Ctrl+Shift+M",
+			ModeToggleHotkey:     DefaultModeToggleHotkey,
 			BlockDefaultBadWords: true,
 			BlockedWords:         []string{},
 		},
@@ -373,6 +444,12 @@ func DefaultConfig() *Config {
 			ChatScale:                  100,
 			SessionResumeWindowMinutes: 60,
 			LiveLogs:                   DefaultLiveLogPresets(),
+		},
+		WebSocket: WebSocketConfig{
+			Enabled:   false,
+			Host:      DefaultWebSocketHost,
+			Port:      DefaultWebSocketPort,
+			AuthToken: "",
 		},
 		GlobalChatRules: GlobalChatRules{
 			SpeakNames:        true,
@@ -930,6 +1007,23 @@ func migrate(cfg *Config) error {
 	}
 	if cfg.TTS.MaxClauseWords <= 0 {
 		cfg.TTS.MaxClauseWords = 12
+	}
+	cfg.TTS.OutputMode = NormalizeTTSOutputMode(cfg.TTS.OutputMode)
+	if cfg.TTS.IdleTimeoutSeconds <= 0 {
+		cfg.TTS.IdleTimeoutSeconds = DefaultIdleTimeoutSeconds
+	}
+	if cfg.TTS.AlertCooldownMs <= 0 {
+		cfg.TTS.AlertCooldownMs = DefaultAlertCooldownMs
+		cfg.TTS.PlayAlertWhenDisabled = true
+	}
+	if strings.TrimSpace(cfg.Safety.ModeToggleHotkey) == "" {
+		cfg.Safety.ModeToggleHotkey = DefaultModeToggleHotkey
+	}
+	if strings.TrimSpace(cfg.WebSocket.Host) == "" {
+		cfg.WebSocket.Host = DefaultWebSocketHost
+	}
+	if cfg.WebSocket.Port <= 0 || cfg.WebSocket.Port > 65535 {
+		cfg.WebSocket.Port = DefaultWebSocketPort
 	}
 
 	if strings.TrimSpace(cfg.UIScale) == "" {

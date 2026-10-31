@@ -12,8 +12,12 @@ Audio routes directly to any selected playback device—such as a virtual audio 
 
 ## Features
 
-### Modular Application Features
+### Modular Application Features & Smart TTS Output Modes
 - **Independent TTS & Logging Toggles**: Toggle **Text-to-Speech (TTS)** and **Event Logging** independently in **Settings → General & Audio**.
+- **TTS Output Modes & Auto-AFK Detection**: Switch between **Always On**, **Auto-AFK**, and **Always Off** from the Dashboard header, Settings, or global hotkey (`Ctrl+Shift+T`). In **Auto-AFK** mode, TownCrier monitors keyboard/mouse inactivity (`GetLastInputInfo`) so chat is read aloud while you step away or play on a controller, and automatically mutes & flushes pending speech the instant you touch your keyboard or mouse.
+- **Inactive TTS Alert Sounds**: Optionally play a built-in harmonic chime or custom `.wav` / `.mp3` alert sound (with 3-second cooldown protection) whenever messages arrive while TTS speech is inactive.
+- **Elgato Stream Deck Plugin & Control API**: Built-in local WebSocket (binary Protocol Buffers & JSON) and HTTP REST control server (`127.0.0.1:8765`), plus a 1-click installer for the native **Elgato Stream Deck** plugin (`com.github.mrpoundsign.towncrier.sdPlugin`) with 5 hardware actions (TTS Output Mode, Panic Mute, Queue Control, Custom Announcement, and Master Volume with Stream Deck + rotary dial support).
+- **Unified Setup Installer & Self-Updater**: Standalone `TownCrier-Setup.exe` wizard with optional voice model pre-downloading and SHA-256 verified GitHub Release self-updates.
 - **Ultra-Fast Launch (<100ms) & Near-Zero RAM**: When TTS is disabled, TownCrier skips ONNX runtime initialization and model downloads entirely, running as a lean stream monitor and event logger with ~35–45 MB baseline RAM.
 - **Dynamic UI Removal**: Disabling features cleanly removes non-applicable navigation tabs, settings sub-tabs, volume sliders, panic buttons, and queue controls rather than simply greying them out.
 - **Full Configuration Retention**: All voice assignments, audio devices, hardware presets, speech templates, platform overrides, and retention rules are retained in `config.json` when features are toggled.

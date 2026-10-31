@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.0.8 — 2026-10-31
+
+### Added
+- **TTS Output Modes, Auto-AFK Detection & Global Mode Toggle Hotkey (#109)**:
+  - Added three TTS Output Modes (`Always On`, `Auto-AFK`, and `Always Off`) selectable from the Dashboard header and Settings.
+  - Added cross-platform OS input inactivity detection (`GetLastInputInfo` on Windows, X11/idle fallback on Linux/macOS) to automatically enable TTS while away from keyboard (`Auto-AFK`) and immediately silence/flush pending speech when returning to the keyboard/mouse.
+  - Added configurable global hotkey (`Ctrl+Shift+T` by default) to cycle TTS Output Modes from anywhere.
+- **Alert Sound Engine for Inactive TTS (#110)**:
+  - Added built-in 24kHz harmonic chime synthesizer, native RIFF/WAVE decoder, and pure-Go MP3 decoder (`github.com/yatagai-mm/byrd`) with 3-second cooldown protection to play a subtle audio notification when chat messages arrive while TTS speech is inactive (`Always Off` or `Auto-AFK` while active at desk).
+- **Dual-Mode Protocol Buffers WebSocket & HTTP REST Control Server (#111)**:
+  - Added local control server (`internal/ws`) supporting both binary Protocol Buffers (`proto/control/v1/control.proto` via `/ws?format=protobuf`) and JSON (`/ws`), plus HTTP REST endpoints (`/api/status`, `/api/speak`, `/api/mode`, `/api/panic`, `/api/queue`, `/api/volume`) with optional Bearer token authentication.
+- **Elgato Stream Deck Plugin & 1-Click Installer (#112)**:
+  - Added native TypeScript Elgato Stream Deck plugin (`com.github.mrpoundsign.towncrier.sdPlugin`) communicating over binary Protocol Buffers WebSocket with 5 hardware actions (`TTS Output Mode`, `Emergency Panic Mute`, `Speech Queue Control`, `Custom TTS Announcement`, and `TTS Master Volume` with Stream Deck + rotary dial support) and dynamic Obsidian Slate SVG key rendering.
+  - Added 1-click **Install / Update Elgato Stream Deck Plugin** button in Settings > General & Audio.
+- **Unified Setup Installer, Uninstaller & SHA-256 Self-Updater (#113)**:
+  - Integrated `github.com/mrpoundsign/appinstaller` to build `TownCrier-Setup.exe` (`-tags nosherpa`) with optional TTS voice model pre-downloading and SHA-256 verified GitHub Release self-updates.
+
+### Fixed
+- **TikTok Live Offline Polling Quota Protection**:
+  - Added lightweight HTML room status pre-check before invoking `gotiktoklive.TrackUser` so offline polling does not consume EulerStream sign API quota, plus detailed WebCast diagnostics.
+
+---
+
 ## v0.0.7 — 2026-10-25
 
 ### Added

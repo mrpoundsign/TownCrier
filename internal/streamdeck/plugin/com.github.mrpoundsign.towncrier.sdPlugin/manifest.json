@@ -1,0 +1,116 @@
+{
+  "SDKVersion": 2,
+  "Author": "TownCrier",
+  "Name": "TownCrier TTS Control",
+  "Description": "Control TownCrier neural TTS output mode (Always On, Auto-AFK, Always Off), Emergency Panic Mute, Speech Queue, Custom Announcements, and Master Volume via binary Protocol Buffers.",
+  "Version": "1.0.1.0",
+  "Category": "TownCrier",
+  "CategoryIcon": "imgs/plugin",
+  "Icon": "imgs/plugin",
+  "CodePath": "bin/plugin.js",
+  "PropertyInspectorPath": "property-inspector/index.html",
+  "UUID": "com.github.mrpoundsign.towncrier",
+  "Nodejs": {
+    "Version": "20",
+    "Debug": "enabled"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Software": {
+    "MinimumVersion": "6.5"
+  },
+  "Actions": [
+    {
+      "UUID": "com.github.mrpoundsign.towncrier.mode",
+      "Name": "TTS Output Mode",
+      "Tooltip": "Cycle or set TownCrier TTS output mode (Always On, Auto-AFK, Always Off)",
+      "Icon": "imgs/mode",
+      "Controllers": ["Keypad"],
+      "States": [
+        {
+          "Image": "imgs/mode",
+          "ShowTitle": false,
+          "TitleAlignment": "middle",
+          "FontSize": "11"
+        }
+      ]
+    },
+    {
+      "UUID": "com.github.mrpoundsign.towncrier.panic",
+      "Name": "Emergency Panic Mute",
+      "Tooltip": "Instantly mute or unmute TownCrier audio output (<50ms)",
+      "Icon": "imgs/panic",
+      "Controllers": ["Keypad"],
+      "States": [
+        {
+          "Image": "imgs/panic",
+          "ShowTitle": false,
+          "TitleAlignment": "middle",
+          "FontSize": "11"
+        },
+        {
+          "Image": "imgs/panic",
+          "ShowTitle": false,
+          "TitleAlignment": "middle",
+          "FontSize": "11"
+        }
+      ]
+    },
+    {
+      "UUID": "com.github.mrpoundsign.towncrier.queue",
+      "Name": "Speech Queue Control",
+      "Tooltip": "Pause/Resume, Skip current speech, or Clear the TownCrier speech queue",
+      "Icon": "imgs/queue",
+      "Controllers": ["Keypad"],
+      "States": [
+        {
+          "Image": "imgs/queue",
+          "ShowTitle": false,
+          "TitleAlignment": "middle",
+          "FontSize": "10"
+        }
+      ]
+    },
+    {
+      "UUID": "com.github.mrpoundsign.towncrier.speak",
+      "Name": "Custom TTS Announcement",
+      "Tooltip": "Speak a custom phrase through TownCrier TTS",
+      "Icon": "imgs/speak",
+      "Controllers": ["Keypad"],
+      "States": [
+        {
+          "Image": "imgs/speak",
+          "ShowTitle": false,
+          "TitleAlignment": "middle",
+          "FontSize": "11"
+        }
+      ]
+    },
+    {
+      "UUID": "com.github.mrpoundsign.towncrier.volume",
+      "Name": "TTS Master Volume",
+      "Tooltip": "Adjust TownCrier master volume via keypad or Stream Deck + rotary dial",
+      "Icon": "imgs/volume",
+      "Controllers": ["Keypad", "Encoder"],
+      "Encoder": {
+        "layout": "$B1",
+        "TriggerDescription": {
+          "Rotate": "Adjust Volume",
+          "Push": "Step Volume"
+        }
+      },
+      "States": [
+        {
+          "Image": "imgs/volume",
+          "ShowTitle": false,
+          "TitleAlignment": "middle",
+          "FontSize": "11"
+        }
+      ]
+    }
+  ]
+}

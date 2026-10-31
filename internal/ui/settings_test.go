@@ -12,6 +12,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/audio"
 	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
+	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
 	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
@@ -332,6 +333,39 @@ func TestSettingsView_TTSAndLoggingToggles(t *testing.T) {
 	}
 	if sess.Config().TTS.Enabled {
 		t.Error("expected session config TTS.Enabled to be false")
+	}
+}
+
+func TestSettingsView_StreamDeckOneClickInstall(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestStreamDeckInstall")
+
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.streamDeckPluginsDir = t.TempDir()
+	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
+		return []audio.DeviceInfo{{ID: "mock1", Name: "Mock Speakers", IsDefault: true}}, nil
+	})
+
+	_ = view.Build()
+
+	if view.streamDeckInstallBtn == nil {
+		t.Fatal("expected streamDeckInstallBtn to be initialized")
+	}
+	if streamdeck.IsPluginInstalled(view.streamDeckPluginsDir) {
+		t.Fatal("expected Stream Deck plugin not installed prior to button tap")
+	}
+
+	test.Tap(view.streamDeckInstallBtn)
+
+	if !streamdeck.IsPluginInstalled(view.streamDeckPluginsDir) {
+		t.Fatal("expected Stream Deck plugin to be installed after tapping streamDeckInstallBtn")
+	}
+	if !strings.Contains(view.streamDeckStatusLabel.Text, "Installed Stream Deck plugin") {
+		t.Errorf("unexpected streamDeckStatusLabel text: %q", view.streamDeckStatusLabel.Text)
 	}
 }
 

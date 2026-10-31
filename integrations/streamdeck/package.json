@@ -1,0 +1,19 @@
+{
+  "name": "@towncrier/streamdeck-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Elgato Stream Deck TypeScript plugin for TownCrier neural TTS control over binary Protocol Buffers WebSocket",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "esbuild src/plugin.ts --bundle --platform=node --target=node20 --outfile=../../internal/streamdeck/plugin/com.github.mrpoundsign.towncrier.sdPlugin/bin/plugin.js && esbuild src/pi.ts --bundle --platform=browser --target=es2022 --outfile=../../internal/streamdeck/plugin/com.github.mrpoundsign.towncrier.sdPlugin/property-inspector/pi.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/ws": "^8.5.12",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

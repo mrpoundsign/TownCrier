@@ -24,6 +24,8 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/queue"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
 	"github.com/mrpoundsign/TownCrier/internal/tts"
+	"github.com/mrpoundsign/TownCrier/internal/ws"
+	"github.com/mrpoundsign/TownCrier/internal/ws/controlv1"
 )
 
 var (
@@ -60,6 +62,18 @@ type Session struct {
 	kickOAuth         *kick.OAuthManager
 	onKickStatus      func(status string, detail string)
 	onEventDispatched func(event *chat.Event, voiceID string)
+	onTTSModeState    func(mode string, speakingActive bool, userIdle bool)
+	onVolumeChanged   func(vol float32)
+	wsServer          *ws.Server
+
+	idleProvider    func() time.Duration
+	userIdle        bool
+	lastOutputMode  string
+	lastSpeakActive bool
+	idleStopCh      chan struct{}
+	idleWg          sync.WaitGroup
+	alertCache      *audio.AlertSoundCache
+	lastAlertAt     time.Time
 
 	streamMu        sync.Mutex
 	livePlatforms   map[string]string
@@ -88,17 +102,23 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 	sanitizer := chat.NewSanitizer(chat.DefaultMaxRunes)
 	router := chat.NewRouter()
 
+	cfgClone := cfg.Clone()
+	initMode := config.NormalizeTTSOutputMode(cfgClone.TTS.OutputMode)
 	s := &Session{
-		cfg:           cfg.Clone(),
-		secrets:       store,
-		configStore:   configStore,
-		router:        router,
-		sanitizer:     sanitizer,
-		bots:          matcher,
-		twitchOAuth:   twitch.NewOAuthManager("", store),
-		youtubeOAuth:  youtube.NewOAuthManager("", "", store),
-		kickOAuth:     kick.NewOAuthManager("", "", store),
-		livePlatforms: make(map[string]string),
+		cfg:             cfgClone,
+		secrets:         store,
+		configStore:     configStore,
+		router:          router,
+		sanitizer:       sanitizer,
+		bots:            matcher,
+		twitchOAuth:     twitch.NewOAuthManager("", store),
+		youtubeOAuth:    youtube.NewOAuthManager("", "", store),
+		kickOAuth:       kick.NewOAuthManager("", "", store),
+		livePlatforms:   make(map[string]string),
+		idleProvider:    SystemIdleDuration,
+		lastOutputMode:  initMode,
+		lastSpeakActive: cfgClone.TTS.Enabled && initMode == config.TTSModeAlwaysOn,
+		alertCache:      audio.NewAlertSoundCache(),
 	}
 
 	s.twitchConnector = twitch.NewConnector(
@@ -160,6 +180,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 			if s.tiktokConnector != nil && s.tiktokConnector.Username() != "" {
 				user = s.tiktokConnector.Username()
 			}
+			log.Printf("[Session] TikTok status update: status=%s detail=%q user=%q", status, detail, user)
 			s.UpdatePlatformStreamState("tiktok", user, status == tiktok.StatusConnected)
 
 			s.mu.RLock()
@@ -212,6 +233,51 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 			Speed:         item.Speed,
 		})
 	})
+
+	s.wsServer = ws.NewServer(s)
+	s.queue.AddOnItemStarted(func(item *queue.Item) {
+		if item == nil {
+			return
+		}
+		var user, plat string
+		if item.Event != nil {
+			user = item.Event.UserName
+			plat = item.Event.Platform
+		}
+		s.wsServer.BroadcastSpeechEvent(&controlv1.SpeechEvent{
+			Id:       item.ID,
+			Text:     item.Text,
+			VoiceId:  item.VoiceID,
+			Username: user,
+			Platform: plat,
+			Finished: false,
+		})
+		s.wsServer.BroadcastState()
+	})
+	s.queue.AddOnItemFinished(func(item *queue.Item) {
+		if item != nil {
+			var user, plat string
+			if item.Event != nil {
+				user = item.Event.UserName
+				plat = item.Event.Platform
+			}
+			s.wsServer.BroadcastSpeechEvent(&controlv1.SpeechEvent{
+				Id:       item.ID,
+				Text:     item.Text,
+				VoiceId:  item.VoiceID,
+				Username: user,
+				Platform: plat,
+				Finished: true,
+			})
+		}
+		s.wsServer.BroadcastState()
+	})
+	s.queue.AddOnQueueDepthChanged(func(_ int) {
+		s.wsServer.BroadcastState()
+	})
+	s.queue.AddOnStateChanged(func(_, _ bool) {
+		s.wsServer.BroadcastState()
+	})
 	return s
 }
 
@@ -235,6 +301,9 @@ func (s *Session) Start() error {
 	if q != nil {
 		q.Resume()
 	}
+	s.startIdleMonitor()
+	s.EvaluateIdleState()
+	s.syncWSServer(cfg)
 	syncConnectors(cfg, tw, yt, tt, kk)
 	return nil
 }
@@ -254,6 +323,11 @@ func (s *Session) Stop() error {
 	tt := s.tiktokConnector
 	kk := s.kickConnector
 	s.mu.Unlock()
+
+	s.stopIdleMonitor()
+	if s.wsServer != nil {
+		_ = s.wsServer.Stop()
+	}
 
 	if q != nil {
 		q.Pause()
@@ -283,12 +357,20 @@ func (s *Session) Close() error {
 	s.onYouTubeStatus = nil
 	s.onTikTokStatus = nil
 	s.onKickStatus = nil
+	s.onTTSModeState = nil
+	s.onVolumeChanged = nil
 	tw := s.twitchConnector
 	yt := s.youtubeConnector
 	tt := s.tiktokConnector
 	kk := s.kickConnector
 	q := s.queue
+	wsSrv := s.wsServer
 	s.mu.Unlock()
+
+	s.stopIdleMonitor()
+	if wsSrv != nil {
+		_ = wsSrv.Stop()
+	}
 
 	if tw != nil {
 		_ = tw.Stop()
@@ -358,6 +440,7 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 	s.mu.Unlock()
 
 	if running {
+		s.syncWSServer(cfgSnap)
 		syncConnectors(cfgSnap, tw, yt, tt, kk)
 	}
 
@@ -368,6 +451,7 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 			EventRetentionDays: newCfg.Logging.EventRetentionDays,
 		})
 	}
+	s.EvaluateIdleState()
 	return nil
 }
 
@@ -649,6 +733,13 @@ func (s *Session) ActiveSessionID() int64 {
 	return s.activeSessionID
 }
 
+// IsStreamLive reports whether any configured streaming platform is currently broadcasting live.
+func (s *Session) IsStreamLive() bool {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	return len(s.livePlatforms) > 0
+}
+
 // UpdatePlatformStreamState transitions a platform's live stream state and opens or closes the unified StreamSession accordingly.
 func (s *Session) UpdatePlatformStreamState(platform, channel string, live bool) {
 	platform = strings.ToLower(strings.TrimSpace(platform))
@@ -763,6 +854,7 @@ func (s *Session) DetectLiveStatus(ctx context.Context) {
 	tw := s.twitchConnector
 	kk := s.kickConnector
 	yt := s.youtubeConnector
+	tt := s.tiktokConnector
 	s.mu.RUnlock()
 
 	var wg sync.WaitGroup
@@ -803,6 +895,18 @@ func (s *Session) DetectLiveStatus(ctx context.Context) {
 		}
 	}
 
+	if tt != nil {
+		if p, ok := cfg.Platforms["tiktok"]; ok && p.Enabled && strings.TrimSpace(p.AccountName) != "" {
+			wg.Add(1)
+			go func(ch string) {
+				defer wg.Done()
+				if live, err := tt.CheckLiveUser(ctx, ch); err == nil && live {
+					s.UpdatePlatformStreamState("tiktok", tiktok.NormalizeUsername(ch), true)
+				}
+			}(p.AccountName)
+		}
+	}
+
 	wg.Wait()
 }
 
@@ -834,6 +938,485 @@ func (s *Session) IsPanicked() bool {
 		return s.queue.IsPanicked()
 	}
 	return false
+}
+
+// SetIdleProvider overrides the keyboard/mouse inactivity duration provider (useful for unit tests).
+func (s *Session) SetIdleProvider(fn func() time.Duration) {
+	if fn == nil {
+		fn = SystemIdleDuration
+	}
+	s.mu.Lock()
+	s.idleProvider = fn
+	s.mu.Unlock()
+	s.EvaluateIdleState()
+}
+
+// CurrentIdleDuration returns the elapsed duration since the last keyboard or mouse activity.
+func (s *Session) CurrentIdleDuration() time.Duration {
+	s.mu.RLock()
+	fn := s.idleProvider
+	s.mu.RUnlock()
+	if fn == nil {
+		return 0
+	}
+	return fn()
+}
+
+// IsUserIdle reports whether keyboard/mouse inactivity has reached the configured IdleTimeoutSeconds.
+func (s *Session) IsUserIdle() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.userIdle
+}
+
+// TTSOutputMode returns the normalized TTS operational output mode ("always_on", "auto_idle", or "always_off").
+func (s *Session) TTSOutputMode() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cfg == nil {
+		return config.TTSModeAlwaysOn
+	}
+	return config.NormalizeTTSOutputMode(s.cfg.TTS.OutputMode)
+}
+
+// SetTTSOutputMode updates and persists the TTS operational output mode.
+func (s *Session) SetTTSOutputMode(mode string) error {
+	norm := config.NormalizeTTSOutputMode(mode)
+	return s.UpdateConfig(func(c *config.Config) {
+		c.TTS.OutputMode = norm
+	})
+}
+
+// CycleTTSOutputMode cycles the TTS output mode (Always On -> Auto-AFK -> Always Off) and returns the new mode.
+func (s *Session) CycleTTSOutputMode() string {
+	next := config.NextTTSOutputMode(s.TTSOutputMode())
+	_ = s.SetTTSOutputMode(next)
+	return next
+}
+
+// IsTTSSpeakingActive reports whether TTS speech synthesis/playback is currently active
+// based on master TTS.Enabled, OutputMode, and (when in Auto-AFK mode) user inactivity.
+func (s *Session) IsTTSSpeakingActive() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cfg == nil || !s.cfg.TTS.Enabled {
+		return false
+	}
+	switch config.NormalizeTTSOutputMode(s.cfg.TTS.OutputMode) {
+	case config.TTSModeAlwaysOff:
+		return false
+	case config.TTSModeAutoIdle:
+		return s.userIdle
+	default:
+		return true
+	}
+}
+
+// SetOnTTSModeStateChanged registers a callback invoked whenever TTS output mode, effective speaking state,
+// or user idle status changes.
+func (s *Session) SetOnTTSModeStateChanged(fn func(mode string, speakingActive bool, userIdle bool)) {
+	s.mu.Lock()
+	s.onTTSModeState = fn
+	mode := s.lastOutputMode
+	if s.cfg != nil {
+		mode = config.NormalizeTTSOutputMode(s.cfg.TTS.OutputMode)
+	}
+	active := s.lastSpeakActive
+	idle := s.userIdle
+	s.mu.Unlock()
+
+	if fn != nil {
+		fn(mode, active, idle)
+	}
+}
+
+// EvaluateIdleState checks the current keyboard/mouse idle duration, updates userIdle and speaking state,
+// flushes pending queue items when transitioning from speaking to inactive, and notifies listeners.
+func (s *Session) EvaluateIdleState() {
+	s.mu.RLock()
+	provider := s.idleProvider
+	cfg := s.cfg
+	q := s.queue
+	s.mu.RUnlock()
+
+	if cfg == nil {
+		return
+	}
+
+	var idleDur time.Duration
+	if provider != nil {
+		idleDur = provider()
+	}
+
+	timeoutSec := cfg.TTS.IdleTimeoutSeconds
+	if timeoutSec <= 0 {
+		timeoutSec = config.DefaultIdleTimeoutSeconds
+	}
+	nowIdle := idleDur >= time.Duration(timeoutSec)*time.Second
+	mode := config.NormalizeTTSOutputMode(cfg.TTS.OutputMode)
+
+	nowSpeakActive := false
+	if cfg.TTS.Enabled {
+		switch mode {
+		case config.TTSModeAlwaysOn:
+			nowSpeakActive = true
+		case config.TTSModeAutoIdle:
+			nowSpeakActive = nowIdle
+		case config.TTSModeAlwaysOff:
+			nowSpeakActive = false
+		}
+	}
+
+	s.mu.Lock()
+	changed := (mode != s.lastOutputMode) || (nowIdle != s.userIdle) || (nowSpeakActive != s.lastSpeakActive)
+	deactivated := s.lastSpeakActive && !nowSpeakActive
+	s.lastOutputMode = mode
+	s.userIdle = nowIdle
+	s.lastSpeakActive = nowSpeakActive
+	cb := s.onTTSModeState
+	s.mu.Unlock()
+
+	if deactivated && q != nil {
+		flushed := q.FlushPendingForActivity()
+		if flushed > 0 {
+			log.Printf("[Session] Flushed %d pending speech items on transition to TTS inactive (mode=%s, idle=%v)", flushed, mode, nowIdle)
+			_ = s.PlayAlertSound(false)
+		}
+	}
+
+	if changed && cb != nil {
+		cb(mode, nowSpeakActive, nowIdle)
+	}
+	if changed && s.wsServer != nil {
+		s.wsServer.BroadcastState()
+	}
+}
+
+// WSServer returns the local WebSocket and HTTP REST control server.
+func (s *Session) WSServer() *ws.Server {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.wsServer
+}
+
+// SetOnVolumeChanged registers a callback invoked when master volume is updated via WebSocket/HTTP control.
+func (s *Session) SetOnVolumeChanged(fn func(vol float32)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onVolumeChanged = fn
+}
+
+func (s *Session) syncWSServer(cfg *config.Config) {
+	if s.wsServer == nil || cfg == nil {
+		return
+	}
+	if !cfg.WebSocket.Enabled {
+		if s.wsServer.IsRunning() {
+			_ = s.wsServer.Stop()
+		}
+		return
+	}
+
+	host := strings.TrimSpace(cfg.WebSocket.Host)
+	if host == "" {
+		host = config.DefaultWebSocketHost
+	}
+	port := cfg.WebSocket.Port
+	if port <= 0 || port > 65535 {
+		port = config.DefaultWebSocketPort
+	}
+	wantAddr := fmt.Sprintf("%s:%d", host, port)
+	if s.wsServer.IsRunning() {
+		if s.wsServer.Addr() == wantAddr {
+			return
+		}
+		_ = s.wsServer.Stop()
+	}
+	if err := s.wsServer.Start(host, port, cfg.WebSocket.AuthToken); err != nil {
+		log.Printf("[Session] Warning: failed to start WebSocket control server on %s: %v", wantAddr, err)
+	}
+}
+
+// SnapshotState implements ws.Controller, returning the current StateSnapshot for WebSocket/HTTP clients.
+func (s *Session) SnapshotState() *controlv1.StateSnapshot {
+	cfg := s.Config()
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+	idleDur := s.CurrentIdleDuration()
+	q := s.Queue()
+	var (
+		paused     bool
+		panicked   bool
+		queueDepth int
+		curText    string
+	)
+	if q != nil {
+		paused = q.IsPaused()
+		panicked = q.IsPanicked()
+		queueDepth = q.Depth()
+		if cur := q.CurrentItem(); cur != nil {
+			curText = cur.Text
+		}
+	}
+	vol := cfg.Audio.Volume
+	if p := s.Player(); p != nil {
+		vol = p.Volume()
+	}
+	timeoutSec := cfg.TTS.IdleTimeoutSeconds
+	if timeoutSec <= 0 {
+		timeoutSec = config.DefaultIdleTimeoutSeconds
+	}
+	return &controlv1.StateSnapshot{
+		TtsEnabled:         cfg.TTS.Enabled,
+		OutputMode:         ws.ModeToProto(cfg.TTS.OutputMode),
+		UserIdle:           s.IsUserIdle(),
+		IdleSeconds:        int64(idleDur.Seconds()),
+		IdleTimeoutSeconds: int32(timeoutSec),
+		SpeakingActive:     s.IsTTSSpeakingActive(),
+		Paused:             paused,
+		Panicked:           panicked,
+		QueueDepth:         int32(queueDepth),
+		Volume:             vol,
+		CurrentVoice:       cfg.GlobalChatRules.DefaultVoice,
+		CurrentlySpeaking:  curText,
+	}
+}
+
+// SetControlTTSMode implements ws.Controller, updating OutputMode and optionally IdleTimeoutSeconds.
+func (s *Session) SetControlTTSMode(mode string, idleTimeoutSec *int32) error {
+	norm := config.NormalizeTTSOutputMode(mode)
+	return s.UpdateConfig(func(c *config.Config) {
+		c.TTS.OutputMode = norm
+		if idleTimeoutSec != nil && *idleTimeoutSec > 0 {
+			c.TTS.IdleTimeoutSeconds = int(*idleTimeoutSec)
+		}
+	})
+}
+
+// CycleControlTTSMode implements ws.Controller, cycling OutputMode and returning the new mode.
+func (s *Session) CycleControlTTSMode() string {
+	return s.CycleTTSOutputMode()
+}
+
+// SpeakCustom implements ws.Controller, enqueuing a direct custom TTS command from WebSocket/HTTP.
+func (s *Session) SpeakCustom(req ws.SpeakRequest) error {
+	text := strings.TrimSpace(req.Text)
+	if text == "" {
+		return errors.New("speak text cannot be empty")
+	}
+	cfg := s.Config()
+	if cfg == nil || !cfg.TTS.Enabled {
+		return errors.New("TTS is disabled")
+	}
+	q := s.Queue()
+	if q == nil {
+		return errors.New("speech queue unavailable")
+	}
+
+	voiceID := strings.TrimSpace(req.VoiceID)
+	if voiceID == "" {
+		voiceID = cfg.GlobalChatRules.DefaultVoice
+	}
+	speed := req.Speed
+	if speed <= 0 {
+		speed = cfg.GlobalChatRules.DefaultSpeed
+		if speed <= 0 {
+			speed = 1.0
+		}
+	}
+	user := strings.TrimSpace(req.Username)
+	if user == "" {
+		user = "RemoteControl"
+	}
+
+	ev := &chat.Event{
+		ID:          fmt.Sprintf("ws-%d-%d", time.Now().UTC().UnixNano(), s.eventSeq.Add(1)),
+		Platform:    "websocket",
+		Kind:        chat.EventKindMessage,
+		Timestamp:   time.Now().UTC(),
+		UserName:    user,
+		DisplayName: user,
+		Text:        text,
+	}
+
+	return q.Enqueue(&queue.Item{
+		ID:         ev.ID,
+		Event:      ev,
+		Text:       text,
+		VoiceID:    voiceID,
+		Speed:      speed,
+		EnqueuedAt: time.Now(),
+		Priority:   req.Priority,
+	})
+}
+
+// ExecutePanicAction implements ws.Controller, executing Toggle, Mute, or Clear panic actions.
+func (s *Session) ExecutePanicAction(action controlv1.PanicAction) error {
+	switch action {
+	case controlv1.PanicAction_PANIC_ACTION_MUTE:
+		s.Panic()
+	case controlv1.PanicAction_PANIC_ACTION_CLEAR:
+		s.ClearPanic()
+	default:
+		s.TogglePanic()
+	}
+	return nil
+}
+
+// ExecuteQueueAction implements ws.Controller, executing Pause, Resume, Skip, or Clear queue actions.
+func (s *Session) ExecuteQueueAction(action controlv1.QueueAction) error {
+	q := s.Queue()
+	if q == nil {
+		return errors.New("speech queue unavailable")
+	}
+	switch action {
+	case controlv1.QueueAction_QUEUE_ACTION_PAUSE:
+		q.Pause()
+	case controlv1.QueueAction_QUEUE_ACTION_RESUME:
+		q.Resume()
+	case controlv1.QueueAction_QUEUE_ACTION_SKIP:
+		q.Skip()
+	case controlv1.QueueAction_QUEUE_ACTION_CLEAR:
+		q.Clear()
+	default:
+		return errors.New("unsupported queue action")
+	}
+	return nil
+}
+
+// AdjustVolume implements ws.Controller, setting an absolute volume or applying a relative delta.
+func (s *Session) AdjustVolume(volume *float32, delta *float32) error {
+	if volume == nil && delta == nil {
+		return errors.New("either volume or delta must be specified")
+	}
+	cfg := s.Config()
+	curVol := float32(1.0)
+	if cfg != nil && cfg.Audio.Volume > 0 {
+		curVol = cfg.Audio.Volume
+	}
+	if p := s.Player(); p != nil {
+		curVol = p.Volume()
+	}
+
+	target := curVol
+	if volume != nil {
+		target = *volume
+	}
+	if delta != nil {
+		target += *delta
+	}
+	if target < 0.0 {
+		target = 0.0
+	} else if target > 1.0 {
+		target = 1.0
+	}
+
+	if p := s.Player(); p != nil {
+		p.SetVolume(target)
+	}
+	err := s.UpdateConfig(func(c *config.Config) {
+		c.Audio.Volume = target
+	})
+
+	s.mu.RLock()
+	volCb := s.onVolumeChanged
+	s.mu.RUnlock()
+	if volCb != nil {
+		volCb(target)
+	}
+	return err
+}
+
+// PlayAlertSound plays the configured alert chime or custom .wav/.mp3 sound through the active audio player.
+// When force is false, it enforces PlayAlertWhenDisabled, Panic Mute state, and AlertCooldownMs.
+func (s *Session) PlayAlertSound(force bool) error {
+	if s.IsPanicked() {
+		return nil
+	}
+
+	s.mu.Lock()
+	cfg := s.cfg
+	player := s.player
+	cache := s.alertCache
+	if cfg == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	if !force {
+		if !cfg.TTS.PlayAlertWhenDisabled {
+			s.mu.Unlock()
+			return nil
+		}
+		cooldownMs := cfg.TTS.AlertCooldownMs
+		if cooldownMs <= 0 {
+			cooldownMs = config.DefaultAlertCooldownMs
+		}
+		now := time.Now()
+		if !s.lastAlertAt.IsZero() && now.Sub(s.lastAlertAt) < time.Duration(cooldownMs)*time.Millisecond {
+			s.mu.Unlock()
+			return nil
+		}
+		s.lastAlertAt = now
+	}
+	customPath := cfg.TTS.AlertSoundPath
+	s.mu.Unlock()
+
+	if cache == nil {
+		cache = audio.NewAlertSoundCache()
+	}
+
+	samples, rate, err := cache.Resolve(customPath)
+	if err != nil {
+		if force {
+			return err
+		}
+		log.Printf("[Session] Warning: failed to load custom alert sound %q (%v); falling back to built-in chime", customPath, err)
+		samples, rate = audio.DefaultChimeSamples()
+	}
+
+	if player == nil {
+		return nil
+	}
+	return player.Play(samples, rate)
+}
+
+func (s *Session) startIdleMonitor() {
+	s.mu.Lock()
+	if s.idleStopCh != nil {
+		s.mu.Unlock()
+		return
+	}
+	stopCh := make(chan struct{})
+	s.idleStopCh = stopCh
+	s.idleWg.Add(1)
+	s.mu.Unlock()
+
+	go func() {
+		defer s.idleWg.Done()
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				s.EvaluateIdleState()
+			}
+		}
+	}()
+}
+
+func (s *Session) stopIdleMonitor() {
+	s.mu.Lock()
+	stopCh := s.idleStopCh
+	s.idleStopCh = nil
+	s.mu.Unlock()
+
+	if stopCh != nil {
+		close(stopCh)
+		s.idleWg.Wait()
+	}
 }
 
 func (s *Session) buildLogEntry(event *chat.Event, rawText string, rawEmotes []chat.EmoteSpan, spokenText, voiceID string, speed float32, passedFilters bool, outcome eventlog.EventOutcome, detail string) *eventlog.Entry {
@@ -1355,10 +1938,35 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		return nil
 	}
 
-	// 6. Check if TTS is disabled
+	// 6. Check if TTS is disabled or paused by TTS Output Mode / Auto-AFK
 	if !cfg.TTS.Enabled {
 		log.Printf("[Session] Event passed filters but TTS is disabled: user=%q", event.UserName)
 		s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, sanitizedText, resolved.VoiceID, resolved.Speed, true, eventlog.OutcomeTTSDisabled, "TTS disabled in settings"))
+
+		s.mu.RLock()
+		onDispatched := s.onEventDispatched
+		s.mu.RUnlock()
+		if onDispatched != nil {
+			evCopy := *event
+			if rawText != "" {
+				evCopy.Text = rawText
+			}
+			evCopy.EmoteSpans = rawEmotes
+			go onDispatched(&evCopy, resolved.VoiceID)
+		}
+		return nil
+	}
+
+	s.EvaluateIdleState()
+	if !s.IsTTSSpeakingActive() {
+		mode := config.NormalizeTTSOutputMode(cfg.TTS.OutputMode)
+		reason := "TTS output mode set to Always Off"
+		if mode == config.TTSModeAutoIdle {
+			reason = "TTS paused while user is active at computer (Auto-AFK mode)"
+		}
+		log.Printf("[Session] Event passed filters but TTS output is inactive (%s): user=%q", mode, event.UserName)
+		s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, sanitizedText, resolved.VoiceID, resolved.Speed, true, eventlog.OutcomeTTSDisabled, reason))
+		_ = s.PlayAlertSound(false)
 
 		s.mu.RLock()
 		onDispatched := s.onEventDispatched

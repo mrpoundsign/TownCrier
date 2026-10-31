@@ -12,12 +12,14 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/internal/audio"
 	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
 	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
@@ -34,11 +36,13 @@ type SettingsView struct {
 	reloadSeq         uint64
 	deviceEnum        func() ([]audio.DeviceInfo, error)
 	statusLabel       *widget.Label
-	onStatus          func(msg string)
-	onHotkeyChanged   func(hotkey string) error
-	onServicesChanged func()
-	onModelsChanged   func()
-	onAssignVoice     func(platform, username string)
+	onStatus                  func(msg string)
+	onHotkeyChanged           func(hotkey string) error
+	onModeToggleHotkeyChanged func(hotkey string) error
+	onTTSOutputModeChanged    func(mode string)
+	onServicesChanged         func()
+	onModelsChanged           func()
+	onAssignVoice             func(platform, username string)
 	subTabs           *container.AppTabs
 	generalTabItem    *container.TabItem
 	ttsTabItem        *container.TabItem
@@ -72,9 +76,28 @@ type SettingsView struct {
 	onLoggingChanged     func(enabled bool)
 	onChatScaleChanged   func(pct int)
 	featuresCard         *widget.Card
+	ttsOutputModeCard    *widget.Card
+	ttsOutputModeSelect  *widget.Select
+	idleTimeoutSelect    *widget.Select
+	ttsModeStatusLabel   *widget.Label
+	playAlertCheck       *widget.Check
+	alertSoundEntry      *ScrollPassEntry
+	alertBrowseBtn       *widget.Button
+	alertClearBtn        *widget.Button
+	alertTestBtn         *widget.Button
+	wsControlCard         *widget.Card
+	wsEnabledCheck        *widget.Check
+	wsHostEntry           *ScrollPassEntry
+	wsPortEntry           *ScrollPassEntry
+	wsTokenEntry          *ScrollPassEntry
+	wsStatusLabel         *widget.Label
+	streamDeckInstallBtn  *widget.Button
+	streamDeckStatusLabel *widget.Label
+	streamDeckPluginsDir  string
 	generalBox           *fyne.Container
 	enableTTSCheck       *widget.Check
 	enableLogCheck       *widget.Check
+	checkUpdatesCheck    *widget.Check
 	globalVoiceCard      *widget.Card
 	audioCard            *widget.Card
 	presetSelect         *widget.Select
@@ -94,6 +117,12 @@ type SettingsView struct {
 	hotkeyKeySelect      *widget.Select
 	hotkeyRecordBtn      *widget.Button
 	hotkeyResetBtn       *widget.Button
+	modeHotkeyCtrlCheck  *widget.Check
+	modeHotkeyShiftCheck *widget.Check
+	modeHotkeyAltCheck   *widget.Check
+	modeHotkeyKeySelect  *widget.Select
+	modeHotkeyRecordBtn  *widget.Button
+	modeHotkeyResetBtn   *widget.Button
 	defaultBadWordsCheck *widget.Check
 	newWordEntry         *ScrollPassEntry
 	addWordBtn           *widget.Button
@@ -163,6 +192,16 @@ func (v *SettingsView) SetStatusHandler(fn func(msg string)) {
 // SetHotkeyChangedHandler registers a callback invoked when the user changes the global Panic Mute hotkey.
 func (v *SettingsView) SetHotkeyChangedHandler(fn func(hotkey string) error) {
 	v.onHotkeyChanged = fn
+}
+
+// SetModeToggleHotkeyChangedHandler registers a callback invoked when the user changes the global TTS Mode Toggle hotkey.
+func (v *SettingsView) SetModeToggleHotkeyChangedHandler(fn func(hotkey string) error) {
+	v.onModeToggleHotkeyChanged = fn
+}
+
+// SetTTSOutputModeChangedHandler registers a callback invoked when the TTS Output Mode is updated in Settings.
+func (v *SettingsView) SetTTSOutputModeChangedHandler(fn func(mode string)) {
+	v.onTTSOutputModeChanged = fn
 }
 
 // SetServicesChangedHandler registers a callback invoked when streaming services are enabled or disabled.
@@ -306,6 +345,13 @@ func (v *SettingsView) SyncTTSState(enabled bool) {
 				v.globalVoiceCard.Hide()
 			}
 		}
+		if v.ttsOutputModeCard != nil {
+			if enabled {
+				v.ttsOutputModeCard.Show()
+			} else {
+				v.ttsOutputModeCard.Hide()
+			}
+		}
 		if v.audioCard != nil {
 			if enabled {
 				v.audioCard.Show()
@@ -317,6 +363,35 @@ func (v *SettingsView) SyncTTSState(enabled bool) {
 			v.generalBox.Refresh()
 		}
 		v.SyncPlatformTabVisibility()
+	})
+}
+
+// SyncTTSModeState synchronizes the Settings TTS Output Mode controls and live status indicator.
+func (v *SettingsView) SyncTTSModeState(mode string, speakingActive bool, userIdle bool) {
+	fyne.Do(func() {
+		cfg := v.currentConfig()
+		v.initializing = true
+		defer func() { v.initializing = false }()
+
+		if v.ttsOutputModeSelect != nil {
+			target := FormatTTSOutputModeLabel(mode)
+			if v.ttsOutputModeSelect.Selected != target {
+				v.ttsOutputModeSelect.SetSelected(target)
+			}
+		}
+		timeoutSec := config.DefaultIdleTimeoutSeconds
+		if cfg != nil && cfg.TTS.IdleTimeoutSeconds > 0 {
+			timeoutSec = cfg.TTS.IdleTimeoutSeconds
+		}
+		if v.idleTimeoutSelect != nil {
+			targetIdle := FormatIdleTimeoutLabel(timeoutSec)
+			if v.idleTimeoutSelect.Selected != targetIdle {
+				v.idleTimeoutSelect.SetSelected(targetIdle)
+			}
+		}
+		if v.ttsModeStatusLabel != nil {
+			v.ttsModeStatusLabel.SetText(FormatTTSModeStatusSummary(mode, speakingActive, userIdle, timeoutSec))
+		}
 	})
 }
 
@@ -364,6 +439,34 @@ func (v *SettingsView) SyncFromConfig() {
 	if v.globalVoiceField != nil {
 		v.globalVoiceField.SetVoiceAndSpeed(v.cfg.GlobalChatRules.DefaultVoice, v.cfg.GlobalChatRules.DefaultSpeed)
 	}
+	if v.ttsOutputModeSelect != nil {
+		v.ttsOutputModeSelect.SetSelected(FormatTTSOutputModeLabel(v.cfg.TTS.OutputMode))
+	}
+	if v.idleTimeoutSelect != nil {
+		v.idleTimeoutSelect.SetSelected(FormatIdleTimeoutLabel(v.cfg.TTS.IdleTimeoutSeconds))
+	}
+	if v.playAlertCheck != nil {
+		v.playAlertCheck.SetChecked(v.cfg.TTS.PlayAlertWhenDisabled)
+	}
+	if v.alertSoundEntry != nil {
+		v.alertSoundEntry.SetText(v.cfg.TTS.AlertSoundPath)
+	}
+	if v.wsEnabledCheck != nil {
+		v.wsEnabledCheck.SetChecked(v.cfg.WebSocket.Enabled)
+	}
+	if v.wsHostEntry != nil {
+		v.wsHostEntry.SetText(v.cfg.WebSocket.Host)
+	}
+	if v.wsPortEntry != nil {
+		v.wsPortEntry.SetText(strconv.Itoa(v.cfg.WebSocket.Port))
+	}
+	if v.wsTokenEntry != nil {
+		v.wsTokenEntry.SetText(v.cfg.WebSocket.AuthToken)
+	}
+	if v.checkUpdatesCheck != nil {
+		v.checkUpdatesCheck.SetChecked(v.cfg.Update.CheckOnStartup)
+	}
+	v.refreshWSStatusLabel()
 	if v.logsView != nil {
 		v.logsView.SyncFromConfig()
 		v.logsView.RefreshQuery()
@@ -412,6 +515,8 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	}
 
 	v.featuresCard = v.buildFeaturesCard()
+	v.ttsOutputModeCard = v.buildTTSOutputModeCard()
+	v.wsControlCard = v.buildWSControlCard()
 	servicesCard := v.buildServicesCard()
 	v.globalVoiceCard = v.buildGlobalVoiceCard()
 	v.audioCard = v.buildAudioCard()
@@ -422,12 +527,15 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	safetyCard := v.buildSafetyCard()
 
 	if !v.ttsEnabled {
+		v.ttsOutputModeCard.Hide()
 		v.globalVoiceCard.Hide()
 		v.audioCard.Hide()
 	}
 
 	v.generalBox = container.NewVBox(
 		v.featuresCard,
+		v.ttsOutputModeCard,
+		v.wsControlCard,
 		servicesCard,
 		v.globalVoiceCard,
 		v.audioCard,
@@ -489,6 +597,13 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 			c.TTS.Enabled = checked
 		})
 		v.ttsEnabled = checked
+		if v.ttsOutputModeCard != nil {
+			if checked {
+				v.ttsOutputModeCard.Show()
+			} else {
+				v.ttsOutputModeCard.Hide()
+			}
+		}
 		if v.globalVoiceCard != nil {
 			if checked {
 				v.globalVoiceCard.Show()
@@ -544,12 +659,395 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 	})
 	v.enableLogCheck.SetChecked(cfg.Logging.Enabled)
 
+	v.checkUpdatesCheck = widget.NewCheck("Automatically check for updates on startup", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.Update.CheckOnStartup = checked
+		})
+	})
+	v.checkUpdatesCheck.SetChecked(cfg.Update.CheckOnStartup)
+
+	checkNowBtn := widget.NewButtonWithIcon("Check for Updates Now", theme.ViewRefreshIcon(), func() {
+		TriggerManualUpdateCheck(v.window, v.session, v.setStatus)
+	})
+
+	updateRow := container.NewHBox(v.checkUpdatesCheck, checkNowBtn)
+
 	cardContent := container.NewVBox(
 		v.enableTTSCheck,
 		v.enableLogCheck,
+		updateRow,
 	)
 
 	return widget.NewCard("Application Features", "Enable or disable core system features", cardContent)
+}
+
+// IdleTimeoutOptions lists selectable keyboard/mouse inactivity thresholds for Auto-AFK mode.
+var IdleTimeoutOptions = []string{
+	"5 seconds",
+	"10 seconds",
+	"15 seconds",
+	"30 seconds",
+	"60 seconds",
+	"120 seconds",
+	"300 seconds",
+}
+
+// FormatIdleTimeoutLabel returns the UI dropdown label for a timeout in seconds.
+func FormatIdleTimeoutLabel(sec int) string {
+	switch sec {
+	case 5:
+		return "5 seconds"
+	case 10:
+		return "10 seconds"
+	case 15:
+		return "15 seconds"
+	case 30:
+		return "30 seconds"
+	case 60:
+		return "60 seconds"
+	case 120:
+		return "120 seconds"
+	case 300:
+		return "300 seconds"
+	default:
+		if sec <= 0 {
+			return "15 seconds"
+		}
+		return fmt.Sprintf("%d seconds", sec)
+	}
+}
+
+// ParseIdleTimeoutLabel parses a UI dropdown label into seconds.
+func ParseIdleTimeoutLabel(label string) int {
+	var sec int
+	if _, err := fmt.Sscanf(label, "%d", &sec); err == nil && sec > 0 {
+		return sec
+	}
+	return config.DefaultIdleTimeoutSeconds
+}
+
+func (v *SettingsView) buildTTSOutputModeCard() *widget.Card {
+	cfg := v.currentConfig()
+	initialMode := config.NormalizeTTSOutputMode(cfg.TTS.OutputMode)
+	initialTimeout := cfg.TTS.IdleTimeoutSeconds
+	if initialTimeout <= 0 {
+		initialTimeout = config.DefaultIdleTimeoutSeconds
+	}
+
+	speakingActive := initialMode == config.TTSModeAlwaysOn
+	userIdle := false
+	if v.session != nil {
+		speakingActive = v.session.IsTTSSpeakingActive()
+		userIdle = v.session.IsUserIdle()
+	}
+
+	v.ttsModeStatusLabel = widget.NewLabelWithStyle(
+		FormatTTSModeStatusSummary(initialMode, speakingActive, userIdle, initialTimeout),
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Bold: true},
+	)
+
+	v.ttsOutputModeSelect = widget.NewSelect(TTSOutputModeOptions, func(selected string) {
+		if v.initializing {
+			return
+		}
+		mode := ParseTTSOutputModeLabel(selected)
+		if v.session != nil {
+			_ = v.session.SetTTSOutputMode(mode)
+			v.cfg = v.session.Config()
+		} else {
+			v.updateConfig(func(c *config.Config) {
+				c.TTS.OutputMode = mode
+			})
+		}
+		if v.onTTSOutputModeChanged != nil {
+			v.onTTSOutputModeChanged(mode)
+		}
+		v.setStatus("✓ TTS Output Mode set to " + FormatTTSOutputModeLabel(mode))
+	})
+	v.ttsOutputModeSelect.SetSelected(FormatTTSOutputModeLabel(initialMode))
+
+	v.idleTimeoutSelect = widget.NewSelect(IdleTimeoutOptions, func(selected string) {
+		if v.initializing {
+			return
+		}
+		sec := ParseIdleTimeoutLabel(selected)
+		v.updateConfig(func(c *config.Config) {
+			c.TTS.IdleTimeoutSeconds = sec
+		})
+		if v.session != nil {
+			v.session.EvaluateIdleState()
+		}
+		if v.ttsModeStatusLabel != nil {
+			curMode := config.NormalizeTTSOutputMode(v.currentConfig().TTS.OutputMode)
+			active := curMode == config.TTSModeAlwaysOn
+			idle := false
+			if v.session != nil {
+				active = v.session.IsTTSSpeakingActive()
+				idle = v.session.IsUserIdle()
+			}
+			v.ttsModeStatusLabel.SetText(FormatTTSModeStatusSummary(curMode, active, idle, sec))
+		}
+		v.setStatus(fmt.Sprintf("✓ Auto-AFK inactivity timeout set to %d seconds.", sec))
+	})
+	v.idleTimeoutSelect.SetSelected(FormatIdleTimeoutLabel(initialTimeout))
+
+	modeRow := container.NewHBox(
+		widget.NewLabel("Output Mode:"),
+		v.ttsOutputModeSelect,
+		widget.NewLabel("Auto-AFK Timeout:"),
+		v.idleTimeoutSelect,
+	)
+
+	descLabel := widget.NewLabelWithStyle(
+		"Keeps neural TTS models warm in RAM for instant 0ms switching. In Auto-AFK mode, TownCrier stays quiet while you use your keyboard/mouse and automatically reads chat aloud after inactivity.",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	descLabel.Wrapping = fyne.TextWrapWord
+
+	v.playAlertCheck = widget.NewCheck("Play alert sound for incoming messages when TTS output is inactive (At Computer / Always Off)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.TTS.PlayAlertWhenDisabled = checked
+		})
+	})
+	v.playAlertCheck.SetChecked(cfg.TTS.PlayAlertWhenDisabled)
+
+	alertEntry := NewScrollPassEntry()
+	alertEntry.SetPlaceHolder("Built-in two-tone harmonic chime (or select a custom .wav / .mp3 file)")
+	alertEntry.SetText(cfg.TTS.AlertSoundPath)
+	alertEntry.OnChanged = func(text string) {
+		if v.initializing {
+			return
+		}
+		trimmed := strings.TrimSpace(text)
+		v.updateConfig(func(c *config.Config) {
+			c.TTS.AlertSoundPath = trimmed
+		})
+	}
+	v.alertSoundEntry = alertEntry
+
+	browseBtn := widget.NewButtonWithIcon("Browse...", theme.FolderOpenIcon(), func() {
+		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil {
+				v.setStatus("⚠️ Failed to open file: " + err.Error())
+				return
+			}
+			if reader == nil {
+				return
+			}
+			_ = reader.Close()
+			chosen := reader.URI().Path()
+			alertEntry.SetText(chosen)
+			v.setStatus("✓ Custom alert sound set to " + chosen)
+		}, v.window)
+		fd.SetFilter(storage.NewExtensionFileFilter([]string{".wav", ".wave", ".mp3"}))
+		fd.Show()
+	})
+	v.alertBrowseBtn = browseBtn
+
+	clearBtn := widget.NewButtonWithIcon("Use Built-in Chime", theme.ContentClearIcon(), func() {
+		alertEntry.SetText("")
+		v.setStatus("✓ Reset alert sound to built-in harmonic chime.")
+	})
+	v.alertClearBtn = clearBtn
+
+	testBtn := widget.NewButtonWithIcon("Test Alert Sound", theme.MediaPlayIcon(), func() {
+		go func() {
+			var err error
+			if v.session != nil {
+				err = v.session.PlayAlertSound(true)
+			} else if v.player != nil {
+				cache := audio.NewAlertSoundCache()
+				samples, rate, loadErr := cache.Resolve(strings.TrimSpace(alertEntry.Text))
+				if loadErr != nil {
+					err = loadErr
+				} else {
+					err = v.player.Play(samples, rate)
+				}
+			}
+			if err != nil {
+				v.setStatus("⚠️ Alert sound error: " + err.Error())
+			} else {
+				v.setStatus("🔊 Played alert sound preview.")
+			}
+		}()
+	})
+	v.alertTestBtn = testBtn
+
+	alertBtns := container.NewHBox(browseBtn, clearBtn, testBtn)
+	alertFileRow := container.NewBorder(nil, nil, widget.NewLabel("Alert Sound:"), alertBtns, alertEntry)
+
+	cardContent := container.NewVBox(
+		modeRow,
+		v.ttsModeStatusLabel,
+		descLabel,
+		widget.NewSeparator(),
+		v.playAlertCheck,
+		alertFileRow,
+	)
+
+	return widget.NewCard("TTS Output Mode & Auto-AFK", "Control when chat is spoken aloud vs. alerted with a chime while at your computer", cardContent)
+}
+
+func (v *SettingsView) refreshWSStatusLabel() {
+	if v.wsStatusLabel == nil {
+		return
+	}
+	cfg := v.currentConfig()
+	if cfg == nil || !cfg.WebSocket.Enabled {
+		v.wsStatusLabel.SetText("⚪ Control Server Disabled")
+		return
+	}
+	host := strings.TrimSpace(cfg.WebSocket.Host)
+	if host == "" {
+		host = config.DefaultWebSocketHost
+	}
+	port := cfg.WebSocket.Port
+	if port <= 0 || port > 65535 {
+		port = config.DefaultWebSocketPort
+	}
+	if v.session != nil && v.session.WSServer() != nil && v.session.WSServer().IsRunning() {
+		addr := v.session.WSServer().Addr()
+		clients := v.session.WSServer().ClientCount()
+		v.wsStatusLabel.SetText(fmt.Sprintf("🟢 Listening on ws://%s/ws & http://%s/api/* (%d connected clients)", addr, addr, clients))
+		return
+	}
+	v.wsStatusLabel.SetText(fmt.Sprintf("🟢 Configured for ws://%s:%d/ws & http://%s:%d/api/*", host, port, host, port))
+}
+
+func (v *SettingsView) buildWSControlCard() *widget.Card {
+	cfg := v.currentConfig()
+
+	v.wsStatusLabel = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+
+	v.wsEnabledCheck = widget.NewCheck("Enable Local WebSocket & HTTP Control Server (Stream Deck, Streamer.bot, TouchPortal)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.WebSocket.Enabled = checked
+		})
+		v.refreshWSStatusLabel()
+		if checked {
+			v.setStatus("✓ Local WebSocket & HTTP Control Server enabled.")
+		} else {
+			v.setStatus("Local WebSocket & HTTP Control Server disabled.")
+		}
+	})
+	v.wsEnabledCheck.SetChecked(cfg.WebSocket.Enabled)
+
+	hostEntry := NewScrollPassEntry()
+	hostEntry.SetPlaceHolder(config.DefaultWebSocketHost)
+	host := strings.TrimSpace(cfg.WebSocket.Host)
+	if host == "" {
+		host = config.DefaultWebSocketHost
+	}
+	hostEntry.SetText(host)
+	v.wsHostEntry = hostEntry
+
+	portEntry := NewScrollPassEntry()
+	portEntry.SetPlaceHolder(strconv.Itoa(config.DefaultWebSocketPort))
+	port := cfg.WebSocket.Port
+	if port <= 0 || port > 65535 {
+		port = config.DefaultWebSocketPort
+	}
+	portEntry.SetText(strconv.Itoa(port))
+	v.wsPortEntry = portEntry
+
+	tokenEntry := NewScrollPassEntry()
+	tokenEntry.Password = true
+	tokenEntry.SetPlaceHolder("Optional shared secret token (leave blank for localhost no-auth)")
+	tokenEntry.SetText(cfg.WebSocket.AuthToken)
+	v.wsTokenEntry = tokenEntry
+
+	applyNetBtn := widget.NewButtonWithIcon("Apply Network Settings", theme.ConfirmIcon(), func() {
+		newHost := strings.TrimSpace(hostEntry.Text)
+		if newHost == "" {
+			newHost = config.DefaultWebSocketHost
+			hostEntry.SetText(newHost)
+		}
+		newPort, err := strconv.Atoi(strings.TrimSpace(portEntry.Text))
+		if err != nil || newPort <= 0 || newPort > 65535 {
+			v.setStatus("⚠️ Invalid port number (must be 1..65535)")
+			return
+		}
+		newToken := strings.TrimSpace(tokenEntry.Text)
+		v.updateConfig(func(c *config.Config) {
+			c.WebSocket.Host = newHost
+			c.WebSocket.Port = newPort
+			c.WebSocket.AuthToken = newToken
+		})
+		v.refreshWSStatusLabel()
+		v.setStatus(fmt.Sprintf("✓ Control Server settings updated (%s:%d).", newHost, newPort))
+	})
+
+	netRow := container.NewGridWithColumns(3,
+		container.NewBorder(nil, nil, widget.NewLabel("Host:"), nil, hostEntry),
+		container.NewBorder(nil, nil, widget.NewLabel("Port:"), nil, portEntry),
+		applyNetBtn,
+	)
+	tokenRow := container.NewBorder(nil, nil, widget.NewLabel("Auth Token:"), nil, tokenEntry)
+
+	v.refreshWSStatusLabel()
+
+	infoLabel := widget.NewLabelWithStyle(
+		"Supports binary Protocol Buffers (proto/control/v1/control.proto) and JSON over WebSocket (/ws), plus HTTP REST webhooks (/api/status, /api/speak, /api/mode, /api/panic, /api/queue, /api/volume).",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	infoLabel.Wrapping = fyne.TextWrapWord
+
+	v.streamDeckStatusLabel = widget.NewLabel("Stream Deck Plugin: Ready to install (com.github.mrpoundsign.towncrier.sdPlugin)")
+	v.streamDeckStatusLabel.Wrapping = fyne.TextWrapWord
+	if v.streamDeckPluginsDir != "" && streamdeck.IsPluginInstalled(v.streamDeckPluginsDir) {
+		v.streamDeckStatusLabel.SetText("✓ Stream Deck Plugin installed")
+	}
+
+	v.streamDeckInstallBtn = widget.NewButtonWithIcon("Install / Update Elgato Stream Deck Plugin", theme.DownloadIcon(), func() {
+		installedPath, err := streamdeck.InstallPlugin(v.streamDeckPluginsDir)
+		if err != nil {
+			errMsg := fmt.Sprintf("⚠️ Stream Deck plugin install failed: %v", err)
+			v.streamDeckStatusLabel.SetText(errMsg)
+			v.setStatus(errMsg)
+			return
+		}
+		if cur := v.currentConfig(); cur != nil && !cur.WebSocket.Enabled {
+			v.updateConfig(func(c *config.Config) {
+				c.WebSocket.Enabled = true
+			})
+			v.initializing = true
+			if v.wsEnabledCheck != nil {
+				v.wsEnabledCheck.SetChecked(true)
+			}
+			v.initializing = false
+			v.refreshWSStatusLabel()
+		}
+		okMsg := fmt.Sprintf("✓ Installed Stream Deck plugin to %s (restart Elgato Stream Deck app to load)", installedPath)
+		v.streamDeckStatusLabel.SetText(okMsg)
+		v.setStatus("✓ Elgato Stream Deck plugin installed & WebSocket control server enabled.")
+	})
+	v.streamDeckInstallBtn.Importance = widget.HighImportance
+
+	sdRow := container.NewBorder(nil, nil, v.streamDeckInstallBtn, nil, v.streamDeckStatusLabel)
+
+	cardContent := container.NewVBox(
+		v.wsEnabledCheck,
+		v.wsStatusLabel,
+		netRow,
+		tokenRow,
+		infoLabel,
+		widget.NewSeparator(),
+		sdRow,
+	)
+
+	return widget.NewCard("WebSocket & HTTP Control API", "External automation, Elgato Stream Deck, and webhook integration", cardContent)
 }
 
 func (v *SettingsView) buildServicesCard() *widget.Card {
@@ -1710,6 +2208,108 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 		resetHotkeyBtn,
 	)
 
+	// --- System-Wide TTS Mode Toggle Hotkey ---
+	curModeHotkey := v.cfg.Safety.ModeToggleHotkey
+	if curModeHotkey == "" {
+		curModeHotkey = config.DefaultModeToggleHotkey
+	}
+	parsedModeSpec, parseModeErr := ParseHotkey(curModeHotkey)
+	if parseModeErr != nil {
+		parsedModeSpec, _ = ParseHotkey(config.DefaultModeToggleHotkey)
+	}
+
+	modeHotkeyDisplay := widget.NewLabelWithStyle(
+		fmt.Sprintf("System-Wide TTS Mode Toggle Hotkey: %s (cycles Always On → Auto-AFK → Always Off)", parsedModeSpec.String()),
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Bold: true},
+	)
+	modeHotkeyDisplay.Wrapping = fyne.TextWrapWord
+
+	var syncingModeHotkeyUI bool
+
+	modeCtrlCheck := widget.NewCheck("Ctrl", nil)
+	modeShiftCheck := widget.NewCheck("Shift", nil)
+	modeAltCheck := widget.NewCheck("Alt", nil)
+	modeKeySelect := widget.NewSelect(SupportedHotkeyKeys, nil)
+
+	v.modeHotkeyCtrlCheck = modeCtrlCheck
+	v.modeHotkeyShiftCheck = modeShiftCheck
+	v.modeHotkeyAltCheck = modeAltCheck
+	v.modeHotkeyKeySelect = modeKeySelect
+
+	syncModeWidgetsFromSpec := func(spec HotkeySpec) {
+		syncingModeHotkeyUI = true
+		modeCtrlCheck.SetChecked(spec.Ctrl)
+		modeShiftCheck.SetChecked(spec.Shift)
+		modeAltCheck.SetChecked(spec.Alt)
+		modeKeySelect.SetSelected(spec.Key)
+		modeHotkeyDisplay.SetText(fmt.Sprintf("System-Wide TTS Mode Toggle Hotkey: %s (cycles Always On → Auto-AFK → Always Off)", spec.String()))
+		syncingModeHotkeyUI = false
+	}
+
+	applyNewModeHotkey := func(candidate string) {
+		spec, err := ParseHotkey(candidate)
+		if err != nil {
+			v.setStatus("⚠️ Invalid mode toggle hotkey: " + err.Error())
+			return
+		}
+		canonical := spec.String()
+		v.updateConfig(func(c *config.Config) {
+			c.Safety.ModeToggleHotkey = canonical
+		})
+		syncModeWidgetsFromSpec(spec)
+		if v.onModeToggleHotkeyChanged != nil {
+			if regErr := v.onModeToggleHotkeyChanged(canonical); regErr != nil {
+				v.setStatus(fmt.Sprintf("⚠️ Mode hotkey saved (%s), but OS registration failed: %v", canonical, regErr))
+				return
+			}
+		}
+		v.setStatus("✓ Global TTS Mode Toggle hotkey set to " + canonical)
+	}
+
+	onModeComboChanged := func() {
+		if v.initializing || syncingModeHotkeyUI {
+			return
+		}
+		tempSpec := HotkeySpec{
+			Ctrl:  modeCtrlCheck.Checked,
+			Shift: modeShiftCheck.Checked,
+			Alt:   modeAltCheck.Checked,
+			Key:   modeKeySelect.Selected,
+		}
+		applyNewModeHotkey(tempSpec.String())
+	}
+
+	syncModeWidgetsFromSpec(parsedModeSpec)
+
+	modeCtrlCheck.OnChanged = func(bool) { onModeComboChanged() }
+	modeShiftCheck.OnChanged = func(bool) { onModeComboChanged() }
+	modeAltCheck.OnChanged = func(bool) { onModeComboChanged() }
+	modeKeySelect.OnChanged = func(string) { onModeComboChanged() }
+
+	modeRecordBtn := widget.NewButtonWithIcon("Record Keypress...", theme.MediaRecordIcon(), func() {
+		v.showRecordHotkeyDialog(parsedModeSpec, func(recorded string) {
+			applyNewModeHotkey(recorded)
+		})
+	})
+	v.modeHotkeyRecordBtn = modeRecordBtn
+
+	modeResetHotkeyBtn := widget.NewButtonWithIcon("Reset Default", theme.ViewRefreshIcon(), func() {
+		applyNewModeHotkey(config.DefaultModeToggleHotkey)
+	})
+	v.modeHotkeyResetBtn = modeResetHotkeyBtn
+
+	modeHotkeyControlsRow := container.NewHBox(
+		widget.NewLabel("Modifiers:"),
+		modeCtrlCheck,
+		modeShiftCheck,
+		modeAltCheck,
+		widget.NewLabel("Key:"),
+		modeKeySelect,
+		modeRecordBtn,
+		modeResetHotkeyBtn,
+	)
+
 	wordListContainer := container.NewVBox()
 
 	var refreshWords func()
@@ -1779,6 +2379,9 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 	cardContent := container.NewVBox(
 		hotkeyDisplay,
 		hotkeyControlsRow,
+		widget.NewSeparator(),
+		modeHotkeyDisplay,
+		modeHotkeyControlsRow,
 		widget.NewSeparator(),
 		defaultBadWordsCheck,
 		widget.NewLabel("Custom Blocked Words (masked with '***' before TTS):"),

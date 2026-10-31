@@ -18,6 +18,8 @@
 > 9. **Always Link PRs, Issues, and CI Runs**: Whenever creating or referencing GitHub Pull Requests, Issues, or Actions CI runs, always include clickable Markdown links so the user can watch or inspect them directly.
 > 10. **GitHub CLI Issue & PR Bodies via Files**: PowerShell mangles markdown backticks and escapes (e.g., `\t`, `\f`) when passing strings inline to `gh`. NEVER pass multiline issue or PR descriptions inline via `--body`. ALWAYS write markdown content to a temporary file in `build/` and pass `--body-file`, then clean up the temporary file.
 > 11. **Strict Test Configuration & Directory Isolation**: NEVER write tests that use or default to real configuration locations (`%APPDATA%`, `~/.config`, etc.). Tests must ALWAYS use `config.NewMemoryStore()` or `config.TestLocations(t.TempDir())`. Attempting to load or save default/production config locations during test execution is strictly forbidden and will fail immediately.
+> 12. **Explicit Approval for Pull Requests**: Never open a Pull Request without explicit user approval. 1 commit per ticket is an aspirational goal, not a hard requirement, and multiple commits or tickets can live on the same branch or be merged directly into `dev`.
+> 13. **Release Merges to Main via Pull Request**: Releasing from `dev` to `main` always occurs via a GitHub Pull Request (`dev` → `main`) listing `Closes #<id>` for all completed issues. This leverages GitHub's native closing automation without external scripts and seamlessly updates GitHub Projects Kanban cards to Done.
 
 ---
 
@@ -46,6 +48,7 @@ TownCrier/
 ├── build/                # Local build output and temporary binaries (gitignored)
 │   └── bin/              # Cross-compiled executables and runtime DLLs
 ├── cmd/
+│   ├── installer/        # Fyne GUI installer & uninstaller (-tags nosherpa, via appinstaller)
 │   ├── launcher/         # Single-file portable executable self-extracting launcher
 │   ├── spike/            # Technical spike & audio engine validation CLI
 │   └── towncrier/        # Main desktop application GUI entry point (main.go)
@@ -95,3 +98,7 @@ TownCrier/
    - Never run Windows `.exe` GUI binaries interactively in WSL bash (causes terminal hang). Let the user launch `build/bin/TownCrier.exe` from Windows.
 8. **Frequency-Gated Audio Cache (Issue #21)**:
    - Chat messages follow a long-tail distribution. Never cache one-offs. Use frequency gating (promote to disk in `%LOCALAPPDATA%\com.github.mrpoundsign.towncrier\cache\audio\` only when count ≥ 2 or for alert templates) to maintain near-zero RAM usage.
+9. **Unified Installer, Portable Launcher & Self-Updater (`@skill:goreleaser-installer-updater`)**:
+   - Uses `github.com/mrpoundsign/appinstaller` (`../appinstaller`) and `.goreleaser.yaml` (GoReleaser v2 OSS).
+   - `cmd/installer` is compiled with `-tags nosherpa` so `TownCrier-Setup.exe` runs as a standalone Fyne setup wizard with zero external DLL dependencies while still reusing `internal/tts` to optionally pre-download Supertonic/Kokoro model packs.
+   - Startup update checks suppress modal dialogs whenever `session.IsStreamLive()` is true, showing only the header bar `"⬆ Update"` badge and status message.
