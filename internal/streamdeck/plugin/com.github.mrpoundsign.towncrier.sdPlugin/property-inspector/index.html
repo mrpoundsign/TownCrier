@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>TownCrier Property Inspector</title>
+  <style>
+    body {
+      background-color: #0F172A;
+      color: #F8FAFC;
+      font-family: "Segoe UI", sans-serif;
+      font-size: 12px;
+      margin: 12px;
+    }
+    h3 {
+      color: #38BDF8;
+      font-size: 13px;
+      margin: 10px 0 6px 0;
+      border-bottom: 1px solid #334155;
+      padding-bottom: 4px;
+    }
+    .field {
+      margin-bottom: 8px;
+      display: flex;
+      flex-direction: column;
+    }
+    label {
+      color: #94A3B8;
+      margin-bottom: 3px;
+    }
+    input, select {
+      background: #1E293B;
+      color: #F8FAFC;
+      border: 1px solid #475569;
+      border-radius: 4px;
+      padding: 5px 7px;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div data-action="com.github.mrpoundsign.towncrier.mode" style="display:none">
+    <h3>TTS Output Mode Action</h3>
+    <div class="field">
+      <label>Key Press Behavior</label>
+      <select data-setting="targetMode">
+        <option value="cycle">Cycle (Always On → Auto-AFK → Always Off)</option>
+        <option value="always_on">Set Always On</option>
+        <option value="auto_afk">Set Auto-AFK</option>
+        <option value="always_off">Set Always Off</option>
+      </select>
+    </div>
+  </div>
+
+  <div data-action="com.github.mrpoundsign.towncrier.panic" style="display:none">
+    <h3>Emergency Panic Mute Action</h3>
+    <div class="field">
+      <label>Operation</label>
+      <select data-setting="operation">
+        <option value="toggle">Toggle Mute / Unmute</option>
+        <option value="mute">Force Mute</option>
+        <option value="unmute">Force Unmute</option>
+      </select>
+    </div>
+  </div>
+
+  <div data-action="com.github.mrpoundsign.towncrier.queue" style="display:none">
+    <h3>Speech Queue Action</h3>
+    <div class="field">
+      <label>Queue Operation</label>
+      <select data-setting="queueOperation">
+        <option value="toggle_pause">Toggle Pause / Resume</option>
+        <option value="pause">Pause Queue</option>
+        <option value="resume">Resume Queue</option>
+        <option value="skip">Skip Current Speech</option>
+        <option value="clear">Clear Entire Queue</option>
+      </select>
+    </div>
+  </div>
+
+  <div data-action="com.github.mrpoundsign.towncrier.speak" style="display:none">
+    <h3>Custom TTS Announcement</h3>
+    <div class="field">
+      <label>Button Label</label>
+      <input type="text" data-setting="label" placeholder="SPEAK" />
+    </div>
+    <div class="field">
+      <label>Phrase to Speak</label>
+      <input type="text" data-setting="text" placeholder="Hello from Stream Deck!" />
+    </div>
+    <div class="field">
+      <label>Voice ID (optional)</label>
+      <input type="text" data-setting="voiceId" placeholder="af_heart" />
+    </div>
+    <div class="field">
+      <label>Speed (0.5 - 2.0)</label>
+      <input type="number" step="0.1" min="0.5" max="2.0" data-setting="speed" value="1.0" />
+    </div>
+  </div>
+
+  <div data-action="com.github.mrpoundsign.towncrier.volume" style="display:none">
+    <h3>Master Volume Control</h3>
+    <div class="field">
+      <label>Step % per Press / Dial Tick (use negative to decrease)</label>
+      <input type="number" data-setting="step" value="5" />
+    </div>
+  </div>
+
+  <h3>TownCrier Connection</h3>
+  <div class="field">
+    <label>Host</label>
+    <input type="text" id="tc-host" value="127.0.0.1" />
+  </div>
+  <div class="field">
+    <label>Port</label>
+    <input type="number" id="tc-port" value="8765" />
+  </div>
+  <div class="field">
+    <label>Auth Token (if required)</label>
+    <input type="password" id="tc-token" placeholder="Optional Bearer Token" />
+  </div>
+
+  <script src="pi.js"></script>
+</body>
+</html>

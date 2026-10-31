@@ -8,6 +8,9 @@
 dist/
 build/
 bin/
+!internal/streamdeck/plugin/**/bin/
+!internal/streamdeck/plugin/**/bin/**
+node_modules/
 cmd/launcher/payload/*
 !cmd/launcher/payload/placeholder.txt
 fyne-cross/

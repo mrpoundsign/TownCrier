@@ -19,6 +19,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/internal/audio"
 	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
 	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
@@ -84,12 +85,15 @@ type SettingsView struct {
 	alertBrowseBtn       *widget.Button
 	alertClearBtn        *widget.Button
 	alertTestBtn         *widget.Button
-	wsControlCard        *widget.Card
-	wsEnabledCheck       *widget.Check
-	wsHostEntry          *ScrollPassEntry
-	wsPortEntry          *ScrollPassEntry
-	wsTokenEntry         *ScrollPassEntry
-	wsStatusLabel        *widget.Label
+	wsControlCard         *widget.Card
+	wsEnabledCheck        *widget.Check
+	wsHostEntry           *ScrollPassEntry
+	wsPortEntry           *ScrollPassEntry
+	wsTokenEntry          *ScrollPassEntry
+	wsStatusLabel         *widget.Label
+	streamDeckInstallBtn  *widget.Button
+	streamDeckStatusLabel *widget.Label
+	streamDeckPluginsDir  string
 	generalBox           *fyne.Container
 	enableTTSCheck       *widget.Check
 	enableLogCheck       *widget.Check
@@ -1000,12 +1004,47 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 	)
 	infoLabel.Wrapping = fyne.TextWrapWord
 
+	v.streamDeckStatusLabel = widget.NewLabel("Stream Deck Plugin: Ready to install (com.github.mrpoundsign.towncrier.sdPlugin)")
+	v.streamDeckStatusLabel.Wrapping = fyne.TextWrapWord
+	if v.streamDeckPluginsDir != "" && streamdeck.IsPluginInstalled(v.streamDeckPluginsDir) {
+		v.streamDeckStatusLabel.SetText("✓ Stream Deck Plugin installed")
+	}
+
+	v.streamDeckInstallBtn = widget.NewButtonWithIcon("Install / Update Elgato Stream Deck Plugin", theme.DownloadIcon(), func() {
+		installedPath, err := streamdeck.InstallPlugin(v.streamDeckPluginsDir)
+		if err != nil {
+			errMsg := fmt.Sprintf("⚠️ Stream Deck plugin install failed: %v", err)
+			v.streamDeckStatusLabel.SetText(errMsg)
+			v.setStatus(errMsg)
+			return
+		}
+		if cur := v.currentConfig(); cur != nil && !cur.WebSocket.Enabled {
+			v.updateConfig(func(c *config.Config) {
+				c.WebSocket.Enabled = true
+			})
+			v.initializing = true
+			if v.wsEnabledCheck != nil {
+				v.wsEnabledCheck.SetChecked(true)
+			}
+			v.initializing = false
+			v.refreshWSStatusLabel()
+		}
+		okMsg := fmt.Sprintf("✓ Installed Stream Deck plugin to %s (restart Elgato Stream Deck app to load)", installedPath)
+		v.streamDeckStatusLabel.SetText(okMsg)
+		v.setStatus("✓ Elgato Stream Deck plugin installed & WebSocket control server enabled.")
+	})
+	v.streamDeckInstallBtn.Importance = widget.HighImportance
+
+	sdRow := container.NewBorder(nil, nil, v.streamDeckInstallBtn, nil, v.streamDeckStatusLabel)
+
 	cardContent := container.NewVBox(
 		v.wsEnabledCheck,
 		v.wsStatusLabel,
 		netRow,
 		tokenRow,
 		infoLabel,
+		widget.NewSeparator(),
+		sdRow,
 	)
 
 	return widget.NewCard("WebSocket & HTTP Control API", "External automation, Elgato Stream Deck, and webhook integration", cardContent)
