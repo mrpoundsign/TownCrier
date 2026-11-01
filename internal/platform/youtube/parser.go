@@ -560,6 +560,7 @@ func parseTextMessage(r *textMessageRenderer) *chat.Event {
 		UserName:    author,
 		DisplayName: author,
 		Roles:       extractAuthorRoles(r.AuthorBadges),
+		Mentions:    chat.ExtractMentions(text),
 		Text:        text,
 		EmoteSpans:  emotes,
 	}

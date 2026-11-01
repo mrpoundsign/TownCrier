@@ -368,3 +368,42 @@ func TestLookupViewerMultiPlatform(t *testing.T) {
 		t.Fatalf("expected TikTok match with key 'twitch:mrpoundsign', got key=%q vc=%+v (ok=%v)", key, vc, ok)
 	}
 }
+
+func TestEffectiveMentionRules(t *testing.T) {
+	cfg := DefaultConfig()
+
+	// Default is "off", false, false
+	mode, allowBroadcaster, playAlert := cfg.EffectiveMentionRules("twitch")
+	if mode != IgnoreMentionsOff || allowBroadcaster || playAlert {
+		t.Fatalf("expected default ('off', false, false), got (%q, %v, %v)", mode, allowBroadcaster, playAlert)
+	}
+
+	// Set global rules
+	cfg.GlobalChatRules.IgnoreMentionsMode = IgnoreMentionsRepliesAndLeading
+	cfg.GlobalChatRules.AllowBroadcasterMentions = true
+	cfg.GlobalChatRules.PlayAlertOnIgnoredMention = true
+
+	mode, allowBroadcaster, playAlert = cfg.EffectiveMentionRules("twitch")
+	if mode != IgnoreMentionsRepliesAndLeading || !allowBroadcaster || !playAlert {
+		t.Fatalf("expected inherited ('replies_and_leading', true, true), got (%q, %v, %v)", mode, allowBroadcaster, playAlert)
+	}
+
+	// Enable platform override on twitch
+	p := cfg.Platforms["twitch"]
+	p.Overrides.OverrideRules = true
+	p.Overrides.IgnoreMentionsMode = IgnoreMentionsAll
+	p.Overrides.AllowBroadcasterMentions = false
+	p.Overrides.PlayAlertOnIgnoredMention = false
+	cfg.Platforms["twitch"] = p
+
+	mode, allowBroadcaster, playAlert = cfg.EffectiveMentionRules("twitch")
+	if mode != IgnoreMentionsAll || allowBroadcaster || playAlert {
+		t.Fatalf("expected twitch override ('all', false, false), got (%q, %v, %v)", mode, allowBroadcaster, playAlert)
+	}
+
+	// YouTube still inherits global
+	mode, allowBroadcaster, playAlert = cfg.EffectiveMentionRules("youtube")
+	if mode != IgnoreMentionsRepliesAndLeading || !allowBroadcaster || !playAlert {
+		t.Fatalf("expected youtube inherited ('replies_and_leading', true, true), got (%q, %v, %v)", mode, allowBroadcaster, playAlert)
+	}
+}

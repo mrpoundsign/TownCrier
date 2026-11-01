@@ -199,7 +199,7 @@ func TestConnector_ChatFollowAndGiftEvents(t *testing.T) {
 
 	// Send chat event
 	eventsCh <- gotiktoklive.ChatEvent{
-		Comment: "Hello TikTok!",
+		Comment: "@otherviewer Hello TikTok!",
 		User: &gotiktoklive.User{
 			ID:       101,
 			Username: "chatter1",
@@ -248,8 +248,11 @@ func TestConnector_ChatFollowAndGiftEvents(t *testing.T) {
 	if len(gotEvents) != 3 {
 		t.Fatalf("expected 3 events, got %d", len(gotEvents))
 	}
-	if gotEvents[0].Kind != chat.EventKindMessage || gotEvents[0].Text != "Hello TikTok!" {
+	if gotEvents[0].Kind != chat.EventKindMessage || gotEvents[0].Text != "@otherviewer Hello TikTok!" {
 		t.Errorf("unexpected event 0: %+v", gotEvents[0])
+	}
+	if len(gotEvents[0].Mentions) != 1 || gotEvents[0].Mentions[0] != "otherviewer" {
+		t.Errorf("expected Mentions=['otherviewer'], got %v", gotEvents[0].Mentions)
 	}
 	if gotEvents[1].Kind != chat.EventKindFollow || gotEvents[1].DisplayName != "Follower One" {
 		t.Errorf("unexpected event 1: %+v", gotEvents[1])

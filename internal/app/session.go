@@ -1331,6 +1331,16 @@ func (s *Session) AdjustVolume(volume *float32, delta *float32) error {
 // PlayAlertSound plays the configured alert chime or custom .wav/.mp3 sound through the active audio player.
 // When force is false, it enforces PlayAlertWhenDisabled, Panic Mute state, and AlertCooldownMs.
 func (s *Session) PlayAlertSound(force bool) error {
+	return s.playAlertSoundInternal(force, !force)
+}
+
+// PlayCooldownAlertSound plays the configured alert chime or custom .wav/.mp3 sound while enforcing
+// Panic Mute state and AlertCooldownMs, regardless of whether PlayAlertWhenDisabled is enabled.
+func (s *Session) PlayCooldownAlertSound() error {
+	return s.playAlertSoundInternal(false, false)
+}
+
+func (s *Session) playAlertSoundInternal(force bool, requireDisabledToggle bool) error {
 	if s.IsPanicked() {
 		return nil
 	}
@@ -1344,7 +1354,7 @@ func (s *Session) PlayAlertSound(force bool) error {
 		return nil
 	}
 	if !force {
-		if !cfg.TTS.PlayAlertWhenDisabled {
+		if requireDisabledToggle && !cfg.TTS.PlayAlertWhenDisabled {
 			s.mu.Unlock()
 			return nil
 		}
@@ -1889,6 +1899,29 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 			if strippedText != "" {
 				event.Text = strippedText
 			}
+		}
+	}
+
+	// 2b. @Mention & Reply Filtering (Global Chat Rules + Platform Overrides)
+	if event.Kind == chat.EventKindMessage {
+		mentionMode, allowBroadcaster, playAlertOnIgnored := cfg.EffectiveMentionRules(event.Platform)
+		broadcaster := event.Channel
+		if broadcaster == "" {
+			if pCfg, ok := cfg.Platforms[event.Platform]; ok {
+				broadcaster = pCfg.AccountName
+			}
+		}
+		if broadcaster == "" && strings.EqualFold(event.Platform, "twitch") && s.twitchOAuth != nil {
+			_, login, _ := s.twitchOAuth.StoredUser()
+			broadcaster = login
+		}
+		if chat.ShouldIgnoreMentionOrReply(event, mentionMode, allowBroadcaster, broadcaster) {
+			log.Printf("[Session] Event dropped by @mention/reply filter: user=%q mode=%s isReply=%v replyTo=%q mentions=%v", event.UserName, mentionMode, event.IsReply, event.ReplyToUser, event.Mentions)
+			s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedReadRules, "Ignored @mention or reply"))
+			if playAlertOnIgnored {
+				_ = s.PlayCooldownAlertSound()
+			}
+			return nil
 		}
 	}
 

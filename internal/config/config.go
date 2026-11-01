@@ -204,25 +204,49 @@ type BotConfig struct {
 	CustomBots      []string `json:"custom_bots,omitempty"`
 }
 
+const (
+	IgnoreMentionsOff               = "off"
+	IgnoreMentionsRepliesAndLeading = "replies_and_leading"
+	IgnoreMentionsAll               = "all"
+)
+
+// NormalizeIgnoreMentionsMode returns a canonical IgnoreMentionsMode ("off", "replies_and_leading", or "all").
+func NormalizeIgnoreMentionsMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case IgnoreMentionsRepliesAndLeading, "replies", "leading":
+		return IgnoreMentionsRepliesAndLeading
+	case IgnoreMentionsAll, "any":
+		return IgnoreMentionsAll
+	default:
+		return IgnoreMentionsOff
+	}
+}
+
 type GlobalChatRules struct {
-	SpeakNames        bool    `json:"speak_names"`
-	SpeakEmotes       bool    `json:"speak_emotes"`
-	DeduplicateEmotes bool    `json:"deduplicate_emotes"`
-	MaxDuplicateWords int     `json:"max_duplicate_words"`
-	SpeakPlatformName bool    `json:"speak_platform_name"`
-	DefaultVoice      string  `json:"default_voice"`
-	DefaultSpeed      float32 `json:"default_speed"`
+	SpeakNames                bool    `json:"speak_names"`
+	SpeakEmotes               bool    `json:"speak_emotes"`
+	DeduplicateEmotes         bool    `json:"deduplicate_emotes"`
+	MaxDuplicateWords         int     `json:"max_duplicate_words"`
+	SpeakPlatformName         bool    `json:"speak_platform_name"`
+	IgnoreMentionsMode        string  `json:"ignore_mentions_mode,omitempty"`
+	AllowBroadcasterMentions  bool    `json:"allow_broadcaster_mentions,omitempty"`
+	PlayAlertOnIgnoredMention bool    `json:"play_alert_on_ignored_mention,omitempty"`
+	DefaultVoice              string  `json:"default_voice"`
+	DefaultSpeed              float32 `json:"default_speed"`
 }
 
 type PlatformOverrides struct {
-	OverrideRules     bool    `json:"override_rules"`
-	SpeakNames        bool    `json:"speak_names"`
-	SpeakEmotes       bool    `json:"speak_emotes"`
-	DeduplicateEmotes bool    `json:"deduplicate_emotes"`
-	MaxDuplicateWords int     `json:"max_duplicate_words"`
-	SpeakPlatformName bool    `json:"speak_platform_name"`
-	DefaultVoice      string  `json:"default_voice"`
-	DefaultSpeed      float32 `json:"default_speed"`
+	OverrideRules             bool    `json:"override_rules"`
+	SpeakNames                bool    `json:"speak_names"`
+	SpeakEmotes               bool    `json:"speak_emotes"`
+	DeduplicateEmotes         bool    `json:"deduplicate_emotes"`
+	MaxDuplicateWords         int     `json:"max_duplicate_words"`
+	SpeakPlatformName         bool    `json:"speak_platform_name"`
+	IgnoreMentionsMode        string  `json:"ignore_mentions_mode,omitempty"`
+	AllowBroadcasterMentions  bool    `json:"allow_broadcaster_mentions,omitempty"`
+	PlayAlertOnIgnoredMention bool    `json:"play_alert_on_ignored_mention,omitempty"`
+	DefaultVoice              string  `json:"default_voice"`
+	DefaultSpeed              float32 `json:"default_speed"`
 }
 
 type ReadRules struct {
@@ -819,6 +843,21 @@ func (c *Config) EffectiveChatRules(platform string) (speakNames, speakEmotes, d
 	return speakNames, speakEmotes, deduplicateEmotes, maxDuplicateWords, speakPlatformName, voice, speed
 }
 
+// EffectiveMentionRules returns the effective @mention and reply filtering rules for a platform,
+// taking platform overrides into account when OverrideRules is enabled.
+func (c *Config) EffectiveMentionRules(platform string) (mode string, allowBroadcaster bool, playAlert bool) {
+	mode = NormalizeIgnoreMentionsMode(c.GlobalChatRules.IgnoreMentionsMode)
+	allowBroadcaster = c.GlobalChatRules.AllowBroadcasterMentions
+	playAlert = c.GlobalChatRules.PlayAlertOnIgnoredMention
+
+	if p, ok := c.Platforms[platform]; ok && p.Overrides.OverrideRules {
+		mode = NormalizeIgnoreMentionsMode(p.Overrides.IgnoreMentionsMode)
+		allowBroadcaster = p.Overrides.AllowBroadcasterMentions
+		playAlert = p.Overrides.PlayAlertOnIgnoredMention
+	}
+	return mode, allowBroadcaster, playAlert
+}
+
 // Clone creates a deep copy of the Config.
 func (c *Config) Clone() *Config {
 	data, err := json.Marshal(c)
@@ -1112,6 +1151,7 @@ func migrate(cfg *Config) error {
 			if p.Overrides.MaxDuplicateWords == 0 {
 				p.Overrides.MaxDuplicateWords = 2
 			}
+			p.Overrides.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(p.Overrides.IgnoreMentionsMode)
 			cfg.Platforms[platKey] = p
 		}
 	}
@@ -1119,6 +1159,7 @@ func migrate(cfg *Config) error {
 	if cfg.GlobalChatRules.MaxDuplicateWords == 0 {
 		cfg.GlobalChatRules.MaxDuplicateWords = 2
 	}
+	cfg.GlobalChatRules.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(cfg.GlobalChatRules.IgnoreMentionsMode)
 
 	return nil
 }

@@ -469,6 +469,41 @@ func TestParseEventSubChatNotifications(t *testing.T) {
 		t.Errorf("unexpected channel.chat.message event: %+v", mEv)
 	}
 
+	// 3b. Chat Message with Reply + Mention fragment via channel.chat.message
+	replyChatRaw := json.RawMessage(`{
+		"broadcaster_user_id": "1001",
+		"broadcaster_user_login": "mrpoundsign",
+		"chatter_user_id": "4005",
+		"chatter_user_login": "bob",
+		"chatter_user_name": "Bob",
+		"message_id": "msg-uuid-reply-1",
+		"message_type": "text",
+		"message": {
+			"text": "@Alice hey there @Charlie",
+			"fragments": [
+				{"type": "mention", "text": "@Alice", "mention": {"user_id": "4004", "user_login": "alice", "user_name": "Alice"}},
+				{"type": "text", "text": " hey there @Charlie"}
+			]
+		},
+		"reply": {
+			"parent_message_id": "msg-uuid-123",
+			"parent_user_id": "4004",
+			"parent_user_login": "alice",
+			"parent_user_name": "Alice",
+			"parent_message_body": "Hello Kappa cheer100"
+		}
+	}`)
+	rChatEv, err := ParseEventSubNotification("channel.chat.message", "env-3b", replyChatRaw, "mrpoundsign")
+	if err != nil || rChatEv == nil {
+		t.Fatalf("ParseEventSubNotification(reply channel.chat.message) err=%v ev=%v", err, rChatEv)
+	}
+	if !rChatEv.IsReply || rChatEv.ReplyToUser != "alice" {
+		t.Errorf("expected IsReply=true, ReplyToUser='alice', got IsReply=%v ReplyToUser=%q", rChatEv.IsReply, rChatEv.ReplyToUser)
+	}
+	if len(rChatEv.Mentions) != 2 || rChatEv.Mentions[0] != "alice" || rChatEv.Mentions[1] != "Charlie" {
+		t.Errorf("expected Mentions=['alice', 'Charlie'], got %v", rChatEv.Mentions)
+	}
+
 	// 4. Moderation events via ParseEventSubModeration
 	delMod, err := ParseEventSubModeration("channel.chat.message_delete", json.RawMessage(`{"broadcaster_user_login":"mrpoundsign","message_id":"msg-uuid-123"}`), "mrpoundsign")
 	if err != nil || delMod == nil || delMod.Action != chat.ModActionDeleteMessage || delMod.TargetMessageID != "msg-uuid-123" {

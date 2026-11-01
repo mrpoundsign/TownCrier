@@ -274,6 +274,19 @@ func TestParseKickFollowAndGiftEvents(t *testing.T) {
 	if gsEv.Kind != chat.EventKindGiftSub || gsEv.Count != 3 || gsEv.Recipient != "Alice, Bob, Charlie" {
 		t.Errorf("unexpected multi-recipient gift sub event: %+v", gsEv)
 	}
+
+	// 5. ChatMessageEvent with type="reply", metadata.original_sender, and @mentions
+	replyRaw := []byte(`{"event":"App\\Events\\ChatMessageEvent","data":"{\"id\":\"kick-reply-1\",\"chatroom_id\":27670567,\"content\":\"@OriginalChatter I agree with @KickStreamer!\",\"type\":\"reply\",\"created_at\":\"2026-11-01T12:00:00Z\",\"sender\":{\"id\":123,\"username\":\"Replier\",\"slug\":\"replier\"},\"metadata\":{\"original_sender\":{\"id\":456,\"username\":\"OriginalChatter\"},\"original_message\":{\"id\":\"orig-1\",\"content\":\"Hi\"}}}","channel":"chatrooms.27670567.v2"}`)
+	repEv, _, _, err := ParsePusherFrame(replyRaw)
+	if err != nil || repEv == nil {
+		t.Fatalf("ParsePusherFrame(reply ChatMessageEvent): err=%v ev=%v", err, repEv)
+	}
+	if !repEv.IsReply || repEv.ReplyToUser != "OriginalChatter" {
+		t.Errorf("expected IsReply=true, ReplyToUser='OriginalChatter', got IsReply=%v ReplyToUser=%q", repEv.IsReply, repEv.ReplyToUser)
+	}
+	if len(repEv.Mentions) != 2 || repEv.Mentions[0] != "OriginalChatter" || repEv.Mentions[1] != "KickStreamer" {
+		t.Errorf("expected Mentions=['OriginalChatter', 'KickStreamer'], got %v", repEv.Mentions)
+	}
 }
 
 func TestDualChannelPusherSubscription(t *testing.T) {

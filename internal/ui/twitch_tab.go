@@ -49,9 +49,12 @@ type TwitchTabView struct {
 	followOAuthHint     *widget.Label
 	overrideCheck       *widget.Check
 	overridesBox        *fyne.Container
-	overrideVoiceField  *VoiceSpeedField
-	namesCheck          *widget.Check
-	emotesCheck         *widget.Check
+	overrideVoiceField           *VoiceSpeedField
+	namesCheck                   *widget.Check
+	emotesCheck                  *widget.Check
+	mentionsModeSelect           *widget.Select
+	allowBroadcasterCheck        *widget.Check
+	playAlertIgnoredMentionCheck *widget.Check
 	connCard            *widget.Card
 	rulesCard           *widget.Card
 	settingsCard        *widget.Card
@@ -908,11 +911,61 @@ func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.C
 	)
 	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("Twitch Default Voice & Speed:"), nil, v.overrideVoiceField.Container)
 
+	allowBroadcasterCheck := widget.NewCheck("Still read messages that @ mention the broadcaster", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["twitch"]
+			p.Overrides.AllowBroadcasterMentions = b
+			c.Platforms["twitch"] = p
+		})
+	})
+	allowBroadcasterCheck.SetChecked(ov.AllowBroadcasterMentions)
+	v.allowBroadcasterCheck = allowBroadcasterCheck
+
+	playAlertIgnoredCheck := widget.NewCheck("Play configured alert sound when an @ mention or reply is ignored", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["twitch"]
+			p.Overrides.PlayAlertOnIgnoredMention = b
+			c.Platforms["twitch"] = p
+		})
+	})
+	playAlertIgnoredCheck.SetChecked(ov.PlayAlertOnIgnoredMention)
+	v.playAlertIgnoredMentionCheck = playAlertIgnoredCheck
+
+	syncMentionChecksState := func(mode string) {
+		if config.NormalizeIgnoreMentionsMode(mode) != config.IgnoreMentionsOff {
+			allowBroadcasterCheck.Enable()
+			playAlertIgnoredCheck.Enable()
+		} else {
+			allowBroadcasterCheck.Disable()
+			playAlertIgnoredCheck.Disable()
+		}
+	}
+	syncMentionChecksState(ov.IgnoreMentionsMode)
+
+	mentionsModeSelect := widget.NewSelect(IgnoreMentionsOptions, func(s string) {
+		mode := OptionToIgnoreMentionsMode(s)
+		syncMentionChecksState(mode)
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["twitch"]
+			p.Overrides.IgnoreMentionsMode = mode
+			c.Platforms["twitch"] = p
+		})
+	})
+	mentionsModeSelect.SetSelected(IgnoreMentionsModeToOption(ov.IgnoreMentionsMode))
+	v.mentionsModeSelect = mentionsModeSelect
+	mentionsModeRow := container.NewHBox(
+		widget.NewLabel("@ Mentions & Replies:"),
+		mentionsModeSelect,
+	)
+
 	v.overridesBox = container.NewVBox(
 		namesCheck,
 		emotesCheck,
 		dedupeCheck,
 		dupWordsRow,
+		mentionsModeRow,
+		allowBroadcasterCheck,
+		playAlertIgnoredCheck,
 		voiceRow,
 	)
 

@@ -107,11 +107,14 @@ type SettingsView struct {
 	idleSelect           *widget.Select
 	modelChecks          map[string]*widget.Check
 	deviceRefreshBtn     *widget.Button
-	rulesNamesCheck      *widget.Check
-	rulesEmotesCheck     *widget.Check
-	rulesDedupeCheck     *widget.Check
-	rulesDupWordsSelect  *widget.Select
-	rulesPlatformCheck   *widget.Check
+	rulesNamesCheck                  *widget.Check
+	rulesEmotesCheck                 *widget.Check
+	rulesDedupeCheck                 *widget.Check
+	rulesDupWordsSelect              *widget.Select
+	rulesPlatformCheck               *widget.Check
+	rulesMentionsModeSelect          *widget.Select
+	rulesAllowBroadcasterCheck       *widget.Check
+	rulesPlayAlertIgnoredMentionCheck *widget.Check
 	hotkeyCtrlCheck      *widget.Check
 	hotkeyShiftCheck     *widget.Check
 	hotkeyAltCheck       *widget.Check
@@ -439,6 +442,25 @@ func (v *SettingsView) SyncFromConfig() {
 	}
 	if v.globalVoiceField != nil {
 		v.globalVoiceField.SetVoiceAndSpeed(v.cfg.GlobalChatRules.DefaultVoice, v.cfg.GlobalChatRules.DefaultSpeed)
+	}
+	if v.rulesMentionsModeSelect != nil {
+		v.rulesMentionsModeSelect.SetSelected(IgnoreMentionsModeToOption(v.cfg.GlobalChatRules.IgnoreMentionsMode))
+	}
+	if v.rulesAllowBroadcasterCheck != nil {
+		v.rulesAllowBroadcasterCheck.SetChecked(v.cfg.GlobalChatRules.AllowBroadcasterMentions)
+		if config.NormalizeIgnoreMentionsMode(v.cfg.GlobalChatRules.IgnoreMentionsMode) != config.IgnoreMentionsOff {
+			v.rulesAllowBroadcasterCheck.Enable()
+		} else {
+			v.rulesAllowBroadcasterCheck.Disable()
+		}
+	}
+	if v.rulesPlayAlertIgnoredMentionCheck != nil {
+		v.rulesPlayAlertIgnoredMentionCheck.SetChecked(v.cfg.GlobalChatRules.PlayAlertOnIgnoredMention)
+		if config.NormalizeIgnoreMentionsMode(v.cfg.GlobalChatRules.IgnoreMentionsMode) != config.IgnoreMentionsOff {
+			v.rulesPlayAlertIgnoredMentionCheck.Enable()
+		} else {
+			v.rulesPlayAlertIgnoredMentionCheck.Disable()
+		}
 	}
 	if v.ttsOutputModeSelect != nil {
 		v.ttsOutputModeSelect.SetSelected(FormatTTSOutputModeLabel(v.cfg.TTS.OutputMode))
@@ -2087,6 +2109,40 @@ func OptionToDuplicateWords(opt string) int {
 	}
 }
 
+const (
+	IgnoreMentionsOptionOff               = "Read All Mentions & Replies"
+	IgnoreMentionsOptionRepliesAndLeading = "Ignore Replies & Starting @ Mentions"
+	IgnoreMentionsOptionAll               = "Ignore All @ Mentions & Replies"
+)
+
+var IgnoreMentionsOptions = []string{
+	IgnoreMentionsOptionOff,
+	IgnoreMentionsOptionRepliesAndLeading,
+	IgnoreMentionsOptionAll,
+}
+
+func IgnoreMentionsModeToOption(mode string) string {
+	switch config.NormalizeIgnoreMentionsMode(mode) {
+	case config.IgnoreMentionsRepliesAndLeading:
+		return IgnoreMentionsOptionRepliesAndLeading
+	case config.IgnoreMentionsAll:
+		return IgnoreMentionsOptionAll
+	default:
+		return IgnoreMentionsOptionOff
+	}
+}
+
+func OptionToIgnoreMentionsMode(opt string) string {
+	switch opt {
+	case IgnoreMentionsOptionRepliesAndLeading:
+		return config.IgnoreMentionsRepliesAndLeading
+	case IgnoreMentionsOptionAll:
+		return config.IgnoreMentionsAll
+	default:
+		return config.IgnoreMentionsOff
+	}
+}
+
 func (v *SettingsView) buildRulesCard() *widget.Card {
 	checkNames := widget.NewCheck("Speak Chatter Names (e.g. 'User says...')", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
@@ -2133,12 +2189,57 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 	checkPlatform.SetChecked(v.cfg.GlobalChatRules.SpeakPlatformName)
 	v.rulesPlatformCheck = checkPlatform
 
+	allowBroadcasterCheck := widget.NewCheck("Still read messages that @ mention the broadcaster", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.AllowBroadcasterMentions = b
+		})
+	})
+	allowBroadcasterCheck.SetChecked(v.cfg.GlobalChatRules.AllowBroadcasterMentions)
+	v.rulesAllowBroadcasterCheck = allowBroadcasterCheck
+
+	playAlertIgnoredCheck := widget.NewCheck("Play configured alert sound when an @ mention or reply is ignored", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.PlayAlertOnIgnoredMention = b
+		})
+	})
+	playAlertIgnoredCheck.SetChecked(v.cfg.GlobalChatRules.PlayAlertOnIgnoredMention)
+	v.rulesPlayAlertIgnoredMentionCheck = playAlertIgnoredCheck
+
+	syncMentionChecksState := func(mode string) {
+		if config.NormalizeIgnoreMentionsMode(mode) != config.IgnoreMentionsOff {
+			allowBroadcasterCheck.Enable()
+			playAlertIgnoredCheck.Enable()
+		} else {
+			allowBroadcasterCheck.Disable()
+			playAlertIgnoredCheck.Disable()
+		}
+	}
+	syncMentionChecksState(v.cfg.GlobalChatRules.IgnoreMentionsMode)
+
+	mentionsModeSelect := widget.NewSelect(IgnoreMentionsOptions, func(s string) {
+		mode := OptionToIgnoreMentionsMode(s)
+		syncMentionChecksState(mode)
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.IgnoreMentionsMode = mode
+		})
+	})
+	mentionsModeSelect.SetSelected(IgnoreMentionsModeToOption(v.cfg.GlobalChatRules.IgnoreMentionsMode))
+	v.rulesMentionsModeSelect = mentionsModeSelect
+	mentionsModeRow := container.NewHBox(
+		widget.NewLabel("@ Mentions & Replies:"),
+		mentionsModeSelect,
+	)
+
 	cardContent := container.NewVBox(
 		checkNames,
 		checkEmotes,
 		checkDedupe,
 		dupWordsRow,
 		checkPlatform,
+		widget.NewSeparator(),
+		mentionsModeRow,
+		allowBroadcasterCheck,
+		playAlertIgnoredCheck,
 	)
 
 	return widget.NewCard("Global Chat Rules", "Default reading behavior across all connected platforms", cardContent)

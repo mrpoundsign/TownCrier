@@ -240,3 +240,55 @@ func TestSessionAlertSoundAndCooldown(t *testing.T) {
 	session.ClearPanic()
 }
 
+func TestSessionIgnoredMentionAndAlertSound(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.TTS.OutputMode = config.TTSModeAlwaysOn
+	cfg.TTS.PlayAlertWhenDisabled = false
+	cfg.TTS.AlertCooldownMs = 1
+	cfg.GlobalChatRules.IgnoreMentionsMode = config.IgnoreMentionsRepliesAndLeading
+	cfg.GlobalChatRules.AllowBroadcasterMentions = true
+	cfg.GlobalChatRules.PlayAlertOnIgnoredMention = true
+	p := cfg.Platforms["twitch"]
+	p.AccountName = "streamer_jane"
+	cfg.Platforms["twitch"] = p
+
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = session.Close() }()
+
+	player := &alertCapturePlayer{}
+	session.SetPlayer(player)
+	q := session.Queue()
+	q.Pause()
+
+	// 1. Message starting with @other_viewer -> skipped from speech queue AND plays alert chime
+	if err := session.DispatchEvent(&chat.Event{
+		ID:       "mention-1",
+		Platform: "twitch",
+		Kind:     chat.EventKindMessage,
+		UserName: "alice",
+		Text:     "@other_viewer how is it going?",
+	}); err != nil {
+		t.Fatalf("DispatchEvent failed: %v", err)
+	}
+	if q.Depth() != 0 {
+		t.Fatalf("expected @other_viewer mention to be skipped from speech queue, got depth %d", q.Depth())
+	}
+	if got := player.playCount.Load(); got != 1 {
+		t.Fatalf("expected 1 alert sound played on ignored mention, got %d", got)
+	}
+
+	// 2. Message starting with @streamer_jane -> allowed because AllowBroadcasterMentions is true
+	if err := session.DispatchEvent(&chat.Event{
+		ID:       "mention-2",
+		Platform: "twitch",
+		Kind:     chat.EventKindMessage,
+		UserName: "bob",
+		Text:     "@Streamer_Jane great stream today!",
+	}); err != nil {
+		t.Fatalf("DispatchEvent failed: %v", err)
+	}
+	if q.Depth() != 1 {
+		t.Fatalf("expected @Streamer_Jane mention to be enqueued for speech, got depth %d", q.Depth())
+	}
+}
+

@@ -232,6 +232,37 @@ func parseChatMessage(m map[string]any) *chat.Event {
 	roles := extractKickRoles(sender)
 	cleanText, spans := ParseKickEmotes(content)
 
+	msgType := strings.ToLower(strings.TrimSpace(asString(msgObj["type"])))
+	if msgType == "" {
+		msgType = strings.ToLower(strings.TrimSpace(asString(m["type"])))
+	}
+	meta := asMap(msgObj["metadata"])
+	if len(meta) == 0 {
+		meta = asMap(m["metadata"])
+	}
+	origSender := asMap(meta["original_sender"])
+	origMsg := asMap(meta["original_message"])
+	repliesTo := asMap(msgObj["replies_to"])
+	if len(repliesTo) == 0 {
+		repliesTo = asMap(m["replies_to"])
+	}
+	repliesToSender := asMap(repliesTo["sender"])
+
+	isReply := msgType == "reply" || len(origSender) > 0 || len(origMsg) > 0 || len(repliesTo) > 0
+	var replyToUser string
+	if isReply {
+		replyToUser = strings.TrimLeft(strings.TrimSpace(asString(origSender["username"])), "@")
+		if replyToUser == "" {
+			replyToUser = strings.TrimLeft(strings.TrimSpace(asString(origSender["slug"])), "@")
+		}
+		if replyToUser == "" {
+			replyToUser = strings.TrimLeft(strings.TrimSpace(asString(repliesToSender["username"])), "@")
+		}
+		if replyToUser == "" {
+			replyToUser = strings.TrimLeft(strings.TrimSpace(asString(repliesToSender["slug"])), "@")
+		}
+	}
+
 	ts := time.Now()
 	if createdStr := asString(msgObj["created_at"]); createdStr != "" {
 		if parsedTS, err := time.Parse(time.RFC3339, createdStr); err == nil {
@@ -248,6 +279,9 @@ func parseChatMessage(m map[string]any) *chat.Event {
 		UserName:    strings.ToLower(username),
 		DisplayName: username,
 		Roles:       roles,
+		IsReply:     isReply,
+		ReplyToUser: replyToUser,
+		Mentions:    chat.ExtractMentions(cleanText),
 		Text:        cleanText,
 		EmoteSpans:  spans,
 	}

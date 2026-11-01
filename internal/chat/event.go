@@ -70,6 +70,9 @@ type Event struct {
 	Roles         []string    `json:"roles,omitempty"`
 	FanClubLevel  int         `json:"fan_club_level,omitempty"`
 	IsBotSignal   bool        `json:"is_bot_signal"`
+	IsReply       bool        `json:"is_reply,omitempty"`
+	ReplyToUser   string      `json:"reply_to_user,omitempty"`
+	Mentions      []string    `json:"mentions,omitempty"`
 	Text          string      `json:"text"`
 	EmoteSpans    []EmoteSpan `json:"emote_spans,omitempty"`
 	Amount        float64     `json:"amount,omitempty"`

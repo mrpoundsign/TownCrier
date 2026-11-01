@@ -389,6 +389,60 @@ func TestSettingsView_StreamDeckOneClickInstall(t *testing.T) {
 	}
 }
 
+func TestSettingsAndPlatformTab_IgnoreMentionsControls(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestIgnoreMentionsControls")
+
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
+		return []audio.DeviceInfo{{ID: "mock1", Name: "Mock Speakers", IsDefault: true}}, nil
+	})
+	_ = view.Build()
+
+	if view.rulesMentionsModeSelect == nil || view.rulesAllowBroadcasterCheck == nil || view.rulesPlayAlertIgnoredMentionCheck == nil {
+		t.Fatal("expected mention rule controls on SettingsView to be initialized")
+	}
+
+	// Initially "off" -> sub-checkboxes disabled
+	if !view.rulesAllowBroadcasterCheck.Disabled() || !view.rulesPlayAlertIgnoredMentionCheck.Disabled() {
+		t.Error("expected sub-checkboxes to be disabled when IgnoreMentionsMode is 'off'")
+	}
+
+	// Change to Ignore Replies & Starting @ Mentions
+	view.rulesMentionsModeSelect.SetSelected(IgnoreMentionsOptionRepliesAndLeading)
+	if sess.Config().GlobalChatRules.IgnoreMentionsMode != config.IgnoreMentionsRepliesAndLeading {
+		t.Errorf("expected IgnoreMentionsMode=%q, got %q", config.IgnoreMentionsRepliesAndLeading, sess.Config().GlobalChatRules.IgnoreMentionsMode)
+	}
+	if view.rulesAllowBroadcasterCheck.Disabled() || view.rulesPlayAlertIgnoredMentionCheck.Disabled() {
+		t.Error("expected sub-checkboxes to be enabled when IgnoreMentionsMode != 'off'")
+	}
+
+	view.rulesPlayAlertIgnoredMentionCheck.SetChecked(true)
+	if !sess.Config().GlobalChatRules.PlayAlertOnIgnoredMention {
+		t.Error("expected GlobalChatRules.PlayAlertOnIgnoredMention to be true")
+	}
+
+	// Also verify platform tab override controls (TwitchTabView)
+	twitchTab := NewTwitchTabView(w, sess)
+	_ = twitchTab.Build()
+
+	twitchTab.overrideCheck.SetChecked(true)
+	twitchTab.mentionsModeSelect.SetSelected(IgnoreMentionsOptionAll)
+	twitchTab.allowBroadcasterCheck.SetChecked(false)
+	twitchTab.playAlertIgnoredMentionCheck.SetChecked(true)
+
+	mode, allowBroadcaster, playAlert := sess.Config().EffectiveMentionRules("twitch")
+	if mode != config.IgnoreMentionsAll || allowBroadcaster || !playAlert {
+		t.Errorf("expected twitch override (all, false, true), got (%q, %v, %v)", mode, allowBroadcaster, playAlert)
+	}
+}
+
+
 
 
 

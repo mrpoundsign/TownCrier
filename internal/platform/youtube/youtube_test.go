@@ -129,7 +129,7 @@ func TestParseLiveChatResponse(t *testing.T) {
 									],
 									"message": {
 										"runs": [
-											{"text": "Hello YouTube "},
+											{"text": "@Bob_Viewer Hello YouTube "},
 											{"text": ":wave:", "emoji": {"emojiId": "em1", "shortcuts": [":wave:"]}}
 										]
 									}
@@ -235,10 +235,13 @@ func TestParseLiveChatResponse(t *testing.T) {
 		t.Fatalf("expected 5 chat events, got %d", len(events))
 	}
 
-	// 1. Text message with mod + subscriber roles and emoji span
+	// 1. Text message with mod + subscriber roles, @mention, and emoji span
 	e0 := events[0]
-	if e0.Kind != chat.EventKindMessage || e0.UserName != "Alice" || e0.Text != "Hello YouTube :wave:" {
+	if e0.Kind != chat.EventKindMessage || e0.UserName != "Alice" || e0.Text != "@Bob_Viewer Hello YouTube :wave:" {
 		t.Errorf("unexpected text event: %+v", e0)
+	}
+	if len(e0.Mentions) != 1 || e0.Mentions[0] != "Bob_Viewer" {
+		t.Errorf("expected Mentions=['Bob_Viewer'], got %v", e0.Mentions)
 	}
 	if !slices.Contains(e0.Roles, "mod") || !slices.Contains(e0.Roles, "subscriber") {
 		t.Errorf("expected mod and subscriber roles, got %v", e0.Roles)

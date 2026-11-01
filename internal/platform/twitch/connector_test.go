@@ -142,6 +142,34 @@ func TestConnectorPrivateMessageHandling(t *testing.T) {
 	if len(dispatched.EmoteSpans) != 1 || dispatched.EmoteSpans[0].Name != "Kappa" {
 		t.Errorf("expected emote Kappa, got %v", dispatched.EmoteSpans)
 	}
+
+	// Reply + @mention handling via IRC PrivateMessage
+	replyMsg := twitch.PrivateMessage{
+		ID:      "msg-reply-1",
+		Channel: "mrpoundsign",
+		User: twitch.User{
+			ID:          "1002",
+			Name:        "viewer2",
+			DisplayName: "ViewerTwo",
+		},
+		Message: "@ViewerOne totally agree with @mrpoundsign!",
+		Time:    now,
+		Reply: &twitch.Reply{
+			ParentMsgID:       "msg-123",
+			ParentUserID:      "1001",
+			ParentUserLogin:   "viewer1",
+			ParentDisplayName: "ViewerOne",
+			ParentMsgBody:     "Hello streamer! Kappa",
+		},
+	}
+	conn.handlePrivateMessage(replyMsg)
+
+	if !dispatched.IsReply || dispatched.ReplyToUser != "viewer1" {
+		t.Errorf("expected IsReply=true, ReplyToUser='viewer1', got IsReply=%v, ReplyToUser=%q", dispatched.IsReply, dispatched.ReplyToUser)
+	}
+	if len(dispatched.Mentions) != 2 || dispatched.Mentions[0] != "ViewerOne" || dispatched.Mentions[1] != "mrpoundsign" {
+		t.Errorf("expected Mentions=['ViewerOne', 'mrpoundsign'], got %v", dispatched.Mentions)
+	}
 }
 
 func TestConnectorModerationHandling(t *testing.T) {

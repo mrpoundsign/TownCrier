@@ -42,9 +42,12 @@ type YouTubeTabView struct {
 	paidOnlyCheck      *widget.Check
 	overrideCheck      *widget.Check
 	overridesBox       *fyne.Container
-	overrideVoiceField *VoiceSpeedField
-	namesCheck         *widget.Check
-	emotesCheck        *widget.Check
+	overrideVoiceField           *VoiceSpeedField
+	namesCheck                   *widget.Check
+	emotesCheck                  *widget.Check
+	mentionsModeSelect           *widget.Select
+	allowBroadcasterCheck        *widget.Check
+	playAlertIgnoredMentionCheck *widget.Check
 	connCard           *widget.Card
 	rulesCard          *widget.Card
 	notifsCard         *widget.Card
@@ -782,11 +785,61 @@ func (v *YouTubeTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.
 	)
 	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("YouTube Default Voice & Speed:"), nil, v.overrideVoiceField.Container)
 
+	allowBroadcasterCheck := widget.NewCheck("Still read messages that @ mention the broadcaster", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["youtube"]
+			p.Overrides.AllowBroadcasterMentions = b
+			c.Platforms["youtube"] = p
+		})
+	})
+	allowBroadcasterCheck.SetChecked(ov.AllowBroadcasterMentions)
+	v.allowBroadcasterCheck = allowBroadcasterCheck
+
+	playAlertIgnoredCheck := widget.NewCheck("Play configured alert sound when an @ mention or reply is ignored", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["youtube"]
+			p.Overrides.PlayAlertOnIgnoredMention = b
+			c.Platforms["youtube"] = p
+		})
+	})
+	playAlertIgnoredCheck.SetChecked(ov.PlayAlertOnIgnoredMention)
+	v.playAlertIgnoredMentionCheck = playAlertIgnoredCheck
+
+	syncMentionChecksState := func(mode string) {
+		if config.NormalizeIgnoreMentionsMode(mode) != config.IgnoreMentionsOff {
+			allowBroadcasterCheck.Enable()
+			playAlertIgnoredCheck.Enable()
+		} else {
+			allowBroadcasterCheck.Disable()
+			playAlertIgnoredCheck.Disable()
+		}
+	}
+	syncMentionChecksState(ov.IgnoreMentionsMode)
+
+	mentionsModeSelect := widget.NewSelect(IgnoreMentionsOptions, func(s string) {
+		mode := OptionToIgnoreMentionsMode(s)
+		syncMentionChecksState(mode)
+		v.updateConfig(func(c *config.Config) {
+			p := c.Platforms["youtube"]
+			p.Overrides.IgnoreMentionsMode = mode
+			c.Platforms["youtube"] = p
+		})
+	})
+	mentionsModeSelect.SetSelected(IgnoreMentionsModeToOption(ov.IgnoreMentionsMode))
+	v.mentionsModeSelect = mentionsModeSelect
+	mentionsModeRow := container.NewHBox(
+		widget.NewLabel("@ Mentions & Replies:"),
+		mentionsModeSelect,
+	)
+
 	v.overridesBox = container.NewVBox(
 		namesCheck,
 		emotesCheck,
 		dedupeCheck,
 		dupWordsRow,
+		mentionsModeRow,
+		allowBroadcasterCheck,
+		playAlertIgnoredCheck,
 		voiceRow,
 	)
 

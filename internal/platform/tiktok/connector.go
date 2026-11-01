@@ -688,6 +688,7 @@ func mapChatEvent(e gotiktoklive.ChatEvent) *chat.Event {
 		DisplayName:  displayName,
 		Roles:        roles,
 		FanClubLevel: fanClubLevel,
+		Mentions:     chat.ExtractMentions(text),
 		Text:         text,
 	}
 }
