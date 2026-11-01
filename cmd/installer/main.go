@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"testing"
 
 	"github.com/mrpoundsign/appinstaller/pkg/installer"
 	"github.com/mrpoundsign/appinstaller/pkg/installerui"
 
 	"github.com/mrpoundsign/TownCrier/assets"
+	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
 	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
@@ -19,6 +21,9 @@ var payloadFS embed.FS
 
 var (
 	AppVersion = "0.0.8"
+
+	// Overridable in unit tests to guarantee strict test isolation inside os.TempDir().
+	streamDeckPluginsDirOverride string
 )
 
 func main() {
@@ -88,6 +93,24 @@ func buildAppSpec() installer.AppSpec {
 						totMB := float64(total) / (1024 * 1024)
 						progress(cur, total, fmt.Sprintf("Downloading Kokoro-82M TTS models... %.1f / %.1f MB", curMB, totMB))
 					})
+				},
+			},
+			{
+				ID:          "streamdeck_plugin",
+				Title:       "Install / Update Elgato Stream Deck Plugin",
+				Description: "Install com.github.mrpoundsign.towncrier.sdPlugin (v" + streamdeck.BundledPluginVersion() + ") for hardware keypad & dial control",
+				DefaultOn:   true,
+				Run: func(_ context.Context, _ string, progress func(cur, total int64, status string)) error {
+					progress(0, 1, "Installing Elgato Stream Deck plugin...")
+					targetDir := streamDeckPluginsDirOverride
+					if targetDir == "" && testing.Testing() {
+						targetDir = filepath.Join(os.TempDir(), "towncrier-test-sd-plugins")
+					}
+					if _, err := streamdeck.InstallPlugin(targetDir); err != nil {
+						return err
+					}
+					progress(1, 1, "Installed Elgato Stream Deck plugin v"+streamdeck.BundledPluginVersion()+".")
+					return nil
 				},
 			},
 		},

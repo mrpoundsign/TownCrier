@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -358,14 +359,33 @@ func TestSettingsView_StreamDeckOneClickInstall(t *testing.T) {
 	if streamdeck.IsPluginInstalled(view.streamDeckPluginsDir) {
 		t.Fatal("expected Stream Deck plugin not installed prior to button tap")
 	}
+	if !strings.Contains(view.streamDeckStatusLabel.Text, "Not installed") {
+		t.Errorf("expected initial status to say Not installed, got %q", view.streamDeckStatusLabel.Text)
+	}
 
 	test.Tap(view.streamDeckInstallBtn)
 
 	if !streamdeck.IsPluginInstalled(view.streamDeckPluginsDir) {
 		t.Fatal("expected Stream Deck plugin to be installed after tapping streamDeckInstallBtn")
 	}
-	if !strings.Contains(view.streamDeckStatusLabel.Text, "Installed Stream Deck plugin") {
+	if !strings.Contains(view.streamDeckStatusLabel.Text, "Installed Stream Deck plugin v"+streamdeck.BundledPluginVersion()) {
 		t.Errorf("unexpected streamDeckStatusLabel text: %q", view.streamDeckStatusLabel.Text)
+	}
+	if !strings.Contains(view.streamDeckInstallBtn.Text, "Reinstall Elgato Stream Deck Plugin") {
+		t.Errorf("expected button text to say Reinstall after install, got %q", view.streamDeckInstallBtn.Text)
+	}
+
+	// Simulate an outdated installed plugin version (0.9.0.0) and rebuild view to verify update prompt
+	manifestPath := filepath.Join(view.streamDeckPluginsDir, streamdeck.PluginDirName, "manifest.json")
+	if err := os.WriteFile(manifestPath, []byte(`{"Version":"0.9.0.0"}`), 0o600); err != nil {
+		t.Fatalf("write older manifest.json: %v", err)
+	}
+	_ = view.Build()
+	if !strings.Contains(view.streamDeckStatusLabel.Text, "update available: v0.9.0.0 -> v"+streamdeck.BundledPluginVersion()) {
+		t.Errorf("expected update available status label, got %q", view.streamDeckStatusLabel.Text)
+	}
+	if !strings.Contains(view.streamDeckInstallBtn.Text, "Update Elgato Stream Deck Plugin to v"+streamdeck.BundledPluginVersion()) {
+		t.Errorf("expected Update button label, got %q", view.streamDeckInstallBtn.Text)
 	}
 }
 

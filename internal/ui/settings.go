@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"testing"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -1004,13 +1005,50 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 	)
 	infoLabel.Wrapping = fyne.TextWrapWord
 
-	v.streamDeckStatusLabel = widget.NewLabel("Stream Deck Plugin: Ready to install (com.github.mrpoundsign.towncrier.sdPlugin)")
+	v.streamDeckStatusLabel = widget.NewLabel("")
 	v.streamDeckStatusLabel.Wrapping = fyne.TextWrapWord
-	if v.streamDeckPluginsDir != "" && streamdeck.IsPluginInstalled(v.streamDeckPluginsDir) {
-		v.streamDeckStatusLabel.SetText("✓ Stream Deck Plugin installed")
+
+	refreshStreamDeckUI := func(justInstalledPath string) {
+		var st streamdeck.PluginStatus
+		if testing.Testing() && v.streamDeckPluginsDir == "" {
+			st = streamdeck.PluginStatus{
+				Installed:      false,
+				BundledVersion: streamdeck.BundledPluginVersion(),
+			}
+		} else {
+			st = streamdeck.CheckPluginStatus(v.streamDeckPluginsDir)
+		}
+		if !st.Installed {
+			v.streamDeckStatusLabel.SetText("Stream Deck Plugin: Not installed (Bundled: v" + st.BundledVersion + ")")
+			if v.streamDeckInstallBtn != nil {
+				v.streamDeckInstallBtn.SetText("Install Elgato Stream Deck Plugin (v" + st.BundledVersion + ")")
+				v.streamDeckInstallBtn.Importance = widget.HighImportance
+				v.streamDeckInstallBtn.Refresh()
+			}
+			return
+		}
+		if st.NeedsUpdate {
+			v.streamDeckStatusLabel.SetText(fmt.Sprintf("⬆ Stream Deck Plugin update available: v%s -> v%s", st.InstalledVersion, st.BundledVersion))
+			if v.streamDeckInstallBtn != nil {
+				v.streamDeckInstallBtn.SetText("Update Elgato Stream Deck Plugin to v" + st.BundledVersion)
+				v.streamDeckInstallBtn.Importance = widget.HighImportance
+				v.streamDeckInstallBtn.Refresh()
+			}
+			return
+		}
+		if justInstalledPath != "" {
+			v.streamDeckStatusLabel.SetText(fmt.Sprintf("✓ Installed Stream Deck plugin v%s to %s (restart Elgato Stream Deck app to load)", st.InstalledVersion, justInstalledPath))
+		} else {
+			v.streamDeckStatusLabel.SetText("✓ Stream Deck Plugin v" + st.InstalledVersion + " installed (up to date)")
+		}
+		if v.streamDeckInstallBtn != nil {
+			v.streamDeckInstallBtn.SetText("Reinstall Elgato Stream Deck Plugin (v" + st.BundledVersion + ")")
+			v.streamDeckInstallBtn.Importance = widget.MediumImportance
+			v.streamDeckInstallBtn.Refresh()
+		}
 	}
 
-	v.streamDeckInstallBtn = widget.NewButtonWithIcon("Install / Update Elgato Stream Deck Plugin", theme.DownloadIcon(), func() {
+	v.streamDeckInstallBtn = widget.NewButtonWithIcon("Install Elgato Stream Deck Plugin", theme.DownloadIcon(), func() {
 		installedPath, err := streamdeck.InstallPlugin(v.streamDeckPluginsDir)
 		if err != nil {
 			errMsg := fmt.Sprintf("⚠️ Stream Deck plugin install failed: %v", err)
@@ -1029,11 +1067,11 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 			v.initializing = false
 			v.refreshWSStatusLabel()
 		}
-		okMsg := fmt.Sprintf("✓ Installed Stream Deck plugin to %s (restart Elgato Stream Deck app to load)", installedPath)
-		v.streamDeckStatusLabel.SetText(okMsg)
-		v.setStatus("✓ Elgato Stream Deck plugin installed & WebSocket control server enabled.")
+		refreshStreamDeckUI(installedPath)
+		v.setStatus("✓ Elgato Stream Deck plugin v" + streamdeck.BundledPluginVersion() + " installed & WebSocket control server enabled.")
 	})
 	v.streamDeckInstallBtn.Importance = widget.HighImportance
+	refreshStreamDeckUI("")
 
 	sdRow := container.NewBorder(nil, nil, v.streamDeckInstallBtn, nil, v.streamDeckStatusLabel)
 

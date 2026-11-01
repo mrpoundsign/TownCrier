@@ -3,7 +3,7 @@
   "Author": "TownCrier",
   "Name": "TownCrier TTS Control",
   "Description": "Control TownCrier neural TTS output mode (Always On, Auto-AFK, Always Off), Emergency Panic Mute, Speech Queue, Custom Announcements, and Master Volume via binary Protocol Buffers.",
-  "Version": "1.0.1.0",
+  "Version": "1.0.0.0",
   "Category": "TownCrier",
   "CategoryIcon": "imgs/plugin",
   "Icon": "imgs/plugin",
