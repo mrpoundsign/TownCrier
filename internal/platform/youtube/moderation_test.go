@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mrpoundsign/TownCrier/internal/chat"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
 )
 
@@ -253,5 +254,185 @@ func TestYouTubeModerationEndpoints(t *testing.T) {
 	}
 	if vidID != "unlisted-video-999" || chatID != "CG0KC3VubGlzdGVkLWNoYXQ" {
 		t.Errorf("unexpected broadcast discovery result: vid=%q chat=%q", vidID, chatID)
+	}
+}
+
+func TestConnectorPrivateStreamDataAPIFallback(t *testing.T) {
+	store := secrets.NewMemoryStore()
+	oauth := NewOAuthManager("", "", store)
+	_ = oauth.SaveToken(&TokenData{
+		AccessToken:   "yt-private-token",
+		RefreshToken:  "yt-refresh-token",
+		ExpiresAt:     time.Now().Add(1 * time.Hour),
+		ChannelID:     "UC_BROADCASTER_1",
+		ChannelTitle:  "Broadcaster",
+		ChannelHandle: "@broadcaster",
+	})
+
+	nowISO := time.Now().UTC().Format(time.RFC3339Nano)
+	var chatPollCalls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/broadcaster/live", "/watch":
+			// Simulate a Private YouTube broadcast: public watch page returns LOGIN_REQUIRED with isLive:false
+			_, _ = w.Write([]byte(`<html><script>var ytcfg = {"INNERTUBE_API_KEY":"testKey"}; var ytInitialPlayerResponse = {"playabilityStatus":{"status":"LOGIN_REQUIRED","reason":"This is a private video."},"videoDetails":{"videoId":"private-vid-123","isLive":false}};</script></html>`))
+
+		case "/liveBroadcasts":
+			if r.Header.Get("Authorization") != "Bearer yt-private-token" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"items": []map[string]any{
+					{
+						"id": "old-completed-vid",
+						"snippet": map[string]any{
+							"title":      "Yesterday Stream",
+							"liveChatId": "CG0KC29sZC1jaGF0",
+						},
+						"status": map[string]any{
+							"lifeCycleStatus": "complete",
+							"privacyStatus":   "public",
+						},
+					},
+					{
+						"id": "private-vid-123",
+						"snippet": map[string]any{
+							"title":      "Private Test Stream",
+							"liveChatId": "CG0KC3ByaXZhdGUtY2hhdC0xMjM",
+						},
+						"status": map[string]any{
+							"lifeCycleStatus": "testing",
+							"privacyStatus":   "private",
+						},
+					},
+				},
+			})
+
+		case "/liveChat/messages":
+			if r.Header.Get("Authorization") != "Bearer yt-private-token" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			if r.URL.Query().Get("liveChatId") != "CG0KC3ByaXZhdGUtY2hhdC0xMjM" {
+				http.Error(w, "wrong liveChatId", http.StatusBadRequest)
+				return
+			}
+			callNum := chatPollCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			if callNum == 1 {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"nextPageToken":         "page-2",
+					"pollingIntervalMillis": 2000,
+					"items": []map[string]any{
+						{
+							"id": "priv-msg-1",
+							"snippet": map[string]any{
+								"type":            "textMessageEvent",
+								"liveChatId":      "CG0KC3ByaXZhdGUtY2hhdC0xMjM",
+								"authorChannelId": "UC_BROADCASTER_1",
+								"publishedAt":     nowISO,
+								"displayMessage":  "Testing my private stream chat!",
+								"textMessageDetails": map[string]any{
+									"messageText": "Testing my private stream chat!",
+								},
+							},
+							"authorDetails": map[string]any{
+								"channelId":       "UC_BROADCASTER_1",
+								"displayName":     "@Broadcaster",
+								"isChatOwner":     true,
+								"isChatModerator": false,
+								"isChatSponsor":   false,
+								"isVerified":      true,
+							},
+						},
+						{
+							"id": "priv-del-1",
+							"snippet": map[string]any{
+								"type":        "messageDeletedEvent",
+								"publishedAt": nowISO,
+								"messageDeletedDetails": map[string]any{
+									"deletedMessageId": "old-bad-msg-99",
+								},
+							},
+						},
+					},
+				})
+				return
+			}
+			// End stream after first batch
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"offlineAt": nowISO,
+				"items":     []any{},
+			})
+
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	eventCh := make(chan *chat.Event, 2)
+	modCh := make(chan *chat.ModerationEvent, 2)
+	statusCh := make(chan ConnectionStatus, 4)
+
+	conn := NewConnector(
+		func(ev *chat.Event) {
+			select {
+			case eventCh <- ev:
+			default:
+			}
+		},
+		func(modEv *chat.ModerationEvent) {
+			select {
+			case modCh <- modEv:
+			default:
+			}
+		},
+		func(status ConnectionStatus, _ string) {
+			select {
+			case statusCh <- status:
+			default:
+			}
+		},
+	)
+	conn.SetOAuthManager(oauth)
+	conn.SetAPIBaseURL(srv.URL)
+	conn.baseURL = srv.URL
+	conn.httpClient = srv.Client()
+	conn.waitInterval = 50 * time.Millisecond
+
+	// Start with empty target to verify OAuth profile fallback
+	if err := conn.Start(""); err != nil {
+		t.Fatalf("Start(\"\") with connected OAuth failed: %v", err)
+	}
+	defer func() { _ = conn.Stop() }()
+
+	select {
+	case ev := <-eventCh:
+		if ev.ID != "priv-msg-1" || ev.UserName != "Broadcaster" || ev.Text != "Testing my private stream chat!" {
+			t.Errorf("unexpected private stream chat event: %+v", ev)
+		}
+		if len(ev.Roles) != 2 || ev.Roles[0] != "broadcaster" || ev.Roles[1] != "vip" {
+			t.Errorf("expected broadcaster and vip roles, got %v", ev.Roles)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for private stream chat event via Data API")
+	}
+
+	select {
+	case modEv := <-modCh:
+		if modEv.Action != chat.ModActionDeleteMessage || modEv.TargetMessageID != "old-bad-msg-99" {
+			t.Errorf("unexpected moderation event: %+v", modEv)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for moderation event via Data API")
+	}
+
+	isLive, err := conn.CheckLive(context.Background())
+	if err != nil || !isLive {
+		t.Errorf("expected CheckLive() == true for private stream with OAuth, got isLive=%v err=%v", isLive, err)
 	}
 }

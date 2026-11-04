@@ -237,7 +237,7 @@ func (v *YouTubeTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget
 	v.hintLabel.Wrapping = fyne.TextWrapWord
 
 	v.modHintLabel = widget.NewLabelWithStyle(
-		"🛡️ Optional OAuth: Sign in with Google/YouTube to enable direct broadcast detection (including Unlisted streams) and Chat Log moderation (Delete, Timeout, Ban).",
+		"🛡️ Optional OAuth: Sign in with Google/YouTube to enable direct broadcast detection (including Private & Unlisted streams) and Chat Log moderation (Delete, Timeout, Ban).",
 		fyne.TextAlignLeading,
 		fyne.TextStyle{Italic: true},
 	)
@@ -337,18 +337,26 @@ func (v *YouTubeTabView) refreshOAuthState() {
 				channelIdent = tok.ChannelHandle
 			case tok.ChannelTitle != "":
 				channelIdent = tok.ChannelTitle
+			case tok.ChannelID != "":
+				channelIdent = tok.ChannelID
 			default:
 				// Backfill channel identity asynchronously for tokens saved before channel metadata was stored
 				go func() {
 					ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 					defer cancel()
-					if _, _, handle, fErr := v.session.YouTubeOAuth().FetchAuthenticatedChannel(ctx); fErr == nil && handle != "" {
+					if cid, _, handle, fErr := v.session.YouTubeOAuth().FetchAuthenticatedChannel(ctx); fErr == nil && (handle != "" || cid != "") {
 						fyne.Do(v.refreshOAuthState)
 					}
 				}()
 			}
-			if v.channelEntry != nil && strings.TrimSpace(v.channelEntry.Text) == "" && tok.ChannelHandle != "" {
-				v.channelEntry.SetText(strings.TrimPrefix(tok.ChannelHandle, "@"))
+			if v.channelEntry != nil && strings.TrimSpace(v.channelEntry.Text) == "" {
+				target := strings.TrimPrefix(tok.ChannelHandle, "@")
+				if target == "" {
+					target = tok.ChannelID
+				}
+				if target != "" {
+					v.channelEntry.SetText(target)
+				}
 			}
 		}
 		for _, p := range v.session.YouTubeOAuth().ListProfiles() {
@@ -391,9 +399,9 @@ func (v *YouTubeTabView) refreshOAuthState() {
 	}
 	if v.modHintLabel != nil {
 		if hasTok {
-			v.modHintLabel.SetText("✓ Authenticated Mode: Direct broadcast & Unlisted stream detection, automatic liveChatId resolution, and Chat Log moderation (Delete, Timeout, Ban) are active.")
+			v.modHintLabel.SetText("✓ Authenticated Mode: Direct broadcast, Private & Unlisted stream detection, automatic liveChatId resolution, and Chat Log moderation (Delete, Timeout, Ban) are active.")
 		} else {
-			v.modHintLabel.SetText("🛡️ Optional OAuth: Sign in with Google/YouTube to enable direct broadcast detection (including Unlisted streams) and Chat Log moderation (Delete, Timeout, Ban).")
+			v.modHintLabel.SetText("🛡️ Optional OAuth: Sign in with Google/YouTube to enable direct broadcast detection (including Private & Unlisted streams) and Chat Log moderation (Delete, Timeout, Ban).")
 		}
 	}
 	if v.oauthStatusLabel != nil {
@@ -911,6 +919,14 @@ func (v *YouTubeTabView) saveRoles() {
 func (v *YouTubeTabView) updateConnectionStatus(enabled bool, channel string) {
 	if v.statusBadge == nil {
 		return
+	}
+	hasTok := v.session != nil && v.session.YouTubeOAuth() != nil && v.session.YouTubeOAuth().HasToken()
+	if channel == "" && hasTok {
+		if tok, err := v.session.YouTubeOAuth().LoadToken(); err == nil && tok != nil {
+			channel = tok.DisplayLabel()
+		} else {
+			channel = "OAuth"
+		}
 	}
 	switch {
 	case !enabled:

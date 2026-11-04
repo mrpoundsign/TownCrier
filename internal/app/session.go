@@ -498,8 +498,10 @@ func syncConnectors(cfg *config.Config, tw *twitch.Connector, ytConn *youtube.Co
 
 	if ytConn != nil {
 		yt, ok := cfg.Platforms["youtube"]
-		if ok && yt.Enabled && yt.AccountName != "" {
-			_ = ytConn.Start(yt.AccountName)
+		if ok && yt.Enabled {
+			if err := ytConn.Start(yt.AccountName); err != nil {
+				_ = ytConn.Stop()
+			}
 		} else {
 			_ = ytConn.Stop()
 		}
@@ -884,12 +886,16 @@ func (s *Session) DetectLiveStatus(ctx context.Context) {
 	}
 
 	if yt != nil {
-		if p, ok := cfg.Platforms["youtube"]; ok && p.Enabled && strings.TrimSpace(p.AccountName) != "" {
+		if p, ok := cfg.Platforms["youtube"]; ok && p.Enabled && (strings.TrimSpace(p.AccountName) != "" || (s.youtubeOAuth != nil && s.youtubeOAuth.HasToken())) {
 			wg.Add(1)
 			go func(ch string) {
 				defer wg.Done()
 				if live, err := yt.CheckLiveTarget(ctx, ch); err == nil && live {
-					s.UpdatePlatformStreamState("youtube", ch, true)
+					target := ch
+					if target == "" && yt.Target() != "" {
+						target = yt.Target()
+					}
+					s.UpdatePlatformStreamState("youtube", target, true)
 				}
 			}(p.AccountName)
 		}
