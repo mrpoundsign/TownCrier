@@ -47,14 +47,7 @@ type TwitchTabView struct {
 	redemptionCheck     *widget.Check
 	redemptionTmplEntry *ScrollPassEntry
 	followOAuthHint     *widget.Label
-	overrideCheck       *widget.Check
-	overridesBox        *fyne.Container
-	overrideVoiceField           *VoiceSpeedField
-	namesCheck                   *widget.Check
-	emotesCheck                  *widget.Check
-	mentionsModeSelect           *widget.Select
-	allowBroadcasterCheck        *widget.Check
-	playAlertIgnoredMentionCheck *widget.Check
+	overrides           *PlatformOverridesControl
 	connCard            *widget.Card
 	rulesCard           *widget.Card
 	settingsCard        *widget.Card
@@ -134,8 +127,8 @@ func (v *TwitchTabView) SyncFromConfig() {
 	if v.enableCheck != nil {
 		v.enableCheck.SetChecked(pCfg.Enabled)
 	}
-	if v.overrideVoiceField != nil {
-		v.overrideVoiceField.SetVoiceAndSpeed(pCfg.Overrides.DefaultVoice, pCfg.Overrides.DefaultSpeed)
+	if v.overrides != nil {
+		v.overrides.Refresh()
 	}
 	v.initializing = false
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
@@ -841,182 +834,28 @@ func (v *TwitchTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 	return widget.NewCard("Notification Events", "Spoken alert templates and minimum thresholds for stream events", notifsList)
 }
 
-func (v *TwitchTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Card {
-	ov := pCfg.Overrides
-
-	namesCheck := widget.NewCheck("Speak Names for Twitch Chat", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["twitch"]
-			p.Overrides.SpeakNames = b
-			c.Platforms["twitch"] = p
-		})
-	})
-	namesCheck.SetChecked(ov.SpeakNames)
-	v.namesCheck = namesCheck
-
-	emotesCheck := widget.NewCheck("Speak Emotes & Emojis for Twitch Chat", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["twitch"]
-			p.Overrides.SpeakEmotes = b
-			c.Platforms["twitch"] = p
-		})
-	})
-	emotesCheck.SetChecked(ov.SpeakEmotes)
-	v.emotesCheck = emotesCheck
-
-	dedupeCheck := widget.NewCheck("Deduplicate Emotes & Emojis for Twitch Chat", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["twitch"]
-			p.Overrides.DeduplicateEmotes = b
-			c.Platforms["twitch"] = p
-		})
-	})
-	dedupeCheck.SetChecked(ov.DeduplicateEmotes)
-
-	dupWordsSelect := widget.NewSelect(DuplicateWordsOptions, func(s string) {
-		val := OptionToDuplicateWords(s)
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["twitch"]
-			p.Overrides.MaxDuplicateWords = val
-			c.Platforms["twitch"] = p
-		})
-	})
-	dupWordsSelect.SetSelected(DuplicateWordsToOption(ov.MaxDuplicateWords))
-	dupWordsRow := container.NewHBox(
-		widget.NewLabel("Max Consecutive Duplicate Words:"),
-		dupWordsSelect,
-	)
-
-	selectedVoice := ov.DefaultVoice
-	sp := ov.DefaultSpeed
-	if sp <= 0 {
-		sp = 1.0
-	}
-
-	v.overrideVoiceField = NewVoiceSpeedField(
+func (v *TwitchTabView) buildOverridesCard(_ config.PlatformConfig) *widget.Card {
+	v.overrides = NewPlatformOverridesControl(
 		v.window,
 		v.session,
-		"Edit Twitch Default Voice & Speed",
-		selectedVoice,
-		sp,
-		func(voiceID string, speed float32) {
-			v.updateConfig(func(c *config.Config) {
-				p := c.Platforms["twitch"]
-				p.Overrides.DefaultVoice = voiceID
-				p.Overrides.DefaultSpeed = speed
-				c.Platforms["twitch"] = p
-			})
+		"twitch",
+		"Twitch",
+		v.updateConfig,
+		func(msg string) {
+			if v.onStatus != nil {
+				v.onStatus(msg)
+			}
 		},
-		v.onStatus,
 	)
-	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("Twitch Default Voice & Speed:"), nil, v.overrideVoiceField.Container)
-
-	allowBroadcasterCheck := widget.NewCheck("Still read messages that @ mention the broadcaster", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["twitch"]
-			p.Overrides.AllowBroadcasterMentions = b
-			c.Platforms["twitch"] = p
-		})
-	})
-	allowBroadcasterCheck.SetChecked(ov.AllowBroadcasterMentions)
-	v.allowBroadcasterCheck = allowBroadcasterCheck
-
-	playAlertIgnoredCheck := widget.NewCheck("Play configured alert sound when an @ mention or reply is ignored", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["twitch"]
-			p.Overrides.PlayAlertOnIgnoredMention = b
-			c.Platforms["twitch"] = p
-		})
-	})
-	playAlertIgnoredCheck.SetChecked(ov.PlayAlertOnIgnoredMention)
-	v.playAlertIgnoredMentionCheck = playAlertIgnoredCheck
-
-	syncMentionChecksState := func(mode string) {
-		if config.NormalizeIgnoreMentionsMode(mode) != config.IgnoreMentionsOff {
-			allowBroadcasterCheck.Enable()
-			playAlertIgnoredCheck.Enable()
-		} else {
-			allowBroadcasterCheck.Disable()
-			playAlertIgnoredCheck.Disable()
-		}
-	}
-	syncMentionChecksState(ov.IgnoreMentionsMode)
-
-	mentionsModeSelect := widget.NewSelect(IgnoreMentionsOptions, func(s string) {
-		mode := OptionToIgnoreMentionsMode(s)
-		syncMentionChecksState(mode)
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["twitch"]
-			p.Overrides.IgnoreMentionsMode = mode
-			c.Platforms["twitch"] = p
-		})
-	})
-	mentionsModeSelect.SetSelected(IgnoreMentionsModeToOption(ov.IgnoreMentionsMode))
-	v.mentionsModeSelect = mentionsModeSelect
-	mentionsModeRow := container.NewHBox(
-		widget.NewLabel("@ Mentions & Replies:"),
-		mentionsModeSelect,
-	)
-
-	v.overridesBox = container.NewVBox(
-		namesCheck,
-		emotesCheck,
-		dedupeCheck,
-		dupWordsRow,
-		mentionsModeRow,
-		allowBroadcasterCheck,
-		playAlertIgnoredCheck,
-		voiceRow,
-	)
-
-	var cardContent *fyne.Container
-	toggleOverrides := func(enabled bool) {
-		if enabled {
-			v.overridesBox.Show()
-		} else {
-			v.overridesBox.Hide()
-		}
-		if cardContent != nil {
-			cardContent.Refresh()
-		}
-	}
-	toggleOverrides(ov.OverrideRules)
-
-	v.overrideCheck = widget.NewCheck("Override Global Defaults", func(b bool) {
-		toggleOverrides(b)
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["twitch"]
-			p.Overrides.OverrideRules = b
-			c.Platforms["twitch"] = p
-		})
-	})
-	v.overrideCheck.SetChecked(ov.OverrideRules)
-
-	cardContent = container.NewVBox(
-		v.overrideCheck,
-		v.overridesBox,
-	)
-
-	return widget.NewCard("Platform Overrides", "Custom rules applied only to Twitch", cardContent)
+	return v.overrides.Card
 }
 
 // RefreshVoices updates the platform override voice field when enabled model packs change in Settings.
 func (v *TwitchTabView) RefreshVoices() {
 	fyne.Do(func() {
-		if v.overrideVoiceField == nil || v.session == nil {
-			return
+		if v.overrides != nil {
+			v.overrides.Refresh()
 		}
-		cfg := v.session.Config()
-		ov := cfg.Platforms["twitch"].Overrides
-		voice := ov.DefaultVoice
-		if voice == "" {
-			voice = cfg.GlobalChatRules.DefaultVoice
-		}
-		sp := ov.DefaultSpeed
-		if sp <= 0 {
-			sp = 1.0
-		}
-		v.overrideVoiceField.SetVoiceAndSpeed(voice, sp)
 	})
 }
 

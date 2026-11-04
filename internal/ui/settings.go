@@ -330,7 +330,23 @@ func (v *SettingsView) RefreshVoices() {
 			}
 			v.globalVoiceField.SetVoiceAndSpeed(defVoice, defSpeed)
 		}
+		v.refreshPlatformOverrides()
 	})
+}
+
+func (v *SettingsView) refreshPlatformOverrides() {
+	if v.twitchTab != nil && v.twitchTab.overrides != nil {
+		v.twitchTab.overrides.Refresh()
+	}
+	if v.youtubeTab != nil && v.youtubeTab.overrides != nil {
+		v.youtubeTab.overrides.Refresh()
+	}
+	if v.tiktokTab != nil && v.tiktokTab.overrides != nil {
+		v.tiktokTab.overrides.Refresh()
+	}
+	if v.kickTab != nil && v.kickTab.overrides != nil {
+		v.kickTab.overrides.Refresh()
+	}
 }
 
 // SyncTTSState updates all Settings controls to reflect whether TTS is enabled or disabled.
@@ -1246,6 +1262,7 @@ func (v *SettingsView) buildGlobalVoiceCard() *widget.Card {
 				c.GlobalChatRules.DefaultVoice = voiceID
 				c.GlobalChatRules.DefaultSpeed = speed
 			})
+			v.refreshPlatformOverrides()
 		},
 		v.setStatus,
 	)
@@ -2148,6 +2165,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.SpeakNames = b
 		})
+		v.refreshPlatformOverrides()
 	})
 	checkNames.SetChecked(v.cfg.GlobalChatRules.SpeakNames)
 	v.rulesNamesCheck = checkNames
@@ -2156,6 +2174,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.SpeakEmotes = b
 		})
+		v.refreshPlatformOverrides()
 	})
 	checkEmotes.SetChecked(v.cfg.GlobalChatRules.SpeakEmotes)
 	v.rulesEmotesCheck = checkEmotes
@@ -2164,6 +2183,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.DeduplicateEmotes = b
 		})
+		v.refreshPlatformOverrides()
 	})
 	checkDedupe.SetChecked(v.cfg.GlobalChatRules.DeduplicateEmotes)
 	v.rulesDedupeCheck = checkDedupe
@@ -2173,6 +2193,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.MaxDuplicateWords = val
 		})
+		v.refreshPlatformOverrides()
 	})
 	dupWordsSelect.SetSelected(DuplicateWordsToOption(v.cfg.GlobalChatRules.MaxDuplicateWords))
 	v.rulesDupWordsSelect = dupWordsSelect
@@ -2185,6 +2206,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.SpeakPlatformName = b
 		})
+		v.refreshPlatformOverrides()
 	})
 	checkPlatform.SetChecked(v.cfg.GlobalChatRules.SpeakPlatformName)
 	v.rulesPlatformCheck = checkPlatform
@@ -2193,6 +2215,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.AllowBroadcasterMentions = b
 		})
+		v.refreshPlatformOverrides()
 	})
 	allowBroadcasterCheck.SetChecked(v.cfg.GlobalChatRules.AllowBroadcasterMentions)
 	v.rulesAllowBroadcasterCheck = allowBroadcasterCheck
@@ -2201,6 +2224,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.PlayAlertOnIgnoredMention = b
 		})
+		v.refreshPlatformOverrides()
 	})
 	playAlertIgnoredCheck.SetChecked(v.cfg.GlobalChatRules.PlayAlertOnIgnoredMention)
 	v.rulesPlayAlertIgnoredMentionCheck = playAlertIgnoredCheck
@@ -2222,6 +2246,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.IgnoreMentionsMode = mode
 		})
+		v.refreshPlatformOverrides()
 	})
 	mentionsModeSelect.SetSelected(IgnoreMentionsModeToOption(v.cfg.GlobalChatRules.IgnoreMentionsMode))
 	v.rulesMentionsModeSelect = mentionsModeSelect

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -235,18 +236,103 @@ type GlobalChatRules struct {
 	DefaultSpeed              float32 `json:"default_speed"`
 }
 
+const (
+	OverrideModeGlobal = "global"
+	OverrideModeOn     = "on"
+	OverrideModeOff    = "off"
+	OverrideModeCustom = "custom"
+)
+
+// NormalizeBoolOverrideMode returns "global", "on", or "off".
+func NormalizeBoolOverrideMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case OverrideModeOn, "true", "yes", "1":
+		return OverrideModeOn
+	case OverrideModeOff, "false", "no", "0":
+		return OverrideModeOff
+	default:
+		return OverrideModeGlobal
+	}
+}
+
+// BoolToOverrideMode converts a boolean to "on" or "off".
+func BoolToOverrideMode(b bool) string {
+	if b {
+		return OverrideModeOn
+	}
+	return OverrideModeOff
+}
+
+// NormalizeDuplicateWordsOverrideMode returns "global", "off", "1", "2", or "3".
+func NormalizeDuplicateWordsOverrideMode(mode string) string {
+	clean := strings.ToLower(strings.TrimSpace(mode))
+	switch clean {
+	case OverrideModeOff, "-1", "unlimited":
+		return OverrideModeOff
+	case "1", "2", "3":
+		return clean
+	default:
+		if n, err := strconv.Atoi(clean); err == nil && n > 0 {
+			return strconv.Itoa(n)
+		}
+		return OverrideModeGlobal
+	}
+}
+
+// DuplicateWordsToOverrideMode converts a MaxDuplicateWords integer into its explicit override mode string.
+func DuplicateWordsToOverrideMode(val int) string {
+	if val < 0 {
+		return OverrideModeOff
+	}
+	if val == 0 {
+		return "2"
+	}
+	return strconv.Itoa(val)
+}
+
+// NormalizeIgnoreMentionsOverrideMode returns "global", "off", "replies_and_leading", or "all".
+func NormalizeIgnoreMentionsOverrideMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case IgnoreMentionsOff:
+		return IgnoreMentionsOff
+	case IgnoreMentionsRepliesAndLeading, "replies", "leading":
+		return IgnoreMentionsRepliesAndLeading
+	case IgnoreMentionsAll, "any":
+		return IgnoreMentionsAll
+	default:
+		return OverrideModeGlobal
+	}
+}
+
+// NormalizeVoiceOverrideMode returns "global" or "custom".
+func NormalizeVoiceOverrideMode(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), OverrideModeCustom) {
+		return OverrideModeCustom
+	}
+	return OverrideModeGlobal
+}
+
 type PlatformOverrides struct {
-	OverrideRules             bool    `json:"override_rules"`
-	SpeakNames                bool    `json:"speak_names"`
-	SpeakEmotes               bool    `json:"speak_emotes"`
-	DeduplicateEmotes         bool    `json:"deduplicate_emotes"`
-	MaxDuplicateWords         int     `json:"max_duplicate_words"`
-	SpeakPlatformName         bool    `json:"speak_platform_name"`
-	IgnoreMentionsMode        string  `json:"ignore_mentions_mode,omitempty"`
-	AllowBroadcasterMentions  bool    `json:"allow_broadcaster_mentions,omitempty"`
-	PlayAlertOnIgnoredMention bool    `json:"play_alert_on_ignored_mention,omitempty"`
-	DefaultVoice              string  `json:"default_voice"`
-	DefaultSpeed              float32 `json:"default_speed"`
+	OverrideRules                 bool    `json:"override_rules,omitempty"`
+	SpeakNamesMode                string  `json:"speak_names_mode,omitempty"`
+	SpeakEmotesMode               string  `json:"speak_emotes_mode,omitempty"`
+	DeduplicateEmotesMode         string  `json:"deduplicate_emotes_mode,omitempty"`
+	MaxDuplicateWordsMode         string  `json:"max_duplicate_words_mode,omitempty"`
+	SpeakPlatformNameMode         string  `json:"speak_platform_name_mode,omitempty"`
+	IgnoreMentionsOverride        string  `json:"ignore_mentions_override,omitempty"`
+	AllowBroadcasterMentionsMode  string  `json:"allow_broadcaster_mentions_mode,omitempty"`
+	PlayAlertOnIgnoredMentionMode string  `json:"play_alert_on_ignored_mention_mode,omitempty"`
+	VoiceOverrideMode             string  `json:"voice_override_mode,omitempty"`
+	SpeakNames                    bool    `json:"speak_names"`
+	SpeakEmotes                   bool    `json:"speak_emotes"`
+	DeduplicateEmotes             bool    `json:"deduplicate_emotes"`
+	MaxDuplicateWords             int     `json:"max_duplicate_words"`
+	SpeakPlatformName             bool    `json:"speak_platform_name"`
+	IgnoreMentionsMode            string  `json:"ignore_mentions_mode,omitempty"`
+	AllowBroadcasterMentions      bool    `json:"allow_broadcaster_mentions,omitempty"`
+	PlayAlertOnIgnoredMention     bool    `json:"play_alert_on_ignored_mention,omitempty"`
+	DefaultVoice                  string  `json:"default_voice"`
+	DefaultSpeed                  float32 `json:"default_speed"`
 }
 
 type ReadRules struct {
@@ -817,7 +903,7 @@ func ConfigPath() (string, error) {
 	return filepath.Join(configDir, "com.github.mrpoundsign.towncrier", "config.json"), nil
 }
 
-// EffectiveChatRules returns effective chat rules for a platform, taking platform overrides into account.
+// EffectiveChatRules returns effective chat rules for a platform, taking per-setting platform overrides into account.
 func (c *Config) EffectiveChatRules(platform string) (speakNames, speakEmotes, deduplicateEmotes bool, maxDuplicateWords int, speakPlatformName bool, voice string, speed float32) {
 	speakNames = c.GlobalChatRules.SpeakNames
 	speakEmotes = c.GlobalChatRules.SpeakEmotes
@@ -827,34 +913,125 @@ func (c *Config) EffectiveChatRules(platform string) (speakNames, speakEmotes, d
 	voice = c.GlobalChatRules.DefaultVoice
 	speed = c.GlobalChatRules.DefaultSpeed
 
-	if p, ok := c.Platforms[platform]; ok && p.Overrides.OverrideRules {
-		speakNames = p.Overrides.SpeakNames
-		speakEmotes = p.Overrides.SpeakEmotes
-		deduplicateEmotes = p.Overrides.DeduplicateEmotes
-		maxDuplicateWords = p.Overrides.MaxDuplicateWords
-		speakPlatformName = p.Overrides.SpeakPlatformName
-		if p.Overrides.DefaultVoice != "" {
-			voice = p.Overrides.DefaultVoice
-		}
-		if p.Overrides.DefaultSpeed > 0 {
-			speed = p.Overrides.DefaultSpeed
+	p, ok := c.Platforms[platform]
+	if !ok {
+		return speakNames, speakEmotes, deduplicateEmotes, maxDuplicateWords, speakPlatformName, voice, speed
+	}
+	ov := p.Overrides
+
+	switch NormalizeBoolOverrideMode(ov.SpeakNamesMode) {
+	case OverrideModeOn:
+		speakNames = true
+	case OverrideModeOff:
+		speakNames = false
+	default:
+		if ov.OverrideRules {
+			speakNames = ov.SpeakNames
 		}
 	}
+
+	switch NormalizeBoolOverrideMode(ov.SpeakEmotesMode) {
+	case OverrideModeOn:
+		speakEmotes = true
+	case OverrideModeOff:
+		speakEmotes = false
+	default:
+		if ov.OverrideRules {
+			speakEmotes = ov.SpeakEmotes
+		}
+	}
+
+	switch NormalizeBoolOverrideMode(ov.DeduplicateEmotesMode) {
+	case OverrideModeOn:
+		deduplicateEmotes = true
+	case OverrideModeOff:
+		deduplicateEmotes = false
+	default:
+		if ov.OverrideRules {
+			deduplicateEmotes = ov.DeduplicateEmotes
+		}
+	}
+
+	switch dupMode := NormalizeDuplicateWordsOverrideMode(ov.MaxDuplicateWordsMode); dupMode {
+	case OverrideModeOff:
+		maxDuplicateWords = -1
+	case OverrideModeGlobal:
+		if ov.OverrideRules {
+			maxDuplicateWords = ov.MaxDuplicateWords
+		}
+	default:
+		if n, err := strconv.Atoi(dupMode); err == nil {
+			maxDuplicateWords = n
+		}
+	}
+
+	switch NormalizeBoolOverrideMode(ov.SpeakPlatformNameMode) {
+	case OverrideModeOn:
+		speakPlatformName = true
+	case OverrideModeOff:
+		speakPlatformName = false
+	default:
+		if ov.OverrideRules {
+			speakPlatformName = ov.SpeakPlatformName
+		}
+	}
+
+	if NormalizeVoiceOverrideMode(ov.VoiceOverrideMode) == OverrideModeCustom || ov.OverrideRules {
+		if ov.DefaultVoice != "" {
+			voice = ov.DefaultVoice
+		}
+		if ov.DefaultSpeed > 0 {
+			speed = ov.DefaultSpeed
+		}
+	}
+
 	return speakNames, speakEmotes, deduplicateEmotes, maxDuplicateWords, speakPlatformName, voice, speed
 }
 
 // EffectiveMentionRules returns the effective @mention and reply filtering rules for a platform,
-// taking platform overrides into account when OverrideRules is enabled.
+// taking per-setting platform overrides into account.
 func (c *Config) EffectiveMentionRules(platform string) (mode string, allowBroadcaster bool, playAlert bool) {
 	mode = NormalizeIgnoreMentionsMode(c.GlobalChatRules.IgnoreMentionsMode)
 	allowBroadcaster = c.GlobalChatRules.AllowBroadcasterMentions
 	playAlert = c.GlobalChatRules.PlayAlertOnIgnoredMention
 
-	if p, ok := c.Platforms[platform]; ok && p.Overrides.OverrideRules {
-		mode = NormalizeIgnoreMentionsMode(p.Overrides.IgnoreMentionsMode)
-		allowBroadcaster = p.Overrides.AllowBroadcasterMentions
-		playAlert = p.Overrides.PlayAlertOnIgnoredMention
+	p, ok := c.Platforms[platform]
+	if !ok {
+		return mode, allowBroadcaster, playAlert
 	}
+	ov := p.Overrides
+
+	switch mentionMode := NormalizeIgnoreMentionsOverrideMode(ov.IgnoreMentionsOverride); mentionMode {
+	case IgnoreMentionsOff, IgnoreMentionsRepliesAndLeading, IgnoreMentionsAll:
+		mode = mentionMode
+	default:
+		if ov.OverrideRules {
+			mode = NormalizeIgnoreMentionsMode(ov.IgnoreMentionsMode)
+		}
+	}
+
+	switch NormalizeBoolOverrideMode(ov.AllowBroadcasterMentionsMode) {
+	case OverrideModeOn:
+		allowBroadcaster = true
+	case OverrideModeOff:
+		allowBroadcaster = false
+	default:
+		if ov.OverrideRules {
+			allowBroadcaster = ov.AllowBroadcasterMentions
+		}
+	}
+
+	switch NormalizeBoolOverrideMode(ov.PlayAlertOnIgnoredMentionMode) {
+	case OverrideModeOn:
+		playAlert = true
+	case OverrideModeOff:
+		playAlert = false
+	default:
+		if ov.OverrideRules {
+			playAlert = ov.PlayAlertOnIgnoredMention
+		}
+	}
+
 	return mode, allowBroadcaster, playAlert
 }
 
@@ -1024,7 +1201,7 @@ func migrate(cfg *Config) error {
 		}
 	}
 	for _, p := range cfg.Platforms {
-		if p.Overrides.OverrideRules {
+		if p.Overrides.OverrideRules || NormalizeVoiceOverrideMode(p.Overrides.VoiceOverrideMode) == OverrideModeCustom {
 			ensureVoiceFamily(p.Overrides.DefaultVoice)
 		}
 		for _, n := range p.Notifications {
@@ -1152,6 +1329,36 @@ func migrate(cfg *Config) error {
 				p.Overrides.MaxDuplicateWords = 2
 			}
 			p.Overrides.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(p.Overrides.IgnoreMentionsMode)
+			if p.Overrides.OverrideRules {
+				if p.Overrides.SpeakNamesMode == "" {
+					p.Overrides.SpeakNamesMode = BoolToOverrideMode(p.Overrides.SpeakNames)
+				}
+				if p.Overrides.SpeakEmotesMode == "" {
+					p.Overrides.SpeakEmotesMode = BoolToOverrideMode(p.Overrides.SpeakEmotes)
+				}
+				if p.Overrides.DeduplicateEmotesMode == "" {
+					p.Overrides.DeduplicateEmotesMode = BoolToOverrideMode(p.Overrides.DeduplicateEmotes)
+				}
+				if p.Overrides.MaxDuplicateWordsMode == "" {
+					p.Overrides.MaxDuplicateWordsMode = DuplicateWordsToOverrideMode(p.Overrides.MaxDuplicateWords)
+				}
+				if p.Overrides.SpeakPlatformNameMode == "" {
+					p.Overrides.SpeakPlatformNameMode = BoolToOverrideMode(p.Overrides.SpeakPlatformName)
+				}
+				if p.Overrides.IgnoreMentionsOverride == "" {
+					p.Overrides.IgnoreMentionsOverride = p.Overrides.IgnoreMentionsMode
+				}
+				if p.Overrides.AllowBroadcasterMentionsMode == "" {
+					p.Overrides.AllowBroadcasterMentionsMode = BoolToOverrideMode(p.Overrides.AllowBroadcasterMentions)
+				}
+				if p.Overrides.PlayAlertOnIgnoredMentionMode == "" {
+					p.Overrides.PlayAlertOnIgnoredMentionMode = BoolToOverrideMode(p.Overrides.PlayAlertOnIgnoredMention)
+				}
+				if p.Overrides.VoiceOverrideMode == "" && (strings.TrimSpace(p.Overrides.DefaultVoice) != "" || (p.Overrides.DefaultSpeed > 0 && p.Overrides.DefaultSpeed != 1.0)) {
+					p.Overrides.VoiceOverrideMode = OverrideModeCustom
+				}
+				p.Overrides.OverrideRules = false
+			}
 			cfg.Platforms[platKey] = p
 		}
 	}

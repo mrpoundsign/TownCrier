@@ -25,15 +25,15 @@ func TestYouTubeTabViewBuild(t *testing.T) {
 	if content == nil {
 		t.Fatal("expected non-nil YouTube tab content")
 	}
-	if ytView.overrideCheck.Text != "Override Global Defaults" {
-		t.Errorf("overrideCheck.Text = %q, want 'Override Global Defaults'", ytView.overrideCheck.Text)
+	if ytView.overrides == nil || ytView.overrides.NamesSelect == nil {
+		t.Fatal("expected overrides control to be initialized")
 	}
-	if ytView.overridesBox.Visible() {
-		t.Error("expected overridesBox to be hidden when Override Global Defaults is unchecked")
+	if ytView.overrides.NamesSelect.Selected != "Global ("+boolOnSpeakNames+")" {
+		t.Errorf("NamesSelect.Selected = %q, want %q", ytView.overrides.NamesSelect.Selected, "Global ("+boolOnSpeakNames+")")
 	}
-	ytView.overrideCheck.SetChecked(true)
-	if !ytView.overridesBox.Visible() {
-		t.Error("expected overridesBox to be visible when Override Global Defaults is checked")
+	ytView.overrides.NamesSelect.SetSelected(boolOffSpeakNames)
+	if session.Config().Platforms["youtube"].Overrides.SpeakNamesMode != config.OverrideModeOff {
+		t.Errorf("expected SpeakNamesMode = 'off', got %q", session.Config().Platforms["youtube"].Overrides.SpeakNamesMode)
 	}
 
 	// Verify YouTube OAuth controls and Zero-Config hint visibility

@@ -52,14 +52,14 @@ func TestTikTokTabViewBuild(t *testing.T) {
 		t.Errorf("MinFanClubLevel = %d, want 15", gotCfg.MinFanClubLevel)
 	}
 
-	if ttView.overrideCheck.Text != "Override Global Defaults" {
-		t.Errorf("overrideCheck.Text = %q, want 'Override Global Defaults'", ttView.overrideCheck.Text)
+	if ttView.overrides == nil || ttView.overrides.EmotesSelect == nil {
+		t.Fatal("expected overrides control to be initialized")
 	}
-	if ttView.overridesBox.Visible() {
-		t.Error("expected overridesBox to be hidden when Override Global Defaults is unchecked")
+	if ttView.overrides.EmotesSelect.Selected != "Global ("+boolOffSpeakEmotes+")" {
+		t.Errorf("EmotesSelect.Selected = %q, want %q", ttView.overrides.EmotesSelect.Selected, "Global ("+boolOffSpeakEmotes+")")
 	}
-	ttView.overrideCheck.SetChecked(true)
-	if !ttView.overridesBox.Visible() {
-		t.Error("expected overridesBox to be visible when Override Global Defaults is checked")
+	ttView.overrides.EmotesSelect.SetSelected(boolOnSpeakEmotes)
+	if session.Config().Platforms["tiktok"].Overrides.SpeakEmotesMode != config.OverrideModeOn {
+		t.Errorf("expected SpeakEmotesMode = 'on', got %q", session.Config().Platforms["tiktok"].Overrides.SpeakEmotesMode)
 	}
 }

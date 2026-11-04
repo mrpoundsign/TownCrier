@@ -427,14 +427,27 @@ func TestSettingsAndPlatformTab_IgnoreMentionsControls(t *testing.T) {
 		t.Error("expected GlobalChatRules.PlayAlertOnIgnoredMention to be true")
 	}
 
-	// Also verify platform tab override controls (TwitchTabView)
+	// Also verify platform tab override controls (TwitchTabView) and dynamic Global (...) label updates
 	twitchTab := NewTwitchTabView(w, sess)
+	view.SetPlatformTabs(twitchTab, nil, nil, nil)
 	_ = twitchTab.Build()
 
-	twitchTab.overrideCheck.SetChecked(true)
-	twitchTab.mentionsModeSelect.SetSelected(IgnoreMentionsOptionAll)
-	twitchTab.allowBroadcasterCheck.SetChecked(false)
-	twitchTab.playAlertIgnoredMentionCheck.SetChecked(true)
+	if twitchTab.overrides.MentionsModeSelect.Selected != "Global (Ignore Replies & Starting @ Mentions)" {
+		t.Errorf("expected Global (Ignore Replies & Starting @ Mentions), got %q", twitchTab.overrides.MentionsModeSelect.Selected)
+	}
+	if twitchTab.overrides.PlayAlertIgnoredMentionSelect.Selected != "Global ("+boolOnAlertMention+")" {
+		t.Errorf("expected Global (%s), got %q", boolOnAlertMention, twitchTab.overrides.PlayAlertIgnoredMentionSelect.Selected)
+	}
+
+	// Changing a global rule dynamically refreshes the Global (...) label on platform tabs
+	view.rulesNamesCheck.SetChecked(false)
+	if twitchTab.overrides.NamesSelect.Selected != "Global ("+boolOffSpeakNames+")" {
+		t.Errorf("expected NamesSelect to refresh to 'Global (%s)', got %q", boolOffSpeakNames, twitchTab.overrides.NamesSelect.Selected)
+	}
+
+	twitchTab.overrides.MentionsModeSelect.SetSelected(IgnoreMentionsOptionAll)
+	twitchTab.overrides.AllowBroadcasterSelect.SetSelected(boolOffAllowBcaster)
+	twitchTab.overrides.PlayAlertIgnoredMentionSelect.SetSelected(boolOnAlertMention)
 
 	mode, allowBroadcaster, playAlert := sess.Config().EffectiveMentionRules("twitch")
 	if mode != config.IgnoreMentionsAll || allowBroadcaster || !playAlert {

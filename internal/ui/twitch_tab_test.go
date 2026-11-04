@@ -87,22 +87,22 @@ func TestTwitchTabStatusHandler(t *testing.T) {
 
 	_ = tab.Build()
 
-	if tab.overrideCheck.Text != "Override Global Defaults" {
-		t.Errorf("overrideCheck.Text = %q, want 'Override Global Defaults'", tab.overrideCheck.Text)
+	if tab.overrides == nil || tab.overrides.NamesSelect == nil {
+		t.Fatal("expected overrides control to be initialized")
 	}
-	if tab.overridesBox.Visible() {
-		t.Error("expected overridesBox to be hidden when Override Global Defaults is unchecked")
+	if tab.overrides.NamesSelect.Selected != "Global ("+boolOnSpeakNames+")" {
+		t.Errorf("NamesSelect.Selected = %q, want %q", tab.overrides.NamesSelect.Selected, "Global ("+boolOnSpeakNames+")")
 	}
 
-	tab.overrideCheck.SetChecked(true)
-	if !tab.overridesBox.Visible() {
-		t.Error("expected overridesBox to be visible when Override Global Defaults is checked")
-	}
+	tab.overrides.NamesSelect.SetSelected(boolOffSpeakNames)
 	if lastStatus != "✓ Settings saved." {
 		t.Errorf("expected '✓ Settings saved.', got %q", lastStatus)
 	}
-	if !session.Config().Platforms["twitch"].Overrides.OverrideRules {
-		t.Error("expected OverrideRules to be true")
+	if session.Config().Platforms["twitch"].Overrides.SpeakNamesMode != config.OverrideModeOff {
+		t.Errorf("expected SpeakNamesMode to be 'off', got %q", session.Config().Platforms["twitch"].Overrides.SpeakNamesMode)
+	}
+	if speakNames, _, _, _, _, _, _ := session.Config().EffectiveChatRules("twitch"); speakNames {
+		t.Error("expected EffectiveChatRules('twitch') speakNames to be false when overridden to Off")
 	}
 }
 

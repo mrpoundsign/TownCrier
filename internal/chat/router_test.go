@@ -181,6 +181,17 @@ func TestRouterTextFormatting(t *testing.T) {
 	if resYT.Text != "mrpoundsign says: testing youtube handle" {
 		t.Errorf("expected 'mrpoundsign says: testing youtube handle', got %q", resYT.Text)
 	}
+
+	// Per-setting platform overrides (SpeakNamesMode = off, SpeakPlatformNameMode = on) honored by Router
+	ytCfg := cfg.Platforms["youtube"]
+	ytCfg.Overrides.SpeakNamesMode = config.OverrideModeOff
+	ytCfg.Overrides.SpeakPlatformNameMode = config.OverrideModeOn
+	cfg.Platforms["youtube"] = ytCfg
+
+	resYTOverride := router.Resolve(ytEvent, cfg)
+	if resYTOverride.Text != "youtube, testing youtube handle" {
+		t.Errorf("expected 'youtube, testing youtube handle', got %q", resYTOverride.Text)
+	}
 }
 
 func TestRouterNotificationEvents(t *testing.T) {

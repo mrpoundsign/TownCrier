@@ -40,14 +40,7 @@ type YouTubeTabView struct {
 	roleGatedCheck     *widget.Check
 	roleChecks         map[string]*widget.Check
 	paidOnlyCheck      *widget.Check
-	overrideCheck      *widget.Check
-	overridesBox       *fyne.Container
-	overrideVoiceField           *VoiceSpeedField
-	namesCheck                   *widget.Check
-	emotesCheck                  *widget.Check
-	mentionsModeSelect           *widget.Select
-	allowBroadcasterCheck        *widget.Check
-	playAlertIgnoredMentionCheck *widget.Check
+	overrides          *PlatformOverridesControl
 	connCard           *widget.Card
 	rulesCard          *widget.Card
 	notifsCard         *widget.Card
@@ -122,8 +115,8 @@ func (v *YouTubeTabView) SyncFromConfig() {
 	if v.enableCheck != nil {
 		v.enableCheck.SetChecked(pCfg.Enabled)
 	}
-	if v.overrideVoiceField != nil {
-		v.overrideVoiceField.SetVoiceAndSpeed(pCfg.Overrides.DefaultVoice, pCfg.Overrides.DefaultSpeed)
+	if v.overrides != nil {
+		v.overrides.Refresh()
 	}
 	v.initializing = false
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
@@ -723,182 +716,28 @@ func (v *YouTubeTabView) buildNotificationsCard(pCfg config.PlatformConfig) *wid
 	return widget.NewCard("Notification Events", "Spoken alert templates for YouTube Super Chats, Gifts & Memberships", notifsList)
 }
 
-func (v *YouTubeTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Card {
-	ov := pCfg.Overrides
-
-	namesCheck := widget.NewCheck("Speak Names for YouTube Chat", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.SpeakNames = b
-			c.Platforms["youtube"] = p
-		})
-	})
-	namesCheck.SetChecked(ov.SpeakNames)
-	v.namesCheck = namesCheck
-
-	emotesCheck := widget.NewCheck("Speak Emotes & Emojis for YouTube Chat", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.SpeakEmotes = b
-			c.Platforms["youtube"] = p
-		})
-	})
-	emotesCheck.SetChecked(ov.SpeakEmotes)
-	v.emotesCheck = emotesCheck
-
-	dedupeCheck := widget.NewCheck("Deduplicate Emotes & Emojis for YouTube Chat", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.DeduplicateEmotes = b
-			c.Platforms["youtube"] = p
-		})
-	})
-	dedupeCheck.SetChecked(ov.DeduplicateEmotes)
-
-	dupWordsSelect := widget.NewSelect(DuplicateWordsOptions, func(s string) {
-		val := OptionToDuplicateWords(s)
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.MaxDuplicateWords = val
-			c.Platforms["youtube"] = p
-		})
-	})
-	dupWordsSelect.SetSelected(DuplicateWordsToOption(ov.MaxDuplicateWords))
-	dupWordsRow := container.NewHBox(
-		widget.NewLabel("Max Consecutive Duplicate Words:"),
-		dupWordsSelect,
-	)
-
-	selectedVoice := ov.DefaultVoice
-	sp := ov.DefaultSpeed
-	if sp <= 0 {
-		sp = 1.0
-	}
-
-	v.overrideVoiceField = NewVoiceSpeedField(
+func (v *YouTubeTabView) buildOverridesCard(_ config.PlatformConfig) *widget.Card {
+	v.overrides = NewPlatformOverridesControl(
 		v.window,
 		v.session,
-		"Edit YouTube Default Voice & Speed",
-		selectedVoice,
-		sp,
-		func(voiceID string, speed float32) {
-			v.updateConfig(func(c *config.Config) {
-				p := c.Platforms["youtube"]
-				p.Overrides.DefaultVoice = voiceID
-				p.Overrides.DefaultSpeed = speed
-				c.Platforms["youtube"] = p
-			})
+		"youtube",
+		"YouTube",
+		v.updateConfig,
+		func(msg string) {
+			if v.onStatus != nil {
+				v.onStatus(msg)
+			}
 		},
-		v.onStatus,
 	)
-	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("YouTube Default Voice & Speed:"), nil, v.overrideVoiceField.Container)
-
-	allowBroadcasterCheck := widget.NewCheck("Still read messages that @ mention the broadcaster", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.AllowBroadcasterMentions = b
-			c.Platforms["youtube"] = p
-		})
-	})
-	allowBroadcasterCheck.SetChecked(ov.AllowBroadcasterMentions)
-	v.allowBroadcasterCheck = allowBroadcasterCheck
-
-	playAlertIgnoredCheck := widget.NewCheck("Play configured alert sound when an @ mention or reply is ignored", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.PlayAlertOnIgnoredMention = b
-			c.Platforms["youtube"] = p
-		})
-	})
-	playAlertIgnoredCheck.SetChecked(ov.PlayAlertOnIgnoredMention)
-	v.playAlertIgnoredMentionCheck = playAlertIgnoredCheck
-
-	syncMentionChecksState := func(mode string) {
-		if config.NormalizeIgnoreMentionsMode(mode) != config.IgnoreMentionsOff {
-			allowBroadcasterCheck.Enable()
-			playAlertIgnoredCheck.Enable()
-		} else {
-			allowBroadcasterCheck.Disable()
-			playAlertIgnoredCheck.Disable()
-		}
-	}
-	syncMentionChecksState(ov.IgnoreMentionsMode)
-
-	mentionsModeSelect := widget.NewSelect(IgnoreMentionsOptions, func(s string) {
-		mode := OptionToIgnoreMentionsMode(s)
-		syncMentionChecksState(mode)
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.IgnoreMentionsMode = mode
-			c.Platforms["youtube"] = p
-		})
-	})
-	mentionsModeSelect.SetSelected(IgnoreMentionsModeToOption(ov.IgnoreMentionsMode))
-	v.mentionsModeSelect = mentionsModeSelect
-	mentionsModeRow := container.NewHBox(
-		widget.NewLabel("@ Mentions & Replies:"),
-		mentionsModeSelect,
-	)
-
-	v.overridesBox = container.NewVBox(
-		namesCheck,
-		emotesCheck,
-		dedupeCheck,
-		dupWordsRow,
-		mentionsModeRow,
-		allowBroadcasterCheck,
-		playAlertIgnoredCheck,
-		voiceRow,
-	)
-
-	var cardContent *fyne.Container
-	toggleOverrides := func(enabled bool) {
-		if enabled {
-			v.overridesBox.Show()
-		} else {
-			v.overridesBox.Hide()
-		}
-		if cardContent != nil {
-			cardContent.Refresh()
-		}
-	}
-	toggleOverrides(ov.OverrideRules)
-
-	v.overrideCheck = widget.NewCheck("Override Global Defaults", func(b bool) {
-		toggleOverrides(b)
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.OverrideRules = b
-			c.Platforms["youtube"] = p
-		})
-	})
-	v.overrideCheck.SetChecked(ov.OverrideRules)
-
-	cardContent = container.NewVBox(
-		v.overrideCheck,
-		v.overridesBox,
-	)
-
-	return widget.NewCard("Platform Overrides", "Custom rules applied only to YouTube", cardContent)
+	return v.overrides.Card
 }
 
 // RefreshVoices updates the platform override voice field when enabled model packs change in Settings.
 func (v *YouTubeTabView) RefreshVoices() {
 	fyne.Do(func() {
-		if v.overrideVoiceField == nil || v.session == nil {
-			return
+		if v.overrides != nil {
+			v.overrides.Refresh()
 		}
-		cfg := v.session.Config()
-		ov := cfg.Platforms["youtube"].Overrides
-		voice := ov.DefaultVoice
-		if voice == "" {
-			voice = cfg.GlobalChatRules.DefaultVoice
-		}
-		sp := ov.DefaultSpeed
-		if sp <= 0 {
-			sp = 1.0
-		}
-		v.overrideVoiceField.SetVoiceAndSpeed(voice, sp)
 	})
 }
 
