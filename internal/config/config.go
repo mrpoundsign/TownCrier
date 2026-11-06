@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -17,15 +18,36 @@ const CurrentVersion = 1
 type Config struct {
 	Version         int                       `json:"version"`
 	UIScale         string                    `json:"ui_scale,omitempty"`
+	Update          UpdateConfig              `json:"update"`
 	Audio           AudioConfig               `json:"audio"`
 	TTS             TTSConfig                 `json:"tts"`
 	Safety          SafetyConfig              `json:"safety"`
 	Queue           QueueConfig               `json:"queue"`
 	Bots            BotConfig                 `json:"bots"`
 	Logging         LoggingConfig             `json:"logging"`
+	WebSocket       WebSocketConfig           `json:"websocket"`
 	GlobalChatRules GlobalChatRules           `json:"global_chat_rules"`
 	Viewers         map[string]ViewerConfig   `json:"viewers"`
 	Platforms       map[string]PlatformConfig `json:"platforms"`
+}
+
+// UpdateConfig configures application version checking and self-update preferences.
+type UpdateConfig struct {
+	CheckOnStartup bool   `json:"check_on_startup"`
+	SkippedVersion string `json:"skipped_version,omitempty"`
+}
+
+const (
+	DefaultWebSocketHost = "127.0.0.1"
+	DefaultWebSocketPort = 8765
+)
+
+// WebSocketConfig configures the local dual-mode (Protobuf + JSON) WebSocket and HTTP REST control server.
+type WebSocketConfig struct {
+	Enabled   bool   `json:"enabled"`
+	Host      string `json:"host"`
+	Port      int    `json:"port"`
+	AuthToken string `json:"auth_token,omitempty"`
 }
 
 type LoggingConfig struct {
@@ -86,16 +108,56 @@ type AudioConfig struct {
 	Volume     float32 `json:"volume"` // 0.0 to 1.0
 }
 
+// TTS operational output modes while the TTS engine remains warm in memory.
+const (
+	TTSModeAlwaysOn  = "always_on"
+	TTSModeAutoIdle  = "auto_idle"
+	TTSModeAlwaysOff = "always_off"
+
+	DefaultIdleTimeoutSeconds = 15
+	DefaultModeToggleHotkey   = "Ctrl+Shift+T"
+	DefaultAlertCooldownMs    = 1500
+)
+
+// NormalizeTTSOutputMode returns a valid canonical TTSOutputMode, defaulting to TTSModeAlwaysOn.
+func NormalizeTTSOutputMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case TTSModeAutoIdle, "auto", "idle", "afk":
+		return TTSModeAutoIdle
+	case TTSModeAlwaysOff, "off", "disabled", "muted":
+		return TTSModeAlwaysOff
+	default:
+		return TTSModeAlwaysOn
+	}
+}
+
+// NextTTSOutputMode cycles through Always On -> Auto (AFK Idle) -> Always Off -> Always On.
+func NextTTSOutputMode(current string) string {
+	switch NormalizeTTSOutputMode(current) {
+	case TTSModeAlwaysOn:
+		return TTSModeAutoIdle
+	case TTSModeAutoIdle:
+		return TTSModeAlwaysOff
+	default:
+		return TTSModeAlwaysOn
+	}
+}
+
 type TTSConfig struct {
-	Enabled           bool     `json:"enabled"`
-	Preset            string   `json:"preset,omitempty"`         // "ultra_low", "fast_lean", "balanced", "beefy", "custom"
-	EnabledModels     []string `json:"enabled_models,omitempty"` // ["kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper"]
-	ModelFamily       string   `json:"model_family"`             // "kokoro"
-	ModelPath         string   `json:"model_path"`
-	NumThreads        int      `json:"num_threads"`
-	UseGPU            bool     `json:"use_gpu"`
-	MaxClauseWords    int      `json:"max_clause_words,omitempty"`
-	IdleUnloadMinutes int      `json:"idle_unload_minutes,omitempty"`
+	Enabled               bool     `json:"enabled"`
+	OutputMode            string   `json:"output_mode,omitempty"`          // "always_on", "auto_idle", "always_off"
+	IdleTimeoutSeconds    int      `json:"idle_timeout_seconds,omitempty"` // seconds of keyboard/mouse inactivity before enabling TTS in auto_idle mode
+	PlayAlertWhenDisabled bool     `json:"play_alert_when_disabled"`       // play chime/WAV/MP3 alert when TTS output is inactive
+	AlertSoundPath        string   `json:"alert_sound_path,omitempty"`     // optional custom .wav or .mp3 file path (empty = built-in chime)
+	AlertCooldownMs       int      `json:"alert_cooldown_ms,omitempty"`    // minimum interval between alert sounds in ms (default 1500)
+	Preset                string   `json:"preset,omitempty"`               // "ultra_low", "fast_lean", "balanced", "beefy", "custom"
+	EnabledModels      []string `json:"enabled_models,omitempty"`       // ["kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper"]
+	ModelFamily        string   `json:"model_family"`                   // "kokoro"
+	ModelPath          string   `json:"model_path"`
+	NumThreads         int      `json:"num_threads"`
+	UseGPU             bool     `json:"use_gpu"`
+	MaxClauseWords     int      `json:"max_clause_words,omitempty"`
+	IdleUnloadMinutes  int      `json:"idle_unload_minutes,omitempty"`
 }
 
 // EffectiveEnabledModels returns the non-empty list of enabled TTS model families.
@@ -126,6 +188,7 @@ func (t TTSConfig) EffectiveEnabledModels() []string {
 
 type SafetyConfig struct {
 	PanicHotkey          string   `json:"panic_hotkey"`
+	ModeToggleHotkey     string   `json:"mode_toggle_hotkey,omitempty"`
 	BlockDefaultBadWords bool     `json:"block_default_bad_words"`
 	BlockedWords         []string `json:"blocked_words"`
 }
@@ -142,25 +205,134 @@ type BotConfig struct {
 	CustomBots      []string `json:"custom_bots,omitempty"`
 }
 
+const (
+	IgnoreMentionsOff               = "off"
+	IgnoreMentionsRepliesAndLeading = "replies_and_leading"
+	IgnoreMentionsAll               = "all"
+)
+
+// NormalizeIgnoreMentionsMode returns a canonical IgnoreMentionsMode ("off", "replies_and_leading", or "all").
+func NormalizeIgnoreMentionsMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case IgnoreMentionsRepliesAndLeading, "replies", "leading":
+		return IgnoreMentionsRepliesAndLeading
+	case IgnoreMentionsAll, "any":
+		return IgnoreMentionsAll
+	default:
+		return IgnoreMentionsOff
+	}
+}
+
 type GlobalChatRules struct {
-	SpeakNames        bool    `json:"speak_names"`
-	SpeakEmotes       bool    `json:"speak_emotes"`
-	DeduplicateEmotes bool    `json:"deduplicate_emotes"`
-	MaxDuplicateWords int     `json:"max_duplicate_words"`
-	SpeakPlatformName bool    `json:"speak_platform_name"`
-	DefaultVoice      string  `json:"default_voice"`
-	DefaultSpeed      float32 `json:"default_speed"`
+	SpeakNames                bool    `json:"speak_names"`
+	SpeakEmotes               bool    `json:"speak_emotes"`
+	DeduplicateEmotes         bool    `json:"deduplicate_emotes"`
+	MaxDuplicateWords         int     `json:"max_duplicate_words"`
+	SpeakPlatformName         bool    `json:"speak_platform_name"`
+	IgnoreMentionsMode        string  `json:"ignore_mentions_mode,omitempty"`
+	AllowBroadcasterMentions  bool    `json:"allow_broadcaster_mentions,omitempty"`
+	PlayAlertOnIgnoredMention bool    `json:"play_alert_on_ignored_mention,omitempty"`
+	DefaultVoice              string  `json:"default_voice"`
+	DefaultSpeed              float32 `json:"default_speed"`
+}
+
+const (
+	OverrideModeGlobal = "global"
+	OverrideModeOn     = "on"
+	OverrideModeOff    = "off"
+	OverrideModeCustom = "custom"
+)
+
+// NormalizeBoolOverrideMode returns "global", "on", or "off".
+func NormalizeBoolOverrideMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case OverrideModeOn, "true", "yes", "1":
+		return OverrideModeOn
+	case OverrideModeOff, "false", "no", "0":
+		return OverrideModeOff
+	default:
+		return OverrideModeGlobal
+	}
+}
+
+// BoolToOverrideMode converts a boolean to "on" or "off".
+func BoolToOverrideMode(b bool) string {
+	if b {
+		return OverrideModeOn
+	}
+	return OverrideModeOff
+}
+
+// NormalizeDuplicateWordsOverrideMode returns "global", "off", "1", "2", or "3".
+func NormalizeDuplicateWordsOverrideMode(mode string) string {
+	clean := strings.ToLower(strings.TrimSpace(mode))
+	switch clean {
+	case OverrideModeOff, "-1", "unlimited":
+		return OverrideModeOff
+	case "1", "2", "3":
+		return clean
+	default:
+		if n, err := strconv.Atoi(clean); err == nil && n > 0 {
+			return strconv.Itoa(n)
+		}
+		return OverrideModeGlobal
+	}
+}
+
+// DuplicateWordsToOverrideMode converts a MaxDuplicateWords integer into its explicit override mode string.
+func DuplicateWordsToOverrideMode(val int) string {
+	if val < 0 {
+		return OverrideModeOff
+	}
+	if val == 0 {
+		return "2"
+	}
+	return strconv.Itoa(val)
+}
+
+// NormalizeIgnoreMentionsOverrideMode returns "global", "off", "replies_and_leading", or "all".
+func NormalizeIgnoreMentionsOverrideMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case IgnoreMentionsOff:
+		return IgnoreMentionsOff
+	case IgnoreMentionsRepliesAndLeading, "replies", "leading":
+		return IgnoreMentionsRepliesAndLeading
+	case IgnoreMentionsAll, "any":
+		return IgnoreMentionsAll
+	default:
+		return OverrideModeGlobal
+	}
+}
+
+// NormalizeVoiceOverrideMode returns "global" or "custom".
+func NormalizeVoiceOverrideMode(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), OverrideModeCustom) {
+		return OverrideModeCustom
+	}
+	return OverrideModeGlobal
 }
 
 type PlatformOverrides struct {
-	OverrideRules     bool    `json:"override_rules"`
-	SpeakNames        bool    `json:"speak_names"`
-	SpeakEmotes       bool    `json:"speak_emotes"`
-	DeduplicateEmotes bool    `json:"deduplicate_emotes"`
-	MaxDuplicateWords int     `json:"max_duplicate_words"`
-	SpeakPlatformName bool    `json:"speak_platform_name"`
-	DefaultVoice      string  `json:"default_voice"`
-	DefaultSpeed      float32 `json:"default_speed"`
+	OverrideRules                 bool    `json:"override_rules,omitempty"`
+	SpeakNamesMode                string  `json:"speak_names_mode,omitempty"`
+	SpeakEmotesMode               string  `json:"speak_emotes_mode,omitempty"`
+	DeduplicateEmotesMode         string  `json:"deduplicate_emotes_mode,omitempty"`
+	MaxDuplicateWordsMode         string  `json:"max_duplicate_words_mode,omitempty"`
+	SpeakPlatformNameMode         string  `json:"speak_platform_name_mode,omitempty"`
+	IgnoreMentionsOverride        string  `json:"ignore_mentions_override,omitempty"`
+	AllowBroadcasterMentionsMode  string  `json:"allow_broadcaster_mentions_mode,omitempty"`
+	PlayAlertOnIgnoredMentionMode string  `json:"play_alert_on_ignored_mention_mode,omitempty"`
+	VoiceOverrideMode             string  `json:"voice_override_mode,omitempty"`
+	SpeakNames                    bool    `json:"speak_names"`
+	SpeakEmotes                   bool    `json:"speak_emotes"`
+	DeduplicateEmotes             bool    `json:"deduplicate_emotes"`
+	MaxDuplicateWords             int     `json:"max_duplicate_words"`
+	SpeakPlatformName             bool    `json:"speak_platform_name"`
+	IgnoreMentionsMode            string  `json:"ignore_mentions_mode,omitempty"`
+	AllowBroadcasterMentions      bool    `json:"allow_broadcaster_mentions,omitempty"`
+	PlayAlertOnIgnoredMention     bool    `json:"play_alert_on_ignored_mention,omitempty"`
+	DefaultVoice                  string  `json:"default_voice"`
+	DefaultSpeed                  float32 `json:"default_speed"`
 }
 
 type ReadRules struct {
@@ -334,24 +506,33 @@ func DefaultConfig() *Config {
 	return &Config{
 		Version: CurrentVersion,
 		UIScale: "1.0",
+		Update: UpdateConfig{
+			CheckOnStartup: true,
+		},
 		Audio: AudioConfig{
 			DeviceID:   "",
 			DeviceName: "",
 			Volume:     1.0,
 		},
 		TTS: TTSConfig{
-			Enabled:           true,
-			Preset:            "fast_lean",
-			EnabledModels:     []string{"supertonic"},
-			ModelFamily:       "supertonic",
-			ModelPath:         "",
-			NumThreads:        4,
-			UseGPU:            false,
-			MaxClauseWords:    12,
-			IdleUnloadMinutes: 0,
+			Enabled:               true,
+			OutputMode:            TTSModeAlwaysOn,
+			IdleTimeoutSeconds:    DefaultIdleTimeoutSeconds,
+			PlayAlertWhenDisabled: true,
+			AlertSoundPath:        "",
+			AlertCooldownMs:       DefaultAlertCooldownMs,
+			Preset:                "fast_lean",
+			EnabledModels:      []string{"supertonic"},
+			ModelFamily:        "supertonic",
+			ModelPath:          "",
+			NumThreads:         4,
+			UseGPU:             false,
+			MaxClauseWords:     12,
+			IdleUnloadMinutes:  0,
 		},
 		Safety: SafetyConfig{
 			PanicHotkey:          "Ctrl+Shift+M",
+			ModeToggleHotkey:     DefaultModeToggleHotkey,
 			BlockDefaultBadWords: true,
 			BlockedWords:         []string{},
 		},
@@ -373,6 +554,12 @@ func DefaultConfig() *Config {
 			ChatScale:                  100,
 			SessionResumeWindowMinutes: 60,
 			LiveLogs:                   DefaultLiveLogPresets(),
+		},
+		WebSocket: WebSocketConfig{
+			Enabled:   false,
+			Host:      DefaultWebSocketHost,
+			Port:      DefaultWebSocketPort,
+			AuthToken: "",
 		},
 		GlobalChatRules: GlobalChatRules{
 			SpeakNames:        true,
@@ -716,7 +903,7 @@ func ConfigPath() (string, error) {
 	return filepath.Join(configDir, "com.github.mrpoundsign.towncrier", "config.json"), nil
 }
 
-// EffectiveChatRules returns effective chat rules for a platform, taking platform overrides into account.
+// EffectiveChatRules returns effective chat rules for a platform, taking per-setting platform overrides into account.
 func (c *Config) EffectiveChatRules(platform string) (speakNames, speakEmotes, deduplicateEmotes bool, maxDuplicateWords int, speakPlatformName bool, voice string, speed float32) {
 	speakNames = c.GlobalChatRules.SpeakNames
 	speakEmotes = c.GlobalChatRules.SpeakEmotes
@@ -726,20 +913,126 @@ func (c *Config) EffectiveChatRules(platform string) (speakNames, speakEmotes, d
 	voice = c.GlobalChatRules.DefaultVoice
 	speed = c.GlobalChatRules.DefaultSpeed
 
-	if p, ok := c.Platforms[platform]; ok && p.Overrides.OverrideRules {
-		speakNames = p.Overrides.SpeakNames
-		speakEmotes = p.Overrides.SpeakEmotes
-		deduplicateEmotes = p.Overrides.DeduplicateEmotes
-		maxDuplicateWords = p.Overrides.MaxDuplicateWords
-		speakPlatformName = p.Overrides.SpeakPlatformName
-		if p.Overrides.DefaultVoice != "" {
-			voice = p.Overrides.DefaultVoice
-		}
-		if p.Overrides.DefaultSpeed > 0 {
-			speed = p.Overrides.DefaultSpeed
+	p, ok := c.Platforms[platform]
+	if !ok {
+		return speakNames, speakEmotes, deduplicateEmotes, maxDuplicateWords, speakPlatformName, voice, speed
+	}
+	ov := p.Overrides
+
+	switch NormalizeBoolOverrideMode(ov.SpeakNamesMode) {
+	case OverrideModeOn:
+		speakNames = true
+	case OverrideModeOff:
+		speakNames = false
+	default:
+		if ov.OverrideRules {
+			speakNames = ov.SpeakNames
 		}
 	}
+
+	switch NormalizeBoolOverrideMode(ov.SpeakEmotesMode) {
+	case OverrideModeOn:
+		speakEmotes = true
+	case OverrideModeOff:
+		speakEmotes = false
+	default:
+		if ov.OverrideRules {
+			speakEmotes = ov.SpeakEmotes
+		}
+	}
+
+	switch NormalizeBoolOverrideMode(ov.DeduplicateEmotesMode) {
+	case OverrideModeOn:
+		deduplicateEmotes = true
+	case OverrideModeOff:
+		deduplicateEmotes = false
+	default:
+		if ov.OverrideRules {
+			deduplicateEmotes = ov.DeduplicateEmotes
+		}
+	}
+
+	switch dupMode := NormalizeDuplicateWordsOverrideMode(ov.MaxDuplicateWordsMode); dupMode {
+	case OverrideModeOff:
+		maxDuplicateWords = -1
+	case OverrideModeGlobal:
+		if ov.OverrideRules {
+			maxDuplicateWords = ov.MaxDuplicateWords
+		}
+	default:
+		if n, err := strconv.Atoi(dupMode); err == nil {
+			maxDuplicateWords = n
+		}
+	}
+
+	switch NormalizeBoolOverrideMode(ov.SpeakPlatformNameMode) {
+	case OverrideModeOn:
+		speakPlatformName = true
+	case OverrideModeOff:
+		speakPlatformName = false
+	default:
+		if ov.OverrideRules {
+			speakPlatformName = ov.SpeakPlatformName
+		}
+	}
+
+	if NormalizeVoiceOverrideMode(ov.VoiceOverrideMode) == OverrideModeCustom || ov.OverrideRules {
+		if ov.DefaultVoice != "" {
+			voice = ov.DefaultVoice
+		}
+		if ov.DefaultSpeed > 0 {
+			speed = ov.DefaultSpeed
+		}
+	}
+
 	return speakNames, speakEmotes, deduplicateEmotes, maxDuplicateWords, speakPlatformName, voice, speed
+}
+
+// EffectiveMentionRules returns the effective @mention and reply filtering rules for a platform,
+// taking per-setting platform overrides into account.
+func (c *Config) EffectiveMentionRules(platform string) (mode string, allowBroadcaster bool, playAlert bool) {
+	mode = NormalizeIgnoreMentionsMode(c.GlobalChatRules.IgnoreMentionsMode)
+	allowBroadcaster = c.GlobalChatRules.AllowBroadcasterMentions
+	playAlert = c.GlobalChatRules.PlayAlertOnIgnoredMention
+
+	p, ok := c.Platforms[platform]
+	if !ok {
+		return mode, allowBroadcaster, playAlert
+	}
+	ov := p.Overrides
+
+	switch mentionMode := NormalizeIgnoreMentionsOverrideMode(ov.IgnoreMentionsOverride); mentionMode {
+	case IgnoreMentionsOff, IgnoreMentionsRepliesAndLeading, IgnoreMentionsAll:
+		mode = mentionMode
+	default:
+		if ov.OverrideRules {
+			mode = NormalizeIgnoreMentionsMode(ov.IgnoreMentionsMode)
+		}
+	}
+
+	switch NormalizeBoolOverrideMode(ov.AllowBroadcasterMentionsMode) {
+	case OverrideModeOn:
+		allowBroadcaster = true
+	case OverrideModeOff:
+		allowBroadcaster = false
+	default:
+		if ov.OverrideRules {
+			allowBroadcaster = ov.AllowBroadcasterMentions
+		}
+	}
+
+	switch NormalizeBoolOverrideMode(ov.PlayAlertOnIgnoredMentionMode) {
+	case OverrideModeOn:
+		playAlert = true
+	case OverrideModeOff:
+		playAlert = false
+	default:
+		if ov.OverrideRules {
+			playAlert = ov.PlayAlertOnIgnoredMention
+		}
+	}
+
+	return mode, allowBroadcaster, playAlert
 }
 
 // Clone creates a deep copy of the Config.
@@ -908,7 +1201,7 @@ func migrate(cfg *Config) error {
 		}
 	}
 	for _, p := range cfg.Platforms {
-		if p.Overrides.OverrideRules {
+		if p.Overrides.OverrideRules || NormalizeVoiceOverrideMode(p.Overrides.VoiceOverrideMode) == OverrideModeCustom {
 			ensureVoiceFamily(p.Overrides.DefaultVoice)
 		}
 		for _, n := range p.Notifications {
@@ -930,6 +1223,23 @@ func migrate(cfg *Config) error {
 	}
 	if cfg.TTS.MaxClauseWords <= 0 {
 		cfg.TTS.MaxClauseWords = 12
+	}
+	cfg.TTS.OutputMode = NormalizeTTSOutputMode(cfg.TTS.OutputMode)
+	if cfg.TTS.IdleTimeoutSeconds <= 0 {
+		cfg.TTS.IdleTimeoutSeconds = DefaultIdleTimeoutSeconds
+	}
+	if cfg.TTS.AlertCooldownMs <= 0 {
+		cfg.TTS.AlertCooldownMs = DefaultAlertCooldownMs
+		cfg.TTS.PlayAlertWhenDisabled = true
+	}
+	if strings.TrimSpace(cfg.Safety.ModeToggleHotkey) == "" {
+		cfg.Safety.ModeToggleHotkey = DefaultModeToggleHotkey
+	}
+	if strings.TrimSpace(cfg.WebSocket.Host) == "" {
+		cfg.WebSocket.Host = DefaultWebSocketHost
+	}
+	if cfg.WebSocket.Port <= 0 || cfg.WebSocket.Port > 65535 {
+		cfg.WebSocket.Port = DefaultWebSocketPort
 	}
 
 	if strings.TrimSpace(cfg.UIScale) == "" {
@@ -1018,6 +1328,37 @@ func migrate(cfg *Config) error {
 			if p.Overrides.MaxDuplicateWords == 0 {
 				p.Overrides.MaxDuplicateWords = 2
 			}
+			p.Overrides.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(p.Overrides.IgnoreMentionsMode)
+			if p.Overrides.OverrideRules {
+				if p.Overrides.SpeakNamesMode == "" {
+					p.Overrides.SpeakNamesMode = BoolToOverrideMode(p.Overrides.SpeakNames)
+				}
+				if p.Overrides.SpeakEmotesMode == "" {
+					p.Overrides.SpeakEmotesMode = BoolToOverrideMode(p.Overrides.SpeakEmotes)
+				}
+				if p.Overrides.DeduplicateEmotesMode == "" {
+					p.Overrides.DeduplicateEmotesMode = BoolToOverrideMode(p.Overrides.DeduplicateEmotes)
+				}
+				if p.Overrides.MaxDuplicateWordsMode == "" {
+					p.Overrides.MaxDuplicateWordsMode = DuplicateWordsToOverrideMode(p.Overrides.MaxDuplicateWords)
+				}
+				if p.Overrides.SpeakPlatformNameMode == "" {
+					p.Overrides.SpeakPlatformNameMode = BoolToOverrideMode(p.Overrides.SpeakPlatformName)
+				}
+				if p.Overrides.IgnoreMentionsOverride == "" {
+					p.Overrides.IgnoreMentionsOverride = p.Overrides.IgnoreMentionsMode
+				}
+				if p.Overrides.AllowBroadcasterMentionsMode == "" {
+					p.Overrides.AllowBroadcasterMentionsMode = BoolToOverrideMode(p.Overrides.AllowBroadcasterMentions)
+				}
+				if p.Overrides.PlayAlertOnIgnoredMentionMode == "" {
+					p.Overrides.PlayAlertOnIgnoredMentionMode = BoolToOverrideMode(p.Overrides.PlayAlertOnIgnoredMention)
+				}
+				if p.Overrides.VoiceOverrideMode == "" && (strings.TrimSpace(p.Overrides.DefaultVoice) != "" || (p.Overrides.DefaultSpeed > 0 && p.Overrides.DefaultSpeed != 1.0)) {
+					p.Overrides.VoiceOverrideMode = OverrideModeCustom
+				}
+				p.Overrides.OverrideRules = false
+			}
 			cfg.Platforms[platKey] = p
 		}
 	}
@@ -1025,6 +1366,7 @@ func migrate(cfg *Config) error {
 	if cfg.GlobalChatRules.MaxDuplicateWords == 0 {
 		cfg.GlobalChatRules.MaxDuplicateWords = 2
 	}
+	cfg.GlobalChatRules.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(cfg.GlobalChatRules.IgnoreMentionsMode)
 
 	return nil
 }

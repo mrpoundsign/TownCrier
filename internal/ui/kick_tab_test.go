@@ -25,15 +25,15 @@ func TestKickTabViewBuild(t *testing.T) {
 	if content == nil {
 		t.Fatal("expected non-nil Kick tab content")
 	}
-	if kickView.overrideCheck.Text != "Override Global Defaults" {
-		t.Errorf("overrideCheck.Text = %q, want 'Override Global Defaults'", kickView.overrideCheck.Text)
+	if kickView.overrides == nil || kickView.overrides.PlatformNameSelect == nil {
+		t.Fatal("expected overrides control to be initialized")
 	}
-	if kickView.overridesBox.Visible() {
-		t.Error("expected overridesBox to be hidden when Override Global Defaults is unchecked")
+	if kickView.overrides.PlatformNameSelect.Selected != "Global ("+boolOffPlatformPrefix+")" {
+		t.Errorf("PlatformNameSelect.Selected = %q, want %q", kickView.overrides.PlatformNameSelect.Selected, "Global ("+boolOffPlatformPrefix+")")
 	}
-	kickView.overrideCheck.SetChecked(true)
-	if !kickView.overridesBox.Visible() {
-		t.Error("expected overridesBox to be visible when Override Global Defaults is checked")
+	kickView.overrides.PlatformNameSelect.SetSelected(boolOnPlatformPrefix)
+	if session.Config().Platforms["kick"].Overrides.SpeakPlatformNameMode != config.OverrideModeOn {
+		t.Errorf("expected SpeakPlatformNameMode = 'on', got %q", session.Config().Platforms["kick"].Overrides.SpeakPlatformNameMode)
 	}
 
 	folChk, ok := kickView.roleChecks["follower"]

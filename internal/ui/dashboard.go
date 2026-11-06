@@ -29,24 +29,77 @@ type ActivityEntry struct {
 	Kind      string
 }
 
+// TTSOutputModeOptions lists the selectable operational TTS output modes in the UI.
+var TTSOutputModeOptions = []string{
+	"Always On",
+	"Auto-AFK (Enable on Idle)",
+	"Always Off (Muted / Standby)",
+}
+
+// FormatTTSOutputModeLabel converts a canonical config TTS output mode into its UI display label.
+func FormatTTSOutputModeLabel(mode string) string {
+	switch config.NormalizeTTSOutputMode(mode) {
+	case config.TTSModeAutoIdle:
+		return "Auto-AFK (Enable on Idle)"
+	case config.TTSModeAlwaysOff:
+		return "Always Off (Muted / Standby)"
+	default:
+		return "Always On"
+	}
+}
+
+// ParseTTSOutputModeLabel converts a UI display label back into its canonical config TTS output mode.
+func ParseTTSOutputModeLabel(label string) string {
+	switch label {
+	case "Auto-AFK (Enable on Idle)":
+		return config.TTSModeAutoIdle
+	case "Always Off (Muted / Standby)":
+		return config.TTSModeAlwaysOff
+	default:
+		return config.TTSModeAlwaysOn
+	}
+}
+
+// FormatTTSModeStatusSummary returns a concise human-readable status badge for the given mode and idle state.
+func FormatTTSModeStatusSummary(mode string, speakingActive, userIdle bool, timeoutSec int) string {
+	if timeoutSec <= 0 {
+		timeoutSec = config.DefaultIdleTimeoutSeconds
+	}
+	switch config.NormalizeTTSOutputMode(mode) {
+	case config.TTSModeAutoIdle:
+		if userIdle || speakingActive {
+			return fmt.Sprintf("🟢 AFK (Idle ≥%ds) — TTS Speaking Active", timeoutSec)
+		}
+		return fmt.Sprintf("🟡 At Computer — TTS Paused (Enables after %ds idle)", timeoutSec)
+	case config.TTSModeAlwaysOff:
+		return "⚪ TTS Muted (Standby)"
+	default:
+		return "🟢 TTS Speaking Active (Always On)"
+	}
+}
+
 // DashboardView provides live monitoring, speech status, queue controls, and activity feed.
 type DashboardView struct {
 	window  fyne.Window
 	session *app.Session
 
-	mu         sync.Mutex
-	activities []ActivityEntry
-	ttsEnabled bool
+	mu            sync.Mutex
+	activities    []ActivityEntry
+	ttsEnabled    bool
+	syncingModeUI bool
 
-	nowPlayingLabel *wrappedCellLabel
-	queueDepthLabel *widget.Label
-	pauseResumeBtn  *widget.Button
-	skipBtn         *widget.Button
-	clearBtn        *widget.Button
-	topSection      *fyne.Container
-	feedContainer   *fyne.Container
-	onAssignVoice   func(platform, username string)
-	onStatus        func(msg string)
+	nowPlayingLabel    *wrappedCellLabel
+	queueDepthLabel    *widget.Label
+	ttsModeSelect      *widget.Select
+	ttsModeStatusLabel *widget.Label
+	pauseResumeBtn     *widget.Button
+	skipBtn            *widget.Button
+	clearBtn           *widget.Button
+	topSection         *fyne.Container
+	feedContainer      *fyne.Container
+	onAssignVoice      func(platform, username string)
+	onTTSModeChanged   func(mode string)
+	onStatus           func(msg string)
 }
 
 // NewDashboardView constructs a DashboardView linked to the active session.
@@ -116,6 +169,11 @@ func (v *DashboardView) SetOnAssignVoice(fn func(platform, username string)) {
 // SetStatusHandler registers a callback invoked when dashboard actions update status.
 func (v *DashboardView) SetStatusHandler(fn func(msg string)) {
 	v.onStatus = fn
+}
+
+// SetOnTTSModeChanged registers a callback invoked when the user switches the TTS Output Mode from the Dashboard.
+func (v *DashboardView) SetOnTTSModeChanged(fn func(mode string)) {
+	v.onTTSModeChanged = fn
 }
 
 // Build creates the Fyne CanvasObject for the Dashboard tab.
@@ -207,14 +265,69 @@ func (v *DashboardView) buildControlsCard() *widget.Card {
 		v.clearBtn.Disable()
 	}
 
+	curMode := config.TTSModeAlwaysOn
+	speakingActive := true
+	userIdle := false
+	timeoutSec := config.DefaultIdleTimeoutSeconds
+	if v.session != nil {
+		cfg := v.session.Config()
+		curMode = config.NormalizeTTSOutputMode(cfg.TTS.OutputMode)
+		if cfg.TTS.IdleTimeoutSeconds > 0 {
+			timeoutSec = cfg.TTS.IdleTimeoutSeconds
+		}
+		speakingActive = v.session.IsTTSSpeakingActive()
+		userIdle = v.session.IsUserIdle()
+	}
+
+	v.ttsModeStatusLabel = widget.NewLabelWithStyle(
+		FormatTTSModeStatusSummary(curMode, speakingActive, userIdle, timeoutSec),
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Bold: true},
+	)
+
+	v.ttsModeSelect = widget.NewSelect(TTSOutputModeOptions, func(selected string) {
+		v.mu.Lock()
+		syncing := v.syncingModeUI
+		v.mu.Unlock()
+		if syncing || v.session == nil {
+			return
+		}
+		mode := ParseTTSOutputModeLabel(selected)
+		_ = v.session.SetTTSOutputMode(mode)
+		if v.onTTSModeChanged != nil {
+			v.onTTSModeChanged(mode)
+		}
+	})
+	v.mu.Lock()
+	v.syncingModeUI = true
+	v.mu.Unlock()
+	v.ttsModeSelect.SetSelected(FormatTTSOutputModeLabel(curMode))
+	v.mu.Lock()
+	v.syncingModeUI = false
+	v.mu.Unlock()
+
+	if !v.ttsEnabled {
+		v.ttsModeSelect.Disable()
+	}
+
+	modeRow := container.NewBorder(
+		nil,
+		nil,
+		container.NewHBox(widget.NewLabel("TTS Mode:"), v.ttsModeSelect),
+		nil,
+		v.ttsModeStatusLabel,
+	)
+
 	buttonsRow := container.NewGridWithColumns(3, v.pauseResumeBtn, v.skipBtn, v.clearBtn)
 
 	cardContent := container.NewVBox(
+		modeRow,
+		widget.NewSeparator(),
 		container.NewBorder(nil, nil, v.queueDepthLabel, nil),
 		buttonsRow,
 	)
 
-	return widget.NewCard("Queue & Playback Controls", "Manage live TTS queue", cardContent)
+	return widget.NewCard("Queue & Playback Controls", "Manage live TTS output mode and speech queue", cardContent)
 }
 
 func (v *DashboardView) buildActivityCard() *widget.Card {
@@ -461,10 +574,42 @@ func (v *DashboardView) SyncTTSState(enabled bool) {
 			if v.clearBtn != nil {
 				v.clearBtn.Enable()
 			}
+			if v.ttsModeSelect != nil {
+				v.ttsModeSelect.Enable()
+			}
+		} else if v.ttsModeSelect != nil {
+			v.ttsModeSelect.Disable()
 		}
 		v.mu.Lock()
 		v.refreshFeedLocked()
 		v.mu.Unlock()
+	})
+}
+
+// SyncTTSModeState updates the Dashboard's TTS Output Mode selector and live AFK/At-Computer indicator.
+func (v *DashboardView) SyncTTSModeState(mode string, speakingActive bool, userIdle bool) {
+	fyne.Do(func() {
+		timeoutSec := config.DefaultIdleTimeoutSeconds
+		if v.session != nil {
+			if t := v.session.Config().TTS.IdleTimeoutSeconds; t > 0 {
+				timeoutSec = t
+			}
+		}
+		if v.ttsModeSelect != nil {
+			targetLabel := FormatTTSOutputModeLabel(mode)
+			if v.ttsModeSelect.Selected != targetLabel {
+				v.mu.Lock()
+				v.syncingModeUI = true
+				v.mu.Unlock()
+				v.ttsModeSelect.SetSelected(targetLabel)
+				v.mu.Lock()
+				v.syncingModeUI = false
+				v.mu.Unlock()
+			}
+		}
+		if v.ttsModeStatusLabel != nil {
+			v.ttsModeStatusLabel.SetText(FormatTTSModeStatusSummary(mode, speakingActive, userIdle, timeoutSec))
+		}
 	})
 }
 

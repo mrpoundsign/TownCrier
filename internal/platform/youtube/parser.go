@@ -560,6 +560,7 @@ func parseTextMessage(r *textMessageRenderer) *chat.Event {
 		UserName:    author,
 		DisplayName: author,
 		Roles:       extractAuthorRoles(r.AuthorBadges),
+		Mentions:    chat.ExtractMentions(text),
 		Text:        text,
 		EmoteSpans:  emotes,
 	}
@@ -1056,6 +1057,324 @@ func parsePurchaseAmount(raw string) (float64, string) {
 func parseUsecTimestamp(usecStr string) time.Time {
 	if usec, err := strconv.ParseInt(usecStr, 10, 64); err == nil && usec > 0 {
 		return time.UnixMicro(usec)
+	}
+	return time.Now()
+}
+
+// YouTube Data API v3 liveChatMessages.list models & parser
+
+type dataAPILiveChatResponse struct {
+	NextPageToken         string                `json:"nextPageToken"`
+	PollingIntervalMillis int                   `json:"pollingIntervalMillis"`
+	OfflineAt             string                `json:"offlineAt"`
+	Items                 []dataAPILiveChatItem `json:"items"`
+}
+
+type dataAPILiveChatItem struct {
+	ID      string `json:"id"`
+	Snippet *struct {
+		Type               string `json:"type"`
+		LiveChatID         string `json:"liveChatId"`
+		AuthorChannelID    string `json:"authorChannelId"`
+		PublishedAt        string `json:"publishedAt"`
+		DisplayMessage     string `json:"displayMessage"`
+		TextMessageDetails *struct {
+			MessageText string `json:"messageText"`
+		} `json:"textMessageDetails"`
+		SuperChatDetails *struct {
+			AmountMicros        string `json:"amountMicros"`
+			Currency            string `json:"currency"`
+			AmountDisplayString string `json:"amountDisplayString"`
+			UserComment         string `json:"userComment"`
+		} `json:"superChatDetails"`
+		SuperStickerDetails *struct {
+			AmountMicros        string `json:"amountMicros"`
+			Currency            string `json:"currency"`
+			AmountDisplayString string `json:"amountDisplayString"`
+			SuperStickerMetadata *struct {
+				StickerID  string `json:"stickerId"`
+				AltText    string `json:"altText"`
+			} `json:"superStickerMetadata"`
+		} `json:"superStickerDetails"`
+		NewSponsorDetails *struct {
+			MemberLevelName string `json:"memberLevelName"`
+			IsUpgrade       bool   `json:"isUpgrade"`
+		} `json:"newSponsorDetails"`
+		MemberMilestoneChatDetails *struct {
+			MemberLevelName string `json:"memberLevelName"`
+			MemberMonth     int    `json:"memberMonth"`
+			UserComment     string `json:"userComment"`
+		} `json:"memberMilestoneChatDetails"`
+		MembershipGiftingDetails *struct {
+			GiftMembershipsCount int    `json:"giftMembershipsCount"`
+			GiftMembershipsLevel string `json:"giftMembershipsLevelName"`
+		} `json:"membershipGiftingDetails"`
+		GiftMembershipReceivedDetails *struct {
+			MemberLevelName                  string `json:"memberLevelName"`
+			GifterChannelID                  string `json:"gifterChannelId"`
+			AssociatedMembershipGiftingMsgID string `json:"associatedMembershipGiftingMessageId"`
+		} `json:"giftMembershipReceivedDetails"`
+		MessageDeletedDetails *struct {
+			DeletedMessageID string `json:"deletedMessageId"`
+		} `json:"messageDeletedDetails"`
+		UserBannedDetails *struct {
+			BannedUserDetails *struct {
+				ChannelID   string `json:"channelId"`
+				DisplayName string `json:"displayName"`
+			} `json:"bannedUserDetails"`
+			BanType            string `json:"banType"`
+			BanDurationSeconds int    `json:"banDurationSeconds"`
+		} `json:"userBannedDetails"`
+	} `json:"snippet"`
+	AuthorDetails *struct {
+		ChannelID       string `json:"channelId"`
+		DisplayName     string `json:"displayName"`
+		IsVerified      bool   `json:"isVerified"`
+		IsChatOwner     bool   `json:"isChatOwner"`
+		IsChatSponsor   bool   `json:"isChatSponsor"`
+		IsChatModerator bool   `json:"isChatModerator"`
+	} `json:"authorDetails"`
+}
+
+// ParseDataAPILiveChatResponse parses a YouTube Data API v3 GET /liveChat/messages JSON payload into
+// normalized chat events, moderation events, the next page token, and suggested poll delay.
+func ParseDataAPILiveChatResponse(data []byte) (events []*chat.Event, modEvents []*chat.ModerationEvent, nextPageToken string, pollDelay time.Duration, err error) {
+	var resp dataAPILiveChatResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, nil, "", 0, fmt.Errorf("unmarshal liveChat/messages response: %w", err)
+	}
+
+	if strings.TrimSpace(resp.OfflineAt) != "" {
+		return nil, nil, "", 0, nil
+	}
+
+	nextPageToken = strings.TrimSpace(resp.NextPageToken)
+	pollDelay = 5 * time.Second
+	if resp.PollingIntervalMillis > 0 {
+		pollDelay = time.Duration(resp.PollingIntervalMillis) * time.Millisecond
+	}
+	if pollDelay < 2*time.Second {
+		pollDelay = 2 * time.Second
+	} else if pollDelay > 15*time.Second {
+		pollDelay = 15 * time.Second
+	}
+
+	for _, item := range resp.Items {
+		if item.Snippet == nil {
+			continue
+		}
+		sn := item.Snippet
+		msgType := strings.TrimSpace(sn.Type)
+
+		switch msgType {
+		case "messageDeletedEvent":
+			if sn.MessageDeletedDetails != nil && strings.TrimSpace(sn.MessageDeletedDetails.DeletedMessageID) != "" {
+				modEvents = append(modEvents, &chat.ModerationEvent{
+					Platform:        "youtube",
+					Action:          chat.ModActionDeleteMessage,
+					TargetMessageID: strings.TrimSpace(sn.MessageDeletedDetails.DeletedMessageID),
+					Timestamp:       parseRFC3339Timestamp(sn.PublishedAt),
+				})
+			}
+			continue
+
+		case "userBannedEvent":
+			if sn.UserBannedDetails != nil && sn.UserBannedDetails.BannedUserDetails != nil {
+				targetUID := strings.TrimSpace(sn.UserBannedDetails.BannedUserDetails.ChannelID)
+				if targetUID != "" {
+					modEvents = append(modEvents, &chat.ModerationEvent{
+						Platform:     "youtube",
+						Action:       chat.ModActionBanUser,
+						TargetUserID: targetUID,
+						Timestamp:    parseRFC3339Timestamp(sn.PublishedAt),
+					})
+				}
+			}
+			continue
+		}
+
+		author := ""
+		userID := strings.TrimSpace(sn.AuthorChannelID)
+		var roles []string
+		if item.AuthorDetails != nil {
+			author = strings.TrimLeft(strings.TrimSpace(item.AuthorDetails.DisplayName), "@")
+			if userID == "" {
+				userID = strings.TrimSpace(item.AuthorDetails.ChannelID)
+			}
+			if item.AuthorDetails.IsChatOwner {
+				roles = append(roles, "broadcaster")
+			}
+			if item.AuthorDetails.IsChatModerator {
+				roles = append(roles, "mod")
+			}
+			if item.AuthorDetails.IsVerified {
+				roles = append(roles, "vip")
+			}
+			if item.AuthorDetails.IsChatSponsor {
+				roles = append(roles, "subscriber")
+			}
+		}
+		if author == "" {
+			author = userID
+		}
+		ts := parseRFC3339Timestamp(sn.PublishedAt)
+
+		switch msgType {
+		case "textMessageEvent":
+			text := strings.TrimSpace(sn.DisplayMessage)
+			if sn.TextMessageDetails != nil && strings.TrimSpace(sn.TextMessageDetails.MessageText) != "" {
+				text = strings.TrimSpace(sn.TextMessageDetails.MessageText)
+			}
+			if text == "" {
+				continue
+			}
+			events = append(events, &chat.Event{
+				ID:          item.ID,
+				Platform:    "youtube",
+				Kind:        chat.EventKindMessage,
+				Timestamp:   ts,
+				UserID:      userID,
+				UserName:    author,
+				DisplayName: author,
+				Roles:       roles,
+				Mentions:    chat.ExtractMentions(text),
+				Text:        text,
+			})
+
+		case "superChatEvent":
+			var text, amountDisplay string
+			if sn.SuperChatDetails != nil {
+				text = strings.TrimSpace(sn.SuperChatDetails.UserComment)
+				amountDisplay = sn.SuperChatDetails.AmountDisplayString
+			}
+			if text == "" {
+				text = strings.TrimSpace(sn.DisplayMessage)
+			}
+			amount, currency := parsePurchaseAmount(amountDisplay)
+			events = append(events, &chat.Event{
+				ID:          item.ID,
+				Platform:    "youtube",
+				Kind:        chat.EventKindSuperChat,
+				Timestamp:   ts,
+				UserID:      userID,
+				UserName:    author,
+				DisplayName: author,
+				Roles:       roles,
+				Text:        text,
+				Count:       1,
+				UnitAmount:  amount,
+				Amount:      amount,
+				Currency:    currency,
+			})
+
+		case "superStickerEvent":
+			var amountDisplay string
+			stickerLabel := "Super Sticker"
+			if sn.SuperStickerDetails != nil {
+				amountDisplay = sn.SuperStickerDetails.AmountDisplayString
+				if sn.SuperStickerDetails.SuperStickerMetadata != nil && strings.TrimSpace(sn.SuperStickerDetails.SuperStickerMetadata.AltText) != "" {
+					stickerLabel = strings.TrimSpace(sn.SuperStickerDetails.SuperStickerMetadata.AltText)
+				}
+			}
+			amount, currency := parsePurchaseAmount(amountDisplay)
+			events = append(events, &chat.Event{
+				ID:          item.ID,
+				Platform:    "youtube",
+				Kind:        chat.EventKindSuperSticker,
+				Timestamp:   ts,
+				UserID:      userID,
+				UserName:    author,
+				DisplayName: author,
+				Roles:       roles,
+				ItemName:    stickerLabel,
+				RewardTitle: stickerLabel,
+				Count:       1,
+				UnitAmount:  amount,
+				Amount:      amount,
+				Currency:    currency,
+			})
+
+		case "newSponsorEvent":
+			events = append(events, &chat.Event{
+				ID:          item.ID,
+				Platform:    "youtube",
+				Kind:        chat.EventKindSub,
+				Timestamp:   ts,
+				UserID:      userID,
+				UserName:    author,
+				DisplayName: author,
+				Roles:       roles,
+				Months:      1,
+			})
+
+		case "memberMilestoneChatEvent":
+			months := 1
+			var text string
+			if sn.MemberMilestoneChatDetails != nil {
+				if sn.MemberMilestoneChatDetails.MemberMonth > 0 {
+					months = sn.MemberMilestoneChatDetails.MemberMonth
+				}
+				text = strings.TrimSpace(sn.MemberMilestoneChatDetails.UserComment)
+			}
+			events = append(events, &chat.Event{
+				ID:          item.ID,
+				Platform:    "youtube",
+				Kind:        chat.EventKindResub,
+				Timestamp:   ts,
+				UserID:      userID,
+				UserName:    author,
+				DisplayName: author,
+				Roles:       roles,
+				Text:        text,
+				Months:      months,
+			})
+
+		case "membershipGiftingEvent":
+			count := 1
+			if sn.MembershipGiftingDetails != nil && sn.MembershipGiftingDetails.GiftMembershipsCount > 0 {
+				count = sn.MembershipGiftingDetails.GiftMembershipsCount
+			}
+			events = append(events, &chat.Event{
+				ID:          item.ID,
+				Platform:    "youtube",
+				Kind:        chat.EventKindGiftSub,
+				Timestamp:   ts,
+				UserID:      userID,
+				UserName:    author,
+				DisplayName: author,
+				Roles:       roles,
+				Count:       count,
+			})
+
+		case "giftMembershipReceivedEvent":
+			var gifter string
+			if sn.GiftMembershipReceivedDetails != nil {
+				gifter = strings.TrimSpace(sn.GiftMembershipReceivedDetails.GifterChannelID)
+			}
+			events = append(events, &chat.Event{
+				ID:          item.ID,
+				Platform:    "youtube",
+				Kind:        chat.EventKindGiftRedemption,
+				Timestamp:   ts,
+				UserID:      userID,
+				UserName:    author,
+				DisplayName: author,
+				Roles:       roles,
+				Recipient:   gifter,
+				Count:       1,
+			})
+		}
+	}
+
+	return events, modEvents, nextPageToken, pollDelay, nil
+}
+
+func parseRFC3339Timestamp(tsStr string) time.Time {
+	if t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(tsStr)); err == nil {
+		return t
+	}
+	if t, err := time.Parse(time.RFC3339, strings.TrimSpace(tsStr)); err == nil {
+		return t
 	}
 	return time.Now()
 }

@@ -29,11 +29,7 @@ type TikTokTabView struct {
 	roleChecks         map[string]*widget.Check
 	fanClubLevelEntry  *ScrollPassEntry
 	paidOnlyCheck      *widget.Check
-	overrideCheck      *widget.Check
-	overridesBox       *fyne.Container
-	overrideVoiceField *VoiceSpeedField
-	namesCheck         *widget.Check
-	emotesCheck        *widget.Check
+	overrides          *PlatformOverridesControl
 	connCard           *widget.Card
 	rulesCard          *widget.Card
 	notifsCard         *widget.Card
@@ -108,8 +104,8 @@ func (v *TikTokTabView) SyncFromConfig() {
 	if v.enableCheck != nil {
 		v.enableCheck.SetChecked(pCfg.Enabled)
 	}
-	if v.overrideVoiceField != nil {
-		v.overrideVoiceField.SetVoiceAndSpeed(pCfg.Overrides.DefaultVoice, pCfg.Overrides.DefaultSpeed)
+	if v.overrides != nil {
+		v.overrides.Refresh()
 	}
 	v.initializing = false
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
@@ -612,132 +608,28 @@ func (v *TikTokTabView) buildNotificationsCard(pCfg config.PlatformConfig) *widg
 	return widget.NewCard("Notification Events", "Spoken alert templates for TikTok Gifts, Super Fans, Follows & Shares", notifsList)
 }
 
-func (v *TikTokTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Card {
-	ov := pCfg.Overrides
-
-	namesCheck := widget.NewCheck("Speak Names for TikTok Chat", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["tiktok"]
-			p.Overrides.SpeakNames = b
-			c.Platforms["tiktok"] = p
-		})
-	})
-	namesCheck.SetChecked(ov.SpeakNames)
-	v.namesCheck = namesCheck
-
-	emotesCheck := widget.NewCheck("Speak Emotes & Emojis for TikTok Chat", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["tiktok"]
-			p.Overrides.SpeakEmotes = b
-			c.Platforms["tiktok"] = p
-		})
-	})
-	emotesCheck.SetChecked(ov.SpeakEmotes)
-	v.emotesCheck = emotesCheck
-
-	dedupeCheck := widget.NewCheck("Deduplicate Emotes & Emojis for TikTok Chat", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["tiktok"]
-			p.Overrides.DeduplicateEmotes = b
-			c.Platforms["tiktok"] = p
-		})
-	})
-	dedupeCheck.SetChecked(ov.DeduplicateEmotes)
-
-	dupWordsSelect := widget.NewSelect(DuplicateWordsOptions, func(s string) {
-		val := OptionToDuplicateWords(s)
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["tiktok"]
-			p.Overrides.MaxDuplicateWords = val
-			c.Platforms["tiktok"] = p
-		})
-	})
-	dupWordsSelect.SetSelected(DuplicateWordsToOption(ov.MaxDuplicateWords))
-	dupWordsRow := container.NewHBox(
-		widget.NewLabel("Max Consecutive Duplicate Words:"),
-		dupWordsSelect,
-	)
-
-	selectedVoice := ov.DefaultVoice
-	sp := ov.DefaultSpeed
-	if sp <= 0 {
-		sp = 1.0
-	}
-
-	v.overrideVoiceField = NewVoiceSpeedField(
+func (v *TikTokTabView) buildOverridesCard(_ config.PlatformConfig) *widget.Card {
+	v.overrides = NewPlatformOverridesControl(
 		v.window,
 		v.session,
-		"Edit TikTok Default Voice & Speed",
-		selectedVoice,
-		sp,
-		func(voiceID string, speed float32) {
-			v.updateConfig(func(c *config.Config) {
-				p := c.Platforms["tiktok"]
-				p.Overrides.DefaultVoice = voiceID
-				p.Overrides.DefaultSpeed = speed
-				c.Platforms["tiktok"] = p
-			})
+		"tiktok",
+		"TikTok",
+		v.updateConfig,
+		func(msg string) {
+			if v.onStatus != nil {
+				v.onStatus(msg)
+			}
 		},
-		v.onStatus,
 	)
-	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("TikTok Default Voice & Speed:"), nil, v.overrideVoiceField.Container)
-
-	v.overridesBox = container.NewVBox(
-		namesCheck,
-		emotesCheck,
-		dedupeCheck,
-		dupWordsRow,
-		voiceRow,
-	)
-
-	var cardContent *fyne.Container
-	toggleOverrides := func(enabled bool) {
-		if enabled {
-			v.overridesBox.Show()
-		} else {
-			v.overridesBox.Hide()
-		}
-		if cardContent != nil {
-			cardContent.Refresh()
-		}
-	}
-	toggleOverrides(ov.OverrideRules)
-
-	v.overrideCheck = widget.NewCheck("Override Global Defaults", func(b bool) {
-		toggleOverrides(b)
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["tiktok"]
-			p.Overrides.OverrideRules = b
-			c.Platforms["tiktok"] = p
-		})
-	})
-	v.overrideCheck.SetChecked(ov.OverrideRules)
-
-	cardContent = container.NewVBox(
-		v.overrideCheck,
-		v.overridesBox,
-	)
-
-	return widget.NewCard("Platform Overrides", "Custom rules applied only to TikTok", cardContent)
+	return v.overrides.Card
 }
 
 // RefreshVoices updates the platform override voice field when enabled model packs change in Settings.
 func (v *TikTokTabView) RefreshVoices() {
 	fyne.Do(func() {
-		if v.overrideVoiceField == nil || v.session == nil {
-			return
+		if v.overrides != nil {
+			v.overrides.Refresh()
 		}
-		cfg := v.session.Config()
-		ov := cfg.Platforms["tiktok"].Overrides
-		voice := ov.DefaultVoice
-		if voice == "" {
-			voice = cfg.GlobalChatRules.DefaultVoice
-		}
-		sp := ov.DefaultSpeed
-		if sp <= 0 {
-			sp = 1.0
-		}
-		v.overrideVoiceField.SetVoiceAndSpeed(voice, sp)
 	})
 }
 

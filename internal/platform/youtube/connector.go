@@ -30,6 +30,7 @@ const (
 	innerTubeClientName   = "WEB"
 	innerTubeClientVer    = "2.20250101.00.00"
 	defaultStreamWaitPoll = 15 * time.Second
+	dataAPIStreamMarker   = "__YOUTUBE_DATA_API__"
 )
 
 // Connector manages zero-config YouTube Live stream discovery and InnerTube live chat polling,
@@ -91,11 +92,26 @@ func (c *Connector) SetAPIBaseURL(apiBaseURL string) {
 }
 
 // Start begins watching the given YouTube handle (@channel), channel ID, or video URL/ID.
+// If target is empty and OAuth is connected, it automatically resolves the target from the OAuth profile.
 func (c *Connector) Start(target string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	trimmed := strings.TrimSpace(target)
+	if trimmed == "" && c.oauth != nil && c.oauth.HasToken() {
+		if tok, err := c.oauth.LoadToken(); err == nil && tok != nil {
+			switch {
+			case strings.TrimSpace(tok.ChannelHandle) != "":
+				trimmed = strings.TrimSpace(tok.ChannelHandle)
+			case strings.TrimSpace(tok.ChannelID) != "":
+				trimmed = strings.TrimSpace(tok.ChannelID)
+			default:
+				trimmed = "oauth"
+			}
+		} else {
+			trimmed = "oauth"
+		}
+	}
 	if trimmed == "" {
 		return errors.New("empty YouTube channel or video target")
 	}
@@ -146,6 +162,20 @@ func (c *Connector) CheckLiveTarget(ctx context.Context, target string) (bool, e
 	if target == "" {
 		c.mu.Lock()
 		target = c.target
+		if target == "" && c.oauth != nil && c.oauth.HasToken() {
+			if tok, err := c.oauth.LoadToken(); err == nil && tok != nil {
+				switch {
+				case strings.TrimSpace(tok.ChannelHandle) != "":
+					target = strings.TrimSpace(tok.ChannelHandle)
+				case strings.TrimSpace(tok.ChannelID) != "":
+					target = strings.TrimSpace(tok.ChannelID)
+				default:
+					target = "oauth"
+				}
+			} else {
+				target = "oauth"
+			}
+		}
 		c.mu.Unlock()
 	}
 	if target == "" {
@@ -231,7 +261,11 @@ func (c *Connector) runLoop(ctx context.Context, target string) {
 		log.Printf("[YouTube] Discovered active live chat for %s", display)
 		c.updateStatus(StatusConnected, display)
 
-		c.streamLiveChat(ctx, apiKey, continuation)
+		if apiKey == dataAPIStreamMarker {
+			c.streamDataAPILiveChat(ctx, continuation)
+		} else {
+			c.streamLiveChat(ctx, apiKey, continuation)
+		}
 	}
 }
 
@@ -241,8 +275,8 @@ func (c *Connector) discoverStream(ctx context.Context, liveURL string) (string,
 		return apiKey, continuation, nil
 	}
 
-	// If OAuth is connected, attempt authenticated broadcast discovery (detects Unlisted streams,
-	// scheduled streams transitioning to live, or multi-stream broadcasts).
+	// If OAuth is connected, attempt authenticated broadcast discovery (detects Private streams,
+	// Unlisted streams, testing/preview streams, or scheduled streams transitioning to live).
 	c.mu.Lock()
 	hasOAuth := c.oauth != nil && c.oauth.HasToken()
 	baseURL := strings.TrimRight(c.baseURL, "/")
@@ -260,6 +294,12 @@ func (c *Connector) discoverStream(ctx context.Context, liveURL string) (string,
 			watchURL := fmt.Sprintf("%s/watch?v=%s", baseURL, videoID)
 			if k, cont, wErr := c.fetchWatchPageTokens(ctx, watchURL); wErr == nil && k != "" && cont != "" {
 				return k, cont, nil
+			}
+
+			// If the watch page could not be scraped unauthenticated (e.g., Private or Testing broadcast
+			// where YouTube returns LOGIN_REQUIRED), fall back to authenticated YouTube Data API v3 liveChat polling.
+			if liveChatID != "" {
+				return dataAPIStreamMarker, liveChatID, nil
 			}
 		}
 	}
@@ -325,52 +365,7 @@ func (c *Connector) streamLiveChat(ctx context.Context, apiKey string, initialCo
 			return
 		}
 
-		targetChan := c.Target()
-
-		// Dispatch moderation events immediately
-		for _, modEv := range modEvents {
-			if modEv != nil && modEv.Channel == "" {
-				modEv.Channel = targetChan
-			}
-			if c.onModeration != nil {
-				c.onModeration(modEv)
-			}
-		}
-
-		// On the very first poll upon connecting, mark historical replay messages as seen
-		// so we don't read out a backlog of old messages from before TownCrier connected,
-		// while still reading any brand-new messages arriving on subsequent polls.
-		for _, ev := range events {
-			if ev == nil {
-				continue
-			}
-			if ev.Channel == "" {
-				ev.Channel = targetChan
-			}
-			c.mu.Lock()
-			_, alreadySeen := c.seenIDs[ev.ID]
-			if !alreadySeen && ev.ID != "" {
-				// Prevent unbounded map growth over multi-hour streams
-				if len(c.seenIDs) > 5000 {
-					c.seenIDs = make(map[string]struct{})
-				}
-				c.seenIDs[ev.ID] = struct{}{}
-			}
-			c.mu.Unlock()
-
-			if alreadySeen {
-				continue
-			}
-
-			// Skip historical chat messages older than 15 seconds on the initial bootstrap batch
-			if isFirstPoll && ev.Kind == chat.EventKindMessage && time.Since(ev.Timestamp) > 15*time.Second {
-				continue
-			}
-
-			if c.onEvent != nil {
-				c.onEvent(ev)
-			}
-		}
+		c.dispatchPolledBatch(events, modEvents, isFirstPoll)
 
 		isFirstPoll = false
 		continuation = nextCont
@@ -382,6 +377,106 @@ func (c *Connector) streamLiveChat(ctx context.Context, apiKey string, initialCo
 		case <-ctx.Done():
 			return
 		case <-time.After(delay):
+		}
+	}
+}
+
+func (c *Connector) streamDataAPILiveChat(ctx context.Context, liveChatID string) {
+	pageToken := ""
+	isFirstPoll := true
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		// Periodically check if the broadcast became Public/Unlisted so we can seamlessly switch
+		// to 0-quota InnerTube polling without consuming Data API quota.
+		if !isFirstPoll {
+			c.mu.Lock()
+			videoID := c.activeVideoID
+			baseURL := strings.TrimRight(c.baseURL, "/")
+			c.mu.Unlock()
+			if videoID != "" {
+				watchURL := fmt.Sprintf("%s/watch?v=%s", baseURL, videoID)
+				if k, cont, wErr := c.fetchWatchPageTokens(ctx, watchURL); wErr == nil && k != "" && cont != "" {
+					log.Printf("[YouTube] Broadcast %s is now accessible via InnerTube; switching from Data API to InnerTube polling", videoID)
+					c.streamLiveChat(ctx, k, cont)
+					return
+				}
+			}
+		}
+
+		events, modEvents, nextToken, delay, err := c.fetchDataAPILiveChatPage(ctx, liveChatID, pageToken)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("[YouTube] Data API live chat poll error: %v", err)
+			return
+		}
+
+		c.dispatchPolledBatch(events, modEvents, isFirstPoll)
+
+		isFirstPoll = false
+		if nextToken == "" {
+			return
+		}
+		pageToken = nextToken
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+	}
+}
+
+func (c *Connector) dispatchPolledBatch(events []*chat.Event, modEvents []*chat.ModerationEvent, isFirstPoll bool) {
+	targetChan := c.Target()
+
+	// Dispatch moderation events immediately
+	for _, modEv := range modEvents {
+		if modEv != nil && modEv.Channel == "" {
+			modEv.Channel = targetChan
+		}
+		if c.onModeration != nil {
+			c.onModeration(modEv)
+		}
+	}
+
+	// On the very first poll upon connecting, mark historical replay messages as seen
+	// so we don't read out a backlog of old messages from before TownCrier connected,
+	// while still reading any brand-new messages arriving on subsequent polls.
+	for _, ev := range events {
+		if ev == nil {
+			continue
+		}
+		if ev.Channel == "" {
+			ev.Channel = targetChan
+		}
+		c.mu.Lock()
+		_, alreadySeen := c.seenIDs[ev.ID]
+		if !alreadySeen && ev.ID != "" {
+			// Prevent unbounded map growth over multi-hour streams
+			if len(c.seenIDs) > 5000 {
+				c.seenIDs = make(map[string]struct{})
+			}
+			c.seenIDs[ev.ID] = struct{}{}
+		}
+		c.mu.Unlock()
+
+		if alreadySeen {
+			continue
+		}
+
+		// Skip historical chat messages older than 15 seconds on the initial bootstrap batch
+		if isFirstPoll && ev.Kind == chat.EventKindMessage && time.Since(ev.Timestamp) > 15*time.Second {
+			continue
+		}
+
+		if c.onEvent != nil {
+			c.onEvent(ev)
 		}
 	}
 }

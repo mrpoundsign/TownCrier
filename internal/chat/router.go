@@ -38,21 +38,9 @@ func (r *Router) Resolve(event *Event, cfg *config.Config) ResolvedSpeech {
 		cfg = config.DefaultConfig()
 	}
 
-	// 1. Determine effective rules (Platform Override vs Global Rules)
-	speakNames := cfg.GlobalChatRules.SpeakNames
-	speakEmotes := cfg.GlobalChatRules.SpeakEmotes
-	speakPlatformName := cfg.GlobalChatRules.SpeakPlatformName
-	platformDefaultVoice := ""
-	var platformDefaultSpeed float32
-
-	pCfg, hasPlatform := cfg.Platforms[event.Platform]
-	if hasPlatform && pCfg.Overrides.OverrideRules {
-		speakNames = pCfg.Overrides.SpeakNames
-		speakEmotes = pCfg.Overrides.SpeakEmotes
-		speakPlatformName = pCfg.Overrides.SpeakPlatformName
-		platformDefaultVoice = pCfg.Overrides.DefaultVoice
-		platformDefaultSpeed = pCfg.Overrides.DefaultSpeed
-	}
+	// 1. Determine effective rules (Per-Setting Platform Overrides vs Global Rules)
+	speakNames, speakEmotes, _, _, speakPlatformName, effectiveDefaultVoice, effectiveDefaultSpeed := cfg.EffectiveChatRules(event.Platform)
+	pCfg := cfg.Platforms[event.Platform]
 
 	// 2. Lookup Viewer Overrides (case-insensitive)
 	var viewerVoice string
@@ -73,10 +61,7 @@ func (r *Router) Resolve(event *Event, cfg *config.Config) ResolvedSpeech {
 		voiceID = event.VoiceOverride
 	}
 	if voiceID == "" {
-		voiceID = platformDefaultVoice
-	}
-	if voiceID == "" {
-		voiceID = cfg.GlobalChatRules.DefaultVoice
+		voiceID = effectiveDefaultVoice
 	}
 	if voiceID == "" {
 		voiceID = "af_bella"
@@ -85,10 +70,7 @@ func (r *Router) Resolve(event *Event, cfg *config.Config) ResolvedSpeech {
 	// 4. Resolve Speed (Viewer -> Platform -> Global)
 	speed := viewerSpeed
 	if speed <= 0 {
-		speed = platformDefaultSpeed
-	}
-	if speed <= 0 {
-		speed = cfg.GlobalChatRules.DefaultSpeed
+		speed = effectiveDefaultSpeed
 	}
 	if speed <= 0 {
 		speed = 1.0

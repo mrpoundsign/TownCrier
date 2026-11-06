@@ -40,11 +40,7 @@ type YouTubeTabView struct {
 	roleGatedCheck     *widget.Check
 	roleChecks         map[string]*widget.Check
 	paidOnlyCheck      *widget.Check
-	overrideCheck      *widget.Check
-	overridesBox       *fyne.Container
-	overrideVoiceField *VoiceSpeedField
-	namesCheck         *widget.Check
-	emotesCheck        *widget.Check
+	overrides          *PlatformOverridesControl
 	connCard           *widget.Card
 	rulesCard          *widget.Card
 	notifsCard         *widget.Card
@@ -119,8 +115,8 @@ func (v *YouTubeTabView) SyncFromConfig() {
 	if v.enableCheck != nil {
 		v.enableCheck.SetChecked(pCfg.Enabled)
 	}
-	if v.overrideVoiceField != nil {
-		v.overrideVoiceField.SetVoiceAndSpeed(pCfg.Overrides.DefaultVoice, pCfg.Overrides.DefaultSpeed)
+	if v.overrides != nil {
+		v.overrides.Refresh()
 	}
 	v.initializing = false
 	v.updateConnectionStatus(pCfg.Enabled, pCfg.AccountName)
@@ -234,7 +230,7 @@ func (v *YouTubeTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget
 	v.hintLabel.Wrapping = fyne.TextWrapWord
 
 	v.modHintLabel = widget.NewLabelWithStyle(
-		"🛡️ Optional OAuth: Sign in with Google/YouTube to enable direct broadcast detection (including Unlisted streams) and Chat Log moderation (Delete, Timeout, Ban).",
+		"🛡️ Optional OAuth: Sign in with Google/YouTube to enable direct broadcast detection (including Private & Unlisted streams) and Chat Log moderation (Delete, Timeout, Ban).",
 		fyne.TextAlignLeading,
 		fyne.TextStyle{Italic: true},
 	)
@@ -334,18 +330,26 @@ func (v *YouTubeTabView) refreshOAuthState() {
 				channelIdent = tok.ChannelHandle
 			case tok.ChannelTitle != "":
 				channelIdent = tok.ChannelTitle
+			case tok.ChannelID != "":
+				channelIdent = tok.ChannelID
 			default:
 				// Backfill channel identity asynchronously for tokens saved before channel metadata was stored
 				go func() {
 					ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 					defer cancel()
-					if _, _, handle, fErr := v.session.YouTubeOAuth().FetchAuthenticatedChannel(ctx); fErr == nil && handle != "" {
+					if cid, _, handle, fErr := v.session.YouTubeOAuth().FetchAuthenticatedChannel(ctx); fErr == nil && (handle != "" || cid != "") {
 						fyne.Do(v.refreshOAuthState)
 					}
 				}()
 			}
-			if v.channelEntry != nil && strings.TrimSpace(v.channelEntry.Text) == "" && tok.ChannelHandle != "" {
-				v.channelEntry.SetText(strings.TrimPrefix(tok.ChannelHandle, "@"))
+			if v.channelEntry != nil && strings.TrimSpace(v.channelEntry.Text) == "" {
+				target := strings.TrimPrefix(tok.ChannelHandle, "@")
+				if target == "" {
+					target = tok.ChannelID
+				}
+				if target != "" {
+					v.channelEntry.SetText(target)
+				}
 			}
 		}
 		for _, p := range v.session.YouTubeOAuth().ListProfiles() {
@@ -388,9 +392,9 @@ func (v *YouTubeTabView) refreshOAuthState() {
 	}
 	if v.modHintLabel != nil {
 		if hasTok {
-			v.modHintLabel.SetText("✓ Authenticated Mode: Direct broadcast & Unlisted stream detection, automatic liveChatId resolution, and Chat Log moderation (Delete, Timeout, Ban) are active.")
+			v.modHintLabel.SetText("✓ Authenticated Mode: Direct broadcast, Private & Unlisted stream detection, automatic liveChatId resolution, and Chat Log moderation (Delete, Timeout, Ban) are active.")
 		} else {
-			v.modHintLabel.SetText("🛡️ Optional OAuth: Sign in with Google/YouTube to enable direct broadcast detection (including Unlisted streams) and Chat Log moderation (Delete, Timeout, Ban).")
+			v.modHintLabel.SetText("🛡️ Optional OAuth: Sign in with Google/YouTube to enable direct broadcast detection (including Private & Unlisted streams) and Chat Log moderation (Delete, Timeout, Ban).")
 		}
 	}
 	if v.oauthStatusLabel != nil {
@@ -712,132 +716,28 @@ func (v *YouTubeTabView) buildNotificationsCard(pCfg config.PlatformConfig) *wid
 	return widget.NewCard("Notification Events", "Spoken alert templates for YouTube Super Chats, Gifts & Memberships", notifsList)
 }
 
-func (v *YouTubeTabView) buildOverridesCard(pCfg config.PlatformConfig) *widget.Card {
-	ov := pCfg.Overrides
-
-	namesCheck := widget.NewCheck("Speak Names for YouTube Chat", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.SpeakNames = b
-			c.Platforms["youtube"] = p
-		})
-	})
-	namesCheck.SetChecked(ov.SpeakNames)
-	v.namesCheck = namesCheck
-
-	emotesCheck := widget.NewCheck("Speak Emotes & Emojis for YouTube Chat", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.SpeakEmotes = b
-			c.Platforms["youtube"] = p
-		})
-	})
-	emotesCheck.SetChecked(ov.SpeakEmotes)
-	v.emotesCheck = emotesCheck
-
-	dedupeCheck := widget.NewCheck("Deduplicate Emotes & Emojis for YouTube Chat", func(b bool) {
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.DeduplicateEmotes = b
-			c.Platforms["youtube"] = p
-		})
-	})
-	dedupeCheck.SetChecked(ov.DeduplicateEmotes)
-
-	dupWordsSelect := widget.NewSelect(DuplicateWordsOptions, func(s string) {
-		val := OptionToDuplicateWords(s)
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.MaxDuplicateWords = val
-			c.Platforms["youtube"] = p
-		})
-	})
-	dupWordsSelect.SetSelected(DuplicateWordsToOption(ov.MaxDuplicateWords))
-	dupWordsRow := container.NewHBox(
-		widget.NewLabel("Max Consecutive Duplicate Words:"),
-		dupWordsSelect,
-	)
-
-	selectedVoice := ov.DefaultVoice
-	sp := ov.DefaultSpeed
-	if sp <= 0 {
-		sp = 1.0
-	}
-
-	v.overrideVoiceField = NewVoiceSpeedField(
+func (v *YouTubeTabView) buildOverridesCard(_ config.PlatformConfig) *widget.Card {
+	v.overrides = NewPlatformOverridesControl(
 		v.window,
 		v.session,
-		"Edit YouTube Default Voice & Speed",
-		selectedVoice,
-		sp,
-		func(voiceID string, speed float32) {
-			v.updateConfig(func(c *config.Config) {
-				p := c.Platforms["youtube"]
-				p.Overrides.DefaultVoice = voiceID
-				p.Overrides.DefaultSpeed = speed
-				c.Platforms["youtube"] = p
-			})
+		"youtube",
+		"YouTube",
+		v.updateConfig,
+		func(msg string) {
+			if v.onStatus != nil {
+				v.onStatus(msg)
+			}
 		},
-		v.onStatus,
 	)
-	voiceRow := container.NewBorder(nil, nil, widget.NewLabel("YouTube Default Voice & Speed:"), nil, v.overrideVoiceField.Container)
-
-	v.overridesBox = container.NewVBox(
-		namesCheck,
-		emotesCheck,
-		dedupeCheck,
-		dupWordsRow,
-		voiceRow,
-	)
-
-	var cardContent *fyne.Container
-	toggleOverrides := func(enabled bool) {
-		if enabled {
-			v.overridesBox.Show()
-		} else {
-			v.overridesBox.Hide()
-		}
-		if cardContent != nil {
-			cardContent.Refresh()
-		}
-	}
-	toggleOverrides(ov.OverrideRules)
-
-	v.overrideCheck = widget.NewCheck("Override Global Defaults", func(b bool) {
-		toggleOverrides(b)
-		v.updateConfig(func(c *config.Config) {
-			p := c.Platforms["youtube"]
-			p.Overrides.OverrideRules = b
-			c.Platforms["youtube"] = p
-		})
-	})
-	v.overrideCheck.SetChecked(ov.OverrideRules)
-
-	cardContent = container.NewVBox(
-		v.overrideCheck,
-		v.overridesBox,
-	)
-
-	return widget.NewCard("Platform Overrides", "Custom rules applied only to YouTube", cardContent)
+	return v.overrides.Card
 }
 
 // RefreshVoices updates the platform override voice field when enabled model packs change in Settings.
 func (v *YouTubeTabView) RefreshVoices() {
 	fyne.Do(func() {
-		if v.overrideVoiceField == nil || v.session == nil {
-			return
+		if v.overrides != nil {
+			v.overrides.Refresh()
 		}
-		cfg := v.session.Config()
-		ov := cfg.Platforms["youtube"].Overrides
-		voice := ov.DefaultVoice
-		if voice == "" {
-			voice = cfg.GlobalChatRules.DefaultVoice
-		}
-		sp := ov.DefaultSpeed
-		if sp <= 0 {
-			sp = 1.0
-		}
-		v.overrideVoiceField.SetVoiceAndSpeed(voice, sp)
 	})
 }
 
@@ -858,6 +758,14 @@ func (v *YouTubeTabView) saveRoles() {
 func (v *YouTubeTabView) updateConnectionStatus(enabled bool, channel string) {
 	if v.statusBadge == nil {
 		return
+	}
+	hasTok := v.session != nil && v.session.YouTubeOAuth() != nil && v.session.YouTubeOAuth().HasToken()
+	if channel == "" && hasTok {
+		if tok, err := v.session.YouTubeOAuth().LoadToken(); err == nil && tok != nil {
+			channel = tok.DisplayLabel()
+		} else {
+			channel = "OAuth"
+		}
 	}
 	switch {
 	case !enabled:

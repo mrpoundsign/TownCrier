@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -55,6 +56,11 @@ type Queue struct {
 	onItemOutcome  func(item *Item, spoken bool, outcome string, detail string)
 	onDepthChanged func(depth int)
 	onStateChanged func(paused, panicked bool)
+
+	extraStarted  []func(item *Item)
+	extraFinished []func(item *Item)
+	extraDepth    []func(depth int)
+	extraState    []func(paused, panicked bool)
 }
 
 // NewQueue creates a new Priority Speech Queue and starts the background dispatcher.
@@ -110,10 +116,7 @@ func (q *Queue) Enqueue(item *Item) error {
 	}
 
 	depth := len(q.eventsQueue) + len(q.chatQueue)
-	if q.onDepthChanged != nil {
-		fn := q.onDepthChanged
-		go fn(depth)
-	}
+	q.notifyDepthLocked(depth)
 
 	q.cond.Signal()
 	q.mu.Unlock()
@@ -139,11 +142,15 @@ func (q *Queue) Pause() {
 	q.mu.Lock()
 	q.paused = true
 	fn := q.onStateChanged
+	extras := slices.Clone(q.extraState)
 	panicked := q.panicked
 	q.mu.Unlock()
 
 	if fn != nil {
 		fn(true, panicked)
+	}
+	for _, ex := range extras {
+		ex(true, panicked)
 	}
 }
 
@@ -157,11 +164,15 @@ func (q *Queue) Resume() {
 		q.player.ResetPanic()
 	}
 	fn := q.onStateChanged
+	extras := slices.Clone(q.extraState)
 	q.cond.Signal()
 	q.mu.Unlock()
 
 	if fn != nil {
 		fn(false, false)
+	}
+	for _, ex := range extras {
+		ex(false, false)
 	}
 }
 
@@ -195,7 +206,7 @@ func (q *Queue) Clear() {
 	flushed = append(flushed, q.chatQueue...)
 	q.eventsQueue = q.eventsQueue[:0]
 	q.chatQueue = q.chatQueue[:0]
-	depthFn := q.onDepthChanged
+	q.notifyDepthLocked(0)
 	outcomeFn := q.onItemOutcome
 	q.mu.Unlock()
 
@@ -204,9 +215,34 @@ func (q *Queue) Clear() {
 			outcomeFn(it, false, "skipped", "Pending queue cleared by user")
 		}
 	}
-	if depthFn != nil {
-		go depthFn(0)
+}
+
+// FlushPendingForActivity flushes all pending items in both tiers without interrupting
+// the currently speaking item, recording a TTS-disabled/activity outcome for each flushed item.
+// It returns the number of pending items that were flushed.
+func (q *Queue) FlushPendingForActivity() int {
+	q.mu.Lock()
+	flushed := make([]*Item, 0, len(q.eventsQueue)+len(q.chatQueue))
+	flushed = append(flushed, q.eventsQueue...)
+	flushed = append(flushed, q.chatQueue...)
+	q.eventsQueue = q.eventsQueue[:0]
+	q.chatQueue = q.chatQueue[:0]
+	if len(flushed) > 0 {
+		q.notifyDepthLocked(0)
 	}
+	outcomeFn := q.onItemOutcome
+	q.mu.Unlock()
+
+	if len(flushed) == 0 {
+		return 0
+	}
+
+	if outcomeFn != nil {
+		for _, it := range flushed {
+			outcomeFn(it, false, "tts_disabled", "Flushed on user activity (TTS mode inactive)")
+		}
+	}
+	return len(flushed)
 }
 
 // Panic executes Emergency Panic Mute (<50ms, D28): latches Panic Mode, flushes all queues, and halts audio instantly.
@@ -221,8 +257,9 @@ func (q *Queue) Panic() {
 	q.eventsQueue = q.eventsQueue[:0]
 	q.chatQueue = q.chatQueue[:0]
 
-	depthFn := q.onDepthChanged
+	q.notifyDepthLocked(0)
 	stateFn := q.onStateChanged
+	extraState := slices.Clone(q.extraState)
 	outcomeFn := q.onItemOutcome
 
 	q.abortWithReasonLocked("dropped_panic", "Aborted by Emergency Panic Mute")
@@ -233,11 +270,11 @@ func (q *Queue) Panic() {
 			outcomeFn(it, false, "dropped_panic", "Flushed by Emergency Panic Mute")
 		}
 	}
-	if depthFn != nil {
-		go depthFn(0)
-	}
 	if stateFn != nil {
 		stateFn(true, true)
+	}
+	for _, ex := range extraState {
+		ex(true, true)
 	}
 }
 
@@ -400,6 +437,61 @@ func (q *Queue) SetOnStateChanged(fn func(paused, panicked bool)) {
 	q.onStateChanged = fn
 }
 
+// AddOnItemStarted registers an additional observer invoked when an item begins synthesis/speech.
+func (q *Queue) AddOnItemStarted(fn func(item *Item)) {
+	if fn == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.extraStarted = append(q.extraStarted, fn)
+}
+
+// AddOnItemFinished registers an additional observer invoked when an item finishes speaking or is aborted.
+func (q *Queue) AddOnItemFinished(fn func(item *Item)) {
+	if fn == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.extraFinished = append(q.extraFinished, fn)
+}
+
+// AddOnQueueDepthChanged registers an additional observer invoked whenever queue depth changes.
+func (q *Queue) AddOnQueueDepthChanged(fn func(depth int)) {
+	if fn == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.extraDepth = append(q.extraDepth, fn)
+}
+
+// AddOnStateChanged registers an additional observer invoked whenever paused or panicked state changes.
+func (q *Queue) AddOnStateChanged(fn func(paused, panicked bool)) {
+	if fn == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.extraState = append(q.extraState, fn)
+}
+
+func (q *Queue) notifyDepthLocked(depth int) {
+	fn := q.onDepthChanged
+	extras := slices.Clone(q.extraDepth)
+	if fn != nil || len(extras) > 0 {
+		go func() {
+			if fn != nil {
+				fn(depth)
+			}
+			for _, ex := range extras {
+				ex(depth)
+			}
+		}()
+	}
+}
+
 // Close halts the dispatcher and releases resources.
 func (q *Queue) Close() {
 	q.mu.Lock()
@@ -468,10 +560,7 @@ func (q *Queue) popNext() (*Item, int, bool) {
 			q.currentAbortOutcome = ""
 			q.currentAbortDetail = ""
 			depth := len(q.eventsQueue) + len(q.chatQueue)
-			if q.onDepthChanged != nil {
-				fn := q.onDepthChanged
-				go fn(depth)
-			}
+			q.notifyDepthLocked(depth)
 			return item, depth, true
 		}
 
@@ -501,14 +590,11 @@ func (q *Queue) popNext() (*Item, int, bool) {
 			if age > maxAge {
 				// Drop stale chat message
 				depth := len(q.eventsQueue) + len(q.chatQueue)
-				depthFn := q.onDepthChanged
+				q.notifyDepthLocked(depth)
 				outcomeFn := q.onItemOutcome
 				q.mu.Unlock()
 				if outcomeFn != nil {
 					outcomeFn(item, false, "dropped_stale", fmt.Sprintf("Exceeded %ds queue staleness TTL (waited %.1fs)", int(maxAge.Seconds()), age.Seconds()))
-				}
-				if depthFn != nil {
-					go depthFn(depth)
 				}
 				q.mu.Lock()
 				continue
@@ -519,10 +605,7 @@ func (q *Queue) popNext() (*Item, int, bool) {
 			q.currentAbortOutcome = ""
 			q.currentAbortDetail = ""
 			depth := len(q.eventsQueue) + len(q.chatQueue)
-			if q.onDepthChanged != nil {
-				fn := q.onDepthChanged
-				go fn(depth)
-			}
+			q.notifyDepthLocked(depth)
 			return item, depth, true
 		}
 
@@ -535,7 +618,9 @@ func (q *Queue) popNext() (*Item, int, bool) {
 func (q *Queue) processItem(item *Item, depth int) {
 	q.mu.Lock()
 	onStarted := q.onItemStarted
+	extraStarted := slices.Clone(q.extraStarted)
 	onFinished := q.onItemFinished
+	extraFinished := slices.Clone(q.extraFinished)
 	onOutcome := q.onItemOutcome
 	engine := q.engine
 	player := q.player
@@ -581,6 +666,9 @@ func (q *Queue) processItem(item *Item, depth int) {
 		if onFinished != nil {
 			onFinished(item)
 		}
+		for _, ex := range extraFinished {
+			ex(item)
+		}
 	}()
 
 	// Calculate base speed, falling back to GlobalChatRules.DefaultSpeed (or 1.0)
@@ -612,6 +700,9 @@ func (q *Queue) processItem(item *Item, depth int) {
 
 	if onStarted != nil {
 		onStarted(item)
+	}
+	for _, ex := range extraStarted {
+		ex(item)
 	}
 
 	if item.Text == "" {

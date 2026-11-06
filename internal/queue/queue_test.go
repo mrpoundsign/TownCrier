@@ -454,3 +454,28 @@ func TestQueueStreamingClauses(t *testing.T) {
 	}
 }
 
+func TestQueueFlushPendingForActivity(t *testing.T) {
+	player := &mockPlayer{}
+	engine := &mockEngine{}
+	cfg := config.DefaultConfig()
+
+	q := NewQueue(player, engine, func() *config.Config { return cfg })
+	defer q.Close()
+
+	q.Pause()
+	_ = q.Enqueue(&Item{ID: "1", Text: "first", Priority: 1})
+	_ = q.Enqueue(&Item{ID: "2", Text: "second", Priority: 1})
+
+	flushed := q.FlushPendingForActivity()
+	if flushed != 2 {
+		t.Fatalf("expected 2 flushed items, got %d", flushed)
+	}
+	if q.Depth() != 0 {
+		t.Fatalf("expected depth 0 after flush, got %d", q.Depth())
+	}
+	if player.stopCount.Load() != 0 {
+		t.Fatalf("expected player.Stop() NOT to be called during FlushPendingForActivity, got %d", player.stopCount.Load())
+	}
+}
+
+

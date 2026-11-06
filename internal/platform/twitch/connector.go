@@ -514,6 +514,16 @@ func (c *Connector) handlePrivateMessage(msg twitch.PrivateMessage) {
 		ch = c.Channel()
 	}
 
+	var isReply bool
+	var replyToUser string
+	if msg.Reply != nil && (msg.Reply.ParentMsgID != "" || msg.Reply.ParentUserLogin != "" || msg.Reply.ParentDisplayName != "") {
+		isReply = true
+		replyToUser = strings.TrimSpace(msg.Reply.ParentUserLogin)
+		if replyToUser == "" {
+			replyToUser = strings.TrimSpace(msg.Reply.ParentDisplayName)
+		}
+	}
+
 	ev := &chat.Event{
 		ID:          msg.ID,
 		Platform:    "twitch",
@@ -524,6 +534,9 @@ func (c *Connector) handlePrivateMessage(msg twitch.PrivateMessage) {
 		UserName:    msg.User.Name,
 		DisplayName: displayName,
 		Roles:       roles,
+		IsReply:     isReply,
+		ReplyToUser: replyToUser,
+		Mentions:    chat.ExtractMentions(msg.Message),
 		Text:        msg.Message,
 		EmoteSpans:  emotes,
 		Amount:      amount,

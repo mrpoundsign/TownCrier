@@ -193,8 +193,20 @@ type eventSubChatMessageEvent struct {
 			Emote *struct {
 				ID string `json:"id"`
 			} `json:"emote"`
+			Mention *struct {
+				UserID    string `json:"user_id"`
+				UserLogin string `json:"user_login"`
+				UserName  string `json:"user_name"`
+			} `json:"mention"`
 		} `json:"fragments"`
 	} `json:"message"`
+	Reply *struct {
+		ParentMessageID   string `json:"parent_message_id"`
+		ParentMessageBody string `json:"parent_message_body"`
+		ParentUserID      string `json:"parent_user_id"`
+		ParentUserLogin   string `json:"parent_user_login"`
+		ParentUserName    string `json:"parent_user_name"`
+	} `json:"reply"`
 	Badges []struct {
 		SetID string `json:"set_id"`
 		ID    string `json:"id"`
@@ -429,6 +441,20 @@ func parseChatMessageEvent(msgID string, eventRaw json.RawMessage, fallbackChann
 	}
 
 	var emotes []chat.EmoteSpan
+	var mentions []string
+	seenMentions := make(map[string]struct{})
+	addMention := func(u string) {
+		u = strings.TrimPrefix(strings.TrimSpace(u), "@")
+		if u == "" {
+			return
+		}
+		lower := strings.ToLower(u)
+		if _, exists := seenMentions[lower]; !exists {
+			seenMentions[lower] = struct{}{}
+			mentions = append(mentions, u)
+		}
+	}
+
 	runeOffset := 0
 	for _, frag := range me.Message.Fragments {
 		fragLen := utf8.RuneCountInString(frag.Text)
@@ -445,8 +471,27 @@ func parseChatMessageEvent(msgID string, eventRaw json.RawMessage, fallbackChann
 				Name:  frag.Text,
 				URL:   imgURL,
 			})
+		} else if frag.Type == "mention" && frag.Mention != nil {
+			mLogin := strings.TrimSpace(frag.Mention.UserLogin)
+			if mLogin == "" {
+				mLogin = strings.TrimSpace(frag.Mention.UserName)
+			}
+			addMention(mLogin)
 		}
 		runeOffset += fragLen
+	}
+	for _, m := range chat.ExtractMentions(me.Message.Text) {
+		addMention(m)
+	}
+
+	var isReply bool
+	var replyToUser string
+	if me.Reply != nil && (me.Reply.ParentMessageID != "" || me.Reply.ParentUserLogin != "" || me.Reply.ParentUserName != "") {
+		isReply = true
+		replyToUser = strings.TrimSpace(me.Reply.ParentUserLogin)
+		if replyToUser == "" {
+			replyToUser = strings.TrimSpace(me.Reply.ParentUserName)
+		}
 	}
 
 	kind := chat.EventKindMessage
@@ -495,6 +540,9 @@ func parseChatMessageEvent(msgID string, eventRaw json.RawMessage, fallbackChann
 		UserName:    userLogin,
 		DisplayName: displayName,
 		Roles:       roles,
+		IsReply:     isReply,
+		ReplyToUser: replyToUser,
+		Mentions:    mentions,
 		Text:        me.Message.Text,
 		EmoteSpans:  emotes,
 		Amount:      amount,

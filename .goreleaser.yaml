@@ -1,0 +1,67 @@
+version: 2
+
+project_name: TownCrier
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: towncrier-launcher
+    main: ./cmd/launcher
+    binary: TownCrier
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+      - goos: linux
+        goarch: arm64
+    ldflags:
+      - -s -w -X main.AppVersion={{.Version}}
+
+archives:
+  - id: default
+    builds:
+      - towncrier-launcher
+    name_template: "TownCrier-v{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+      - THIRDPARTY_NOTICES.md
+      - FyneApp.toml
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: mrpoundsign
+    name: TownCrier
+  draft: false
+  prerelease: auto
+  mode: keep-existing
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"

@@ -18,10 +18,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
 BIN_DIR="$BUILD_DIR/bin"
 DIST_DIR="$ROOT_DIR/dist"
-VERSION="${VERSION:-0.0.6}"
+DEFAULT_VER=$(grep -E '^[[:space:]]*Version[[:space:]]*=' "$ROOT_DIR/FyneApp.toml" 2>/dev/null | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
+VERSION="${VERSION:-${DEFAULT_VER:-0.0.8}}"
 
-mkdir -p "$BUILD_DIR" "$BIN_DIR" "$DIST_DIR" "$ROOT_DIR/cmd/launcher/payload"
-touch "$ROOT_DIR/cmd/launcher/payload/placeholder.txt"
+mkdir -p "$BUILD_DIR" "$BIN_DIR" "$DIST_DIR" "$ROOT_DIR/cmd/launcher/payload" "$ROOT_DIR/cmd/installer/payload"
+touch "$ROOT_DIR/cmd/launcher/payload/placeholder.txt" "$ROOT_DIR/cmd/installer/payload/placeholder.txt"
 
 if command -v git &>/dev/null && [ -d "$ROOT_DIR/.git" ] && [ -d "$ROOT_DIR/.githooks" ]; then
     git -C "$ROOT_DIR" config core.hooksPath .githooks 2>/dev/null || true
@@ -137,12 +138,14 @@ build_win() {
 
     local core_syso="$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso"
     local launcher_syso="$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso"
+    local installer_syso="$ROOT_DIR/cmd/installer/rsrc_windows_amd64.syso"
     if command -v x86_64-w64-mingw32-windres &>/dev/null && [ -f "$ROOT_DIR/assets/icon.ico" ]; then
         echo "==> Compiling Windows icon resources (.syso)..."
         local rc_file="$BUILD_DIR/icon.rc"
         echo 'IDI_ICON1 ICON "../assets/icon.ico"' > "$rc_file"
         (cd "$BUILD_DIR" && x86_64-w64-mingw32-windres icon.rc -O coff -o "$core_syso")
         cp -f "$core_syso" "$launcher_syso"
+        cp -f "$core_syso" "$installer_syso"
         rm -f "$rc_file"
     fi
 
@@ -152,26 +155,42 @@ build_win() {
         -o "$BIN_DIR/towncrier-core.exe" ./cmd/towncrier
     echo "✓ Built $BIN_DIR/towncrier-core.exe"
 
-    echo "==> Staging Windows payload for single-file launcher..."
+    echo "==> Staging Windows payload for single-file launcher & setup installer..."
     local payload_dir="$ROOT_DIR/cmd/launcher/payload"
-    mkdir -p "$payload_dir"
+    local inst_payload_dir="$ROOT_DIR/cmd/installer/payload"
+    mkdir -p "$payload_dir" "$inst_payload_dir"
     rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
-    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/launcher/payload/"*.dylib "$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso"' RETURN
+    rm -f "$inst_payload_dir/towncrier-core"* "$inst_payload_dir/"*.dll "$inst_payload_dir/LICENSE" "$inst_payload_dir/THIRDPARTY_NOTICES.md"
+    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/launcher/payload/"*.dylib "$ROOT_DIR/cmd/installer/payload/towncrier-core"* "$ROOT_DIR/cmd/installer/payload/"*.dll "$ROOT_DIR/cmd/installer/payload/LICENSE" "$ROOT_DIR/cmd/installer/payload/THIRDPARTY_NOTICES.md" "$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/installer/rsrc_windows_amd64.syso"' RETURN
     cp -f "$BIN_DIR/towncrier-core.exe" "$payload_dir/"
     cp -f "$BIN_DIR/onnxruntime.dll" "$payload_dir/"
     cp -f "$BIN_DIR/sherpa-onnx-c-api.dll" "$payload_dir/"
     cp -f "$BIN_DIR/sherpa-onnx-cxx-api.dll" "$payload_dir/"
+
+    cp -f "$BIN_DIR/towncrier-core.exe" "$inst_payload_dir/"
+    cp -f "$BIN_DIR/onnxruntime.dll" "$inst_payload_dir/"
+    cp -f "$BIN_DIR/sherpa-onnx-c-api.dll" "$inst_payload_dir/"
+    cp -f "$BIN_DIR/sherpa-onnx-cxx-api.dll" "$inst_payload_dir/"
+    [ -f "$ROOT_DIR/LICENSE" ] && cp -f "$ROOT_DIR/LICENSE" "$inst_payload_dir/"
+    [ -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" ] && cp -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" "$inst_payload_dir/"
 
     echo "==> Building standalone TownCrier.exe v${VERSION}..."
     CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
         go build -trimpath -ldflags="-H windowsgui -s -w -X main.AppVersion=${VERSION}" \
         -o "$BIN_DIR/TownCrier.exe" ./cmd/launcher
 
+    echo "==> Building Fyne GUI installer TownCrier-Setup.exe v${VERSION} (-tags nosherpa)..."
+    CC=x86_64-w64-mingw32-gcc CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
+        go build -tags nosherpa -trimpath -ldflags="-H windowsgui -s -w -X main.AppVersion=${VERSION} -extldflags '-static-libgcc'" \
+        -o "$BIN_DIR/TownCrier-Setup.exe" ./cmd/installer
+
     # Clean staged payload and temporary .syso from source tree
-    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib "$core_syso" "$launcher_syso"
+    rm -f "$payload_dir/towncrier-core"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
+    rm -f "$inst_payload_dir/towncrier-core"* "$inst_payload_dir/"*.dll "$inst_payload_dir/LICENSE" "$inst_payload_dir/THIRDPARTY_NOTICES.md"
+    rm -f "$core_syso" "$launcher_syso" "$installer_syso"
     trap - RETURN
 
-    echo "✓ Successfully built standalone single-file $BIN_DIR/TownCrier.exe"
+    echo "✓ Successfully built standalone single-file $BIN_DIR/TownCrier.exe and $BIN_DIR/TownCrier-Setup.exe"
 }
 
 build_linux() {
@@ -307,6 +326,12 @@ with zipfile.ZipFile('$zip_file', 'w', zipfile.ZIP_DEFLATED) as zf:
     fi
     rm -rf "$staging"
     echo "✓ Successfully packaged $zip_file"
+
+    if [ -f "$BIN_DIR/TownCrier-Setup.exe" ]; then
+        local setup_file="$DIST_DIR/TownCrier-v${VERSION}-windows-amd64-setup.exe"
+        cp -f "$BIN_DIR/TownCrier-Setup.exe" "$setup_file"
+        echo "✓ Successfully packaged $setup_file"
+    fi
 
     local tar_file="$DIST_DIR/TownCrier-v${VERSION}-linux-amd64.tar.gz"
     echo "==> Packaging Linux distribution into $tar_file..."

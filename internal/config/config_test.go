@@ -208,7 +208,7 @@ func TestEffectiveChatRules(t *testing.T) {
 			names, emotes, dedupe, maxDup, platformName, voice, speed)
 	}
 
-	// Case 2: Platform with overrides enabled
+	// Case 2: Platform with legacy OverrideRules enabled
 	p := cfg.Platforms["twitch"]
 	p.Overrides.OverrideRules = true
 	p.Overrides.SpeakNames = false
@@ -223,6 +223,78 @@ func TestEffectiveChatRules(t *testing.T) {
 	if names || !emotes || dedupe || maxDup != 1 || platformName || voice != "am_michael" || speed != 1.25 {
 		t.Errorf("unexpected platform override: names=%v, emotes=%v, dedupe=%v, maxDup=%d, platformName=%v, voice=%s, speed=%f",
 			names, emotes, dedupe, maxDup, platformName, voice, speed)
+	}
+
+	// Case 3: Per-setting overrides (independent without master checkbox)
+	yt := cfg.Platforms["youtube"]
+	yt.Overrides.SpeakNamesMode = OverrideModeOff
+	yt.Overrides.SpeakPlatformNameMode = OverrideModeOn
+	yt.Overrides.MaxDuplicateWordsMode = "3"
+	yt.Overrides.VoiceOverrideMode = OverrideModeCustom
+	yt.Overrides.DefaultVoice = "bf_emma"
+	yt.Overrides.DefaultSpeed = 1.1
+	cfg.Platforms["youtube"] = yt
+
+	names, emotes, dedupe, maxDup, platformName, voice, speed = cfg.EffectiveChatRules("youtube")
+	if names || emotes || !dedupe || maxDup != 3 || !platformName || voice != "bf_emma" || speed != 1.1 {
+		t.Errorf("unexpected per-setting override: names=%v, emotes=%v, dedupe=%v, maxDup=%d, platformName=%v, voice=%s, speed=%f",
+			names, emotes, dedupe, maxDup, platformName, voice, speed)
+	}
+}
+
+func TestMigrateLegacyOverrideRulesToPerSettingModes(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+
+	cfg := DefaultConfig()
+	tw := cfg.Platforms["twitch"]
+	tw.Overrides.OverrideRules = true
+	tw.Overrides.SpeakNames = false
+	tw.Overrides.SpeakEmotes = true
+	tw.Overrides.DeduplicateEmotes = false
+	tw.Overrides.MaxDuplicateWords = -1
+	tw.Overrides.SpeakPlatformName = true
+	tw.Overrides.IgnoreMentionsMode = IgnoreMentionsAll
+	tw.Overrides.AllowBroadcasterMentions = true
+	tw.Overrides.PlayAlertOnIgnoredMention = true
+	tw.Overrides.DefaultVoice = "am_adam"
+	tw.Overrides.DefaultSpeed = 1.2
+	cfg.Platforms["twitch"] = tw
+
+	if err := Save(configPath, cfg); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	ov := loaded.Platforms["twitch"].Overrides
+	if ov.OverrideRules {
+		t.Error("expected legacy OverrideRules to be cleared to false after migration")
+	}
+	if ov.SpeakNamesMode != OverrideModeOff || ov.SpeakEmotesMode != OverrideModeOn || ov.DeduplicateEmotesMode != OverrideModeOff {
+		t.Errorf("unexpected migrated bool modes: names=%q, emotes=%q, dedupe=%q", ov.SpeakNamesMode, ov.SpeakEmotesMode, ov.DeduplicateEmotesMode)
+	}
+	if ov.MaxDuplicateWordsMode != OverrideModeOff {
+		t.Errorf("expected MaxDuplicateWordsMode='off', got %q", ov.MaxDuplicateWordsMode)
+	}
+	if ov.SpeakPlatformNameMode != OverrideModeOn {
+		t.Errorf("expected SpeakPlatformNameMode='on', got %q", ov.SpeakPlatformNameMode)
+	}
+	if ov.IgnoreMentionsOverride != IgnoreMentionsAll || ov.AllowBroadcasterMentionsMode != OverrideModeOn || ov.PlayAlertOnIgnoredMentionMode != OverrideModeOn {
+		t.Errorf("unexpected migrated mention modes: mode=%q, broadcaster=%q, alert=%q",
+			ov.IgnoreMentionsOverride, ov.AllowBroadcasterMentionsMode, ov.PlayAlertOnIgnoredMentionMode)
+	}
+	if ov.VoiceOverrideMode != OverrideModeCustom {
+		t.Errorf("expected VoiceOverrideMode='custom', got %q", ov.VoiceOverrideMode)
+	}
+
+	// Verify unoverridden platform (youtube) kept all modes as global
+	ytOv := loaded.Platforms["youtube"].Overrides
+	if NormalizeBoolOverrideMode(ytOv.SpeakNamesMode) != OverrideModeGlobal || NormalizeVoiceOverrideMode(ytOv.VoiceOverrideMode) != OverrideModeGlobal {
+		t.Errorf("expected unoverridden youtube to stay global, got %+v", ytOv)
 	}
 }
 
@@ -366,5 +438,44 @@ func TestLookupViewerMultiPlatform(t *testing.T) {
 	key, vc, ok := LookupViewerWithKey(viewers, "tiktok", "poundsign_tt", "poundsign_tt")
 	if !ok || key != "twitch:mrpoundsign" || vc.Voice != "am_adam" {
 		t.Fatalf("expected TikTok match with key 'twitch:mrpoundsign', got key=%q vc=%+v (ok=%v)", key, vc, ok)
+	}
+}
+
+func TestEffectiveMentionRules(t *testing.T) {
+	cfg := DefaultConfig()
+
+	// Default is "off", false, false
+	mode, allowBroadcaster, playAlert := cfg.EffectiveMentionRules("twitch")
+	if mode != IgnoreMentionsOff || allowBroadcaster || playAlert {
+		t.Fatalf("expected default ('off', false, false), got (%q, %v, %v)", mode, allowBroadcaster, playAlert)
+	}
+
+	// Set global rules
+	cfg.GlobalChatRules.IgnoreMentionsMode = IgnoreMentionsRepliesAndLeading
+	cfg.GlobalChatRules.AllowBroadcasterMentions = true
+	cfg.GlobalChatRules.PlayAlertOnIgnoredMention = true
+
+	mode, allowBroadcaster, playAlert = cfg.EffectiveMentionRules("twitch")
+	if mode != IgnoreMentionsRepliesAndLeading || !allowBroadcaster || !playAlert {
+		t.Fatalf("expected inherited ('replies_and_leading', true, true), got (%q, %v, %v)", mode, allowBroadcaster, playAlert)
+	}
+
+	// Enable platform override on twitch
+	p := cfg.Platforms["twitch"]
+	p.Overrides.OverrideRules = true
+	p.Overrides.IgnoreMentionsMode = IgnoreMentionsAll
+	p.Overrides.AllowBroadcasterMentions = false
+	p.Overrides.PlayAlertOnIgnoredMention = false
+	cfg.Platforms["twitch"] = p
+
+	mode, allowBroadcaster, playAlert = cfg.EffectiveMentionRules("twitch")
+	if mode != IgnoreMentionsAll || allowBroadcaster || playAlert {
+		t.Fatalf("expected twitch override ('all', false, false), got (%q, %v, %v)", mode, allowBroadcaster, playAlert)
+	}
+
+	// YouTube still inherits global
+	mode, allowBroadcaster, playAlert = cfg.EffectiveMentionRules("youtube")
+	if mode != IgnoreMentionsRepliesAndLeading || !allowBroadcaster || !playAlert {
+		t.Fatalf("expected youtube inherited ('replies_and_leading', true, true), got (%q, %v, %v)", mode, allowBroadcaster, playAlert)
 	}
 }

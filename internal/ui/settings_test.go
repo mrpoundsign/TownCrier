@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/audio"
 	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
+	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
 	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
@@ -334,6 +336,125 @@ func TestSettingsView_TTSAndLoggingToggles(t *testing.T) {
 		t.Error("expected session config TTS.Enabled to be false")
 	}
 }
+
+func TestSettingsView_StreamDeckOneClickInstall(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestStreamDeckInstall")
+
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.streamDeckPluginsDir = t.TempDir()
+	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
+		return []audio.DeviceInfo{{ID: "mock1", Name: "Mock Speakers", IsDefault: true}}, nil
+	})
+
+	_ = view.Build()
+
+	if view.streamDeckInstallBtn == nil {
+		t.Fatal("expected streamDeckInstallBtn to be initialized")
+	}
+	if streamdeck.IsPluginInstalled(view.streamDeckPluginsDir) {
+		t.Fatal("expected Stream Deck plugin not installed prior to button tap")
+	}
+	if !strings.Contains(view.streamDeckStatusLabel.Text, "Not installed") {
+		t.Errorf("expected initial status to say Not installed, got %q", view.streamDeckStatusLabel.Text)
+	}
+
+	test.Tap(view.streamDeckInstallBtn)
+
+	if !streamdeck.IsPluginInstalled(view.streamDeckPluginsDir) {
+		t.Fatal("expected Stream Deck plugin to be installed after tapping streamDeckInstallBtn")
+	}
+	if !strings.Contains(view.streamDeckStatusLabel.Text, "Installed Stream Deck plugin v"+streamdeck.BundledPluginVersion()) {
+		t.Errorf("unexpected streamDeckStatusLabel text: %q", view.streamDeckStatusLabel.Text)
+	}
+	if !strings.Contains(view.streamDeckInstallBtn.Text, "Reinstall Elgato Stream Deck Plugin") {
+		t.Errorf("expected button text to say Reinstall after install, got %q", view.streamDeckInstallBtn.Text)
+	}
+
+	// Simulate an outdated installed plugin version (0.9.0.0) and rebuild view to verify update prompt
+	manifestPath := filepath.Join(view.streamDeckPluginsDir, streamdeck.PluginDirName, "manifest.json")
+	if err := os.WriteFile(manifestPath, []byte(`{"Version":"0.9.0.0"}`), 0o600); err != nil {
+		t.Fatalf("write older manifest.json: %v", err)
+	}
+	_ = view.Build()
+	if !strings.Contains(view.streamDeckStatusLabel.Text, "update available: v0.9.0.0 -> v"+streamdeck.BundledPluginVersion()) {
+		t.Errorf("expected update available status label, got %q", view.streamDeckStatusLabel.Text)
+	}
+	if !strings.Contains(view.streamDeckInstallBtn.Text, "Update Elgato Stream Deck Plugin to v"+streamdeck.BundledPluginVersion()) {
+		t.Errorf("expected Update button label, got %q", view.streamDeckInstallBtn.Text)
+	}
+}
+
+func TestSettingsAndPlatformTab_IgnoreMentionsControls(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestIgnoreMentionsControls")
+
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
+		return []audio.DeviceInfo{{ID: "mock1", Name: "Mock Speakers", IsDefault: true}}, nil
+	})
+	_ = view.Build()
+
+	if view.rulesMentionsModeSelect == nil || view.rulesAllowBroadcasterCheck == nil || view.rulesPlayAlertIgnoredMentionCheck == nil {
+		t.Fatal("expected mention rule controls on SettingsView to be initialized")
+	}
+
+	// Initially "off" -> sub-checkboxes disabled
+	if !view.rulesAllowBroadcasterCheck.Disabled() || !view.rulesPlayAlertIgnoredMentionCheck.Disabled() {
+		t.Error("expected sub-checkboxes to be disabled when IgnoreMentionsMode is 'off'")
+	}
+
+	// Change to Ignore Replies & Starting @ Mentions
+	view.rulesMentionsModeSelect.SetSelected(IgnoreMentionsOptionRepliesAndLeading)
+	if sess.Config().GlobalChatRules.IgnoreMentionsMode != config.IgnoreMentionsRepliesAndLeading {
+		t.Errorf("expected IgnoreMentionsMode=%q, got %q", config.IgnoreMentionsRepliesAndLeading, sess.Config().GlobalChatRules.IgnoreMentionsMode)
+	}
+	if view.rulesAllowBroadcasterCheck.Disabled() || view.rulesPlayAlertIgnoredMentionCheck.Disabled() {
+		t.Error("expected sub-checkboxes to be enabled when IgnoreMentionsMode != 'off'")
+	}
+
+	view.rulesPlayAlertIgnoredMentionCheck.SetChecked(true)
+	if !sess.Config().GlobalChatRules.PlayAlertOnIgnoredMention {
+		t.Error("expected GlobalChatRules.PlayAlertOnIgnoredMention to be true")
+	}
+
+	// Also verify platform tab override controls (TwitchTabView) and dynamic Global (...) label updates
+	twitchTab := NewTwitchTabView(w, sess)
+	view.SetPlatformTabs(twitchTab, nil, nil, nil)
+	_ = twitchTab.Build()
+
+	if twitchTab.overrides.MentionsModeSelect.Selected != "Global (Ignore Replies & Starting @ Mentions)" {
+		t.Errorf("expected Global (Ignore Replies & Starting @ Mentions), got %q", twitchTab.overrides.MentionsModeSelect.Selected)
+	}
+	if twitchTab.overrides.PlayAlertIgnoredMentionSelect.Selected != "Global ("+boolOnAlertMention+")" {
+		t.Errorf("expected Global (%s), got %q", boolOnAlertMention, twitchTab.overrides.PlayAlertIgnoredMentionSelect.Selected)
+	}
+
+	// Changing a global rule dynamically refreshes the Global (...) label on platform tabs
+	view.rulesNamesCheck.SetChecked(false)
+	if twitchTab.overrides.NamesSelect.Selected != "Global ("+boolOffSpeakNames+")" {
+		t.Errorf("expected NamesSelect to refresh to 'Global (%s)', got %q", boolOffSpeakNames, twitchTab.overrides.NamesSelect.Selected)
+	}
+
+	twitchTab.overrides.MentionsModeSelect.SetSelected(IgnoreMentionsOptionAll)
+	twitchTab.overrides.AllowBroadcasterSelect.SetSelected(boolOffAllowBcaster)
+	twitchTab.overrides.PlayAlertIgnoredMentionSelect.SetSelected(boolOnAlertMention)
+
+	mode, allowBroadcaster, playAlert := sess.Config().EffectiveMentionRules("twitch")
+	if mode != config.IgnoreMentionsAll || allowBroadcaster || !playAlert {
+		t.Errorf("expected twitch override (all, false, true), got (%q, %v, %v)", mode, allowBroadcaster, playAlert)
+	}
+}
+
 
 
 

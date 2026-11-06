@@ -242,3 +242,140 @@ func TestEvaluateReadRules_FanClubLevel(t *testing.T) {
 	}
 }
 
+func TestExtractMentionsAndLeadingMention(t *testing.T) {
+	// 1. Leading mention and inline mention
+	mentions := ExtractMentions("@Alice hey have you seen @Bob_123's stream?")
+	if len(mentions) != 2 || mentions[0] != "Alice" || mentions[1] != "Bob_123" {
+		t.Fatalf("expected [Alice, Bob_123], got %v", mentions)
+	}
+	lead, ok := ExtractLeadingMention("@Alice hey have you seen @Bob_123's stream?")
+	if !ok || lead != "Alice" {
+		t.Fatalf("expected leading mention Alice, got %q (ok=%v)", lead, ok)
+	}
+
+	// 2. Mid-sentence mention only (no leading mention)
+	mentions = ExtractMentions("I totally agree with @charlie!")
+	if len(mentions) != 1 || mentions[0] != "charlie" {
+		t.Fatalf("expected [charlie], got %v", mentions)
+	}
+	if _, ok := ExtractLeadingMention("I totally agree with @charlie!"); ok {
+		t.Fatal("expected no leading mention for mid-sentence @charlie")
+	}
+
+	// 3. Email addresses and bare '@' must NOT match
+	mentions = ExtractMentions("Contact me at support@example.com or @ for info")
+	if len(mentions) != 0 {
+		t.Fatalf("expected no mentions for email/bare @, got %v", mentions)
+	}
+	if _, ok := ExtractLeadingMention("support@example.com hello"); ok {
+		t.Fatal("expected email at start not to be treated as leading mention")
+	}
+}
+
+func TestNormalizeBroadcasterHandle(t *testing.T) {
+	cases := map[string]string{
+		"@MrPoundSign":                                "mrpoundsign",
+		"https://www.twitch.tv/MrPoundSign":           "mrpoundsign",
+		"https://www.youtube.com/@StreamerHandle":     "streamerhandle",
+		"https://www.tiktok.com/@tiktok_creator/live": "tiktok_creator",
+		"kickstreamer#12345:67890":                    "kickstreamer",
+	}
+	for input, want := range cases {
+		if got := NormalizeBroadcasterHandle(input); got != want {
+			t.Errorf("NormalizeBroadcasterHandle(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestShouldIgnoreMentionOrReply(t *testing.T) {
+	const broadcaster = "https://www.twitch.tv/streamer_jane"
+
+	leadingViewerEv := &Event{
+		Kind: EventKindMessage,
+		Text: "@other_viewer how are you doing?",
+	}
+	midViewerEv := &Event{
+		Kind: EventKindMessage,
+		Text: "That was awesome @other_viewer!",
+	}
+	leadingBroadcasterEv := &Event{
+		Kind: EventKindMessage,
+		Text: "@Streamer_Jane look behind you!",
+	}
+	midBroadcasterEv := &Event{
+		Kind: EventKindMessage,
+		Text: "Great play @Streamer_Jane!",
+	}
+	replyToViewerEv := &Event{
+		Kind:        EventKindMessage,
+		IsReply:     true,
+		ReplyToUser: "other_viewer",
+		Text:        "@other_viewer totally agree",
+	}
+	replyToBroadcasterEv := &Event{
+		Kind:        EventKindMessage,
+		IsReply:     true,
+		ReplyToUser: "streamer_jane",
+		Text:        "@Streamer_Jane I love this game",
+	}
+	paidMentionEv := &Event{
+		Kind:   EventKindMessage,
+		Amount: 5.00,
+		Text:   "@other_viewer hype!",
+	}
+
+	// 1. Mode "off": nothing is ignored
+	if ShouldIgnoreMentionOrReply(leadingViewerEv, config.IgnoreMentionsOff, false, broadcaster) {
+		t.Error("expected Mode Off to not ignore leading mention")
+	}
+	if ShouldIgnoreMentionOrReply(replyToViewerEv, config.IgnoreMentionsOff, false, broadcaster) {
+		t.Error("expected Mode Off to not ignore reply")
+	}
+
+	// 2. Mode "replies_and_leading" (allowBroadcaster = false)
+	if !ShouldIgnoreMentionOrReply(leadingViewerEv, config.IgnoreMentionsRepliesAndLeading, false, broadcaster) {
+		t.Error("expected leading viewer mention to be ignored in replies_and_leading mode")
+	}
+	if !ShouldIgnoreMentionOrReply(replyToViewerEv, config.IgnoreMentionsRepliesAndLeading, false, broadcaster) {
+		t.Error("expected reply to viewer to be ignored in replies_and_leading mode")
+	}
+	if ShouldIgnoreMentionOrReply(midViewerEv, config.IgnoreMentionsRepliesAndLeading, false, broadcaster) {
+		t.Error("expected mid-sentence mention to be spoken in replies_and_leading mode")
+	}
+	if !ShouldIgnoreMentionOrReply(leadingBroadcasterEv, config.IgnoreMentionsRepliesAndLeading, false, broadcaster) {
+		t.Error("expected leading broadcaster mention to be ignored when allowBroadcaster is false")
+	}
+
+	// 3. Mode "replies_and_leading" (allowBroadcaster = true)
+	if ShouldIgnoreMentionOrReply(leadingBroadcasterEv, config.IgnoreMentionsRepliesAndLeading, true, broadcaster) {
+		t.Error("expected leading broadcaster mention to be spoken when allowBroadcaster is true")
+	}
+	if ShouldIgnoreMentionOrReply(replyToBroadcasterEv, config.IgnoreMentionsRepliesAndLeading, true, broadcaster) {
+		t.Error("expected reply to broadcaster to be spoken when allowBroadcaster is true")
+	}
+	if !ShouldIgnoreMentionOrReply(replyToViewerEv, config.IgnoreMentionsRepliesAndLeading, true, broadcaster) {
+		t.Error("expected reply to another viewer to still be ignored when allowBroadcaster is true")
+	}
+
+	// 4. Mode "all" (allowBroadcaster = false)
+	if !ShouldIgnoreMentionOrReply(midViewerEv, config.IgnoreMentionsAll, false, broadcaster) {
+		t.Error("expected mid-sentence viewer mention to be ignored in all mode")
+	}
+	if !ShouldIgnoreMentionOrReply(midBroadcasterEv, config.IgnoreMentionsAll, false, broadcaster) {
+		t.Error("expected mid-sentence broadcaster mention to be ignored in all mode when allowBroadcaster is false")
+	}
+
+	// 5. Mode "all" (allowBroadcaster = true)
+	if ShouldIgnoreMentionOrReply(midBroadcasterEv, config.IgnoreMentionsAll, true, broadcaster) {
+		t.Error("expected mid-sentence broadcaster mention to be spoken in all mode when allowBroadcaster is true")
+	}
+	if !ShouldIgnoreMentionOrReply(midViewerEv, config.IgnoreMentionsAll, true, broadcaster) {
+		t.Error("expected mid-sentence viewer mention to still be ignored in all mode when allowBroadcaster is true")
+	}
+
+	// 6. Paid message always bypasses mention filter (4-A)
+	if ShouldIgnoreMentionOrReply(paidMentionEv, config.IgnoreMentionsAll, false, broadcaster) {
+		t.Error("expected paid message to never be ignored by mention filter")
+	}
+}
+

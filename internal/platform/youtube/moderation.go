@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/mrpoundsign/TownCrier/internal/chat"
 )
 
 // DefaultYouTubeAPIBaseURL is the default base URL for YouTube Data API v3 requests.
@@ -261,8 +263,9 @@ func (c *Connector) handleUnauthorized(ctx context.Context) {
 }
 
 // discoverAuthenticatedBroadcast checks the authenticated user's active YouTube broadcasts via
-// GET /liveBroadcasts?part=id,snippet&broadcastStatus=active&broadcastType=all (1 quota unit).
-// This enables discovering Unlisted or newly-transitioned broadcasts that /@handle/live does not redirect to.
+// GET /liveBroadcasts?part=id,snippet,status&mine=true&broadcastType=all (1 quota unit), with fallback
+// to broadcastStatus=active. This enables discovering Private, Unlisted, or newly-transitioned/testing
+// broadcasts that /@handle/live does not redirect to.
 func (c *Connector) discoverAuthenticatedBroadcast(ctx context.Context) (videoID, liveChatID string, err error) {
 	httpClient, apiBase, token, err := c.resolveModContext(ctx)
 	if err != nil {
@@ -275,40 +278,150 @@ func (c *Connector) discoverAuthenticatedBroadcast(ctx context.Context) (videoID
 	return vid, chatID, err
 }
 
+type liveBroadcastItem struct {
+	ID      string `json:"id"`
+	Snippet *struct {
+		LiveChatID         string `json:"liveChatId"`
+		ActualStartTime    string `json:"actualStartTime"`
+		ActualEndTime      string `json:"actualEndTime"`
+		IsDefaultBroadcast bool   `json:"isDefaultBroadcast"`
+	} `json:"snippet"`
+	Status *struct {
+		LifeCycleStatus string `json:"lifeCycleStatus"`
+		PrivacyStatus   string `json:"privacyStatus"`
+	} `json:"status"`
+}
+
 func fetchActiveBroadcastVideoAndChatID(ctx context.Context, httpClient *http.Client, apiBase, token string) (videoID, liveChatID string, err error) {
-	endpoint := apiBase + "/liveBroadcasts?part=id,snippet&broadcastStatus=active&broadcastType=all"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	items, err := queryLiveBroadcasts(ctx, httpClient, apiBase, token, "/liveBroadcasts?part=id,snippet,status&mine=true&broadcastType=all&maxResults=25")
 	if err != nil {
 		return "", "", err
+	}
+	if vid, chatID := selectActiveBroadcast(items); vid != "" && chatID != "" {
+		return vid, chatID, nil
+	}
+
+	// Fallback for accounts/tests that only respond to broadcastStatus=active
+	activeItems, activeErr := queryLiveBroadcasts(ctx, httpClient, apiBase, token, "/liveBroadcasts?part=id,snippet,status&broadcastStatus=active&broadcastType=all")
+	if activeErr == nil {
+		if vid, chatID := selectActiveBroadcast(activeItems); vid != "" && chatID != "" {
+			return vid, chatID, nil
+		}
+	}
+
+	return "", "", errors.New("no active YouTube liveChatId found for stream")
+}
+
+func queryLiveBroadcasts(ctx context.Context, httpClient *http.Client, apiBase, token, pathAndQuery string) ([]liveBroadcastItem, error) {
+	endpoint := apiBase + pathAndQuery
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", "", fmt.Errorf("youtube liveBroadcasts.list HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("youtube liveBroadcasts.list HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var parsed struct {
-		Items []struct {
-			ID      string `json:"id"`
-			Snippet *struct {
-				LiveChatID string `json:"liveChatId"`
-			} `json:"snippet"`
-		} `json:"items"`
+		Items []liveBroadcastItem `json:"items"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&parsed); err != nil {
-		return "", "", err
+		return nil, err
 	}
-	for _, it := range parsed.Items {
-		if it.Snippet != nil && strings.TrimSpace(it.Snippet.LiveChatID) != "" {
-			return strings.TrimSpace(it.ID), strings.TrimSpace(it.Snippet.LiveChatID), nil
+	return parsed.Items, nil
+}
+
+func selectActiveBroadcast(items []liveBroadcastItem) (videoID, liveChatID string) {
+	// Pass 1: explicitly "live" broadcasts
+	for _, it := range items {
+		if it.Snippet == nil || strings.TrimSpace(it.Snippet.LiveChatID) == "" {
+			continue
+		}
+		if it.Status != nil && strings.EqualFold(strings.TrimSpace(it.Status.LifeCycleStatus), "live") {
+			return strings.TrimSpace(it.ID), strings.TrimSpace(it.Snippet.LiveChatID)
 		}
 	}
-	return "", "", errors.New("no active YouTube liveChatId found for stream")
+	// Pass 2: "testing" or "liveStarting" broadcasts (e.g., private preview or transitioning to live in YouTube Studio)
+	for _, it := range items {
+		if it.Snippet == nil || strings.TrimSpace(it.Snippet.LiveChatID) == "" {
+			continue
+		}
+		if it.Status != nil {
+			lc := strings.ToLower(strings.TrimSpace(it.Status.LifeCycleStatus))
+			if lc == "testing" || lc == "livestarting" || lc == "teststarting" {
+				return strings.TrimSpace(it.ID), strings.TrimSpace(it.Snippet.LiveChatID)
+			}
+		}
+	}
+	// Pass 3: items with an actualStartTime and no actualEndTime, or items where status was omitted
+	for _, it := range items {
+		if it.Snippet == nil || strings.TrimSpace(it.Snippet.LiveChatID) == "" {
+			continue
+		}
+		if strings.TrimSpace(it.Snippet.ActualEndTime) != "" {
+			continue
+		}
+		if it.Status != nil {
+			lc := strings.ToLower(strings.TrimSpace(it.Status.LifeCycleStatus))
+			if lc == "complete" || lc == "revoked" || lc == "created" || lc == "ready" {
+				continue
+			}
+		}
+		return strings.TrimSpace(it.ID), strings.TrimSpace(it.Snippet.LiveChatID)
+	}
+	return "", ""
+}
+
+// fetchDataAPILiveChatPage polls YouTube Data API v3 GET /liveChat/messages (used for Private or Testing
+// broadcasts where unauthenticated InnerTube watch-page scraping is blocked by LOGIN_REQUIRED).
+func (c *Connector) fetchDataAPILiveChatPage(ctx context.Context, liveChatID, pageToken string) ([]*chat.Event, []*chat.ModerationEvent, string, time.Duration, error) {
+	httpClient, apiBase, token, err := c.resolveModContext(ctx)
+	if err != nil {
+		return nil, nil, "", 0, err
+	}
+
+	q := url.Values{}
+	q.Set("liveChatId", liveChatID)
+	q.Set("part", "id,snippet,authorDetails")
+	q.Set("maxResults", "200")
+	if pageToken != "" {
+		q.Set("pageToken", pageToken)
+	}
+
+	endpoint := apiBase + "/liveChat/messages?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, nil, "", 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, nil, "", 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized {
+			c.handleUnauthorized(ctx)
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, nil, "", 0, fmt.Errorf("youtube liveChat/messages HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil {
+		return nil, nil, "", 0, err
+	}
+
+	return ParseDataAPILiveChatResponse(data)
 }

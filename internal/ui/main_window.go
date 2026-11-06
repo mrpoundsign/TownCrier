@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"image/color"
 	"log"
 	"sync"
+	"testing"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -14,6 +16,8 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/mrpoundsign/appinstaller/pkg/updater"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/internal/config"
@@ -67,11 +71,15 @@ type MainWindow struct {
 	tooltipLayer   *fyne.Container
 	tooltipBubble  *fyne.Container
 	tooltipText    *canvas.Text
-	volumeSlider   *widget.Slider
-	volContainer   *fyne.Container
-	panicBtn       *widget.Button
-	hotkeyMgr      *GlobalHotkeyManager
-	activeShortcut *desktop.CustomShortcut
+	volumeSlider       *widget.Slider
+	volContainer       *fyne.Container
+	updateBtn          *widget.Button
+	pendingRelease     *updater.ReleaseInfo
+	panicBtn           *widget.Button
+	hotkeyMgr          *GlobalHotkeyManager
+	activeShortcut     *desktop.CustomShortcut
+	modeHotkeyMgr      *GlobalHotkeyManager
+	activeModeShortcut *desktop.CustomShortcut
 }
 
 // NewMainWindow creates and initializes the complete desktop application window.
@@ -132,6 +140,9 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 			if mw.hotkeyMgr != nil {
 				mw.hotkeyMgr.Close()
 			}
+			if mw.modeHotkeyMgr != nil {
+				mw.modeHotkeyMgr.Close()
+			}
 			_ = session.Close()
 			if p := session.Player(); p != nil {
 				_ = p.Close()
@@ -168,7 +179,52 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 		cleanup()
 	})
 
+	mw.startStartupUpdateCheck()
+
 	return mw
+}
+
+func (mw *MainWindow) startStartupUpdateCheck() {
+	if testing.Testing() || mw.Session == nil {
+		return
+	}
+	cfg := mw.Session.Config()
+	if cfg == nil || !cfg.Update.CheckOnStartup {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+
+		checker := NewTownCrierUpdater()
+		rel, isNewer, err := checker.CheckLatest(ctx, AppVersion)
+		if err != nil || !isNewer || rel == nil {
+			return
+		}
+
+		fyne.Do(func() {
+			mw.pendingRelease = rel
+			if mw.updateBtn != nil {
+				mw.updateBtn.SetText("⬆ Update v" + rel.Version)
+				mw.updateBtn.Show()
+			}
+			if mw.headerBar != nil {
+				mw.headerBar.Refresh()
+			}
+			mw.SetStatus("⬆ Update available: TownCrier v" + rel.Version + " — click 'Update' in the top bar.")
+
+			// Never interrupt an active broadcast with a modal update dialog
+			if mw.Session.IsStreamLive() {
+				return
+			}
+			curCfg := mw.Session.Config()
+			if curCfg != nil && curCfg.Update.SkippedVersion == rel.Version {
+				return
+			}
+			ShowTownCrierUpdateDialog(mw.Window, mw.Session, rel)
+		})
+	}()
 }
 
 func (mw *MainWindow) initStatusBar() {
@@ -260,6 +316,14 @@ func (mw *MainWindow) currentHotkeyLabel() string {
 	return hk
 }
 
+func (mw *MainWindow) currentModeToggleHotkeyLabel() string {
+	hk := mw.Session.Config().Safety.ModeToggleHotkey
+	if hk == "" {
+		return config.DefaultModeToggleHotkey
+	}
+	return hk
+}
+
 func (mw *MainWindow) initViews() {
 	cfg := mw.Session.Config()
 	player := mw.Session.Player()
@@ -305,6 +369,18 @@ func (mw *MainWindow) initViews() {
 	})
 	mw.settingsTab.SetHotkeyChangedHandler(func(hotkey string) error {
 		return mw.ApplyPanicHotkey(hotkey)
+	})
+	mw.settingsTab.SetModeToggleHotkeyChangedHandler(func(hotkey string) error {
+		return mw.ApplyModeToggleHotkey(hotkey)
+	})
+	mw.settingsTab.SetTTSOutputModeChangedHandler(func(mode string) {
+		mw.syncTTSModeUI(mode, mw.Session.IsTTSSpeakingActive(), mw.Session.IsUserIdle())
+	})
+	mw.dashboardTab.SetOnTTSModeChanged(func(mode string) {
+		mw.syncTTSModeUI(mode, mw.Session.IsTTSSpeakingActive(), mw.Session.IsUserIdle())
+	})
+	mw.Session.SetOnTTSModeStateChanged(func(mode string, speakingActive bool, userIdle bool) {
+		mw.syncTTSModeUI(mode, speakingActive, userIdle)
 	})
 	mw.settingsTab.SetServicesChangedHandler(func() {
 		mw.syncServiceVisibility()
@@ -630,24 +706,50 @@ func (mw *MainWindow) initHeader() {
 	volLabel := widget.NewLabel(fmt.Sprintf("Vol: %d%%", int(vol*100)))
 	mw.volumeSlider = widget.NewSlider(0, 100)
 	mw.volumeSlider.SetValue(float64(vol * 100))
+	var syncingVolumeSlider bool
 	mw.volumeSlider.OnChanged = func(val float64) {
 		gain := float32(val / 100.0)
 		volLabel.SetText(fmt.Sprintf("Vol: %d%%", int(val)))
+		if syncingVolumeSlider {
+			return
+		}
 		if p := mw.Session.Player(); p != nil {
 			p.SetVolume(gain)
 		}
 		_ = mw.Session.UpdateConfig(func(c *config.Config) {
 			c.Audio.Volume = gain
 		})
+		if wsSrv := mw.Session.WSServer(); wsSrv != nil {
+			wsSrv.BroadcastState()
+		}
 	}
+	mw.Session.SetOnVolumeChanged(func(newVol float32) {
+		fyne.Do(func() {
+			syncingVolumeSlider = true
+			pct := float64(int(newVol*100 + 0.5))
+			volLabel.SetText(fmt.Sprintf("Vol: %d%%", int(pct)))
+			mw.volumeSlider.SetValue(pct)
+			syncingVolumeSlider = false
+		})
+	})
 
 	volSliderSpacer := canvas.NewRectangle(color.Transparent)
 	volSliderSpacer.SetMinSize(fyne.NewSize(90, 1))
 	volContainer := container.NewBorder(nil, nil, volLabel, nil, container.NewStack(volSliderSpacer, mw.volumeSlider))
 	mw.volContainer = volContainer
 
+	mw.updateBtn = widget.NewButtonWithIcon("⬆ Update", theme.DownloadIcon(), func() {
+		if mw.pendingRelease != nil {
+			ShowTownCrierUpdateDialog(mw.Window, mw.Session, mw.pendingRelease)
+		} else {
+			TriggerManualUpdateCheck(mw.Window, mw.Session, mw.SetStatus)
+		}
+	})
+	mw.updateBtn.Importance = widget.HighImportance
+	mw.updateBtn.Hide()
+
 	aboutBtn := widget.NewButtonWithIcon("About", theme.InfoIcon(), func() {
-		ShowAboutDialog(mw.Window)
+		ShowAboutDialog(mw.Window, mw.Session)
 	})
 
 	navButtons := container.NewHBox(
@@ -664,7 +766,7 @@ func (mw *MainWindow) initHeader() {
 		widget.NewSeparator(),
 		navButtons,
 	)
-	rightSide := container.NewHBox(volContainer, aboutBtn)
+	rightSide := container.NewHBox(volContainer, mw.updateBtn, aboutBtn)
 
 	mw.headerBar = container.NewVBox(
 		container.NewHBox(leftSide, layout.NewSpacer(), rightSide),
@@ -769,6 +871,24 @@ func (mw *MainWindow) syncPanicUI(paused, panicked bool) {
 	}
 }
 
+func (mw *MainWindow) triggerCycleTTSMode() {
+	if mw.Session == nil || !mw.Session.Config().TTS.Enabled {
+		return
+	}
+	nextMode := mw.Session.CycleTTSOutputMode()
+	mw.syncTTSModeUI(nextMode, mw.Session.IsTTSSpeakingActive(), mw.Session.IsUserIdle())
+	mw.SetStatus(fmt.Sprintf("🔊 TTS Output Mode switched to %s (%s)", FormatTTSOutputModeLabel(nextMode), mw.currentModeToggleHotkeyLabel()))
+}
+
+func (mw *MainWindow) syncTTSModeUI(mode string, speakingActive bool, userIdle bool) {
+	if mw.dashboardTab != nil {
+		mw.dashboardTab.SyncTTSModeState(mode, speakingActive, userIdle)
+	}
+	if mw.settingsTab != nil {
+		mw.settingsTab.SyncTTSModeState(mode, speakingActive, userIdle)
+	}
+}
+
 func (mw *MainWindow) initShortcuts() {
 	// 1. Escape key panic toggle listener (when TownCrier window is focused)
 	mw.Window.Canvas().SetOnTypedKey(func(ke *fyne.KeyEvent) {
@@ -777,15 +897,26 @@ func (mw *MainWindow) initShortcuts() {
 		}
 	})
 
-	// 2. System-wide global hotkey + in-window shortcut
-	mw.hotkeyMgr = NewGlobalHotkeyManager(func() {
+	// 2. System-wide global panic hotkey + in-window shortcut
+	mw.hotkeyMgr = NewGlobalHotkeyManagerWithID(HotkeyIDPanic, func() {
 		fyne.Do(func() {
 			mw.triggerTogglePanic()
 		})
 	})
 
 	if err := mw.ApplyPanicHotkey(mw.currentHotkeyLabel()); err != nil {
-		log.Printf("[MainWindow] Warning: failed to register global hotkey: %v", err)
+		log.Printf("[MainWindow] Warning: failed to register global panic hotkey: %v", err)
+	}
+
+	// 3. System-wide global TTS Mode Toggle hotkey + in-window shortcut
+	mw.modeHotkeyMgr = NewGlobalHotkeyManagerWithID(HotkeyIDModeToggle, func() {
+		fyne.Do(func() {
+			mw.triggerCycleTTSMode()
+		})
+	})
+
+	if err := mw.ApplyModeToggleHotkey(mw.currentModeToggleHotkeyLabel()); err != nil {
+		log.Printf("[MainWindow] Warning: failed to register global mode toggle hotkey: %v", err)
 	}
 }
 
@@ -823,6 +954,37 @@ func (mw *MainWindow) ApplyPanicHotkey(hotkeyStr string) error {
 		paused = q.IsPaused()
 	}
 	mw.syncPanicUI(paused, mw.Session.IsPanicked())
+
+	return regErr
+}
+
+// ApplyModeToggleHotkey dynamically updates both the in-window shortcut and OS-wide global hotkey for cycling TTS output mode.
+func (mw *MainWindow) ApplyModeToggleHotkey(hotkeyStr string) error {
+	spec, err := ParseHotkey(hotkeyStr)
+	if err != nil {
+		return err
+	}
+
+	if mw.activeModeShortcut != nil {
+		mw.Window.Canvas().RemoveShortcut(mw.activeModeShortcut)
+		mw.activeModeShortcut = nil
+	}
+
+	if spec.FyneModifier() != 0 {
+		sc := &desktop.CustomShortcut{
+			KeyName:  spec.FyneKeyName(),
+			Modifier: spec.FyneModifier(),
+		}
+		mw.Window.Canvas().AddShortcut(sc, func(fyne.Shortcut) {
+			mw.triggerCycleTTSMode()
+		})
+		mw.activeModeShortcut = sc
+	}
+
+	var regErr error
+	if mw.modeHotkeyMgr != nil {
+		regErr = mw.modeHotkeyMgr.Register(spec.String())
+	}
 
 	return regErr
 }
