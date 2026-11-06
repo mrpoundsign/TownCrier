@@ -1,5 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
-  <rect x="4" y="4" width="136" height="136" rx="22" fill="#0F172A" stroke="#38BDF8" stroke-width="4"/>
-  <path d="M40 60 L64 60 L88 40 L88 104 L64 84 L40 84 Z" fill="#38BDF8"/>
-  <path d="M98 52 C108 62 108 82 98 92" stroke="#F8FAFC" stroke-width="6" fill="none" stroke-linecap="round"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 512 512">
+  <title>TownCrier Icon</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path id="bg_outer" d="M116 12 L396 12 C453.438 12 500 58.562 500 116 L500 396 C500 453.438 453.438 500 396 500 L116 500 C58.562 500 12 453.438 12 396 L12 116 C12 58.562 58.562 12 116 12 Z" fill="#0f172a" stroke="#38bdf8" stroke-width="24" stroke-miterlimit="10"/>
+    <path id="bg_inner_glow" d="M118 30 L394 30 C442.601 30 482 69.399 482 118 L482 394 C482 442.601 442.601 482 394 482 L118 482 C69.399 482 30 442.601 30 394 L30 118 C30 69.399 69.399 30 118 30 Z" fill="#131e36"/>
+    <polygon id="megaphone_shadow" points="90,306 360,84 450,318 132,396" fill="#060a12" opacity="0.55"/>
+    <path id="handle_outer" d="M192 362 L224 354 L246 418 C254 438 288 429 283 407 L267 344 L299 336 L319 412 C330 458 234 476 212 424 Z" fill="#cbd5e1"/>
+    <polygon id="cone_body" points="84,290 354,68 444,302 126,380" fill="#f8fafc"/>
+    <polygon id="cone_shade" points="114.2,354.8 418.8,236.5 444,302 126,380" fill="#e2e8f0"/>
+    <line id="cone_highlight" x1="131.2" y1="263.5" x2="328.3" y2="112" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round" stroke-miterlimit="10" opacity="0.9"/>
+    <polygon id="neck_band" points="84,290 121.8,258.9 170.5,369.1 126,380" fill="#38bdf8"/>
+    <path id="mouthpiece" d="M48 307 C34 314 30 331 37 347 L57 390 C64 405 82 410 96 403 L116 393 L71 296 Z" fill="#38bdf8"/>
+    <path id="bell_rim_outer" d="M348 54 C325.819 53.689 330.671 112.087 358.837 184.436 C387.004 256.785 427.819 315.689 450 316 C472.181 316.311 467.329 257.913 439.163 185.564 C410.996 113.215 370.181 54.311 348 54 Z" fill="#0f172a" stroke="#38bdf8" stroke-width="14" stroke-miterlimit="10"/>
+    <path id="bell_interior" d="M359 76 C341.278 65.176 344.82 105.203 366.911 165.402 C389.003 225.601 421.278 283.176 439 294 C456.722 304.824 453.18 264.797 431.089 204.598 C408.997 144.399 376.722 86.824 359 76 Z" fill="#090e1a" stroke="#1e293b" stroke-width="4" stroke-miterlimit="10"/>
+    <polygon id="letter_T_skewed" points="161.2,262.8 228.7,207.3 238.7,234.5 216.1,249.4 243.3,322.4 214.7,329.4 190.8,266.1 168.2,281" fill="#0f172a"/>
+    <polygon id="letter_C_skewed" points="246.2,216.7 255.7,185.1 315.1,136.2 330.6,179.6 303.7,196.9 300.1,187 276.3,203.3 303.5,278.1 329.6,268.9 326.1,259 355,247.8 370.5,291.2 300.6,308.3 274.8,294.7" fill="#0f172a"/>
+  </g>
 </svg>
