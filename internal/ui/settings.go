@@ -350,11 +350,6 @@ func (v *SettingsView) SyncPlatformTabVisibility() {
 	v.subTabs.SetItems(items)
 }
 
-// LogsView returns the embedded Event Logs sub-tab view.
-func (v *SettingsView) LogsView() *LogsView {
-	return v.logsView
-}
-
 func (v *SettingsView) currentConfig() *config.Config {
 	if v.session != nil {
 		v.cfg = v.session.Config()

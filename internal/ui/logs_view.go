@@ -2179,11 +2179,6 @@ func (v *LogsView) buildDateSeparatorRow(t time.Time) fyne.CanvasObject {
 	)
 }
 
-func (v *LogsView) buildLogRow(rowIdx int, e eventlog.Entry) fyne.CanvasObject {
-	obj, _ := v.buildLogRowWithRef(rowIdx, e)
-	return obj
-}
-
 func (v *LogsView) buildLogRowWithRef(rowIdx int, e eventlog.Entry) (fyne.CanvasObject, *cachedLogRow) {
 	s := v.chatScaleFactor()
 	iconSz := fyne.NewSize(20*s, 20*s)

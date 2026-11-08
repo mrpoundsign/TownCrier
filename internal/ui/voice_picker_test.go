@@ -42,15 +42,6 @@ func TestVoiceSpeedFieldAndSummary(t *testing.T) {
 	if !strings.Contains(field.Label.Text, "Supertonic M2") || !strings.Contains(field.Label.Text, "1.50x") {
 		t.Errorf("unexpected summary label after update: %q", field.Label.Text)
 	}
-
-	field.Disable()
-	if !field.Disabled() {
-		t.Error("expected field to be disabled after Disable()")
-	}
-	field.Enable()
-	if field.Disabled() {
-		t.Error("expected field to be enabled after Enable()")
-	}
 }
 
 func TestBuildVoiceGroupsForModels(t *testing.T) {

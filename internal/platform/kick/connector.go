@@ -104,12 +104,6 @@ func NormalizeChannelInfo(raw string) (string, ChannelInfo) {
 	return strings.ToLower(trimmed), ChannelInfo{}
 }
 
-// NormalizeChannel parses a Kick channel input into a clean channel label and optional direct chatroom ID.
-func NormalizeChannel(raw string) (string, int64) {
-	slug, info := NormalizeChannelInfo(raw)
-	return slug, info.ChatroomID
-}
-
 // ResolveChannelInfo queries Kick's public channel endpoints to resolve a channel slug into its ChannelID and ChatroomID.
 func ResolveChannelInfo(ctx context.Context, client *http.Client, apiBaseURL, slug string) (ChannelInfo, error) {
 	if client == nil {
@@ -155,15 +149,6 @@ func ResolveChannelInfo(ctx context.Context, client *http.Client, apiBaseURL, sl
 		return ChannelInfo{}, lastErr
 	}
 	return ChannelInfo{}, fmt.Errorf("could not resolve chatroom_id for Kick channel %q", slug)
-}
-
-// ResolveChatroomID queries Kick's public channel endpoints to resolve a channel slug into its Pusher chatroom_id.
-func ResolveChatroomID(ctx context.Context, client *http.Client, apiBaseURL, slug string) (int64, error) {
-	info, err := ResolveChannelInfo(ctx, client, apiBaseURL, slug)
-	if err != nil {
-		return 0, err
-	}
-	return info.ChatroomID, nil
 }
 
 func fetchChannelInfoFromEndpoint(ctx context.Context, client *http.Client, endpoint string) (ChannelInfo, error) {

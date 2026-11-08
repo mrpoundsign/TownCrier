@@ -302,7 +302,7 @@ func TestLogsTableIconsAndHoverTooltips(t *testing.T) {
 	// Verify that a very long message wraps vertically and never expands the table's MinSize width
 	baseMinW := lv.listBox.MinSize().Width
 	longMsg := strings.Repeat("supercalifragilisticexpialidocious ", 30)
-	row := lv.buildLogRow(0, eventlog.Entry{
+	row, _ := lv.buildLogRowWithRef(0, eventlog.Entry{
 		CreatedAt:     time.Now(),
 		Platform:      "twitch",
 		Channel:       "testchannel",
@@ -332,7 +332,7 @@ func TestLogsTableIconsAndHoverTooltips(t *testing.T) {
 		t.Fatalf("unexpected emote tokens: %+v", tokens)
 	}
 
-	emoteRow := lv.buildLogRow(1, eventlog.Entry{
+	emoteRow, _ := lv.buildLogRowWithRef(1, eventlog.Entry{
 		CreatedAt:     time.Now(),
 		Platform:      "twitch",
 		Channel:       "testchannel",
@@ -525,7 +525,7 @@ func TestLogsViewStreamSessionAndTotalsSummary(t *testing.T) {
 		ItemName:   "Sub Gift",
 		UnitAmount: 1,
 	}
-	row := lv.buildLogRow(0, rolesEntry)
+	row, _ := lv.buildLogRowWithRef(0, rolesEntry)
 	if row == nil {
 		t.Fatal("expected non-nil row")
 	}

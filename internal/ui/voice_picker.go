@@ -215,28 +215,6 @@ func (f *VoiceSpeedField) Speed() float32 {
 	return f.speed
 }
 
-// Enable enables the Edit button.
-func (f *VoiceSpeedField) Enable() {
-	if f.EditBtn != nil {
-		f.EditBtn.Enable()
-	}
-}
-
-// Disable disables the Edit button.
-func (f *VoiceSpeedField) Disable() {
-	if f.EditBtn != nil {
-		f.EditBtn.Disable()
-	}
-}
-
-// Disabled reports whether the Edit button is currently disabled.
-func (f *VoiceSpeedField) Disabled() bool {
-	if f.EditBtn == nil {
-		return false
-	}
-	return f.EditBtn.Disabled()
-}
-
 // ShowVoiceSpeedDialog opens a modal dialog to select a voice (grouped by enabled model packs with no dropdowns),
 // adjust speech speed, and preview the voice with sample text before saving.
 func ShowVoiceSpeedDialog(

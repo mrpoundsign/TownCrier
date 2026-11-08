@@ -19,7 +19,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/chat"
 )
 
-func TestNormalizeChannel(t *testing.T) {
+func TestNormalizeChannelInfo(t *testing.T) {
 	tests := []struct {
 		input    string
 		wantSlug string
@@ -34,9 +34,9 @@ func TestNormalizeChannel(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		slug, id := NormalizeChannel(tc.input)
-		if slug != tc.wantSlug || id != tc.wantID {
-			t.Errorf("NormalizeChannel(%q) = (%q, %d), want (%q, %d)", tc.input, slug, id, tc.wantSlug, tc.wantID)
+		slug, info := NormalizeChannelInfo(tc.input)
+		if slug != tc.wantSlug || info.ChatroomID != tc.wantID {
+			t.Errorf("NormalizeChannelInfo(%q) = (%q, %d), want (%q, %d)", tc.input, slug, info.ChatroomID, tc.wantSlug, tc.wantID)
 		}
 	}
 }

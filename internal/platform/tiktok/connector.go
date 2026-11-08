@@ -539,10 +539,6 @@ func (c *Connector) consumeStreamEvents(ctx context.Context, username string, ev
 	}
 }
 
-func (c *Connector) handleRawEvent(rawEv gotiktoklive.Event) bool {
-	return c.handleRawEventWithStats(rawEv, nil)
-}
-
 func (c *Connector) handleRawEventWithStats(rawEv gotiktoklive.Event, stats *streamSessionStats) bool {
 	if rawEv == nil {
 		return false

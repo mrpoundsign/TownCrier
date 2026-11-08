@@ -9,8 +9,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/theme"
-
-	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
 // UI scale mode constants and display labels.
@@ -356,14 +354,6 @@ func ParseCustomChatScaleInput(text string, fallback int) int {
 		return NormalizeChatScale(val)
 	}
 	return NormalizeChatScale(fallback)
-}
-
-// EffectivePresetChatScale returns the effective chat scale percentage for a LiveLogPreset.
-func EffectivePresetChatScale(preset config.LiveLogPreset, defaultPct int) int {
-	if preset.ChatScale > 0 {
-		return NormalizeChatScale(preset.ChatScale)
-	}
-	return NormalizeChatScale(defaultPct)
 }
 
 // ScaledChatTheme wraps ObsidianTheme to scale text, inline icons, and cell padding inside chat panels

@@ -10,10 +10,6 @@ type SherpaEngine struct {
 	family string
 }
 
-func NewSherpaEngine(modelDir string, numThreads int, useGPU bool) (*SherpaEngine, error) {
-	return NewFamilySherpaEngine(ModelKokoro, modelDir, numThreads, useGPU)
-}
-
 func NewFamilySherpaEngine(family string, _ string, _ int, _ bool) (*SherpaEngine, error) {
 	return &SherpaEngine{family: family}, ErrEngineClosed
 }

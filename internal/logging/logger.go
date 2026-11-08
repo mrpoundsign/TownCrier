@@ -78,13 +78,6 @@ func Init(customPath string) (string, error) {
 	return target, nil
 }
 
-// LogPath returns the active log file path, if initialized.
-func LogPath() string {
-	mu.Lock()
-	defer mu.Unlock()
-	return logPath
-}
-
 // Sync flushes pending buffered log writes to disk.
 func Sync() {
 	mu.Lock()

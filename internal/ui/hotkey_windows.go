@@ -49,11 +49,6 @@ type GlobalHotkeyManager struct {
 	onTrigger func()
 }
 
-// NewGlobalHotkeyManager creates a new Windows global hotkey manager with the default Panic hotkey ID.
-func NewGlobalHotkeyManager(onTrigger func()) *GlobalHotkeyManager {
-	return NewGlobalHotkeyManagerWithID(HotkeyIDPanic, onTrigger)
-}
-
 // NewGlobalHotkeyManagerWithID creates a new Windows global hotkey manager with a specific Win32 hotkey ID.
 func NewGlobalHotkeyManagerWithID(id uintptr, onTrigger func()) *GlobalHotkeyManager {
 	if id == 0 {
