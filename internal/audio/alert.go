@@ -22,8 +22,10 @@ const (
 )
 
 var (
-	defaultChimeOnce    sync.Once
-	defaultChimeSamples []float32
+	defaultChimeOnce               sync.Once
+	defaultChimeSamples            []float32
+	defaultTranslationChimeOnce    sync.Once
+	defaultTranslationChimeSamples []float32
 )
 
 // DefaultChimeSamples returns a pre-synthesized 24 kHz mono float32 two-tone harmonic chime
@@ -68,6 +70,57 @@ func DefaultChimeSamples() ([]float32, int) {
 		defaultChimeSamples = buf
 	})
 	return defaultChimeSamples, AlertSampleRate
+}
+
+// DefaultTranslationChimeSamples returns a pre-synthesized 24 kHz mono float32 three-note ascending
+// harmonic chime (E5 659.25 Hz -> A5 880.00 Hz -> C#6 1108.73 Hz, ~210ms notes + 40ms trailing gap)
+// that plays before a translated chat message is spoken.
+func DefaultTranslationChimeSamples() ([]float32, int) {
+	defaultTranslationChimeOnce.Do(func() {
+		note1Samples := int(AlertSampleRate * 0.060) // 60ms E5
+		note2Samples := int(AlertSampleRate * 0.060) // 60ms A5
+		note3Samples := int(AlertSampleRate * 0.090) // 90ms C#6
+		gapSamples := int(AlertSampleRate * 0.040)   // 40ms breath gap before speech
+		activeSamples := note1Samples + note2Samples + note3Samples
+		totalSamples := activeSamples + gapSamples
+		buf := make([]float32, totalSamples)
+
+		attackSamples := int(0.003 * AlertSampleRate)
+		for i := range activeSamples {
+			var freq float64
+			var localIdx int
+			var noteLen int
+			switch {
+			case i < note1Samples:
+				freq = 659.25 // E5
+				localIdx = i
+				noteLen = note1Samples
+			case i < note1Samples+note2Samples:
+				freq = 880.00 // A5
+				localIdx = i - note1Samples
+				noteLen = note2Samples
+			default:
+				freq = 1108.73 // C#6
+				localIdx = i - (note1Samples + note2Samples)
+				noteLen = note3Samples
+			}
+
+			t := float64(localIdx) / float64(AlertSampleRate)
+			env := 1.0
+			if localIdx < attackSamples {
+				env = float64(localIdx) / float64(attackSamples)
+			}
+			progress := float64(localIdx) / float64(noteLen)
+			decay := math.Exp(-4.0 * progress)
+
+			fundamental := math.Sin(2.0 * math.Pi * freq * t)
+			harmonic := 0.22 * math.Sin(2.0*math.Pi*(freq*2.0)*t)
+			sample := 0.30 * env * decay * (fundamental + harmonic)
+			buf[i] = float32(sample)
+		}
+		defaultTranslationChimeSamples = buf
+	})
+	return defaultTranslationChimeSamples, AlertSampleRate
 }
 
 // AlertSoundCache caches decoded custom alert audio files by path and modification time.
@@ -120,6 +173,17 @@ func (c *AlertSoundCache) Resolve(customPath string) ([]float32, int, error) {
 	c.mu.Unlock()
 
 	return samples, rate, nil
+}
+
+// ResolveTranslationChime returns the PCM samples and sample rate for customPath (using the mtime cache),
+// or returns DefaultTranslationChimeSamples() (3-note ascending chime) when customPath is empty.
+func (c *AlertSoundCache) ResolveTranslationChime(customPath string) ([]float32, int, error) {
+	trimmed := strings.TrimSpace(customPath)
+	if trimmed == "" {
+		samples, rate := DefaultTranslationChimeSamples()
+		return samples, rate, nil
+	}
+	return c.Resolve(trimmed)
 }
 
 // LoadAlertSoundFile decodes a .wav or .mp3 file into 24 kHz mono float32 PCM samples.

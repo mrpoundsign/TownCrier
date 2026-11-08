@@ -479,3 +479,93 @@ func TestEffectiveMentionRules(t *testing.T) {
 		t.Fatalf("expected youtube inherited ('replies_and_leading', true, true), got (%q, %v, %v)", mode, allowBroadcaster, playAlert)
 	}
 }
+
+func TestTranslationConfigAndOverrides(t *testing.T) {
+	store := NewMemoryStore(nil)
+	cfg, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Translation.Enabled {
+		t.Fatalf("expected default Translation.Enabled=false")
+	}
+	if cfg.Translation.Provider != TranslationProviderMyMemory {
+		t.Fatalf("expected default Translation.Provider=%q, got %q", TranslationProviderMyMemory, cfg.Translation.Provider)
+	}
+	if cfg.Translation.TargetLang != DefaultTranslationTargetLang {
+		t.Fatalf("expected default Translation.TargetLang=%q, got %q", DefaultTranslationTargetLang, cfg.Translation.TargetLang)
+	}
+	if NormalizeTranslationTargetLang("tl") != "tl" {
+		t.Fatalf("expected NormalizeTranslationTargetLang('tl')='tl', got %q", NormalizeTranslationTargetLang("tl"))
+	}
+	if NormalizeTranslationProvider("deepl") != TranslationProviderDeepL {
+		t.Fatalf("expected NormalizeTranslationProvider('deepl')=%q", TranslationProviderDeepL)
+	}
+	if NormalizeTranslationProvider("google") != TranslationProviderGoogle {
+		t.Fatalf("expected NormalizeTranslationProvider('google')=%q", TranslationProviderGoogle)
+	}
+	if NormalizeTranslationRoutingMode("round_robin") != TranslationRoutingRoundRobin {
+		t.Fatalf("expected NormalizeTranslationRoutingMode('round_robin')=%q", TranslationRoutingRoundRobin)
+	}
+	if NormalizeTranslationRoutingMode("invalid") != TranslationRoutingPriority {
+		t.Fatalf("expected NormalizeTranslationRoutingMode('invalid')=%q", TranslationRoutingPriority)
+	}
+	if !cfg.Translation.PlayChimeBeforeSpeak {
+		t.Fatalf("expected default PlayChimeBeforeSpeak=true")
+	}
+	if len(cfg.Translation.Providers) != len(AllTranslationProviders) {
+		t.Fatalf("expected %d providers by default, got %d", len(AllTranslationProviders), len(cfg.Translation.Providers))
+	}
+	if cfg.Translation.Providers[0].Provider != TranslationProviderMyMemory || !cfg.Translation.Providers[0].Enabled {
+		t.Fatalf("expected MyMemory enabled at #1 by default, got %+v", cfg.Translation.Providers[0])
+	}
+
+	// Verify legacy single-provider migration populates Providers with legacy primary #1 and MyMemory #2
+	legacy := TranslationConfig{
+		Enabled:      true,
+		Provider:     TranslationProviderOllama,
+		EndpointURL:  "http://127.0.0.1:11434",
+		Model:        "llama3.2",
+		ContactEmail: "test@example.com",
+	}
+	NormalizeTranslationProviders(&legacy)
+	if len(legacy.Providers) != len(AllTranslationProviders) {
+		t.Fatalf("expected %d providers after migration, got %d", len(AllTranslationProviders), len(legacy.Providers))
+	}
+	if legacy.Providers[0].Provider != TranslationProviderOllama || !legacy.Providers[0].Enabled || legacy.Providers[0].Model != "llama3.2" {
+		t.Fatalf("expected migrated #1 to be Ollama enabled with model llama3.2, got %+v", legacy.Providers[0])
+	}
+	if legacy.Providers[1].Provider != TranslationProviderMyMemory || !legacy.Providers[1].Enabled || legacy.Providers[1].ContactEmail != "test@example.com" {
+		t.Fatalf("expected migrated #2 to be MyMemory enabled with ContactEmail, got %+v", legacy.Providers[1])
+	}
+
+	if cfg.EffectiveTranslationEnabled("twitch") {
+		t.Fatalf("expected EffectiveTranslationEnabled('twitch')=false by default")
+	}
+
+	// Enable globally
+	cfg.Translation.Enabled = true
+	if !cfg.EffectiveTranslationEnabled("twitch") {
+		t.Fatalf("expected EffectiveTranslationEnabled('twitch')=true when enabled globally")
+	}
+
+	// Override off on twitch, on on youtube
+	pTw := cfg.Platforms["twitch"]
+	pTw.Overrides.TranslateMode = OverrideModeOff
+	cfg.Platforms["twitch"] = pTw
+
+	pYt := cfg.Platforms["youtube"]
+	pYt.Overrides.TranslateMode = OverrideModeOn
+	cfg.Platforms["youtube"] = pYt
+
+	if cfg.EffectiveTranslationEnabled("twitch") {
+		t.Fatalf("expected EffectiveTranslationEnabled('twitch')=false when overridden off")
+	}
+	cfg.Translation.Enabled = false
+	if !cfg.EffectiveTranslationEnabled("youtube") {
+		t.Fatalf("expected EffectiveTranslationEnabled('youtube')=true when overridden on")
+	}
+	if err := store.Save(cfg); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+}

@@ -22,6 +22,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/bots"
 	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
+	"github.com/mrpoundsign/TownCrier/internal/translate"
 )
 
 const (
@@ -163,7 +164,8 @@ type LogsView struct {
 	tooltipText   *canvas.Text
 	emoteCache    *EmoteCache
 
-	rowCache map[string]*cachedLogRow
+	rowCache          map[string]*cachedLogRow
+	showOriginalByID  map[string]bool
 
 	onStatus           func(msg string)
 	onAssignVoice      func(platform, username string)
@@ -189,6 +191,7 @@ func NewLogsView(w fyne.Window, session *app.Session) *LogsView {
 		tabActive:         true,
 		heldQueueExpanded: true,
 		rowCache:          make(map[string]*cachedLogRow),
+		showOriginalByID:  make(map[string]bool),
 		listBox:           container.NewVBox(),
 	}
 }
@@ -1977,6 +1980,7 @@ func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
 	if f.TextQuery != "" {
 		tq := strings.ToLower(f.TextQuery)
 		if !strings.Contains(strings.ToLower(e.RawText), tq) &&
+			!strings.Contains(strings.ToLower(e.TranslatedText), tq) &&
 			!strings.Contains(strings.ToLower(e.SpokenText), tq) &&
 			!strings.Contains(strings.ToLower(e.ItemName), tq) &&
 			!strings.Contains(strings.ToLower(e.RewardTitle), tq) &&
@@ -2237,23 +2241,8 @@ func (v *LogsView) buildLogRowWithRef(rowIdx int, e eventlog.Entry) (fyne.Canvas
 		userCell = userNameLabel
 	}
 
-	// [3] Message column (expanding flex, word-wrapped with inline emote support)
-	msgTip := ""
-	if e.SpokenText != "" && !strings.EqualFold(e.SpokenText, e.RawText) {
-		msgTip = "Spoken as: " + e.SpokenText
-	}
-	var msgCell fyne.CanvasObject
-	if len(e.Emotes) > 0 {
-		ec := newScaledEmoteMessageCell(v.emoteCache, s, v.showTooltipForObject)
-		ec.SetContent(e.Platform, e.RawText, e.Emotes, msgTip, "")
-		msgCell = ec
-	} else {
-		msgLine := strings.ReplaceAll(strings.TrimSpace(e.RawText), "\n", " ")
-		if msgLine == "" {
-			msgLine = fmt.Sprintf("(%s event)", e.Kind)
-		}
-		msgCell = v.newWrappedCellLabel(msgLine, msgTip, fyne.TextStyle{})
-	}
+	// [3] Message column (expanding flex, word-wrapped with inline emote support and 文A translation toggle)
+	msgCell := v.buildMessageCell(e, s)
 
 	// [4] Collapsed TTS Status icon column ([Filter] [Spoken] [Voice])
 	ttsStatusCell := v.ttsStatusIcons(e)
@@ -2292,6 +2281,109 @@ func (v *LogsView) buildLogRowWithRef(rowIdx int, e eventlog.Entry) (fyne.Canvas
 	}
 
 	return root, cached
+}
+
+func (v *LogsView) buildMessageCell(e eventlog.Entry, s float32) fyne.CanvasObject {
+	hasTranslation := strings.TrimSpace(e.TranslatedText) != ""
+	if !hasTranslation {
+		msgTip := ""
+		if e.SpokenText != "" && !strings.EqualFold(e.SpokenText, e.RawText) {
+			msgTip = "Spoken as: " + e.SpokenText
+		}
+		if len(e.Emotes) > 0 {
+			ec := newScaledEmoteMessageCell(v.emoteCache, s, v.showTooltipForObject)
+			ec.SetContent(e.Platform, e.RawText, e.Emotes, msgTip, "")
+			return ec
+		}
+		msgLine := strings.ReplaceAll(strings.TrimSpace(e.RawText), "\n", " ")
+		if msgLine == "" {
+			msgLine = fmt.Sprintf("(%s event)", e.Kind)
+		}
+		return v.newWrappedCellLabel(msgLine, msgTip, fyne.TextStyle{})
+	}
+
+	v.mu.Lock()
+	if v.showOriginalByID == nil {
+		v.showOriginalByID = make(map[string]bool)
+	}
+	showOrig := v.showOriginalByID[e.ID]
+	v.mu.Unlock()
+
+	srcLang := e.SourceLang
+	if srcLang == "" {
+		srcLang = "auto"
+	}
+	langName := translate.LanguageName(srcLang)
+	targetLang := "en"
+	if v.session != nil && v.session.Config() != nil {
+		targetLang = config.NormalizeTranslationTargetLang(v.session.Config().Translation.TargetLang)
+	}
+
+	iconSz := fyne.NewSize(20*s, 20*s)
+	entryID := e.ID
+	entryCopy := e
+	toggleTap := func() {
+		v.ToggleEntryTranslationView(entryID, entryCopy)
+	}
+
+	var toggleIcon *hoverIconWidget
+	var textBody fyne.CanvasObject
+
+	if showOrig {
+		tip := fmt.Sprintf("Showing original %s (%s) • Click 文A to show translation: %s", langName, srcLang, e.TranslatedText)
+		toggleIcon = v.newHoverIcon(resLogTranslatedOriginal, iconSz, tip, toggleTap)
+		if len(e.Emotes) > 0 {
+			ec := newScaledEmoteMessageCell(v.emoteCache, s, v.showTooltipForObject)
+			ec.SetContent(e.Platform, e.RawText, e.Emotes, tip, "")
+			textBody = ec
+		} else {
+			origLine := strings.ReplaceAll(strings.TrimSpace(e.RawText), "\n", " ")
+			textBody = v.newWrappedCellLabel(origLine, tip, fyne.TextStyle{})
+		}
+	} else {
+		tip := fmt.Sprintf("Translated from %s (%s → %s) • Click 文A to show original: %s", langName, srcLang, targetLang, e.RawText)
+		toggleIcon = v.newHoverIcon(resLogTranslated, iconSz, tip, toggleTap)
+		transLine := strings.ReplaceAll(strings.TrimSpace(e.TranslatedText), "\n", " ")
+		textBody = v.newWrappedCellLabel(transLine, tip, fyne.TextStyle{Italic: true})
+	}
+
+	return container.NewBorder(nil, nil, container.NewCenter(toggleIcon), nil, textBody)
+}
+
+// ToggleEntryTranslationView flips a translated log row between italicized translated text and original text.
+func (v *LogsView) ToggleEntryTranslationView(entryID string, fallbackEntry eventlog.Entry) {
+	if entryID == "" {
+		return
+	}
+	v.mu.Lock()
+	if v.showOriginalByID == nil {
+		v.showOriginalByID = make(map[string]bool)
+	}
+	v.showOriginalByID[entryID] = !v.showOriginalByID[entryID]
+	cached := v.rowCache[entryID]
+	v.mu.Unlock()
+
+	s := v.chatScaleFactor()
+	if cached != nil && cached.rowCols != nil && len(cached.rowCols.Objects) > 3 {
+		entry := cached.entry
+		if entry.ID == "" {
+			entry = fallbackEntry
+		}
+		cached.rowCols.Objects[3] = v.buildMessageCell(entry, s)
+		cached.rowCols.Refresh()
+		if v.listBox != nil {
+			v.listBox.Refresh()
+		}
+		return
+	}
+	v.renderEntries()
+}
+
+// IsShowingOriginalText reports whether the given log entry ID is currently toggled to display original text.
+func (v *LogsView) IsShowingOriginalText(entryID string) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.showOriginalByID[entryID]
 }
 
 func (v *LogsView) showAssignVoiceDialog(platform, username string) {

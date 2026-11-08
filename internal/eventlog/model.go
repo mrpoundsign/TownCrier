@@ -98,9 +98,11 @@ type Entry struct {
 	UserName      string           `json:"user_name"`
 	DisplayName   string           `json:"display_name"`
 	Roles         []string         `json:"roles,omitempty"`
-	RawText       string           `json:"raw_text"`
-	Emotes        []chat.EmoteSpan `json:"emotes,omitempty"`
-	SpokenText    string           `json:"spoken_text,omitempty"`
+	RawText        string           `json:"raw_text"`
+	Emotes         []chat.EmoteSpan `json:"emotes,omitempty"`
+	TranslatedText string           `json:"translated_text,omitempty"`
+	SourceLang     string           `json:"source_lang,omitempty"`
+	SpokenText     string           `json:"spoken_text,omitempty"`
 	VoiceID       string           `json:"voice_id,omitempty"`
 	Speed         float32          `json:"speed,omitempty"`
 	Amount        float64          `json:"amount,omitempty"`

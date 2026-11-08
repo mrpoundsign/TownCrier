@@ -22,7 +22,7 @@ import (
 const (
 	defaultQueryLimit      = 100
 	maxQueryLimit          = 1000
-	currentSchemaVersion   = 3
+	currentSchemaVersion   = 4
 	maxDBBackups           = 5
 	historicalSessionGapMs = 4 * 60 * 60 * 1000 // 4 hour inactivity gap splits historical stream sessions
 )
@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS event_logs (
 	roles_json      TEXT NOT NULL DEFAULT '[]',
 	raw_text        TEXT NOT NULL DEFAULT '',
 	emotes_json     TEXT NOT NULL DEFAULT '[]',
+	translated_text TEXT NOT NULL DEFAULT '',
+	source_lang     TEXT NOT NULL DEFAULT '',
 	spoken_text     TEXT NOT NULL DEFAULT '',
 	voice_id        TEXT NOT NULL DEFAULT '',
 	speed           REAL NOT NULL DEFAULT 1.0,
@@ -94,6 +96,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS event_logs_fts USING fts5(
 	user_name,
 	display_name,
 	raw_text,
+	translated_text,
 	spoken_text,
 	item_name,
 	reward_title,
@@ -104,20 +107,20 @@ CREATE VIRTUAL TABLE IF NOT EXISTS event_logs_fts USING fts5(
 );
 
 CREATE TRIGGER IF NOT EXISTS trg_event_logs_ai AFTER INSERT ON event_logs BEGIN
-	INSERT INTO event_logs_fts(rowid, user_id, user_name, display_name, raw_text, spoken_text, item_name, reward_title, recipient)
-	VALUES (new.rowid, new.user_id, new.user_name, new.display_name, new.raw_text, new.spoken_text, new.item_name, new.reward_title, new.recipient);
+	INSERT INTO event_logs_fts(rowid, user_id, user_name, display_name, raw_text, translated_text, spoken_text, item_name, reward_title, recipient)
+	VALUES (new.rowid, new.user_id, new.user_name, new.display_name, new.raw_text, new.translated_text, new.spoken_text, new.item_name, new.reward_title, new.recipient);
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_event_logs_ad AFTER DELETE ON event_logs BEGIN
-	INSERT INTO event_logs_fts(event_logs_fts, rowid, user_id, user_name, display_name, raw_text, spoken_text, item_name, reward_title, recipient)
-	VALUES ('delete', old.rowid, old.user_id, old.user_name, old.display_name, old.raw_text, old.spoken_text, old.item_name, old.reward_title, old.recipient);
+	INSERT INTO event_logs_fts(event_logs_fts, rowid, user_id, user_name, display_name, raw_text, translated_text, spoken_text, item_name, reward_title, recipient)
+	VALUES ('delete', old.rowid, old.user_id, old.user_name, old.display_name, old.raw_text, old.translated_text, old.spoken_text, old.item_name, old.reward_title, old.recipient);
 END;
 
-CREATE TRIGGER IF NOT EXISTS trg_event_logs_au AFTER UPDATE OF user_id, user_name, display_name, raw_text, spoken_text, item_name, reward_title, recipient ON event_logs BEGIN
-	INSERT INTO event_logs_fts(event_logs_fts, rowid, user_id, user_name, display_name, raw_text, spoken_text, item_name, reward_title, recipient)
-	VALUES ('delete', old.rowid, old.user_id, old.user_name, old.display_name, old.raw_text, old.spoken_text, old.item_name, old.reward_title, old.recipient);
-	INSERT INTO event_logs_fts(rowid, user_id, user_name, display_name, raw_text, spoken_text, item_name, reward_title, recipient)
-	VALUES (new.rowid, new.user_id, new.user_name, new.display_name, new.raw_text, new.spoken_text, new.item_name, new.reward_title, new.recipient);
+CREATE TRIGGER IF NOT EXISTS trg_event_logs_au AFTER UPDATE OF user_id, user_name, display_name, raw_text, translated_text, spoken_text, item_name, reward_title, recipient ON event_logs BEGIN
+	INSERT INTO event_logs_fts(event_logs_fts, rowid, user_id, user_name, display_name, raw_text, translated_text, spoken_text, item_name, reward_title, recipient)
+	VALUES ('delete', old.rowid, old.user_id, old.user_name, old.display_name, old.raw_text, old.translated_text, old.spoken_text, old.item_name, old.reward_title, old.recipient);
+	INSERT INTO event_logs_fts(rowid, user_id, user_name, display_name, raw_text, translated_text, spoken_text, item_name, reward_title, recipient)
+	VALUES (new.rowid, new.user_id, new.user_name, new.display_name, new.raw_text, new.translated_text, new.spoken_text, new.item_name, new.reward_title, new.recipient);
 END;
 `
 
@@ -129,6 +132,8 @@ type columnSpec struct {
 var requiredEventLogColumns = []columnSpec{
 	{"session_id", "INTEGER NOT NULL DEFAULT 0"},
 	{"emotes_json", "TEXT NOT NULL DEFAULT '[]'"},
+	{"translated_text", "TEXT NOT NULL DEFAULT ''"},
+	{"source_lang", "TEXT NOT NULL DEFAULT ''"},
 	{"is_paid_event", "INTEGER NOT NULL DEFAULT 0"},
 	{"amount", "REAL NOT NULL DEFAULT 0"},
 	{"unit_amount", "REAL NOT NULL DEFAULT 0"},
@@ -250,13 +255,24 @@ func migrateAndRecover(db *sql.DB, cleanFile string) error {
 		}
 	}
 
-	// 6. Create FTS5 virtual table and sync triggers, then rebuild FTS5 index when upgrading to v2
+	// 6. Create FTS5 virtual table and sync triggers, then rebuild FTS5 index when upgrading to v2 or v4
+	if existingFTS && userVersion > 0 && userVersion < 4 {
+		if _, err := db.Exec(`
+			DROP TRIGGER IF EXISTS trg_event_logs_ai;
+			DROP TRIGGER IF EXISTS trg_event_logs_ad;
+			DROP TRIGGER IF EXISTS trg_event_logs_au;
+			DROP TABLE IF EXISTS event_logs_fts;
+		`); err != nil {
+			return fmt.Errorf("drop legacy sqlite fts5 schema: %w", err)
+		}
+		existingFTS = false
+	}
 	if _, err := db.Exec(sqliteFTSSchema); err != nil {
 		return fmt.Errorf("initialize sqlite fts5 schema: %w", err)
 	}
-	if userVersion < 2 || (existingEventLogs && !existingFTS) {
+	if userVersion < 4 || (existingEventLogs && !existingFTS) {
 		if err := runVersion2DataMigration(db); err != nil {
-			return fmt.Errorf("migrate sqlite data to v2: %w", err)
+			return fmt.Errorf("migrate sqlite data to v4 fts: %w", err)
 		}
 	}
 
@@ -988,29 +1004,31 @@ func (s *SQLiteBackend) Append(ctx context.Context, entry *Entry) error {
 INSERT INTO event_logs (
 	id, session_id, created_at, updated_at, platform, channel, kind, is_paid_event,
 	user_id, user_name, display_name, roles_json,
-	raw_text, emotes_json, spoken_text, voice_id, speed,
+	raw_text, emotes_json, translated_text, source_lang, spoken_text, voice_id, speed,
 	amount, unit_amount, currency, item_name, sub_tier, recipient, reward_id, reward_title,
 	months, count,
 	passed_filters, spoken, outcome, outcome_detail
 ) VALUES (
 	?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?,
-	?, ?, ?, ?, ?,
+	?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?,
 	?, ?, ?, ?
 )
 ON CONFLICT(id) DO UPDATE SET
-	session_id     = CASE WHEN excluded.session_id > 0 THEN excluded.session_id ELSE event_logs.session_id END,
-	updated_at     = excluded.updated_at,
-	emotes_json    = CASE WHEN excluded.emotes_json != '[]' THEN excluded.emotes_json ELSE event_logs.emotes_json END,
-	spoken_text    = CASE WHEN excluded.spoken_text != '' THEN excluded.spoken_text ELSE event_logs.spoken_text END,
-	voice_id       = CASE WHEN excluded.voice_id != '' THEN excluded.voice_id ELSE event_logs.voice_id END,
-	speed          = CASE WHEN excluded.speed > 0 THEN excluded.speed ELSE event_logs.speed END,
-	passed_filters = excluded.passed_filters,
-	spoken         = excluded.spoken,
-	outcome        = excluded.outcome,
-	outcome_detail = excluded.outcome_detail;
+	session_id      = CASE WHEN excluded.session_id > 0 THEN excluded.session_id ELSE event_logs.session_id END,
+	updated_at      = excluded.updated_at,
+	emotes_json     = CASE WHEN excluded.emotes_json != '[]' THEN excluded.emotes_json ELSE event_logs.emotes_json END,
+	translated_text = CASE WHEN excluded.translated_text != '' THEN excluded.translated_text ELSE event_logs.translated_text END,
+	source_lang     = CASE WHEN excluded.source_lang != '' THEN excluded.source_lang ELSE event_logs.source_lang END,
+	spoken_text     = CASE WHEN excluded.spoken_text != '' THEN excluded.spoken_text ELSE event_logs.spoken_text END,
+	voice_id        = CASE WHEN excluded.voice_id != '' THEN excluded.voice_id ELSE event_logs.voice_id END,
+	speed           = CASE WHEN excluded.speed > 0 THEN excluded.speed ELSE event_logs.speed END,
+	passed_filters  = excluded.passed_filters,
+	spoken          = excluded.spoken,
+	outcome         = excluded.outcome,
+	outcome_detail  = excluded.outcome_detail;
 `
 
 	_, err = s.db.ExecContext(
@@ -1030,6 +1048,8 @@ ON CONFLICT(id) DO UPDATE SET
 		string(rolesBytes),
 		entry.RawText,
 		string(emotesBytes),
+		entry.TranslatedText,
+		entry.SourceLang,
 		entry.SpokenText,
 		entry.VoiceID,
 		entry.Speed,
@@ -1186,7 +1206,7 @@ func buildWhereClause(filter QueryFilter) (string, []any) {
 	uq := strings.TrimSpace(filter.UserQuery)
 	tq := strings.TrimSpace(filter.TextQuery)
 	userFTS, hasUserFTS := ftsTrigramColumnExpr("user_id user_name display_name", uq)
-	textFTS, hasTextFTS := ftsTrigramColumnExpr("raw_text spoken_text item_name reward_title recipient", tq)
+	textFTS, hasTextFTS := ftsTrigramColumnExpr("raw_text translated_text spoken_text item_name reward_title recipient", tq)
 	switch {
 	case hasUserFTS && hasTextFTS:
 		whereClauses = append(whereClauses, "rowid IN (SELECT rowid FROM event_logs_fts WHERE event_logs_fts MATCH ?)")
@@ -1207,8 +1227,8 @@ func buildWhereClause(filter QueryFilter) (string, []any) {
 
 	if tq != "" && !hasTextFTS {
 		likePat := "%" + strings.ToLower(tq) + "%"
-		whereClauses = append(whereClauses, "(LOWER(raw_text) LIKE ? OR LOWER(spoken_text) LIKE ? OR LOWER(item_name) LIKE ? OR LOWER(reward_title) LIKE ? OR LOWER(recipient) LIKE ?)")
-		args = append(args, likePat, likePat, likePat, likePat, likePat)
+		whereClauses = append(whereClauses, "(LOWER(raw_text) LIKE ? OR LOWER(translated_text) LIKE ? OR LOWER(spoken_text) LIKE ? OR LOWER(item_name) LIKE ? OR LOWER(reward_title) LIKE ? OR LOWER(recipient) LIKE ?)")
+		args = append(args, likePat, likePat, likePat, likePat, likePat, likePat)
 	}
 
 	// 8. Outcome / Spoken mode filter
@@ -1367,7 +1387,7 @@ func hasFTSFilter(filter QueryFilter) bool {
 	if uOK {
 		return true
 	}
-	_, tOK := ftsTrigramColumnExpr("raw_text spoken_text item_name reward_title recipient", strings.TrimSpace(filter.TextQuery))
+	_, tOK := ftsTrigramColumnExpr("raw_text translated_text spoken_text item_name reward_title recipient", strings.TrimSpace(filter.TextQuery))
 	return tOK
 }
 
@@ -1401,7 +1421,7 @@ func (s *SQLiteBackend) Query(ctx context.Context, filter QueryFilter) (*QueryRe
 SELECT
 	id, session_id, created_at, updated_at, platform, channel, kind, is_paid_event,
 	user_id, user_name, display_name, roles_json,
-	raw_text, emotes_json, spoken_text, voice_id, speed,
+	raw_text, emotes_json, translated_text, source_lang, spoken_text, voice_id, speed,
 	amount, unit_amount, currency, item_name, sub_tier, recipient, reward_id, reward_title,
 	months, count,
 	passed_filters, spoken, outcome, outcome_detail
@@ -1444,6 +1464,8 @@ LIMIT ? OFFSET ?;`
 			&rolesJSON,
 			&e.RawText,
 			&emotesJSON,
+			&e.TranslatedText,
+			&e.SourceLang,
 			&e.SpokenText,
 			&e.VoiceID,
 			&speedFloat,

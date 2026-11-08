@@ -1382,6 +1382,68 @@ func TestLogsViewCoalescedLiveRenderAndTabDeferral(t *testing.T) {
 	}
 }
 
+func TestLogsViewTranslationToggle(t *testing.T) {
+	testApp := test.NewApp()
+	defer testApp.Quit()
+
+	w := testApp.NewWindow("Translation Toggle Test")
+	defer w.Close()
+
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
+
+	backend, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	mgr := eventlog.NewManager(eventlog.RetentionPolicy{}, backend)
+	sess.SetEventLogger(mgr)
+
+	lv := NewLogsView(w, sess)
+	defer lv.Close()
+	w.SetContent(lv.Build())
+
+	entry := eventlog.Entry{
+		ID:             "trans-row-1",
+		CreatedAt:      time.Now().UTC(),
+		Platform:       "twitch",
+		Channel:        "mrpoundsign",
+		Kind:           "message",
+		UserID:         "u-es",
+		UserName:       "carlos",
+		DisplayName:    "Carlos",
+		RawText:        "Hola amigos, este directo está increíble hoy!",
+		TranslatedText: "Hello friends, this stream is incredible today!",
+		SourceLang:     "es",
+		SpokenText:     "Carlos says: Hello friends, this stream is incredible today!",
+		PassedFilters:  true,
+		Spoken:         true,
+		Outcome:        eventlog.OutcomeSpoken,
+	}
+	if err := mgr.Append(context.Background(), &entry); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	lv.RefreshQuery()
+
+	if lv.IsShowingOriginalText("trans-row-1") {
+		t.Fatal("expected translated log row to default to showing translated text")
+	}
+
+	// Toggle to original text
+	lv.ToggleEntryTranslationView("trans-row-1", entry)
+	if !lv.IsShowingOriginalText("trans-row-1") {
+		t.Fatal("expected IsShowingOriginalText to be true after first toggle")
+	}
+
+	// Toggle back to translated text
+	lv.ToggleEntryTranslationView("trans-row-1", entry)
+	if lv.IsShowingOriginalText("trans-row-1") {
+		t.Fatal("expected IsShowingOriginalText to be false after second toggle")
+	}
+}
+
+
 
 
 

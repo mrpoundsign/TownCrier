@@ -285,6 +285,7 @@
 
     <nav aria-label="Main Navigation">
       <a href="index.html"><strong>Home</strong></a>
+      <a href="translation-guides.html">Translation Guides</a>
       <a href="privacy.html">Privacy Policy</a>
       <a href="terms.html">Terms of Service</a>
       <a href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
@@ -423,10 +424,27 @@
         </div>
       </section>
 
+      <!-- Feature: Live Foreign Chat Translation -->
+      <section class="card">
+        <span class="badge">Multilingual</span>
+        <h2>Automatic Foreign Chat Detection &amp; Cascading Translation</h2>
+        <p>
+          Engage global viewers effortlessly with built-in sub-millisecond language detection, a two-tier sentence spam cache, and cascading multi-provider translation:
+        </p>
+        <ul>
+          <li><strong>Zero-Setup Free Default + Official Providers:</strong> Works immediately out of the box via MyMemory (up to 50,000 free chars/day with an email address), or chain together <strong>Google Cloud Translation (Basic v2)</strong>, <strong>DeepL API (Free / Pro)</strong>, <strong>LibreTranslate</strong>, and <strong>Local LLMs via Ollama</strong> using Priority Failover or Round-Robin Load Balancing.</li>
+          <li><strong>Smart Sentence Splitting &amp; Two-Tier Cache:</strong> Splits messages into sentences so repeated greetings, copypastas, and bilingual chatters resolve cached or already-English sentences locally at 0 API cost. Phrases seen &ge;2 times promote to disk automatically.</li>
+          <li><strong>3-Note Notification Chime &amp; Dual-Language Logs:</strong> Plays a subtle 3-note ascending chime (or custom WAV/MP3) before speaking translated messages, and stores both original and translated text in Event Logs with a 1-click <code>文A</code> toggle.</li>
+        </ul>
+        <div class="btn-group">
+          <a class="btn btn-secondary" href="translation-guides.html">View Translation Setup Guides</a>
+        </div>
+      </section>
+
       <!-- Legal & Privacy -->
       <section class="card">
         <span class="badge">Compliance</span>
-        <h2>Legal, Licensing & Privacy</h2>
+        <h2>Legal, Licensing &amp; Privacy</h2>
         <p>
           TownCrier is free, open-source software licensed under the <a href="https://github.com/mrpoundsign/TownCrier/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GNU Affero General Public License v3.0 (AGPL-3.0)</a>.
         </p>
@@ -445,6 +463,7 @@
       <div>&copy; TownCrier Open Source Project. Licensed under GNU AGPLv3.</div>
       <nav aria-label="Footer Navigation">
         <a href="index.html">Home</a>
+        <a href="translation-guides.html">Translation Guides</a>
         <a href="privacy.html">Privacy Policy</a>
         <a href="terms.html">Terms of Service</a>
         <a href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>

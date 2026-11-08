@@ -37,9 +37,10 @@ type Queue struct {
 	eventsQueue []*Item
 	chatQueue   []*Item
 
-	player audio.Player
-	engine tts.Engine
-	cfgFn  func() *config.Config
+	player                audio.Player
+	engine                tts.Engine
+	cfgFn                 func() *config.Config
+	translationChimeCache *audio.AlertSoundCache
 
 	currentItem         *Item
 	currentAborted      bool
@@ -71,10 +72,11 @@ func NewQueue(player audio.Player, engine tts.Engine, cfgFn func() *config.Confi
 	}
 
 	q := &Queue{
-		player:         player,
-		engine:         engine,
-		cfgFn:          cfgFn,
-		stopPlaybackCh: make(chan struct{}, 1),
+		player:                player,
+		engine:                engine,
+		cfgFn:                 cfgFn,
+		translationChimeCache: audio.NewAlertSoundCache(),
+		stopPlaybackCh:        make(chan struct{}, 1),
 	}
 	q.cond = sync.NewCond(&q.mu)
 
@@ -717,6 +719,8 @@ func (q *Queue) processItem(item *Item, depth int) {
 
 	log.Printf("[Queue] Synthesizing speech for %q (voice=%s, speed=%.2f)...", item.Text, item.VoiceID, speed)
 
+	needsTranslationChime := item.Event != nil && strings.TrimSpace(item.Event.TranslatedText) != "" && cfg != nil && cfg.Translation.PlayChimeBeforeSpeak
+
 	if streamEng, ok := engine.(tts.StreamingEngine); ok {
 		chunkCount := 0
 		startedPlaying := false
@@ -741,6 +745,11 @@ func (q *Queue) processItem(item *Item, depth int) {
 			}
 			if sampleRate > 0 {
 				preBufferSR = sampleRate
+			}
+			if chunkCount == 1 && needsTranslationChime {
+				if chime := q.translationChimeForRate(cfg, preBufferSR); len(chime) > 0 {
+					preBuffer = append(preBuffer, chime...)
+				}
 			}
 
 			// Pre-buffer at least ~0.9s of audio before starting playback so a tiny 1-word
@@ -818,6 +827,15 @@ func (q *Queue) processItem(item *Item, depth int) {
 			return
 		}
 
+		if needsTranslationChime {
+			if chime := q.translationChimeForRate(cfg, sampleRate); len(chime) > 0 {
+				combined := make([]float32, 0, len(chime)+len(samples))
+				combined = append(combined, chime...)
+				combined = append(combined, samples...)
+				samples = combined
+			}
+		}
+
 		log.Printf("[Queue] Playing audio (%d samples at %d Hz)...", len(samples), sampleRate)
 		if err := player.Play(samples, sampleRate); err != nil {
 			log.Printf("[Queue] Player.Play failed: %v", err)
@@ -849,6 +867,30 @@ func (q *Queue) processItem(item *Item, depth int) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (q *Queue) translationChimeForRate(cfg *config.Config, targetRate int) []float32 {
+	if cfg == nil || !cfg.Translation.PlayChimeBeforeSpeak {
+		return nil
+	}
+	var (
+		samples []float32
+		rate    int
+		err     error
+	)
+	if q.translationChimeCache != nil {
+		samples, rate, err = q.translationChimeCache.ResolveTranslationChime(cfg.Translation.ChimeSoundPath)
+	}
+	if err != nil || len(samples) == 0 {
+		if err != nil {
+			log.Printf("[Queue] Custom translation chime load failed (%v), falling back to built-in 3-note chime", err)
+		}
+		samples, rate = audio.DefaultTranslationChimeSamples()
+	}
+	if targetRate > 0 && rate > 0 && targetRate != rate {
+		return audio.ResamplePCM(samples, rate, targetRate)
+	}
+	return samples
 }
 
 func matchesPlatformAndUser(ev *chat.Event, platform, targetUserID string) bool {

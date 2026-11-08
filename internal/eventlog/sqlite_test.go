@@ -717,13 +717,13 @@ INSERT INTO event_logs (
 		t.Fatalf("expected 1 v2 backup file, got %v", backups)
 	}
 
-	// Verify user_version is now 3
+	// Verify user_version is now currentSchemaVersion (4)
 	var userVer int
 	if err := backend.db.QueryRow(`PRAGMA user_version;`).Scan(&userVer); err != nil {
 		t.Fatalf("query user_version: %v", err)
 	}
-	if userVer != 3 {
-		t.Errorf("expected user_version=3, got %d", userVer)
+	if userVer != currentSchemaVersion {
+		t.Errorf("expected user_version=%d, got %d", currentSchemaVersion, userVer)
 	}
 
 	// Verify sessions: should be 3 total (1 existing + 2 backfilled)
@@ -1278,6 +1278,67 @@ func TestResumeSessionAndLatestSessionLastActive(t *testing.T) {
 		t.Errorf("expected channels to contain kickstreamer, got %v", sList[0].Channels)
 	}
 }
+
+func TestTranslatedTextStorageAndFTS5Search(t *testing.T) {
+	ctx := context.Background()
+	backend, err := NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	entry := &Entry{
+		ID:             "trans-1",
+		SessionID:      1,
+		CreatedAt:      now,
+		Platform:       "twitch",
+		Channel:        "streamer",
+		Kind:           "message",
+		UserID:         "u-es",
+		UserName:       "carlos_es",
+		DisplayName:    "CarlosES",
+		RawText:        "Hola amigos, este directo está increíble!",
+		TranslatedText: "Hello friends, this stream is incredible!",
+		SourceLang:     "es",
+		SpokenText:     "CarlosES said: Hello friends, this stream is incredible!",
+		PassedFilters:  true,
+		Spoken:         true,
+		Outcome:        OutcomeSpoken,
+	}
+	if err := backend.Append(ctx, entry); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	// 1. Search by translated text (FTS5 >= 3 runes)
+	res, err := backend.Query(ctx, QueryFilter{TextQuery: "incredible"})
+	if err != nil {
+		t.Fatalf("Query by translated text: %v", err)
+	}
+	if len(res.Entries) != 1 {
+		t.Fatalf("expected 1 entry matching translated text, got %d", len(res.Entries))
+	}
+	got := res.Entries[0]
+	if got.TranslatedText != entry.TranslatedText {
+		t.Errorf("TranslatedText = %q, want %q", got.TranslatedText, entry.TranslatedText)
+	}
+	if got.SourceLang != "es" {
+		t.Errorf("SourceLang = %q, want 'es'", got.SourceLang)
+	}
+	if got.RawText != entry.RawText {
+		t.Errorf("RawText = %q, want %q", got.RawText, entry.RawText)
+	}
+
+	// 2. Search by original raw text (FTS5 >= 3 runes)
+	resOrig, err := backend.Query(ctx, QueryFilter{TextQuery: "increíble"})
+	if err != nil {
+		t.Fatalf("Query by original text: %v", err)
+	}
+	if len(resOrig.Entries) != 1 {
+		t.Fatalf("expected 1 entry matching original text, got %d", len(resOrig.Entries))
+	}
+}
+
 
 
 

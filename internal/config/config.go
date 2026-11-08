@@ -26,9 +26,245 @@ type Config struct {
 	Bots            BotConfig                 `json:"bots"`
 	Logging         LoggingConfig             `json:"logging"`
 	WebSocket       WebSocketConfig           `json:"websocket"`
+	Translation     TranslationConfig         `json:"translation"`
 	GlobalChatRules GlobalChatRules           `json:"global_chat_rules"`
 	Viewers         map[string]ViewerConfig   `json:"viewers"`
 	Platforms       map[string]PlatformConfig `json:"platforms"`
+}
+
+const (
+	TranslationProviderMyMemory       = "mymemory"
+	TranslationProviderGoogle         = "google"
+	TranslationProviderDeepL          = "deepl"
+	TranslationProviderLibreTranslate = "libretranslate"
+	TranslationProviderOllama         = "ollama"
+
+	TranslationRoutingPriority   = "priority"
+	TranslationRoutingRoundRobin = "round_robin"
+
+	DefaultTranslationTargetLang    = "en"
+	DefaultTranslationMinConfidence = 0.65
+	DefaultLibreTranslateURL        = "http://localhost:5000"
+	DefaultOllamaURL                = "http://localhost:11434"
+	DefaultOllamaModel              = "qwen2.5:3b"
+)
+
+// AllTranslationProviders is the canonical ordered list of all supported translation provider IDs.
+var AllTranslationProviders = []string{
+	TranslationProviderMyMemory,
+	TranslationProviderGoogle,
+	TranslationProviderDeepL,
+	TranslationProviderLibreTranslate,
+	TranslationProviderOllama,
+}
+
+// TranslationProviderEntry configures a single translation provider node in the fallback/load-balancing chain.
+type TranslationProviderEntry struct {
+	Provider     string `json:"provider"`
+	Enabled      bool   `json:"enabled"`
+	ContactEmail string `json:"contact_email,omitempty"`
+	EndpointURL  string `json:"endpoint_url,omitempty"`
+	Model        string `json:"model,omitempty"`
+	APIKey       string `json:"api_key,omitempty"`
+}
+
+// TranslationConfig configures automatic language detection and foreign chat translation.
+type TranslationConfig struct {
+	Enabled              bool                       `json:"enabled"`
+	RoutingMode          string                     `json:"routing_mode,omitempty"`
+	PlayChimeBeforeSpeak bool                       `json:"play_chime_before_speak"`
+	ChimeSoundPath       string                     `json:"chime_sound_path,omitempty"`
+	Providers            []TranslationProviderEntry `json:"providers,omitempty"`
+	Provider             string                     `json:"provider"`
+	TargetLang           string                     `json:"target_lang"`
+	MinConfidence        float64                    `json:"min_confidence"`
+	ContactEmail         string                     `json:"contact_email,omitempty"`
+	EndpointURL          string                     `json:"endpoint_url,omitempty"`
+	Model                string                     `json:"model,omitempty"`
+	APIKey               string                     `json:"api_key,omitempty"`
+}
+
+// NormalizeTranslationRoutingMode returns a canonical routing mode ("priority" or "round_robin").
+func NormalizeTranslationRoutingMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case TranslationRoutingRoundRobin, "rr", "round-robin", "roundrobin":
+		return TranslationRoutingRoundRobin
+	default:
+		return TranslationRoutingPriority
+	}
+}
+
+// DefaultTranslationProviders returns the default 5-node translation provider list with MyMemory enabled first.
+func DefaultTranslationProviders() []TranslationProviderEntry {
+	return []TranslationProviderEntry{
+		{
+			Provider: TranslationProviderMyMemory,
+			Enabled:  true,
+		},
+		{
+			Provider: TranslationProviderGoogle,
+			Enabled:  false,
+		},
+		{
+			Provider: TranslationProviderDeepL,
+			Enabled:  false,
+		},
+		{
+			Provider:    TranslationProviderLibreTranslate,
+			Enabled:     false,
+			EndpointURL: DefaultLibreTranslateURL,
+		},
+		{
+			Provider:    TranslationProviderOllama,
+			Enabled:     false,
+			EndpointURL: DefaultOllamaURL,
+			Model:       DefaultOllamaModel,
+		},
+	}
+}
+
+func isUntouchedDefaultProviders(providers []TranslationProviderEntry) bool {
+	defs := DefaultTranslationProviders()
+	if len(providers) != len(defs) {
+		return false
+	}
+	for i := range defs {
+		if providers[i] != defs[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// NormalizeTranslationProviders ensures t.Providers contains all 5 canonical providers without duplicates,
+// migrating any legacy single-provider settings when t.Providers is empty or untouched from defaults.
+func NormalizeTranslationProviders(t *TranslationConfig) {
+	if t == nil {
+		return
+	}
+	t.RoutingMode = NormalizeTranslationRoutingMode(t.RoutingMode)
+	t.Provider = NormalizeTranslationProvider(t.Provider)
+	t.TargetLang = NormalizeTranslationTargetLang(t.TargetLang)
+	t.MinConfidence = NormalizeTranslationMinConfidence(t.MinConfidence)
+
+	legacyEmpty := len(t.Providers) == 0 || (isUntouchedDefaultProviders(t.Providers) && t.Provider != TranslationProviderMyMemory)
+	var out []TranslationProviderEntry
+	seen := make(map[string]bool, len(AllTranslationProviders))
+
+	if legacyEmpty {
+		legacyPrimary := NormalizeTranslationProvider(t.Provider)
+		if legacyPrimary != TranslationProviderMyMemory {
+			entry := TranslationProviderEntry{
+				Provider: legacyPrimary,
+				Enabled:  true,
+				APIKey:   strings.TrimSpace(t.APIKey),
+			}
+			switch legacyPrimary {
+			case TranslationProviderLibreTranslate:
+				entry.EndpointURL = strings.TrimSpace(t.EndpointURL)
+			case TranslationProviderOllama:
+				entry.EndpointURL = strings.TrimSpace(t.EndpointURL)
+				entry.Model = strings.TrimSpace(t.Model)
+			}
+			out = append(out, entry)
+			seen[legacyPrimary] = true
+		}
+		mmEntry := TranslationProviderEntry{
+			Provider:     TranslationProviderMyMemory,
+			Enabled:      true,
+			ContactEmail: strings.TrimSpace(t.ContactEmail),
+		}
+		out = append(out, mmEntry)
+		seen[TranslationProviderMyMemory] = true
+	} else {
+		for _, entry := range t.Providers {
+			p := NormalizeTranslationProvider(entry.Provider)
+			if seen[p] {
+				continue
+			}
+			seen[p] = true
+			entry.Provider = p
+			out = append(out, entry)
+		}
+	}
+
+	for _, def := range DefaultTranslationProviders() {
+		if !seen[def.Provider] {
+			seen[def.Provider] = true
+			out = append(out, def)
+		}
+	}
+
+	for i := range out {
+		switch out[i].Provider {
+		case TranslationProviderMyMemory:
+			if strings.TrimSpace(out[i].ContactEmail) == "" && strings.TrimSpace(t.ContactEmail) != "" {
+				out[i].ContactEmail = strings.TrimSpace(t.ContactEmail)
+			}
+		case TranslationProviderLibreTranslate:
+			if strings.TrimSpace(out[i].EndpointURL) == "" {
+				out[i].EndpointURL = DefaultLibreTranslateURL
+			}
+		case TranslationProviderOllama:
+			if strings.TrimSpace(out[i].EndpointURL) == "" {
+				out[i].EndpointURL = DefaultOllamaURL
+			}
+			if strings.TrimSpace(out[i].Model) == "" {
+				out[i].Model = DefaultOllamaModel
+			}
+		}
+	}
+
+	t.Providers = out
+	if len(t.Providers) > 0 {
+		for _, p := range t.Providers {
+			if p.Enabled {
+				t.Provider = p.Provider
+				break
+			}
+		}
+	}
+}
+
+// NormalizeTranslationProvider returns a canonical translation provider ("mymemory", "google", "deepl", "libretranslate", or "ollama").
+func NormalizeTranslationProvider(p string) string {
+	switch strings.ToLower(strings.TrimSpace(p)) {
+	case TranslationProviderGoogle, "google_cloud":
+		return TranslationProviderGoogle
+	case TranslationProviderDeepL:
+		return TranslationProviderDeepL
+	case TranslationProviderLibreTranslate, "libre":
+		return TranslationProviderLibreTranslate
+	case TranslationProviderOllama, "llm", "openai":
+		return TranslationProviderOllama
+	default:
+		return TranslationProviderMyMemory
+	}
+}
+
+// NormalizeTranslationTargetLang returns a canonical lowercased ISO-639-1 language code, defaulting to "en".
+func NormalizeTranslationTargetLang(lang string) string {
+	clean := strings.ToLower(strings.TrimSpace(lang))
+	switch clean {
+	case "en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh", "ru", "hi", "tl":
+		return clean
+	default:
+		return DefaultTranslationTargetLang
+	}
+}
+
+// NormalizeTranslationMinConfidence clamps confidence to [0.1, 0.99], defaulting to 0.65 when <= 0.
+func NormalizeTranslationMinConfidence(c float64) float64 {
+	if c <= 0 {
+		return DefaultTranslationMinConfidence
+	}
+	if c < 0.10 {
+		return 0.10
+	}
+	if c > 0.99 {
+		return 0.99
+	}
+	return c
 }
 
 // UpdateConfig configures application version checking and self-update preferences.
@@ -322,6 +558,7 @@ type PlatformOverrides struct {
 	IgnoreMentionsOverride        string  `json:"ignore_mentions_override,omitempty"`
 	AllowBroadcasterMentionsMode  string  `json:"allow_broadcaster_mentions_mode,omitempty"`
 	PlayAlertOnIgnoredMentionMode string  `json:"play_alert_on_ignored_mention_mode,omitempty"`
+	TranslateMode                 string  `json:"translate_mode,omitempty"`
 	VoiceOverrideMode             string  `json:"voice_override_mode,omitempty"`
 	SpeakNames                    bool    `json:"speak_names"`
 	SpeakEmotes                   bool    `json:"speak_emotes"`
@@ -560,6 +797,16 @@ func DefaultConfig() *Config {
 			Host:      DefaultWebSocketHost,
 			Port:      DefaultWebSocketPort,
 			AuthToken: "",
+		},
+		Translation: TranslationConfig{
+			Enabled:              false,
+			RoutingMode:          TranslationRoutingPriority,
+			PlayChimeBeforeSpeak: true,
+			ChimeSoundPath:       "",
+			Providers:            DefaultTranslationProviders(),
+			Provider:             TranslationProviderMyMemory,
+			TargetLang:           DefaultTranslationTargetLang,
+			MinConfidence:        DefaultTranslationMinConfidence,
 		},
 		GlobalChatRules: GlobalChatRules{
 			SpeakNames:        true,
@@ -1035,6 +1282,23 @@ func (c *Config) EffectiveMentionRules(platform string) (mode string, allowBroad
 	return mode, allowBroadcaster, playAlert
 }
 
+// EffectiveTranslationEnabled reports whether foreign chat translation is enabled for a platform,
+// taking per-platform TranslateMode ("global", "on", "off") into account.
+func (c *Config) EffectiveTranslationEnabled(platform string) bool {
+	if c == nil {
+		return false
+	}
+	if p, ok := c.Platforms[platform]; ok {
+		switch NormalizeBoolOverrideMode(p.Overrides.TranslateMode) {
+		case OverrideModeOn:
+			return true
+		case OverrideModeOff:
+			return false
+		}
+	}
+	return c.Translation.Enabled
+}
+
 // Clone creates a deep copy of the Config.
 func (c *Config) Clone() *Config {
 	data, err := json.Marshal(c)
@@ -1076,6 +1340,7 @@ func Load(path string) (*Config, error) {
 						cfg := DefaultConfig()
 						cfg.TTS.Preset = ""
 						cfg.TTS.EnabledModels = nil
+						cfg.Translation.Providers = nil
 						if errParse := json.Unmarshal(legacyData, cfg); errParse == nil {
 							_ = migrate(cfg)
 							// Migrate immediately to the new location
@@ -1093,6 +1358,7 @@ func Load(path string) (*Config, error) {
 	cfg := DefaultConfig()
 	cfg.TTS.Preset = ""
 	cfg.TTS.EnabledModels = nil
+	cfg.Translation.Providers = nil
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config json: %w", err)
 	}
@@ -1367,6 +1633,7 @@ func migrate(cfg *Config) error {
 		cfg.GlobalChatRules.MaxDuplicateWords = 2
 	}
 	cfg.GlobalChatRules.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(cfg.GlobalChatRules.IgnoreMentionsMode)
+	NormalizeTranslationProviders(&cfg.Translation)
 
 	return nil
 }

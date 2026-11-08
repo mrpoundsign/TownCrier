@@ -3,6 +3,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -455,7 +456,120 @@ func TestSettingsAndPlatformTab_IgnoreMentionsControls(t *testing.T) {
 	}
 }
 
+func TestSettingsView_TranslationTabAndOverrides(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestTranslationTab")
 
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
+		return []audio.DeviceInfo{{ID: "mock1", Name: "Mock Speakers", IsDefault: true}}, nil
+	})
+	twitchTab := NewTwitchTabView(w, sess)
+	view.SetPlatformTabs(twitchTab, nil, nil, nil)
+	_ = view.Build()
 
+	// Initially Translation is disabled -> 5 sub-tabs (General, TTS, Twitch, Rules, Event Logs)
+	if view.enableTranslationCheck == nil || view.enableTranslationCheck.Checked {
+		t.Fatal("expected enableTranslationCheck to be unchecked by default")
+	}
+
+	// Enable Chat Translation -> adds Translation sub-tab and updates Twitch override Global label
+	view.enableTranslationCheck.SetChecked(true)
+	if !sess.Config().Translation.Enabled {
+		t.Error("expected Translation.Enabled to be true")
+	}
+	hasTranslationTab := slices.Contains(view.subTabs.Items, view.translationTabItem)
+	if !hasTranslationTab {
+		t.Error("expected Translation sub-tab to be visible when Translation is enabled")
+	}
+	if twitchTab.overrides.TranslateSelect.Selected != "Global ("+boolOnTranslateChat+")" {
+		t.Errorf("expected Twitch TranslateSelect 'Global (%s)', got %q", boolOnTranslateChat, twitchTab.overrides.TranslateSelect.Selected)
+	}
+
+	// Default provider is MyMemory Translated API
+	if !strings.Contains(view.translationLimitLabel.Text, "MyMemory") {
+		t.Errorf("expected default translationLimitLabel to describe MyMemory limits, got %q", view.translationLimitLabel.Text)
+	}
+	if view.translationKeyLink == nil || !strings.Contains(view.translationKeyLink.Text, "MyMemory") {
+		t.Errorf("expected default translationKeyLink to reference MyMemory")
+	}
+	if view.translationTOSLink == nil || !strings.Contains(view.translationTOSLink.Text, "MyMemory") {
+		t.Errorf("expected default translationTOSLink to reference MyMemory")
+	}
+	view.translationEmailEntry.SetText("streamer@example.com")
+	if sess.Config().Translation.ContactEmail != "streamer@example.com" {
+		t.Errorf("expected ContactEmail 'streamer@example.com', got %q", sess.Config().Translation.ContactEmail)
+	}
+	if !strings.Contains(view.translationLimitLabel.Text, "10x Email Quota Active") {
+		t.Errorf("expected translationLimitLabel to reflect 10x email quota, got %q", view.translationLimitLabel.Text)
+	}
+
+	// Change Target Language to Tagalog (Filipino) (tl) and Routing Mode to Round-Robin
+	view.translationTargetSelect.SetSelected("Tagalog (Filipino) (tl)")
+	if sess.Config().Translation.TargetLang != "tl" {
+		t.Errorf("expected TargetLang 'tl', got %q", sess.Config().Translation.TargetLang)
+	}
+
+	view.translationRoutingSelect.SetSelected(TranslationRoutingOptionRoundRobin)
+	if sess.Config().Translation.RoutingMode != config.TranslationRoutingRoundRobin {
+		t.Errorf("expected RoutingMode %q, got %q", config.TranslationRoutingRoundRobin, sess.Config().Translation.RoutingMode)
+	}
+
+	if view.translationChimeCheck == nil || !view.translationChimeCheck.Checked {
+		t.Error("expected translationChimeCheck to be checked by default")
+	}
+	view.translationChimeCheck.SetChecked(false)
+	if sess.Config().Translation.PlayChimeBeforeSpeak {
+		t.Error("expected PlayChimeBeforeSpeak=false after unchecking")
+	}
+
+	if view.translationNodesBox == nil || len(view.translationNodesBox.Objects) != len(config.AllTranslationProviders) {
+		t.Errorf("expected %d provider node rows, got %d", len(config.AllTranslationProviders), len(view.translationNodesBox.Objects))
+	}
+
+	// By default, no provider drawer is open and test button says "Test Translation Chain"
+	if view.translationConfigDrawer == nil || view.translationConfigDrawer.Visible() {
+		t.Error("expected translationConfigDrawer to be hidden by default until Configure is clicked")
+	}
+	if view.translationTestBtn == nil || view.translationTestBtn.Text != "Test Translation Chain" {
+		t.Errorf("expected default test button text 'Test Translation Chain', got %q", view.translationTestBtn.Text)
+	}
+
+	view.translationProviderSelect.SetSelected("Local LLM (Ollama / OpenAI API)")
+	if view.selectedTranslationProvider() != config.TranslationProviderOllama {
+		t.Errorf("expected selectedTranslationProvider %q, got %q", config.TranslationProviderOllama, view.selectedTranslationProvider())
+	}
+	if !view.translationConfigDrawer.Visible() {
+		t.Error("expected translationConfigDrawer to be visible when configuring a provider")
+	}
+	if !strings.Contains(view.translationTestBtn.Text, "Local LLM") {
+		t.Errorf("expected test button to target Local LLM while configuring, got %q", view.translationTestBtn.Text)
+	}
+	if !strings.Contains(view.translationLimitLabel.Text, "Local LLM") {
+		t.Errorf("expected translationLimitLabel to describe Local LLM limits, got %q", view.translationLimitLabel.Text)
+	}
+
+	// Clicking "Done Configuring" closes the drawer and resets the test button to "Test Translation Chain"
+	view.translationDoneConfigBtn.OnTapped()
+	if view.translationConfigDrawer.Visible() {
+		t.Error("expected translationConfigDrawer to hide after clicking Done Configuring")
+	}
+	if view.translationTestBtn.Text != "Test Translation Chain" {
+		t.Errorf("expected test button text 'Test Translation Chain' after Done, got %q", view.translationTestBtn.Text)
+	}
+
+	// Override Twitch translation to Off
+	twitchTab.overrides.TranslateSelect.SetSelected(boolOffTranslateChat)
+	if sess.Config().EffectiveTranslationEnabled("twitch") {
+		t.Error("expected EffectiveTranslationEnabled('twitch') to be false after override")
+	}
+	if !sess.Config().EffectiveTranslationEnabled("youtube") {
+		t.Error("expected EffectiveTranslationEnabled('youtube') to inherit global true")
+	}
+}
 

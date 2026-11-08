@@ -26,6 +26,8 @@ const (
 	boolOffAllowBcaster   = "Off (Ignore Broadcaster @)"
 	boolOnAlertMention    = "On (Play Alert Sound)"
 	boolOffAlertMention   = "Off (No Alert Sound)"
+	boolOnTranslateChat   = "On (Translate Foreign Chat)"
+	boolOffTranslateChat  = "Off (Don't Translate)"
 )
 
 // PlatformOverridesControl manages the per-setting global/override pulldowns for a streaming platform tab.
@@ -39,6 +41,7 @@ type PlatformOverridesControl struct {
 	DedupeSelect                  *widget.Select
 	DupWordsSelect                *widget.Select
 	PlatformNameSelect            *widget.Select
+	TranslateSelect               *widget.Select
 	MentionsModeSelect            *widget.Select
 	AllowBroadcasterSelect        *widget.Select
 	PlayAlertIgnoredMentionSelect *widget.Select
@@ -205,6 +208,18 @@ func (c *PlatformOverridesControl) build() {
 		})
 	})
 
+	c.TranslateSelect = widget.NewSelect(nil, func(selected string) {
+		if c.syncing {
+			return
+		}
+		mode, _ := parseSelectedBoolMode(selected, boolOnTranslateChat)
+		c.updateConfig(func(cfg *config.Config) {
+			p := cfg.Platforms[c.PlatformKey]
+			p.Overrides.TranslateMode = mode
+			cfg.Platforms[c.PlatformKey] = p
+		})
+	})
+
 	c.AllowBroadcasterSelect = widget.NewSelect(nil, func(selected string) {
 		if c.syncing {
 			return
@@ -334,6 +349,7 @@ func (c *PlatformOverridesControl) build() {
 		makeRow("Deduplicate Emotes & Emojis:", c.DedupeSelect),
 		makeRow("Max Consecutive Duplicate Words:", c.DupWordsSelect),
 		makeRow("Speak Platform Name Prefix:", c.PlatformNameSelect),
+		makeRow("Translate Foreign Chat:", c.TranslateSelect),
 		widget.NewSeparator(),
 		makeRow("@ Mentions & Replies:", c.MentionsModeSelect),
 		makeRow("Allow Broadcaster @ Mentions:", c.AllowBroadcasterSelect),
@@ -415,6 +431,11 @@ func (c *PlatformOverridesControl) Refresh() {
 	c.PlatformNameSelect.Options = boolOptionsForGlobal(g.SpeakPlatformName, boolOnPlatformPrefix, boolOffPlatformPrefix)
 	c.PlatformNameSelect.SetSelected(selectedBoolOption(ov.SpeakPlatformNameMode, ov.OverrideRules, ov.SpeakPlatformName, g.SpeakPlatformName, boolOnPlatformPrefix, boolOffPlatformPrefix))
 	c.PlatformNameSelect.Refresh()
+
+	// 5b. Translate Foreign Chat
+	c.TranslateSelect.Options = boolOptionsForGlobal(cfg.Translation.Enabled, boolOnTranslateChat, boolOffTranslateChat)
+	c.TranslateSelect.SetSelected(selectedBoolOption(ov.TranslateMode, false, false, cfg.Translation.Enabled, boolOnTranslateChat, boolOffTranslateChat))
+	c.TranslateSelect.Refresh()
 
 	// 6. @ Mentions & Replies
 	globalMentionsOpt := fmt.Sprintf("Global (%s)", IgnoreMentionsModeToOption(g.IgnoreMentionsMode))

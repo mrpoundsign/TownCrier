@@ -16,17 +16,22 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/chat"
 	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/queue"
+	"github.com/mrpoundsign/TownCrier/internal/translate"
 	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
 type ActivityEntry struct {
-	Timestamp time.Time
-	Platform  string
-	UserName  string
-	Text      string
-	Emotes    []chat.EmoteSpan
-	Voice     string
-	Kind      string
+	ID             string
+	Timestamp      time.Time
+	Platform       string
+	UserName       string
+	Text           string
+	Emotes         []chat.EmoteSpan
+	TranslatedText string
+	SourceLang     string
+	ShowOriginal   bool
+	Voice          string
+	Kind           string
 }
 
 // TTSOutputModeOptions lists the selectable operational TTS output modes in the UI.
@@ -148,13 +153,16 @@ func NewDashboardView(w fyne.Window, session *app.Session) *DashboardView {
 			name = ev.UserName
 		}
 		v.AddActivity(ActivityEntry{
-			Timestamp: ts,
-			Platform:  ev.Platform,
-			UserName:  name,
-			Text:      ev.Text,
-			Emotes:    ev.EmoteSpans,
-			Voice:     voice,
-			Kind:      string(ev.Kind),
+			ID:             ev.ID,
+			Timestamp:      ts,
+			Platform:       ev.Platform,
+			UserName:       name,
+			Text:           ev.Text,
+			Emotes:         ev.EmoteSpans,
+			TranslatedText: ev.TranslatedText,
+			SourceLang:     ev.SourceLang,
+			Voice:          voice,
+			Kind:           string(ev.Kind),
 		})
 	})
 
@@ -360,24 +368,73 @@ func (v *DashboardView) AddActivity(entry ActivityEntry) {
 
 func (v *DashboardView) refreshFeedLocked() {
 	v.feedContainer.Objects = nil
-	for _, entry := range slices.Backward(v.activities) {
-		row := v.buildActivityRow(entry)
+	for idx, entry := range slices.Backward(v.activities) {
+		row := v.buildActivityRow(idx, entry)
 		v.feedContainer.Add(row)
 	}
 	v.feedContainer.Refresh()
 }
 
-func (v *DashboardView) buildActivityRow(entry ActivityEntry) fyne.CanvasObject {
+func (v *DashboardView) buildActivityRow(idx int, entry ActivityEntry) fyne.CanvasObject {
 	timeStr := entry.Timestamp.Format("15:04:05")
 	meta := fmt.Sprintf("[%s] %s (%s)", timeStr, entry.UserName, entry.Platform)
 
 	nameLabel := widget.NewLabelWithStyle(meta, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	var msgContent fyne.CanvasObject
-	if len(entry.Emotes) > 0 {
+
+	switch {
+	case entry.TranslatedText != "":
+		iconSz := fyne.NewSize(20, 20)
+		srcLang := entry.SourceLang
+		if srcLang == "" {
+			srcLang = "auto"
+		}
+		langName := translate.LanguageName(srcLang)
+		rowIdx := idx
+		toggleTap := func() {
+			v.mu.Lock()
+			if rowIdx >= 0 && rowIdx < len(v.activities) {
+				v.activities[rowIdx].ShowOriginal = !v.activities[rowIdx].ShowOriginal
+			}
+			v.refreshFeedLocked()
+			v.mu.Unlock()
+		}
+
+		var toggleIcon *hoverIconWidget
+		var body fyne.CanvasObject
+		if entry.ShowOriginal {
+			tip := fmt.Sprintf("Showing original %s (%s) • Click 文A to show translation: %s", langName, srcLang, entry.TranslatedText)
+			toggleIcon = &hoverIconWidget{
+				res:     resLogTranslatedOriginal,
+				minSize: iconSz,
+				tooltip: tip,
+				onTap:   toggleTap,
+			}
+			toggleIcon.ExtendBaseWidget(toggleIcon)
+			if len(entry.Emotes) > 0 {
+				ec := newEmoteMessageCell(nil, nil)
+				ec.SetContent(entry.Platform, entry.Text, entry.Emotes, "", "")
+				body = ec
+			} else {
+				body = newClampedWrapLabel(entry.Text, fyne.TextStyle{})
+			}
+		} else {
+			tip := fmt.Sprintf("Translated from %s (%s) • Click 文A to show original: %s", langName, srcLang, entry.Text)
+			toggleIcon = &hoverIconWidget{
+				res:     resLogTranslated,
+				minSize: iconSz,
+				tooltip: tip,
+				onTap:   toggleTap,
+			}
+			toggleIcon.ExtendBaseWidget(toggleIcon)
+			body = newClampedWrapLabel(entry.TranslatedText, fyne.TextStyle{Italic: true})
+		}
+		msgContent = container.NewBorder(nil, nil, container.NewCenter(toggleIcon), nil, body)
+	case len(entry.Emotes) > 0:
 		ec := newEmoteMessageCell(nil, nil)
 		ec.SetContent(entry.Platform, entry.Text, entry.Emotes, "", "")
 		msgContent = ec
-	} else {
+	default:
 		msgContent = newClampedWrapLabel(entry.Text, fyne.TextStyle{})
 	}
 
