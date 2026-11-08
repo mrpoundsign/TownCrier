@@ -8,13 +8,33 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
+// VoiceUsageKind identifies the configuration target type for a VoiceUsage entry.
+const (
+	UsageKindGlobal           = "global"
+	UsageKindViewer           = "viewer"
+	UsageKindPlatformOverride = "platform_override"
+	UsageKindPlatformAlert    = "platform_alert"
+)
+
 // VoiceUsage describes a single place in the user's configuration that references a voice from a specific model family.
 type VoiceUsage struct {
-	Location   string // Human-readable location (e.g. "Global Default Voice", "Viewer @alice (twitch)", "Twitch Alert (sub)")
-	VoiceID    string // Raw voice ID (e.g. "af_heart", "supertonic:f1")
-	VoiceLabel string // Display label (e.g. "af_heart — Heart (American Female, Warm) [Kokoro]")
-	FamilyID   string // Model family ID ("kokoro", "supertonic", etc.)
-	FamilyName string // Short model family name ("Kokoro-82M", "Supertonic INT8", etc.)
+	Location   string  // Human-readable location (e.g. "Global Default Voice (Settings)", "Chatter Voice: alice (Viewers Tab)", "Twitch Alert (sub)")
+	VoiceID    string  // Raw voice ID (e.g. "af_heart", "supertonic:f1")
+	VoiceLabel string  // Display label (e.g. "Heart — US Female (af_heart)")
+	FamilyID   string  // Model family ID ("kokoro", "supertonic", etc.)
+	FamilyName string  // Short model family name ("Kokoro-82M", "Supertonic INT8", etc.)
+	Kind       string  // Target kind: UsageKindGlobal, UsageKindViewer, UsageKindPlatformOverride, or UsageKindPlatformAlert
+	ViewerKey  string  // Key in cfg.Viewers (when Kind == UsageKindViewer)
+	Platform   string  // Platform key in cfg.Platforms (when Kind == UsageKindPlatformOverride or UsageKindPlatformAlert)
+	AlertKey   string  // Notification key in pCfg.Notifications (when Kind == UsageKindPlatformAlert)
+	Speed      float32 // Current configured speed multiplier for this item (defaults to 1.0)
+}
+
+// VoiceReplacement specifies a replacement voice (and optional speed) for a single VoiceUsage.
+// When VoiceID is empty ("") on a non-global usage, the override is cleared so it inherits the default voice.
+type VoiceReplacement struct {
+	VoiceID string
+	Speed   float32
 }
 
 // FindVoiceUsages returns all configuration assignments that use a voice belonging to any of the targetFamilies.
@@ -34,8 +54,8 @@ func FindVoiceUsages(cfg *config.Config, targetFamilies []string) []VoiceUsage {
 	}
 
 	var usages []VoiceUsage
-	addIfMatches := func(location string, voiceID string) {
-		vid := strings.TrimSpace(voiceID)
+	addIfMatches := func(u VoiceUsage) {
+		vid := strings.TrimSpace(u.VoiceID)
 		if vid == "" {
 			return
 		}
@@ -47,17 +67,27 @@ func FindVoiceUsages(cfg *config.Config, targetFamilies []string) []VoiceUsage {
 		if spec, ok := ModelSpecByID(fam); ok {
 			famName = spec.ShortName
 		}
-		usages = append(usages, VoiceUsage{
-			Location:   location,
-			VoiceID:    vid,
-			VoiceLabel: VoiceDisplayName(vid),
-			FamilyID:   fam,
-			FamilyName: famName,
-		})
+		if u.Speed <= 0 {
+			u.Speed = 1.0
+		}
+		u.VoiceID = VoiceIDFromLabel(vid)
+		u.VoiceLabel = VoiceDisplayName(vid)
+		u.FamilyID = fam
+		u.FamilyName = famName
+		usages = append(usages, u)
 	}
 
 	// 1. Global Default Voice
-	addIfMatches("Global Default Voice (Voices Tab)", cfg.GlobalChatRules.DefaultVoice)
+	globalSpeed := cfg.GlobalChatRules.DefaultSpeed
+	if globalSpeed <= 0 {
+		globalSpeed = 1.0
+	}
+	addIfMatches(VoiceUsage{
+		Location: "Global Default Voice (Settings)",
+		VoiceID:  cfg.GlobalChatRules.DefaultVoice,
+		Kind:     UsageKindGlobal,
+		Speed:    globalSpeed,
+	})
 
 	// 2. Custom Viewer Overrides (sorted for deterministic display)
 	viewerKeys := make([]string, 0, len(cfg.Viewers))
@@ -77,7 +107,17 @@ func FindVoiceUsages(cfg *config.Config, targetFamilies []string) []VoiceUsage {
 		if v.Nickname != "" {
 			displayUser = fmt.Sprintf("%s (%s)", displayUser, v.Nickname)
 		}
-		addIfMatches(fmt.Sprintf("Chatter Voice: %s (Viewers Tab)", displayUser), v.Voice)
+		spd := v.Speed
+		if spd <= 0 {
+			spd = globalSpeed
+		}
+		addIfMatches(VoiceUsage{
+			Location:  fmt.Sprintf("Chatter Voice: %s (Viewers Tab)", displayUser),
+			VoiceID:   v.Voice,
+			Kind:      UsageKindViewer,
+			ViewerKey: k,
+			Speed:     spd,
+		})
 	}
 
 	// 3. Platform Overrides & Alert Notifications
@@ -88,9 +128,23 @@ func FindVoiceUsages(cfg *config.Config, targetFamilies []string) []VoiceUsage {
 	slices.Sort(platKeys)
 	for _, pKey := range platKeys {
 		pCfg := cfg.Platforms[pKey]
-		platTitle := strings.ToUpper(pKey[:1]) + pKey[1:]
-		if pCfg.Overrides.OverrideRules && strings.TrimSpace(pCfg.Overrides.DefaultVoice) != "" {
-			addIfMatches(platTitle+" Platform Default Voice Override", pCfg.Overrides.DefaultVoice)
+		platTitle := pKey
+		if len(pKey) > 0 {
+			platTitle = strings.ToUpper(pKey[:1]) + pKey[1:]
+		}
+		isCustomVoiceOverride := config.NormalizeVoiceOverrideMode(pCfg.Overrides.VoiceOverrideMode) == config.OverrideModeCustom || pCfg.Overrides.OverrideRules
+		if isCustomVoiceOverride && strings.TrimSpace(pCfg.Overrides.DefaultVoice) != "" {
+			spd := pCfg.Overrides.DefaultSpeed
+			if spd <= 0 {
+				spd = globalSpeed
+			}
+			addIfMatches(VoiceUsage{
+				Location: platTitle + " Platform Default Voice Override",
+				VoiceID:  pCfg.Overrides.DefaultVoice,
+				Kind:     UsageKindPlatformOverride,
+				Platform: pKey,
+				Speed:    spd,
+			})
 		}
 
 		notifKeys := make([]string, 0, len(pCfg.Notifications))
@@ -101,12 +155,122 @@ func FindVoiceUsages(cfg *config.Config, targetFamilies []string) []VoiceUsage {
 		for _, nKey := range notifKeys {
 			nCfg := pCfg.Notifications[nKey]
 			if nCfg.Enabled && strings.TrimSpace(nCfg.Voice) != "" {
-				addIfMatches(fmt.Sprintf("%s Alert (%s)", platTitle, nKey), nCfg.Voice)
+				addIfMatches(VoiceUsage{
+					Location: fmt.Sprintf("%s Alert (%s)", platTitle, nKey),
+					VoiceID:  nCfg.Voice,
+					Kind:     UsageKindPlatformAlert,
+					Platform: pKey,
+					AlertKey: nKey,
+					Speed:    globalSpeed,
+				})
 			}
 		}
 	}
 
 	return usages
+}
+
+// DefaultReplacementVoice returns the best default voice ID from remainingModels.
+// If the user's current Global Default Voice belongs to one of remainingModels, it is returned;
+// otherwise the first catalog voice of remainingModels is returned.
+func DefaultReplacementVoice(cfg *config.Config, remainingModels []string) string {
+	remSet := make(map[string]bool, len(remainingModels))
+	for _, m := range remainingModels {
+		remSet[strings.ToLower(strings.TrimSpace(m))] = true
+	}
+	if cfg != nil {
+		rawGlobal := strings.TrimSpace(cfg.GlobalChatRules.DefaultVoice)
+		if rawGlobal != "" {
+			globalVid := VoiceIDFromLabel(rawGlobal)
+			if globalVid != "" && remSet[VoiceFamily(globalVid)] {
+				return globalVid
+			}
+		}
+	}
+	if labels := VoiceDisplayLabelsForModels(remainingModels); len(labels) > 0 {
+		return VoiceIDFromLabel(labels[0])
+	}
+	return "af_heart"
+}
+
+// ApplyVoiceUsageReplacements mutates cfg in-place to apply the chosen replacement voices for each usage.
+func ApplyVoiceUsageReplacements(cfg *config.Config, usages []VoiceUsage, replacements []VoiceReplacement) {
+	if cfg == nil {
+		return
+	}
+	for i, u := range usages {
+		if i >= len(replacements) {
+			break
+		}
+		rep := replacements[i]
+		vid := strings.TrimSpace(rep.VoiceID)
+		if vid != "" {
+			vid = VoiceIDFromLabel(vid)
+		}
+		spd := rep.Speed
+
+		switch u.Kind {
+		case UsageKindGlobal:
+			if vid != "" {
+				cfg.GlobalChatRules.DefaultVoice = vid
+			}
+			if spd > 0 {
+				cfg.GlobalChatRules.DefaultSpeed = spd
+			}
+		case UsageKindViewer:
+			if cfg.Viewers == nil {
+				continue
+			}
+			vc, ok := cfg.Viewers[u.ViewerKey]
+			if !ok {
+				continue
+			}
+			vc.Voice = vid
+			if spd > 0 {
+				vc.Speed = spd
+			}
+			if vid == "" && strings.TrimSpace(vc.Nickname) == "" && !vc.Ignored && !vc.Allowed {
+				delete(cfg.Viewers, u.ViewerKey)
+			} else {
+				cfg.Viewers[u.ViewerKey] = vc
+			}
+		case UsageKindPlatformOverride:
+			if cfg.Platforms == nil {
+				continue
+			}
+			pCfg, ok := cfg.Platforms[u.Platform]
+			if !ok {
+				continue
+			}
+			if vid == "" {
+				pCfg.Overrides.VoiceOverrideMode = config.OverrideModeGlobal
+				pCfg.Overrides.DefaultVoice = ""
+				pCfg.Overrides.OverrideRules = false
+			} else {
+				pCfg.Overrides.VoiceOverrideMode = config.OverrideModeCustom
+				pCfg.Overrides.DefaultVoice = vid
+				if spd > 0 {
+					pCfg.Overrides.DefaultSpeed = spd
+				}
+			}
+			cfg.Platforms[u.Platform] = pCfg
+		case UsageKindPlatformAlert:
+			if cfg.Platforms == nil {
+				continue
+			}
+			pCfg, ok := cfg.Platforms[u.Platform]
+			if !ok || pCfg.Notifications == nil {
+				continue
+			}
+			nCfg, nOk := pCfg.Notifications[u.AlertKey]
+			if !nOk {
+				continue
+			}
+			nCfg.Voice = vid
+			pCfg.Notifications[u.AlertKey] = nCfg
+			cfg.Platforms[u.Platform] = pCfg
+		}
+	}
 }
 
 // DisabledModelFamilies returns the model families that are present in currentEnabled but absent in nextEnabled.

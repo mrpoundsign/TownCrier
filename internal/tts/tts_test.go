@@ -396,28 +396,92 @@ func TestMultiModelPresetsAndHardwareImpact(t *testing.T) {
 	}
 }
 
-func TestFindVoiceUsages(t *testing.T) {
+func TestFindVoiceUsagesAndReplacements(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.GlobalChatRules.DefaultVoice = "supertonic:f1"
+	cfg.GlobalChatRules.DefaultSpeed = 1.15
 	cfg.Viewers["twitch:alice"] = config.ViewerConfig{
 		Platform: "twitch",
 		UserID:   "alice",
 		Voice:    "kitten_nano:f4",
+		Speed:    1.25,
 	}
+	cfg.Viewers["twitch:bob"] = config.ViewerConfig{
+		Platform: "twitch",
+		UserID:   "bob",
+		Nickname: "Bobby",
+		Voice:    "kitten_nano:m1",
+		Speed:    1.0,
+	}
+	twitchCfg := cfg.Platforms["twitch"]
+	twitchCfg.Overrides.VoiceOverrideMode = config.OverrideModeCustom
+	twitchCfg.Overrides.DefaultVoice = "supertonic:m2"
+	twitchCfg.Overrides.DefaultSpeed = 1.10
+	if twitchCfg.Notifications == nil {
+		twitchCfg.Notifications = make(map[string]config.NotificationEventConfig)
+	}
+	twitchCfg.Notifications["sub"] = config.NotificationEventConfig{
+		Enabled:  true,
+		Template: "{user} subscribed!",
+		Voice:    "kitten_nano:f2",
+	}
+	cfg.Platforms["twitch"] = twitchCfg
 
 	usages := FindVoiceUsages(cfg, []string{ModelSupertonic, ModelKittenNano})
-	if len(usages) != 2 {
-		t.Fatalf("expected 2 voice usages, got %d: %+v", len(usages), usages)
+	if len(usages) != 5 {
+		t.Fatalf("expected 5 voice usages, got %d: %+v", len(usages), usages)
 	}
 
 	warning := FormatVoiceUsagesWarning(usages)
-	if !strings.Contains(warning, "Global Default Voice") || !strings.Contains(warning, "alice") {
-		t.Errorf("expected warning to list both Global Default Voice and alice, got: %s", warning)
+	if !strings.Contains(warning, "Global Default Voice") || !strings.Contains(warning, "alice") || !strings.Contains(warning, "Twitch Platform Default Voice Override") {
+		t.Errorf("expected warning to list Global Default Voice, alice, and Twitch override, got: %s", warning)
 	}
 
 	disabled := DisabledModelFamilies([]string{ModelSupertonic, ModelKittenNano}, []string{ModelSupertonic})
 	if len(disabled) != 1 || disabled[0] != ModelKittenNano {
 		t.Errorf("expected disabled=[kitten_nano], got %v", disabled)
+	}
+
+	// DefaultReplacementVoice prefers global default if it belongs to remainingModels
+	if got := DefaultReplacementVoice(cfg, []string{ModelSupertonic}); got != "supertonic:f1" {
+		t.Errorf("expected DefaultReplacementVoice to keep supertonic:f1 when supertonic remains enabled, got %q", got)
+	}
+	// Otherwise picks the first voice of remainingModels
+	if got := DefaultReplacementVoice(cfg, []string{ModelKokoro}); got != "af" {
+		t.Errorf("expected DefaultReplacementVoice for kokoro to be af, got %q", got)
+	}
+
+	// Test ApplyVoiceUsageReplacements:
+	// - Reassign Global Default Voice to af_bella @ 1.2x
+	// - Clear alice viewer override (no nickname -> removed from cfg.Viewers)
+	// - Clear bob viewer override (has nickname -> kept in cfg.Viewers with empty Voice)
+	// - Clear Twitch Platform Override (resets to global)
+	// - Reassign Twitch sub alert to am_michael
+	replacements := []VoiceReplacement{
+		{VoiceID: "af_bella", Speed: 1.20},
+		{VoiceID: "", Speed: 1.25},
+		{VoiceID: "", Speed: 1.0},
+		{VoiceID: "", Speed: 1.10},
+		{VoiceID: "am_michael", Speed: 1.0},
+	}
+	ApplyVoiceUsageReplacements(cfg, usages, replacements)
+
+	if cfg.GlobalChatRules.DefaultVoice != "af_bella" || cfg.GlobalChatRules.DefaultSpeed != 1.20 {
+		t.Errorf("expected global voice af_bella @ 1.20, got %q @ %v", cfg.GlobalChatRules.DefaultVoice, cfg.GlobalChatRules.DefaultSpeed)
+	}
+	if _, exists := cfg.Viewers["twitch:alice"]; exists {
+		t.Error("expected twitch:alice viewer override with no nickname/flags to be deleted when cleared")
+	}
+	if bob, exists := cfg.Viewers["twitch:bob"]; !exists || bob.Voice != "" || bob.Nickname != "Bobby" {
+		t.Errorf("expected twitch:bob to remain with Nickname='Bobby' and Voice='', got exists=%v %+v", exists, bob)
+	}
+	updatedTwitch := cfg.Platforms["twitch"]
+	if updatedTwitch.Overrides.VoiceOverrideMode != config.OverrideModeGlobal || updatedTwitch.Overrides.DefaultVoice != "" {
+		t.Errorf("expected Twitch platform voice override to reset to global, got mode=%q voice=%q",
+			updatedTwitch.Overrides.VoiceOverrideMode, updatedTwitch.Overrides.DefaultVoice)
+	}
+	if updatedTwitch.Notifications["sub"].Voice != "am_michael" {
+		t.Errorf("expected Twitch sub alert voice 'am_michael', got %q", updatedTwitch.Notifications["sub"].Voice)
 	}
 }
 

@@ -573,3 +573,137 @@ func TestSettingsView_TranslationTabAndOverrides(t *testing.T) {
 	}
 }
 
+func TestSettingsView_VoiceReplacementWizard(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestVoiceReplacementWizard")
+
+	cfg := config.DefaultConfig()
+	cfg.TTS.Preset = tts.PresetCustom
+	cfg.TTS.EnabledModels = []string{tts.ModelKokoro, tts.ModelSupertonic}
+	cfg.GlobalChatRules.DefaultVoice = "supertonic:f1"
+	cfg.GlobalChatRules.DefaultSpeed = 1.0
+	cfg.Viewers["twitch:alice"] = config.ViewerConfig{
+		Platform: "twitch",
+		UserID:   "alice",
+		Voice:    "supertonic:m2",
+		Speed:    1.15,
+	}
+	twitchCfg := cfg.Platforms["twitch"]
+	twitchCfg.Overrides.VoiceOverrideMode = config.OverrideModeCustom
+	twitchCfg.Overrides.DefaultVoice = "supertonic:f2"
+	cfg.Platforms["twitch"] = twitchCfg
+
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.modelDir = t.TempDir()
+	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
+		return []audio.DeviceInfo{{ID: "mock1", Name: "Mock Speakers", IsDefault: true}}, nil
+	})
+	twitchTab := NewTwitchTabView(w, sess)
+	view.SetPlatformTabs(twitchTab, nil, nil, nil)
+
+	var modelsChangedCount int
+	view.SetModelsChangedHandler(func() {
+		modelsChangedCount++
+	})
+
+	_ = view.Build()
+
+	superChk := view.modelChecks[tts.ModelSupertonic]
+	if superChk == nil || !superChk.Checked {
+		t.Fatal("expected supertonic checkbox to be checked initially")
+	}
+
+	// 1. Unchecking in-use Supertonic pack opens the VoiceReplacementWizard and keeps checkbox checked while open
+	superChk.SetChecked(false)
+	wiz := view.activeReplacementWizard
+	if wiz == nil {
+		t.Fatal("expected activeReplacementWizard to be opened when unchecking in-use model pack")
+	}
+	if !superChk.Checked {
+		t.Error("expected supertonic checkbox to stay checked until wizard is confirmed")
+	}
+	if len(wiz.usages) != 3 {
+		t.Fatalf("expected 3 affected voice usages (global, viewer alice, twitch override), got %d", len(wiz.usages))
+	}
+
+	// 2. Cancelling the wizard leaves config and enabled model packs untouched
+	test.Tap(wiz.cancelBtn)
+	if view.activeReplacementWizard != nil {
+		t.Error("expected activeReplacementWizard to be nil after cancel")
+	}
+	if !slices.Contains(sess.Config().TTS.EnabledModels, tts.ModelSupertonic) {
+		t.Error("expected supertonic to remain enabled after cancelling wizard")
+	}
+	if sess.Config().GlobalChatRules.DefaultVoice != "supertonic:f1" {
+		t.Errorf("expected Global Default Voice to remain supertonic:f1, got %q", sess.Config().GlobalChatRules.DefaultVoice)
+	}
+
+	// 3. Uncheck again, use SetBulkVoice("af_bella", 1.1) + Clear Overrides, then Confirm
+	superChk.SetChecked(false)
+	wiz = view.activeReplacementWizard
+	if wiz == nil {
+		t.Fatal("expected activeReplacementWizard on second uncheck")
+	}
+	wiz.SetBulkVoice("af_bella", 1.1)
+	if wiz.clearOverridesBtn == nil {
+		t.Fatal("expected clearOverridesBtn to be present when viewer/platform overrides exist")
+	}
+	test.Tap(wiz.clearOverridesBtn)
+	test.Tap(wiz.confirmBtn)
+
+	if superChk.Checked {
+		t.Error("expected supertonic checkbox to be unchecked after confirming wizard")
+	}
+	updatedCfg := sess.Config()
+	if slices.Equal(updatedCfg.TTS.EnabledModels, []string{tts.ModelKokoro}) == false {
+		t.Errorf("expected EnabledModels=[kokoro], got %v", updatedCfg.TTS.EnabledModels)
+	}
+	if updatedCfg.GlobalChatRules.DefaultVoice != "af_bella" {
+		t.Errorf("expected Global Default Voice reassigned to af_bella, got %q", updatedCfg.GlobalChatRules.DefaultVoice)
+	}
+	if _, exists := updatedCfg.Viewers["twitch:alice"]; exists {
+		t.Error("expected alice viewer override to be cleared and removed")
+	}
+	if updatedCfg.Platforms["twitch"].Overrides.VoiceOverrideMode != config.OverrideModeGlobal {
+		t.Errorf("expected Twitch voice override to reset to global, got %q", updatedCfg.Platforms["twitch"].Overrides.VoiceOverrideMode)
+	}
+	if view.globalVoiceField.VoiceID() != "af_bella" {
+		t.Errorf("expected SettingsView globalVoiceField to refresh to af_bella, got %q", view.globalVoiceField.VoiceID())
+	}
+	if modelsChangedCount == 0 {
+		t.Error("expected onModelsChanged callback to fire after wizard confirmation")
+	}
+
+	// 4. Attempting to uncheck the last remaining model pack (Kokoro) blocks immediately without opening the wizard
+	kokoroChk := view.modelChecks[tts.ModelKokoro]
+	kokoroChk.SetChecked(false)
+	if !kokoroChk.Checked {
+		t.Error("expected last remaining model pack checkbox to remain checked")
+	}
+	if view.activeReplacementWizard != nil {
+		t.Error("expected wizard NOT to open when no other model packs remain enabled")
+	}
+
+	// 5. Switching to Fast & Lean preset (which enables only Supertonic and disables Kokoro) opens the wizard for af_bella
+	fastPreset := tts.PresetByID(tts.PresetFastLean)
+	view.presetSelect.SetSelected(fastPreset.Label)
+	wiz = view.activeReplacementWizard
+	if wiz == nil {
+		t.Fatal("expected activeReplacementWizard to open when switching to preset that disables in-use Kokoro pack")
+	}
+	// Default replacement voice for Fast & Lean (Supertonic) should be supertonic:f1
+	test.Tap(wiz.confirmBtn)
+
+	finalCfg := sess.Config()
+	if finalCfg.TTS.Preset != tts.PresetFastLean {
+		t.Errorf("expected Preset=%q after confirming preset wizard, got %q", tts.PresetFastLean, finalCfg.TTS.Preset)
+	}
+	if finalCfg.GlobalChatRules.DefaultVoice != "supertonic:f1" {
+		t.Errorf("expected Global Default Voice reassigned to supertonic:f1, got %q", finalCfg.GlobalChatRules.DefaultVoice)
+	}
+}
+
+

@@ -149,9 +149,10 @@ type SettingsView struct {
 	presetSelect         *widget.Select
 	gpuCheck             *widget.Check
 	threadsSlider        *widget.Slider
-	idleSelect           *widget.Select
-	modelChecks          map[string]*widget.Check
-	deviceRefreshBtn     *widget.Button
+	idleSelect              *widget.Select
+	modelChecks             map[string]*widget.Check
+	activeReplacementWizard *VoiceReplacementWizard
+	deviceRefreshBtn        *widget.Button
 	rulesNamesCheck                  *widget.Check
 	rulesEmotesCheck                 *widget.Check
 	rulesDedupeCheck                 *widget.Check
@@ -1712,18 +1713,6 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 				return
 			}
 			cfg := v.currentConfig()
-			if !checked {
-				if usages := tts.FindVoiceUsages(cfg, []string{famSpec.ID}); len(usages) > 0 {
-					syncingControls = true
-					chk.SetChecked(true)
-					syncingControls = false
-					v.setStatus(fmt.Sprintf("⚠️ Cannot disable %s — %d assigned voice(s) in use.", famSpec.ShortName, len(usages)))
-					if v.window != nil {
-						dialog.ShowInformation("Cannot Disable Model Pack — Voices In Use", tts.FormatVoiceUsagesWarning(usages), v.window)
-					}
-					return
-				}
-			}
 
 			var selectedModels []string
 			for _, s := range tts.AllModelFamilies {
@@ -1737,6 +1726,53 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 				syncingControls = false
 				v.setStatus("⚠️ At least one voice model pack must remain enabled.")
 				return
+			}
+
+			if !checked {
+				if usages := tts.FindVoiceUsages(cfg, []string{famSpec.ID}); len(usages) > 0 {
+					syncingControls = true
+					chk.SetChecked(true)
+					syncingControls = false
+					v.setStatus(fmt.Sprintf("⚠️ %s has %d assigned voice(s) — choose replacement voices to disable.", famSpec.ShortName, len(usages)))
+					v.activeReplacementWizard = ShowVoiceReplacementWizard(
+						v.window,
+						v.session,
+						cfg,
+						usages,
+						selectedModels,
+						func(replacements []tts.VoiceReplacement) {
+							v.activeReplacementWizard = nil
+							syncingControls = true
+							chk.SetChecked(false)
+							syncingControls = false
+
+							if slices.Contains(selectedModels, tts.ModelKokoro) || slices.Contains(selectedModels, tts.ModelKokoroIntl) {
+								gpuCheck.Enable()
+							} else {
+								gpuCheck.Disable()
+							}
+
+							v.updateConfig(func(c *config.Config) {
+								tts.ApplyVoiceUsageReplacements(c, usages, replacements)
+								c.TTS.Preset = tts.PresetCustom
+								c.TTS.EnabledModels = selectedModels
+							})
+							markCustomPreset()
+							updateImpactUI()
+							v.RefreshVoices()
+							if v.onModelsChanged != nil {
+								v.onModelsChanged()
+							}
+							v.reloadTTSEngine(refreshPackLabels)
+						},
+						func() {
+							v.activeReplacementWizard = nil
+							v.setStatus("Model pack removal cancelled.")
+						},
+						v.onStatus,
+					)
+					return
+				}
 			}
 
 			if slices.Contains(selectedModels, tts.ModelKokoro) || slices.Contains(selectedModels, tts.ModelKokoroIntl) {
@@ -1787,10 +1823,39 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		disabledFamilies := tts.DisabledModelFamilies(cfg.TTS.EffectiveEnabledModels(), pSpec.EnabledModels)
 		if usages := tts.FindVoiceUsages(cfg, disabledFamilies); len(usages) > 0 {
 			syncWidgetsFromConfig()
-			v.setStatus(fmt.Sprintf("⚠️ Cannot switch preset — %d assigned voice(s) use a model pack that would be disabled.", len(usages)))
-			if v.window != nil {
-				dialog.ShowInformation("Cannot Disable Model Pack — Voices In Use", tts.FormatVoiceUsagesWarning(usages), v.window)
-			}
+			v.setStatus(fmt.Sprintf("⚠️ Switching to %s disables a pack with %d assigned voice(s) — choose replacements to continue.", pSpec.Label, len(usages)))
+			v.activeReplacementWizard = ShowVoiceReplacementWizard(
+				v.window,
+				v.session,
+				cfg,
+				usages,
+				pSpec.EnabledModels,
+				func(replacements []tts.VoiceReplacement) {
+					v.activeReplacementWizard = nil
+					presetDescLabel.SetText(pSpec.Description)
+					v.updateConfig(func(c *config.Config) {
+						tts.ApplyVoiceUsageReplacements(c, usages, replacements)
+						c.TTS.Preset = pSpec.ID
+						c.TTS.EnabledModels = slices.Clone(pSpec.EnabledModels)
+						c.TTS.UseGPU = pSpec.UseGPU
+						c.TTS.NumThreads = pSpec.NumThreads
+						c.TTS.MaxClauseWords = pSpec.MaxClauseWords
+						c.TTS.IdleUnloadMinutes = pSpec.IdleUnloadMinutes
+					})
+
+					syncWidgetsFromConfig()
+					v.RefreshVoices()
+					if v.onModelsChanged != nil {
+						v.onModelsChanged()
+					}
+					v.reloadTTSEngine(refreshPackLabels)
+				},
+				func() {
+					v.activeReplacementWizard = nil
+					v.setStatus("Preset change cancelled.")
+				},
+				v.onStatus,
+			)
 			return
 		}
 
