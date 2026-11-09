@@ -37,6 +37,7 @@ type PlatformOverridesControl struct {
 	Card          *widget.Card
 
 	NamesSelect                   *widget.Select
+	CoalesceSelect                *widget.Select
 	EmotesSelect                  *widget.Select
 	DedupeSelect                  *widget.Select
 	DupWordsSelect                *widget.Select
@@ -137,6 +138,29 @@ func (c *PlatformOverridesControl) build() {
 			if mode != config.OverrideModeGlobal {
 				p.Overrides.SpeakNames = bVal
 			}
+			cfg.Platforms[c.PlatformKey] = p
+		})
+		c.syncCoalesceSubControl()
+	})
+
+	c.CoalesceSelect = widget.NewSelect(nil, func(selected string) {
+		if c.syncing {
+			return
+		}
+		if strings.HasPrefix(selected, "Global (") {
+			c.updateConfig(func(cfg *config.Config) {
+				p := cfg.Platforms[c.PlatformKey]
+				p.Overrides.CoalesceConsecutiveMode = config.OverrideModeGlobal
+				cfg.Platforms[c.PlatformKey] = p
+			})
+			return
+		}
+		val := OptionToCoalesceSeconds(selected)
+		mode := config.CoalesceSecondsToOverrideMode(val)
+		c.updateConfig(func(cfg *config.Config) {
+			p := cfg.Platforms[c.PlatformKey]
+			p.Overrides.CoalesceConsecutiveMode = mode
+			p.Overrides.CoalesceConsecutiveSeconds = val
 			cfg.Platforms[c.PlatformKey] = p
 		})
 	})
@@ -345,6 +369,7 @@ func (c *PlatformOverridesControl) build() {
 
 	cardContent := container.NewVBox(
 		makeRow("Speak Chatter Names:", c.NamesSelect),
+		makeRow("Coalesce Consecutive Speaker:", c.CoalesceSelect),
 		makeRow("Speak Emotes & Emojis:", c.EmotesSelect),
 		makeRow("Deduplicate Emotes & Emojis:", c.DedupeSelect),
 		makeRow("Max Consecutive Duplicate Words:", c.DupWordsSelect),
@@ -363,6 +388,19 @@ func (c *PlatformOverridesControl) build() {
 		"Choose Global to inherit global settings or set an explicit override for "+c.PlatformTitle,
 		cardContent,
 	)
+}
+
+func (c *PlatformOverridesControl) syncCoalesceSubControl() {
+	if c.CoalesceSelect == nil {
+		return
+	}
+	cfg := c.currentConfig()
+	speakNames, _, _, _, _, _, _ := cfg.EffectiveChatRules(c.PlatformKey)
+	if speakNames {
+		c.CoalesceSelect.Enable()
+	} else {
+		c.CoalesceSelect.Disable()
+	}
 }
 
 func (c *PlatformOverridesControl) syncMentionSubControls() {
@@ -394,6 +432,29 @@ func (c *PlatformOverridesControl) Refresh() {
 	c.NamesSelect.Options = boolOptionsForGlobal(g.SpeakNames, boolOnSpeakNames, boolOffSpeakNames)
 	c.NamesSelect.SetSelected(selectedBoolOption(ov.SpeakNamesMode, ov.OverrideRules, ov.SpeakNames, g.SpeakNames, boolOnSpeakNames, boolOffSpeakNames))
 	c.NamesSelect.Refresh()
+
+	// 1b. Coalesce Consecutive Speaker
+	globalCoalesceOpt := fmt.Sprintf("Global (%s)", CoalesceSecondsToOption(g.CoalesceConsecutiveSeconds))
+	coalesceOpts := make([]string, 0, 1+len(CoalesceSpeakerOptions))
+	coalesceOpts = append(coalesceOpts, globalCoalesceOpt)
+	coalesceOpts = append(coalesceOpts, CoalesceSpeakerOptions...)
+	c.CoalesceSelect.Options = coalesceOpts
+
+	coalMode := config.NormalizeCoalesceOverrideMode(ov.CoalesceConsecutiveMode)
+	switch coalMode {
+	case config.OverrideModeOff:
+		c.CoalesceSelect.SetSelected("Off (Always Speak Name)")
+	case config.OverrideModeGlobal:
+		if ov.OverrideRules && ov.CoalesceConsecutiveSeconds != 0 {
+			c.CoalesceSelect.SetSelected(CoalesceSecondsToOption(ov.CoalesceConsecutiveSeconds))
+		} else {
+			c.CoalesceSelect.SetSelected(globalCoalesceOpt)
+		}
+	default:
+		c.CoalesceSelect.SetSelected(CoalesceSecondsToOption(OptionToCoalesceSeconds(coalMode)))
+	}
+	c.CoalesceSelect.Refresh()
+	c.syncCoalesceSubControl()
 
 	// 2. Speak Emotes
 	c.EmotesSelect.Options = boolOptionsForGlobal(g.SpeakEmotes, boolOnSpeakEmotes, boolOffSpeakEmotes)

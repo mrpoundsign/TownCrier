@@ -1490,6 +1490,103 @@ func TestSessionDispatchEventTranslation(t *testing.T) {
 	}
 }
 
+func TestSessionCoalesceConsecutiveViewerMessages(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.GlobalChatRules.SpeakNames = true
+	cfg.GlobalChatRules.SpeakPlatformName = true
+	cfg.GlobalChatRules.CoalesceConsecutiveSeconds = 20
+
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = session.Close() }()
+
+	var clockMu sync.Mutex
+	now := time.Date(2026, 11, 9, 15, 0, 0, 0, time.UTC)
+	advanceClock := func(d time.Duration) {
+		clockMu.Lock()
+		now = now.Add(d)
+		clockMu.Unlock()
+	}
+	session.Router().SetClock(func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	})
+
+	items := make(chan *queue.Item, 8)
+	session.Queue().SetOnItemStarted(func(item *queue.Item) {
+		items <- item
+	})
+
+	// 1. First message from Alice includes platform + "alice says:"
+	if err := session.DispatchEvent(&chat.Event{
+		ID:       "m1",
+		Platform: "twitch",
+		UserID:   "u-alice",
+		UserName: "alice",
+		Kind:     chat.EventKindMessage,
+		Text:     "first message",
+	}); err != nil {
+		t.Fatalf("DispatchEvent m1: %v", err)
+	}
+
+	select {
+	case it := <-items:
+		if it.Text != "twitch, alice says: first message" {
+			t.Fatalf("m1 text = %q, want 'twitch, alice says: first message'", it.Text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for m1")
+	}
+
+	// 2. Second message from Alice 4s later coalesces (omits platform and "alice says:")
+	advanceClock(4 * time.Second)
+	if err := session.DispatchEvent(&chat.Event{
+		ID:       "m2",
+		Platform: "twitch",
+		UserID:   "u-alice",
+		UserName: "alice",
+		Kind:     chat.EventKindMessage,
+		Text:     "second message right after",
+	}); err != nil {
+		t.Fatalf("DispatchEvent m2: %v", err)
+	}
+
+	select {
+	case it := <-items:
+		if it.Text != "second message right after" {
+			t.Fatalf("m2 text = %q, want 'second message right after'", it.Text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for m2")
+	}
+
+	// 3. Panic + ClearPanic resets the speaker streak so Alice's next message announces her name again
+	session.Panic()
+	session.ClearPanic()
+
+	advanceClock(2 * time.Second)
+	if err := session.DispatchEvent(&chat.Event{
+		ID:       "m3",
+		Platform: "twitch",
+		UserID:   "u-alice",
+		UserName: "alice",
+		Kind:     chat.EventKindMessage,
+		Text:     "message after panic reset",
+	}); err != nil {
+		t.Fatalf("DispatchEvent m3: %v", err)
+	}
+
+	select {
+	case it := <-items:
+		if it.Text != "twitch, alice says: message after panic reset" {
+			t.Fatalf("m3 text = %q, want 'twitch, alice says: message after panic reset'", it.Text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for m3")
+	}
+}
+
+
 
 
 

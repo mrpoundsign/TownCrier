@@ -449,6 +449,8 @@ const (
 	IgnoreMentionsOff               = "off"
 	IgnoreMentionsRepliesAndLeading = "replies_and_leading"
 	IgnoreMentionsAll               = "all"
+
+	DefaultCoalesceConsecutiveSeconds = 20
 )
 
 // NormalizeIgnoreMentionsMode returns a canonical IgnoreMentionsMode ("off", "replies_and_leading", or "all").
@@ -464,16 +466,17 @@ func NormalizeIgnoreMentionsMode(mode string) string {
 }
 
 type GlobalChatRules struct {
-	SpeakNames                bool    `json:"speak_names"`
-	SpeakEmotes               bool    `json:"speak_emotes"`
-	DeduplicateEmotes         bool    `json:"deduplicate_emotes"`
-	MaxDuplicateWords         int     `json:"max_duplicate_words"`
-	SpeakPlatformName         bool    `json:"speak_platform_name"`
-	IgnoreMentionsMode        string  `json:"ignore_mentions_mode,omitempty"`
-	AllowBroadcasterMentions  bool    `json:"allow_broadcaster_mentions,omitempty"`
-	PlayAlertOnIgnoredMention bool    `json:"play_alert_on_ignored_mention,omitempty"`
-	DefaultVoice              string  `json:"default_voice"`
-	DefaultSpeed              float32 `json:"default_speed"`
+	SpeakNames                 bool    `json:"speak_names"`
+	CoalesceConsecutiveSeconds int     `json:"coalesce_consecutive_seconds,omitempty"`
+	SpeakEmotes                bool    `json:"speak_emotes"`
+	DeduplicateEmotes          bool    `json:"deduplicate_emotes"`
+	MaxDuplicateWords          int     `json:"max_duplicate_words"`
+	SpeakPlatformName          bool    `json:"speak_platform_name"`
+	IgnoreMentionsMode         string  `json:"ignore_mentions_mode,omitempty"`
+	AllowBroadcasterMentions   bool    `json:"allow_broadcaster_mentions,omitempty"`
+	PlayAlertOnIgnoredMention  bool    `json:"play_alert_on_ignored_mention,omitempty"`
+	DefaultVoice               string  `json:"default_voice"`
+	DefaultSpeed               float32 `json:"default_speed"`
 }
 
 const (
@@ -530,6 +533,32 @@ func DuplicateWordsToOverrideMode(val int) string {
 	return strconv.Itoa(val)
 }
 
+// NormalizeCoalesceOverrideMode returns "global", "off", or a positive seconds string (e.g. "10", "15", "20", "30", "60").
+func NormalizeCoalesceOverrideMode(mode string) string {
+	clean := strings.ToLower(strings.TrimSpace(mode))
+	clean = strings.TrimSuffix(clean, "s")
+	switch clean {
+	case OverrideModeOff, "-1", "0", "false", "no", "disabled":
+		return OverrideModeOff
+	default:
+		if n, err := strconv.Atoi(clean); err == nil && n > 0 {
+			return strconv.Itoa(n)
+		}
+		return OverrideModeGlobal
+	}
+}
+
+// CoalesceSecondsToOverrideMode converts a CoalesceConsecutiveSeconds integer into its explicit override mode string.
+func CoalesceSecondsToOverrideMode(val int) string {
+	if val < 0 {
+		return OverrideModeOff
+	}
+	if val == 0 {
+		return strconv.Itoa(DefaultCoalesceConsecutiveSeconds)
+	}
+	return strconv.Itoa(val)
+}
+
 // NormalizeIgnoreMentionsOverrideMode returns "global", "off", "replies_and_leading", or "all".
 func NormalizeIgnoreMentionsOverrideMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
@@ -555,6 +584,7 @@ func NormalizeVoiceOverrideMode(mode string) string {
 type PlatformOverrides struct {
 	OverrideRules                 bool    `json:"override_rules,omitempty"`
 	SpeakNamesMode                string  `json:"speak_names_mode,omitempty"`
+	CoalesceConsecutiveMode       string  `json:"coalesce_consecutive_mode,omitempty"`
 	SpeakEmotesMode               string  `json:"speak_emotes_mode,omitempty"`
 	DeduplicateEmotesMode         string  `json:"deduplicate_emotes_mode,omitempty"`
 	MaxDuplicateWordsMode         string  `json:"max_duplicate_words_mode,omitempty"`
@@ -565,6 +595,7 @@ type PlatformOverrides struct {
 	TranslateMode                 string  `json:"translate_mode,omitempty"`
 	VoiceOverrideMode             string  `json:"voice_override_mode,omitempty"`
 	SpeakNames                    bool    `json:"speak_names"`
+	CoalesceConsecutiveSeconds    int     `json:"coalesce_consecutive_seconds,omitempty"`
 	SpeakEmotes                   bool    `json:"speak_emotes"`
 	DeduplicateEmotes             bool    `json:"deduplicate_emotes"`
 	MaxDuplicateWords             int     `json:"max_duplicate_words"`
@@ -814,13 +845,14 @@ func DefaultConfig() *Config {
 			MinConfidence:        DefaultTranslationMinConfidence,
 		},
 		GlobalChatRules: GlobalChatRules{
-			SpeakNames:        true,
-			SpeakEmotes:       false,
-			DeduplicateEmotes: true,
-			MaxDuplicateWords: 2,
-			SpeakPlatformName: false,
-			DefaultVoice:      "supertonic:f1",
-			DefaultSpeed:      1.0,
+			SpeakNames:                 true,
+			CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
+			SpeakEmotes:                false,
+			DeduplicateEmotes:          true,
+			MaxDuplicateWords:          2,
+			SpeakPlatformName:          false,
+			DefaultVoice:               "supertonic:f1",
+			DefaultSpeed:               1.0,
 		},
 		Viewers: make(map[string]ViewerConfig),
 		Platforms: map[string]PlatformConfig{
@@ -915,14 +947,15 @@ func DefaultConfig() *Config {
 					},
 				},
 				Overrides: PlatformOverrides{
-					OverrideRules:     false,
-					SpeakNames:        true,
-					SpeakEmotes:       false,
-					DeduplicateEmotes: true,
-					MaxDuplicateWords: 2,
-					SpeakPlatformName: false,
-					DefaultVoice:      "",
-					DefaultSpeed:      1.0,
+					OverrideRules:              false,
+					SpeakNames:                 true,
+					CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
+					SpeakEmotes:                false,
+					DeduplicateEmotes:          true,
+					MaxDuplicateWords:          2,
+					SpeakPlatformName:          false,
+					DefaultVoice:               "",
+					DefaultSpeed:               1.0,
 				},
 			},
 			"youtube": {
@@ -997,14 +1030,15 @@ func DefaultConfig() *Config {
 					},
 				},
 				Overrides: PlatformOverrides{
-					OverrideRules:     false,
-					SpeakNames:        true,
-					SpeakEmotes:       false,
-					DeduplicateEmotes: true,
-					MaxDuplicateWords: 2,
-					SpeakPlatformName: false,
-					DefaultVoice:      "",
-					DefaultSpeed:      1.0,
+					OverrideRules:              false,
+					SpeakNames:                 true,
+					CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
+					SpeakEmotes:                false,
+					DeduplicateEmotes:          true,
+					MaxDuplicateWords:          2,
+					SpeakPlatformName:          false,
+					DefaultVoice:               "",
+					DefaultSpeed:               1.0,
 				},
 			},
 			"tiktok": {
@@ -1062,14 +1096,15 @@ func DefaultConfig() *Config {
 					},
 				},
 				Overrides: PlatformOverrides{
-					OverrideRules:     false,
-					SpeakNames:        true,
-					SpeakEmotes:       false,
-					DeduplicateEmotes: true,
-					MaxDuplicateWords: 2,
-					SpeakPlatformName: false,
-					DefaultVoice:      "",
-					DefaultSpeed:      1.0,
+					OverrideRules:              false,
+					SpeakNames:                 true,
+					CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
+					SpeakEmotes:                false,
+					DeduplicateEmotes:          true,
+					MaxDuplicateWords:          2,
+					SpeakPlatformName:          false,
+					DefaultVoice:               "",
+					DefaultSpeed:               1.0,
 				},
 			},
 			"kick": {
@@ -1132,14 +1167,15 @@ func DefaultConfig() *Config {
 					},
 				},
 				Overrides: PlatformOverrides{
-					OverrideRules:     false,
-					SpeakNames:        true,
-					SpeakEmotes:       false,
-					DeduplicateEmotes: true,
-					MaxDuplicateWords: 2,
-					SpeakPlatformName: false,
-					DefaultVoice:      "",
-					DefaultSpeed:      1.0,
+					OverrideRules:              false,
+					SpeakNames:                 true,
+					CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
+					SpeakEmotes:                false,
+					DeduplicateEmotes:          true,
+					MaxDuplicateWords:          2,
+					SpeakPlatformName:          false,
+					DefaultVoice:               "",
+					DefaultSpeed:               1.0,
 				},
 			},
 		},
@@ -1238,6 +1274,43 @@ func (c *Config) EffectiveChatRules(platform string) (speakNames, speakEmotes, d
 	}
 
 	return speakNames, speakEmotes, deduplicateEmotes, maxDuplicateWords, speakPlatformName, voice, speed
+}
+
+// EffectiveCoalesceSeconds returns the effective consecutive-speaker coalescing window in seconds
+// for a platform (or 0 when disabled), taking per-setting platform overrides into account.
+func (c *Config) EffectiveCoalesceSeconds(platform string) int {
+	if c == nil {
+		return DefaultCoalesceConsecutiveSeconds
+	}
+	speakNames, _, _, _, _, _, _ := c.EffectiveChatRules(platform)
+	if !speakNames {
+		return 0
+	}
+	val := c.GlobalChatRules.CoalesceConsecutiveSeconds
+	if val == 0 {
+		val = DefaultCoalesceConsecutiveSeconds
+	}
+
+	if p, ok := c.Platforms[platform]; ok {
+		ov := p.Overrides
+		switch mode := NormalizeCoalesceOverrideMode(ov.CoalesceConsecutiveMode); mode {
+		case OverrideModeOff:
+			val = -1
+		case OverrideModeGlobal:
+			if ov.OverrideRules && ov.CoalesceConsecutiveSeconds != 0 {
+				val = ov.CoalesceConsecutiveSeconds
+			}
+		default:
+			if n, err := strconv.Atoi(mode); err == nil {
+				val = n
+			}
+		}
+	}
+
+	if val < 0 {
+		return 0
+	}
+	return val
 }
 
 // EffectiveMentionRules returns the effective @mention and reply filtering rules for a platform,
@@ -1619,10 +1692,16 @@ func migrate(cfg *Config) error {
 			if p.Overrides.MaxDuplicateWords == 0 {
 				p.Overrides.MaxDuplicateWords = 2
 			}
+			if p.Overrides.CoalesceConsecutiveSeconds == 0 {
+				p.Overrides.CoalesceConsecutiveSeconds = DefaultCoalesceConsecutiveSeconds
+			}
 			p.Overrides.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(p.Overrides.IgnoreMentionsMode)
 			if p.Overrides.OverrideRules {
 				if p.Overrides.SpeakNamesMode == "" {
 					p.Overrides.SpeakNamesMode = BoolToOverrideMode(p.Overrides.SpeakNames)
+				}
+				if p.Overrides.CoalesceConsecutiveMode == "" && p.Overrides.CoalesceConsecutiveSeconds != DefaultCoalesceConsecutiveSeconds {
+					p.Overrides.CoalesceConsecutiveMode = CoalesceSecondsToOverrideMode(p.Overrides.CoalesceConsecutiveSeconds)
 				}
 				if p.Overrides.SpeakEmotesMode == "" {
 					p.Overrides.SpeakEmotesMode = BoolToOverrideMode(p.Overrides.SpeakEmotes)
@@ -1656,6 +1735,9 @@ func migrate(cfg *Config) error {
 
 	if cfg.GlobalChatRules.MaxDuplicateWords == 0 {
 		cfg.GlobalChatRules.MaxDuplicateWords = 2
+	}
+	if cfg.GlobalChatRules.CoalesceConsecutiveSeconds == 0 {
+		cfg.GlobalChatRules.CoalesceConsecutiveSeconds = DefaultCoalesceConsecutiveSeconds
 	}
 	cfg.GlobalChatRules.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(cfg.GlobalChatRules.IgnoreMentionsMode)
 	NormalizeTranslationProviders(&cfg.Translation)

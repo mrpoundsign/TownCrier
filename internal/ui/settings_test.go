@@ -906,6 +906,74 @@ func TestWriteSupportBackupZipAndDialog(t *testing.T) {
 	}
 }
 
+func TestSettingsView_CoalesceConsecutiveSpeakerControls(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestCoalesceControls")
+
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
+
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.modelDir = t.TempDir()
+	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
+		return []audio.DeviceInfo{{ID: "mock1", Name: "Mock Speakers", IsDefault: true}}, nil
+	})
+	twitchTab := NewTwitchTabView(w, sess)
+	view.SetPlatformTabs(twitchTab, nil, nil, nil)
+
+	_ = view.Build()
+
+	if view.rulesCoalesceSelect == nil {
+		t.Fatal("expected rulesCoalesceSelect to be initialized")
+	}
+	if view.rulesCoalesceSelect.Selected != "20 seconds (Default)" {
+		t.Fatalf("expected default rulesCoalesceSelect=%q, got %q", "20 seconds (Default)", view.rulesCoalesceSelect.Selected)
+	}
+
+	// Selecting "30 seconds" updates config
+	view.rulesCoalesceSelect.SetSelected("30 seconds")
+	if sess.Config().GlobalChatRules.CoalesceConsecutiveSeconds != 30 {
+		t.Fatalf("expected CoalesceConsecutiveSeconds=30, got %d", sess.Config().GlobalChatRules.CoalesceConsecutiveSeconds)
+	}
+
+	// Selecting "Off (Always Speak Name)" sets -1 in config and 0 effective
+	view.rulesCoalesceSelect.SetSelected("Off (Always Speak Name)")
+	if sess.Config().GlobalChatRules.CoalesceConsecutiveSeconds != -1 {
+		t.Fatalf("expected CoalesceConsecutiveSeconds=-1 when Off selected, got %d", sess.Config().GlobalChatRules.CoalesceConsecutiveSeconds)
+	}
+	if sess.Config().EffectiveCoalesceSeconds("twitch") != 0 {
+		t.Fatalf("expected EffectiveCoalesceSeconds('twitch')=0 when Off selected")
+	}
+
+	// Unchecking SpeakNames disables rulesCoalesceSelect and platform CoalesceSelect (when inheriting global)
+	view.rulesNamesCheck.SetChecked(false)
+	if !view.rulesCoalesceSelect.Disabled() {
+		t.Fatal("expected rulesCoalesceSelect to be disabled when rulesNamesCheck is unchecked")
+	}
+	if !twitchTab.overrides.CoalesceSelect.Disabled() {
+		t.Fatal("expected twitch CoalesceSelect to be disabled when global SpeakNames is off and inherited")
+	}
+
+	// Re-check SpeakNames and set platform override on Twitch to 15s
+	view.rulesNamesCheck.SetChecked(true)
+	view.rulesCoalesceSelect.SetSelected("20 seconds (Default)")
+	if view.rulesCoalesceSelect.Disabled() {
+		t.Fatal("expected rulesCoalesceSelect to be enabled when rulesNamesCheck is checked")
+	}
+
+	twitchTab.overrides.CoalesceSelect.SetSelected("15 seconds")
+	if sess.Config().EffectiveCoalesceSeconds("twitch") != 15 {
+		t.Fatalf("expected EffectiveCoalesceSeconds('twitch')=15 after override, got %d", sess.Config().EffectiveCoalesceSeconds("twitch"))
+	}
+	if sess.Config().EffectiveCoalesceSeconds("youtube") != 20 {
+		t.Fatalf("expected EffectiveCoalesceSeconds('youtube')=20 inheriting global, got %d", sess.Config().EffectiveCoalesceSeconds("youtube"))
+	}
+}
+
+
 
 
 

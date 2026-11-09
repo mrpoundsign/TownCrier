@@ -569,3 +569,53 @@ func TestTranslationConfigAndOverrides(t *testing.T) {
 		t.Fatalf("Save() error: %v", err)
 	}
 }
+
+func TestEffectiveCoalesceSecondsAndOverrides(t *testing.T) {
+	store := NewMemoryStore(nil)
+	cfg, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.GlobalChatRules.CoalesceConsecutiveSeconds != DefaultCoalesceConsecutiveSeconds {
+		t.Fatalf("expected default CoalesceConsecutiveSeconds=%d, got %d", DefaultCoalesceConsecutiveSeconds, cfg.GlobalChatRules.CoalesceConsecutiveSeconds)
+	}
+	if got := cfg.EffectiveCoalesceSeconds("twitch"); got != 20 {
+		t.Fatalf("expected EffectiveCoalesceSeconds('twitch')=20 by default, got %d", got)
+	}
+
+	// Global Off (-1) disables coalescing
+	cfg.GlobalChatRules.CoalesceConsecutiveSeconds = -1
+	if got := cfg.EffectiveCoalesceSeconds("twitch"); got != 0 {
+		t.Fatalf("expected EffectiveCoalesceSeconds('twitch')=0 when global is -1, got %d", got)
+	}
+
+	// Per-platform override via CoalesceConsecutiveMode
+	pTw := cfg.Platforms["twitch"]
+	pTw.Overrides.CoalesceConsecutiveMode = "30"
+	cfg.Platforms["twitch"] = pTw
+	if got := cfg.EffectiveCoalesceSeconds("twitch"); got != 30 {
+		t.Fatalf("expected EffectiveCoalesceSeconds('twitch')=30 when overridden to '30', got %d", got)
+	}
+
+	// Per-platform override to 'off' when global is 15s
+	cfg.GlobalChatRules.CoalesceConsecutiveSeconds = 15
+	pYt := cfg.Platforms["youtube"]
+	pYt.Overrides.CoalesceConsecutiveMode = OverrideModeOff
+	cfg.Platforms["youtube"] = pYt
+	if got := cfg.EffectiveCoalesceSeconds("youtube"); got != 0 {
+		t.Fatalf("expected EffectiveCoalesceSeconds('youtube')=0 when overridden to off, got %d", got)
+	}
+	if got := cfg.EffectiveCoalesceSeconds("kick"); got != 15 {
+		t.Fatalf("expected EffectiveCoalesceSeconds('kick')=15 inheriting global, got %d", got)
+	}
+
+	// SpeakNames disabled on platform forces EffectiveCoalesceSeconds to 0
+	pKick := cfg.Platforms["kick"]
+	pKick.Overrides.SpeakNamesMode = OverrideModeOff
+	cfg.Platforms["kick"] = pKick
+	if got := cfg.EffectiveCoalesceSeconds("kick"); got != 0 {
+		t.Fatalf("expected EffectiveCoalesceSeconds('kick')=0 when SpeakNames is off, got %d", got)
+	}
+}
+

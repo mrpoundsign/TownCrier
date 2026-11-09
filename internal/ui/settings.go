@@ -154,6 +154,7 @@ type SettingsView struct {
 	activeReplacementWizard *VoiceReplacementWizard
 	deviceRefreshBtn        *widget.Button
 	rulesNamesCheck                  *widget.Check
+	rulesCoalesceSelect              *widget.Select
 	rulesEmotesCheck                 *widget.Check
 	rulesDedupeCheck                 *widget.Check
 	rulesDupWordsSelect              *widget.Select
@@ -521,6 +522,14 @@ func (v *SettingsView) SyncFromConfig() {
 	}
 	if v.rulesNamesCheck != nil {
 		v.rulesNamesCheck.SetChecked(v.cfg.GlobalChatRules.SpeakNames)
+	}
+	if v.rulesCoalesceSelect != nil {
+		v.rulesCoalesceSelect.SetSelected(CoalesceSecondsToOption(v.cfg.GlobalChatRules.CoalesceConsecutiveSeconds))
+		if v.cfg.GlobalChatRules.SpeakNames {
+			v.rulesCoalesceSelect.Enable()
+		} else {
+			v.rulesCoalesceSelect.Disable()
+		}
 	}
 	if v.rulesEmotesCheck != nil {
 		v.rulesEmotesCheck.SetChecked(v.cfg.GlobalChatRules.SpeakEmotes)
@@ -2390,6 +2399,60 @@ func OptionToDuplicateWords(opt string) int {
 	}
 }
 
+var CoalesceSpeakerOptions = []string{
+	"Off (Always Speak Name)",
+	"10 seconds",
+	"15 seconds",
+	"20 seconds (Default)",
+	"30 seconds",
+	"60 seconds",
+}
+
+func CoalesceSecondsToOption(val int) string {
+	switch val {
+	case -1:
+		return "Off (Always Speak Name)"
+	case 10:
+		return "10 seconds"
+	case 15:
+		return "15 seconds"
+	case 20, 0:
+		return "20 seconds (Default)"
+	case 30:
+		return "30 seconds"
+	case 60:
+		return "60 seconds"
+	default:
+		if val < 0 {
+			return "Off (Always Speak Name)"
+		}
+		return fmt.Sprintf("%d seconds", val)
+	}
+}
+
+func OptionToCoalesceSeconds(opt string) int {
+	switch opt {
+	case "Off (Always Speak Name)", "off", "-1":
+		return -1
+	case "10 seconds", "10":
+		return 10
+	case "15 seconds", "15":
+		return 15
+	case "20 seconds (Default)", "20":
+		return 20
+	case "30 seconds", "30":
+		return 30
+	case "60 seconds", "60":
+		return 60
+	default:
+		var n int
+		if _, err := fmt.Sscanf(opt, "%d", &n); err == nil && n > 0 {
+			return n
+		}
+		return config.DefaultCoalesceConsecutiveSeconds
+	}
+}
+
 const (
 	IgnoreMentionsOptionOff               = "Read All Mentions & Replies"
 	IgnoreMentionsOptionRepliesAndLeading = "Ignore Replies & Starting @ Mentions"
@@ -2425,7 +2488,29 @@ func OptionToIgnoreMentionsMode(opt string) string {
 }
 
 func (v *SettingsView) buildRulesCard() *widget.Card {
+	coalesceSelect := widget.NewSelect(CoalesceSpeakerOptions, func(s string) {
+		val := OptionToCoalesceSeconds(s)
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.CoalesceConsecutiveSeconds = val
+		})
+		v.refreshPlatformOverrides()
+	})
+	coalesceSelect.SetSelected(CoalesceSecondsToOption(v.cfg.GlobalChatRules.CoalesceConsecutiveSeconds))
+	if !v.cfg.GlobalChatRules.SpeakNames {
+		coalesceSelect.Disable()
+	}
+	v.rulesCoalesceSelect = coalesceSelect
+	coalesceRow := container.NewHBox(
+		widget.NewLabel("Coalesce Consecutive Messages (Same Speaker):"),
+		coalesceSelect,
+	)
+
 	checkNames := widget.NewCheck("Speak Chatter Names (e.g. 'User says...')", func(b bool) {
+		if b {
+			coalesceSelect.Enable()
+		} else {
+			coalesceSelect.Disable()
+		}
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.SpeakNames = b
 		})
@@ -2521,6 +2606,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 
 	cardContent := container.NewVBox(
 		checkNames,
+		coalesceRow,
 		checkEmotes,
 		checkDedupe,
 		dupWordsRow,

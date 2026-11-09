@@ -229,7 +229,17 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 
 	s.queue = queue.NewQueue(nil, nil, s.Config)
 	s.queue.SetOnItemOutcome(func(item *queue.Item, spoken bool, outcome string, detail string) {
-		if item == nil || item.ID == "" {
+		if item == nil {
+			return
+		}
+		if s.router != nil {
+			if spoken && item.Event != nil {
+				s.router.TouchSpeaker(item.Event)
+			} else if !spoken {
+				s.router.ResetSpeaker()
+			}
+		}
+		if item.ID == "" {
 			return
 		}
 		elog := s.EventLogger()
@@ -460,6 +470,9 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 			ChatRetentionDays:  newCfg.Logging.ChatRetentionDays,
 			EventRetentionDays: newCfg.Logging.EventRetentionDays,
 		})
+	}
+	if !newCfg.TTS.Enabled && s.router != nil {
+		s.router.ResetSpeaker()
 	}
 	s.EvaluateIdleState()
 	return nil
@@ -1094,6 +1107,9 @@ func (s *Session) UpdatePlatformStreamState(platform, channel string, live bool)
 }
 
 func (s *Session) endActiveStreamSession() {
+	if s.router != nil {
+		s.router.ResetSpeaker()
+	}
 	elog := s.EventLogger()
 	s.streamMu.Lock()
 	sid := s.activeSessionID
@@ -1181,6 +1197,9 @@ func (s *Session) DetectLiveStatus(ctx context.Context) {
 
 // Panic immediately halts audio playback (<50ms), purges the speech queue, and latches Panic Mode (D28).
 func (s *Session) Panic() {
+	if s.router != nil {
+		s.router.ResetSpeaker()
+	}
 	if s.queue != nil {
 		s.queue.Panic()
 	}
@@ -1188,6 +1207,9 @@ func (s *Session) Panic() {
 
 // ClearPanic unlatches Panic Mode and resumes speech processing.
 func (s *Session) ClearPanic() {
+	if s.router != nil {
+		s.router.ResetSpeaker()
+	}
 	if s.queue != nil {
 		s.queue.ClearPanic()
 	}
@@ -1195,6 +1217,9 @@ func (s *Session) ClearPanic() {
 
 // TogglePanic toggles Emergency Panic Mute mode on or off, returning the new panicked state.
 func (s *Session) TogglePanic() bool {
+	if s.router != nil {
+		s.router.ResetSpeaker()
+	}
 	if s.queue != nil {
 		return s.queue.TogglePanic()
 	}
@@ -1345,6 +1370,9 @@ func (s *Session) EvaluateIdleState() {
 	cb := s.onTTSModeState
 	s.mu.Unlock()
 
+	if (deactivated || (changed && !nowSpeakActive)) && s.router != nil {
+		s.router.ResetSpeaker()
+	}
 	if deactivated && q != nil {
 		flushed := q.FlushPendingForActivity()
 		if flushed > 0 {
@@ -1509,6 +1537,9 @@ func (s *Session) SpeakCustom(req ws.SpeakRequest) error {
 		Text:        text,
 	}
 
+	if s.router != nil {
+		s.router.ResetSpeaker()
+	}
 	return q.Enqueue(&queue.Item{
 		ID:         ev.ID,
 		Event:      ev,
@@ -1545,8 +1576,14 @@ func (s *Session) ExecuteQueueAction(action controlv1.QueueAction) error {
 	case controlv1.QueueAction_QUEUE_ACTION_RESUME:
 		q.Resume()
 	case controlv1.QueueAction_QUEUE_ACTION_SKIP:
+		if s.router != nil {
+			s.router.ResetSpeaker()
+		}
 		q.Skip()
 	case controlv1.QueueAction_QUEUE_ACTION_CLEAR:
+		if s.router != nil {
+			s.router.ResetSpeaker()
+		}
 		q.Clear()
 	default:
 		return errors.New("unsupported queue action")
@@ -2282,8 +2319,8 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		}
 	}
 
-	// 4. Resolve Voice, Speed, and Template
-	resolved := s.router.Resolve(event, cfg)
+	// 4. Resolve Voice, Speed, and Template (defer speaker continuation state commit until enqueued)
+	resolved := s.router.ResolveWithOptions(event, cfg, false)
 	if resolved.Text == "" {
 		log.Printf("[Session] Event resolved to empty text: user=%q", event.UserName)
 		s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Resolved template text is empty"))
@@ -2370,6 +2407,9 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	if err := s.queue.Enqueue(item); err != nil {
 		return err
 	}
+	if !s.IsPanicked() && s.router != nil {
+		s.router.RecordSpoken(event, cfg)
+	}
 
 	s.mu.RLock()
 	onDispatched := s.onEventDispatched
@@ -2429,6 +2469,10 @@ func (s *Session) DispatchModeration(modEvent *chat.ModerationEvent) {
 		Outcome:       eventlog.OutcomeModerationEvent,
 		OutcomeDetail: detail,
 	})
+
+	if s.router != nil {
+		s.router.ResetSpeaker()
+	}
 
 	switch modEvent.Action {
 	case chat.ModActionDeleteMessage:
