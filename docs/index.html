@@ -3,500 +3,284 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TownCrier — Open-Source Neural TTS & Live Chat Aggregator</title>
+  <title>TownCrier — Open-Source Neural TTS &amp; Live Chat Aggregator</title>
   <link rel="icon" type="image/png" href="icon.png">
   <meta name="google-site-verification" content="RJ-0Jr9dzDzeXes7Bo1_Vgc5GKHw8R2ADLe-tBge_tU" />
-  <style>
-    :root {
-      --bg-color: #0F172A;
-      --card-bg: #1E293B;
-      --border-color: #334155;
-      --text-main: #F8FAFC;
-      --text-muted: #94A3B8;
-      --accent: #38BDF8;
-      --accent-hover: #0284C7;
-      --code-bg: #0B1120;
-      --badge-bg: rgba(56, 189, 248, 0.12);
-      --badge-text: #38BDF8;
-    }
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-    body {
-      background-color: var(--bg-color);
-      color: var(--text-main);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.6;
-      padding: 2rem 1.5rem 5rem;
-    }
-    .container {
-      max-width: 860px;
-      margin: 0 auto;
-    }
-    header {
-      display: flex;
-      align-items: center;
-      gap: 1.25rem;
-      margin-bottom: 1.75rem;
-      padding-bottom: 1.5rem;
-      border-bottom: 1px solid var(--border-color);
-    }
-    header img {
-      width: 68px;
-      height: 68px;
-      border-radius: 14px;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-    }
-    header h1 {
-      font-size: 2.1rem;
-      font-weight: 700;
-      color: var(--text-main);
-      letter-spacing: -0.02em;
-    }
-    header p {
-      color: var(--accent);
-      font-size: 0.95rem;
-      font-weight: 500;
-    }
-    nav {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1rem;
-      margin-bottom: 2rem;
-      padding: 0.75rem 1.25rem;
-      background: var(--card-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-    }
-    nav a {
-      color: var(--text-main);
-      text-decoration: none;
-      font-weight: 500;
-      font-size: 0.95rem;
-      transition: color 0.15s ease;
-    }
-    nav a:hover {
-      color: var(--accent);
-    }
-    .hero {
-      background: linear-gradient(180deg, #1E293B 0%, #152033 100%);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
-      padding: 2.25rem 2rem;
-      margin-bottom: 2rem;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-    }
-    .hero h2 {
-      font-size: 1.75rem;
-      font-weight: 700;
-      margin-bottom: 0.75rem;
-      color: var(--text-main);
-      letter-spacing: -0.01em;
-    }
-    .hero p {
-      color: var(--text-muted);
-      font-size: 1.05rem;
-      margin-bottom: 1.5rem;
-      line-height: 1.65;
-    }
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
-      padding: 1.75rem 2rem;
-      margin-bottom: 1.75rem;
-    }
-    h2 {
-      color: var(--text-main);
-      font-size: 1.4rem;
-      margin-bottom: 0.75rem;
-      font-weight: 600;
-      letter-spacing: -0.01em;
-    }
-    h3 {
-      color: var(--text-main);
-      font-size: 1.15rem;
-      margin-top: 1.25rem;
-      margin-bottom: 0.5rem;
-      font-weight: 600;
-    }
-    p {
-      color: var(--text-muted);
-      margin-bottom: 1rem;
-    }
-    p:last-child {
-      margin-bottom: 0;
-    }
-    ul {
-      list-style-type: none;
-      padding-left: 0;
-      margin-bottom: 1rem;
-    }
-    li {
-      color: var(--text-muted);
-      position: relative;
-      padding-left: 1.5rem;
-      margin-bottom: 0.6rem;
-    }
-    li::before {
-      content: "•";
-      color: var(--accent);
-      position: absolute;
-      left: 0.5rem;
-      font-weight: bold;
-    }
-    a {
-      color: var(--accent);
-      text-decoration: none;
-    }
-    a:hover {
-      text-decoration: underline;
-    }
-    .btn-group {
-      display: flex;
-      gap: 1rem;
-      flex-wrap: wrap;
-      margin-top: 1.25rem;
-    }
-    .btn {
-      display: inline-block;
-      background: var(--accent);
-      color: #0F172A;
-      font-weight: 600;
-      padding: 0.7rem 1.35rem;
-      border-radius: 6px;
-      text-decoration: none;
-      transition: background 0.15s ease, transform 0.1s ease;
-    }
-    .btn:hover {
-      background: var(--accent-hover);
-      text-decoration: none;
-      color: #0F172A;
-    }
-    .btn-secondary {
-      background: transparent;
-      color: var(--text-main);
-      border: 1px solid var(--border-color);
-    }
-    .btn-secondary:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: var(--accent);
-      color: var(--accent);
-      text-decoration: none;
-    }
-    .media-card {
-      margin: 1.25rem 0;
-      border-radius: 8px;
-      overflow: hidden;
-      border: 1px solid var(--border-color);
-      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
-    }
-    .media-card img {
-      width: 100%;
-      height: auto;
-      display: block;
-    }
-    .badge {
-      display: inline-block;
-      background: var(--badge-bg);
-      color: var(--badge-text);
-      font-size: 0.8rem;
-      font-weight: 600;
-      padding: 0.2rem 0.6rem;
-      border-radius: 9999px;
-      margin-right: 0.5rem;
-      vertical-align: middle;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    kbd {
-      background: var(--code-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 4px;
-      padding: 0.15rem 0.45rem;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.85em;
-      color: var(--accent);
-    }
-    .grid-2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1.25rem;
-      margin-top: 1rem;
-    }
-    @media (max-width: 680px) {
-      .grid-2 {
-        grid-template-columns: 1fr;
-      }
-    }
-    .grid-item {
-      background: rgba(15, 23, 42, 0.6);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      padding: 1.25rem;
-    }
-    .grid-item h4 {
-      color: var(--text-main);
-      font-size: 1.05rem;
-      margin-bottom: 0.4rem;
-    }
-    .grid-item p {
-      font-size: 0.92rem;
-      margin-bottom: 0;
-    }
-    footer {
-      margin-top: 3.5rem;
-      padding-top: 1.75rem;
-      border-top: 1px solid var(--border-color);
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      align-items: center;
-      gap: 1rem;
-      font-size: 0.875rem;
-      color: var(--text-muted);
-    }
-    footer nav {
-      background: transparent;
-      border: none;
-      padding: 0;
-      margin: 0;
-      gap: 1.25rem;
-    }
-    footer nav a {
-      color: var(--text-muted);
-    }
-    footer nav a:hover {
-      color: var(--accent);
-    }
-  </style>
+  <link rel="stylesheet" href="site.css">
 </head>
 <body>
-  <div class="container">
-    <header>
-      <img src="icon.png" alt="TownCrier Logo" width="68" height="68" fetchpriority="high">
-      <div>
-        <h1>TownCrier</h1>
-        <p>Offline Neural TTS & Multi-Platform Livestream Chat Aggregator</p>
+  <div class="app-shell">
+    <header class="site-header">
+      <a class="brand" href="index.html">
+        <img src="icon.png" alt="TownCrier Logo" width="56" height="56" fetchpriority="high">
+        <div>
+          <div class="brand-title">TownCrier</div>
+          <div class="brand-subtitle">Offline Neural TTS &amp; Multi-Platform Livestream Chat Aggregator</div>
+        </div>
+      </a>
+      <div class="header-actions">
+        <a class="btn" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Download Latest Release</a>
+        <a class="btn btn-secondary" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub</a>
       </div>
     </header>
 
-    <nav aria-label="Primary">
-      <a href="index.html"><strong>Home</strong></a>
-      <a href="translation-guides.html">Translation Guides</a>
-      <a href="privacy.html">Privacy Policy</a>
-      <a href="terms.html">Terms of Service</a>
-      <a href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
-      <a href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Releases</a>
-    </nav>
+    <div class="docs-layout">
+      <aside class="sidebar">
+        <nav aria-label="Documentation">
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Documentation</div>
+            <ul class="sidebar-nav" role="list">
+              <li>
+                <a class="sidebar-link" href="index.html" aria-current="page">Overview &amp; Home</a>
+                <ul class="sidebar-subnav" role="list">
+                  <li><a class="sidebar-sublink" href="#architecture">Modular Operation</a></li>
+                  <li><a class="sidebar-sublink" href="#live-logs">Live Logs &amp; Pop-Outs</a></li>
+                  <li><a class="sidebar-sublink" href="#sessions">Broadcast Sessions</a></li>
+                  <li><a class="sidebar-sublink" href="#search-history">SQLite Search History</a></li>
+                  <li><a class="sidebar-sublink" href="#moderation">Moderation &amp; Safety</a></li>
+                  <li><a class="sidebar-sublink" href="#neural-audio">Voice Packs &amp; Presets</a></li>
+                  <li><a class="sidebar-sublink" href="#translation">Live Chat Translation</a></li>
+                  <li><a class="sidebar-sublink" href="#backups">Backups &amp; Snapshots</a></li>
+                  <li><a class="sidebar-sublink" href="#compliance">Legal &amp; Licensing</a></li>
+                </ul>
+              </li>
+              <li><a class="sidebar-link" href="features.html">Features &amp; Config Guide</a></li>
+              <li><a class="sidebar-link" href="translation-guides.html">Translation Setup Guides</a></li>
+            </ul>
+          </div>
 
-    <main>
-      <!-- Hero -->
-      <section class="hero">
-        <h2>Local Neural TTS & Centralized Chat Aggregation</h2>
-        <p>
-          <strong>TownCrier</strong> is an open-source Windows and Linux desktop application that reads livestream chat and alerts aloud using local neural text-to-speech (TTS), or operates as an ultra-fast, lightweight multi-platform chat aggregator, event logger, and moderation tool.
-        </p>
-        <p>
-          Direct your TTS audio to any virtual cable or monitor sink for clean OBS Studio capture. Everything runs 100% offline on your machine with zero cloud subscriptions, API rate limits, character caps, or developer servers.
-        </p>
-        <div class="btn-group">
-          <a class="btn" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Download TownCrier</a>
-          <a class="btn btn-secondary" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">View on GitHub</a>
-          <a class="btn btn-secondary" href="privacy.html">Privacy Policy</a>
-        </div>
-      </section>
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Legal &amp; Policies</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="privacy.html">Privacy Policy</a></li>
+              <li><a class="sidebar-link" href="terms.html">Terms of Service</a></li>
+            </ul>
+          </div>
 
-      <div class="media-card">
-        <img src="screenshots/dashboard.png" alt="TownCrier Dashboard with Live Speech and Chatter Voice Management">
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Project</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub Repository &#8599;</a></li>
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Releases &amp; Installer &#8599;</a></li>
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">Report an Issue &#8599;</a></li>
+            </ul>
+          </div>
+        </nav>
+      </aside>
+
+      <div class="content-column">
+        <main>
+          <!-- Hero -->
+          <section class="hero">
+            <h1>Local Neural TTS &amp; Centralized Chat Aggregation</h1>
+            <p>
+              <strong>TownCrier</strong> is an open-source Windows and Linux desktop application that reads livestream chat and alerts aloud using local neural text-to-speech (TTS), or operates as an ultra-fast, lightweight multi-platform chat aggregator, event logger, and moderation tool.
+            </p>
+            <p>
+              Direct your TTS audio to any virtual cable or monitor sink for clean OBS Studio capture. Everything runs 100% offline on your machine with zero cloud subscriptions, API rate limits, character caps, or developer servers.
+            </p>
+            <div class="btn-group">
+              <a class="btn" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Download TownCrier</a>
+              <a class="btn btn-secondary" href="features.html">Explore Features &amp; Config Guide</a>
+              <a class="btn btn-secondary" href="translation-guides.html">Translation Setup Guides</a>
+            </div>
+          </section>
+
+          <div class="media-card">
+            <img src="screenshots/dashboard.png" alt="TownCrier Dashboard with Live Speech and Chatter Voice Management">
+          </div>
+
+          <!-- Feature: Modular Performance -->
+          <section id="architecture" class="card">
+            <span class="badge">Architecture</span>
+            <h2>Modular Operation &amp; Lightweight Efficiency</h2>
+            <p>
+              Configure TownCrier to fit your streaming hardware: toggle <strong>Text-to-Speech (TTS)</strong> and <strong>Event Logging</strong> independently in <strong>Settings &rarr; General &amp; Audio</strong>.
+            </p>
+            <div class="grid-2">
+              <div class="grid-item">
+                <h3>Full Voice Announcer + Logger</h3>
+                <p>Generates high-fidelity local neural speech with priority queues, custom chatter voice assignments, and multi-platform event alerts.</p>
+              </div>
+              <div class="grid-item">
+                <h3>Lean Chat Aggregator (&lt;40MB RAM)</h3>
+                <p>Disable TTS to skip ONNX runtime initialization entirely. TownCrier launches in &lt;100ms and acts as a minimal chat monitor and event logger.</p>
+              </div>
+              <div class="grid-item">
+                <h3>Auto-AFK &amp; Alert Chimes</h3>
+                <p>Automatically speak chat only when you step away from the keyboard/mouse (<strong>Auto-AFK</strong>), with optional WAV/MP3 or harmonic chime notifications when muted.</p>
+              </div>
+              <div class="grid-item">
+                <h3>Elgato Stream Deck &amp; Control API</h3>
+                <p>1-click native Elgato Stream Deck plugin installer (5 keypad &amp; rotary dial actions) powered by a local binary Protocol Buffers WebSocket and HTTP REST server.</p>
+              </div>
+            </div>
+            <div class="media-card">
+              <img src="screenshots/general-audio-features.png" alt="TownCrier Modular Features and Audio Settings" loading="lazy">
+            </div>
+          </section>
+
+          <!-- Feature: Chat Logging & Pop-Outs -->
+          <section id="live-logs" class="card">
+            <span class="badge">Chat &amp; Overlays</span>
+            <h2>Centralized Live Logs &amp; Distraction-Free Pop-Outs</h2>
+            <p>
+              Connect all your stream platforms into a single unified chronological live tail feed:
+            </p>
+            <ul>
+              <li><strong>Multi-Platform Aggregation:</strong> Unified feed uniting Twitch, YouTube Live, Kick, and TikTok into one synchronized log.</li>
+              <li><strong>Rich Inline Emotes &amp; Badges:</strong> Native rendering of Twitch emotes, YouTube custom emotes and Super Stickers, Kick emotes, and animated TikTok gifts (with automatic rapid combo grouping). Chatter badges (Broadcaster, Mod, VIP, Subscriber, Founder, Fan Club) appear alongside usernames.</li>
+              <li><strong>Independent Chat Font Scaling:</strong> Customize the zoom level of the chat feed to match your monitor layout with instant presets (<strong>80%</strong>, <strong>100%</strong>, <strong>125%</strong>, <strong>150%</strong>) or a smooth custom % slider.</li>
+              <li><strong>Streamlined Pop-Out Windows:</strong> Launch floating windows stripped of toolbars and sidebars—displaying only the live event feed, sticky stream metrics, and active session status. Perfect for a secondary portrait monitor or capturing directly in OBS Studio via Window Capture.</li>
+            </ul>
+            <div class="media-card">
+              <img src="screenshots/live-popout.png" alt="TownCrier Streamlined Pop-Out Live Log Window" loading="lazy">
+            </div>
+          </section>
+
+          <!-- Feature: Broadcast Sessions -->
+          <section id="sessions" class="card">
+            <span class="badge">Sessions &amp; Metrics</span>
+            <h2>Broadcast Stream Sessions &amp; Telemetry</h2>
+            <p>
+              TownCrier automatically tracks your broadcast sessions as you stream:
+            </p>
+            <ul>
+              <li><strong>Automatic Session Tracking:</strong> Detects broadcast start and end timestamps and maintains an active elapsed duration counter (<kbd>HH:MM:SS</kbd>).</li>
+              <li><strong>Sticky Stream Metrics:</strong> Real-time summary counters tracking total message volume, alert events (subscriptions, bits, Super Chats, gifts), and unique chatter counts.</li>
+              <li><strong>Session-Bound Filtering:</strong> Isolate events from your active broadcast session or filter chat to specific elapsed broadcast time ranges.</li>
+            </ul>
+          </section>
+
+          <!-- Feature: Search History -->
+          <section id="search-history" class="card">
+            <span class="badge">Search &amp; Storage</span>
+            <h2>Instant SQLite FTS5 Full-Text Search History</h2>
+            <p>
+              Never lose a chat message or moderation event. TownCrier embeds an ultra-fast local SQLite database with full-text search indexing:
+            </p>
+            <ul>
+              <li><strong>FTS5 Trigram Search:</strong> Blazing-fast full-text search across millions of historical chat messages and alerts with instant, typo-tolerant search matches.</li>
+              <li><strong>Multi-Session &amp; Date Filters:</strong> Query historical records by specific date ranges, multi-session broadcast selections, platforms, event kinds, or usernames.</li>
+              <li><strong>Automated Data Retention:</strong> Configure automatic database retention policies (pruning by age in days or total row limit) to keep disk space lean.</li>
+              <li><strong>100% Local Storage:</strong> All chat logs and search indexes reside on your machine in <code>%LOCALAPPDATA%</code> (Windows) or <code>~/.local/share</code> (Linux). Zero cloud synchronization.</li>
+            </ul>
+          </section>
+
+          <!-- Feature: Moderation & Stream Safety -->
+          <section id="moderation" class="card">
+            <span class="badge">Stream Safety</span>
+            <h2>In-Log Streamer Moderation &amp; Safety Controls</h2>
+            <p>
+              Manage your stream safety directly from the chat feed with built-in moderation tools:
+            </p>
+            <ul>
+              <li><strong>Inline Moderation Actions:</strong> Delete messages, timeout chatters, or permanently ban users on Twitch and YouTube Live (via secure OAuth 2.0 PKCE) with a single click on any chat log row.</li>
+              <li><strong>Local TTS Mute:</strong> Instantly silence irritating or spammy viewers from speech synthesis without having to timeout or ban them on the streaming platform.</li>
+              <li><strong>Twitch AutoMod Held Queue:</strong> Review held messages in real-time with one-click approve or deny actions before they reach your stream.</li>
+              <li><strong>Sub-50&micro;s Emergency Panic Stop:</strong> Hit <strong>EMERGENCY STOP</strong>, press <kbd>Esc</kbd>, or trigger the global hotkey (<kbd>Ctrl+Shift+M</kbd>) to instantly cut audio buffers in under 50 microseconds and flush speech queues.</li>
+              <li><strong>Live Moderation Sync:</strong> Moderator deletions or timeouts on Twitch and Kick immediately purge queued speech items and halt playback mid-sentence.</li>
+              <li><strong>Bot &amp; Profanity Filters:</strong> One-click common profanity filter toggle, custom blocked words/phrases, and known stream bot filtering (Nightbot, StreamElements, Fossabot, etc.) with per-viewer allow/ignore overrides.</li>
+            </ul>
+          </section>
+
+          <!-- Feature: Voice Packs & TTS Engine -->
+          <section id="neural-audio" class="card">
+            <span class="badge">Neural Audio</span>
+            <h2>Offline Neural Voice Packs &amp; Hardware Presets</h2>
+            <p>
+              Experience natural speech synthesis without cloud subscriptions or character caps:
+            </p>
+            <ul>
+              <li><strong>Five Local Voice Model Families:</strong> Supertonic (default, ultra-fast 66M flow-matching model), Kokoro-82M (with Windows DirectML GPU acceleration), Kokoro International (Japanese, Mandarin, Spanish, French, Hindi, Italian, Brazilian Portuguese), Kitten Mini &amp; Nano (distilled for single-PC streaming rigs), and Piper LibriTTS (904 distinct speakers).</li>
+              <li><strong>Hardware Presets &amp; Impact Meters:</strong> One-click presets (<em>Ultra-Low Resource</em>, <em>Fast &amp; Lean</em>, <em>Studio Quality</em>, <em>Crowd Mode</em>, <em>Full Arsenal</em>) with stacked color-coded bars displaying RAM, CPU math, and GPU acceleration usage.</li>
+              <li><strong>Priority Speech Queue:</strong> Subscriptions, Super Chats, Bits, Follows, and Raids bypass regular chat with zero queue expiration, while chat older than 30s drops during fast chat bursts to keep TTS synchronized with live stream events.</li>
+            </ul>
+            <div class="media-card">
+              <img src="screenshots/tts-hardware-presets.png" alt="TownCrier Neural Voice Packs and Hardware Presets" loading="lazy">
+            </div>
+          </section>
+
+          <!-- Feature: Live Foreign Chat Translation -->
+          <section id="translation" class="card">
+            <span class="badge">Multilingual</span>
+            <h2>Automatic Foreign Chat Detection &amp; Cascading Translation</h2>
+            <p>
+              Engage global viewers effortlessly with built-in sub-millisecond language detection, a two-tier sentence spam cache, and cascading multi-provider translation:
+            </p>
+            <ul>
+              <li><strong>Zero-Setup Free Default + Official Providers:</strong> Works immediately out of the box via MyMemory (up to 50,000 free chars/day with an email address), or chain together <strong>Google Cloud Translation (Basic v2)</strong>, <strong>DeepL API (Free / Pro)</strong>, <strong>LibreTranslate</strong>, and <strong>Local LLMs via Ollama</strong> using Priority Failover or Round-Robin Load Balancing.</li>
+              <li><strong>Smart Sentence Splitting &amp; Two-Tier Cache:</strong> Splits messages into sentences so repeated greetings, copypastas, and bilingual chatters resolve cached or already-English sentences locally at 0 API cost. Phrases seen &ge;2 times promote to disk automatically.</li>
+              <li><strong>3-Note Notification Chime &amp; Dual-Language Logs:</strong> Plays a subtle 3-note ascending chime (or custom WAV/MP3) before speaking translated messages, and stores both original and translated text in Event Logs with a 1-click <code>文A</code> toggle.</li>
+            </ul>
+            <div class="btn-group">
+              <a class="btn btn-secondary" href="translation-guides.html">View Translation Setup Guides</a>
+            </div>
+          </section>
+
+          <!-- Feature: Portable Backups, Selective Import & Schema Snapshots -->
+          <section id="backups" class="card">
+            <span class="badge">Portability &amp; Recovery</span>
+            <h2>Portable <code>.zip</code> Backups, Selective Import &amp; Schema Snapshots</h2>
+            <p>
+              Move your setup between streaming PCs, temporarily load and inspect another streamer's configuration, or roll back across version upgrades in <strong>Settings &rarr; General &amp; Audio &rarr; Backup, Restore &amp; Migration</strong>:
+            </p>
+            <h3>Exporting a Backup Archive (<code>Export Backup&hellip;</code>)</h3>
+            <ul>
+              <li><strong>Unified Versioned <code>.zip</code> Archive:</strong> Creates a portable <code>towncrier-backup-YYYY-MM-DD-HHMMSS-v&lt;version&gt;.zip</code> file where you choose what to include:
+                <br>&bull; <strong>Configuration &amp; Chatter Profiles (<code>config-backup.json</code>):</strong> Checked by default. Includes all chatter voice/speed assignments, blocked words, custom bots, platform alert templates, and Live Log filter tabs. OAuth tokens, WebSocket auth tokens, and translation API keys are automatically scrubbed.
+                <br>&bull; <strong>Event Log &amp; Chat History Database (<code>events.db</code>):</strong> Checked by default. Captures a consistent, WAL-checkpointed SQLite snapshot of your chat history and stream sessions.
+                <br>&bull; <strong>Application Log (<code>towncrier.log</code>):</strong> Unchecked by default; optionally check when sharing a diagnostic bundle for troubleshooting, along with optional notes (<code>support-notes.txt</code>).
+              </li>
+            </ul>
+            <h3>Importing &amp; Switching Configurations (<code>Import Backup&hellip;</code>)</h3>
+            <ul>
+              <li><strong>Selective Merge Mode (Default):</strong> Combine specific sections from a backup (Chatter Voice Overrides, Blocked Words &amp; Bots, Global/Platform Rules, Live Log Filter Presets, or Translation Preferences) into your existing configuration without overwriting your current setup.</li>
+              <li><strong>Full Restore &amp; Profile Swapping:</strong> Back up your own settings, import a friend's or partner's <code>.zip</code> backup in <strong>Full Restore</strong> mode (and/or restore their <code>events.db</code>) to test or troubleshoot their configuration, then import your own backup later to return right where you left off.</li>
+              <li><strong>Preserve Local PC Hardware &amp; Paths:</strong> Keep <em>&ldquo;Preserve this PC's audio output device, hardware preset &amp; local file paths&rdquo;</em> checked when importing from another computer so your WASAPI audio sink, GPU preset, and local sound file paths stay matched to your machine while your OS Keyring credentials remain untouched.</li>
+            </ul>
+            <h3>Automatic Schema Snapshots &amp; Downgrade Protection (<code>Schema Snapshots&hellip;</code>)</h3>
+            <ul>
+              <li><strong>Versioned Pre-Upgrade &amp; Pre-Restore Snapshots:</strong> Before any schema migration or full restore, TownCrier automatically saves timestamped snapshots of your configuration (<code>config.YYYY-MM-DD-HHMMSS-v&lt;schema&gt;.json</code>) and database (<code>events.YYYY-MM-DD-HHMMSS-v&lt;schema&gt;.db</code>).</li>
+              <li><strong>Startup Downgrade Detection:</strong> If you ever install an older TownCrier version after upgrading, TownCrier detects the newer schema version on disk at startup and offers a one-click restore of your compatible pre-upgrade snapshot.</li>
+            </ul>
+            <div class="btn-group">
+              <a class="btn btn-secondary" href="features.html#backups">Step-by-Step Backup &amp; Restore Guide</a>
+            </div>
+          </section>
+
+          <!-- Legal & Privacy -->
+          <section id="compliance" class="card">
+            <span class="badge">Compliance</span>
+            <h2>Legal, Licensing &amp; Privacy</h2>
+            <p>
+              TownCrier is free, open-source software licensed under the <a href="https://github.com/mrpoundsign/TownCrier/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GNU Affero General Public License v3.0 (AGPL-3.0)</a>.
+            </p>
+            <p>
+              We operate zero backend servers, telemetry, or user databases. For full details regarding our Google API Services Limited Use compliance and terms for optional platform integrations:
+            </p>
+            <div class="btn-group">
+              <a class="btn btn-secondary" href="privacy.html">Privacy Policy</a>
+              <a class="btn btn-secondary" href="terms.html">Terms of Service</a>
+              <a class="btn btn-secondary" href="https://github.com/mrpoundsign/TownCrier/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">AGPL-3.0 License</a>
+            </div>
+          </section>
+        </main>
+
+        <footer>
+          <div>&copy; TownCrier Open Source Project. Licensed under GNU AGPLv3.</div>
+          <nav aria-label="Footer">
+            <a href="index.html">Home</a>
+            <a href="features.html">Features &amp; Config Guide</a>
+            <a href="translation-guides.html">Translation Guides</a>
+            <a href="privacy.html">Privacy Policy</a>
+            <a href="terms.html">Terms of Service</a>
+            <a href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>
+          </nav>
+        </footer>
       </div>
-
-      <!-- Feature: Modular Performance -->
-      <section class="card">
-        <span class="badge">Architecture</span>
-        <h2>Modular Operation & Lightweight Efficiency</h2>
-        <p>
-          Configure TownCrier to fit your streaming hardware: toggle <strong>Text-to-Speech (TTS)</strong> and <strong>Event Logging</strong> independently in <strong>Settings &rarr; General & Audio</strong>.
-        </p>
-        <div class="grid-2">
-          <div class="grid-item">
-            <h4>Full Voice Announcer + Logger</h4>
-            <p>Generates high-fidelity local neural speech with priority queues, custom chatter voice assignments, and multi-platform event alerts.</p>
-          </div>
-          <div class="grid-item">
-            <h4>Lean Chat Aggregator (<40MB RAM)</h4>
-            <p>Disable TTS to skip ONNX runtime initialization entirely. TownCrier launches in <100ms and acts as a minimal chat monitor and event logger.</p>
-          </div>
-          <div class="grid-item">
-            <h4>Auto-AFK &amp; Alert Chimes</h4>
-            <p>Automatically speak chat only when you step away from the keyboard/mouse (<strong>Auto-AFK</strong>), with optional WAV/MP3 or harmonic chime notifications when muted.</p>
-          </div>
-          <div class="grid-item">
-            <h4>Elgato Stream Deck &amp; Control API</h4>
-            <p>1-click native Elgato Stream Deck plugin installer (5 keypad &amp; rotary dial actions) powered by a local binary Protocol Buffers WebSocket and HTTP REST server.</p>
-          </div>
-        </div>
-        <div class="media-card">
-          <img src="screenshots/general-audio-features.png" alt="TownCrier Modular Features and Audio Settings">
-        </div>
-      </section>
-
-      <!-- Feature: Chat Logging & Pop-Outs -->
-      <section class="card">
-        <span class="badge">Chat & Overlays</span>
-        <h2>Centralized Live Logs & Distraction-Free Pop-Outs</h2>
-        <p>
-          Connect all your stream platforms into a single unified chronological live tail feed:
-        </p>
-        <ul>
-          <li><strong>Multi-Platform Aggregation:</strong> Unified feed uniting Twitch, YouTube Live, Kick, and TikTok into one synchronized log.</li>
-          <li><strong>Rich Inline Emotes & Badges:</strong> Native rendering of Twitch emotes, YouTube custom emotes and Super Stickers, Kick emotes, and animated TikTok gifts (with automatic rapid combo grouping). Chatter badges (Broadcaster, Mod, VIP, Subscriber, Founder, Fan Club) appear alongside usernames.</li>
-          <li><strong>Independent Chat Font Scaling:</strong> Customize the zoom level of the chat feed to match your monitor layout with instant presets (<strong>80%</strong>, <strong>100%</strong>, <strong>125%</strong>, <strong>150%</strong>) or a smooth custom % slider.</li>
-          <li><strong>Streamlined Pop-Out Windows:</strong> Launch floating windows stripped of toolbars and sidebars—displaying only the live event feed, sticky stream metrics, and active session status. Perfect for a secondary portrait monitor or capturing directly in OBS Studio via Window Capture.</li>
-        </ul>
-        <div class="media-card">
-          <img src="screenshots/live-popout.png" alt="TownCrier Streamlined Pop-Out Live Log Window">
-        </div>
-      </section>
-
-      <!-- Feature: Broadcast Sessions -->
-      <section class="card">
-        <span class="badge">Sessions & Metrics</span>
-        <h2>Broadcast Stream Sessions & Telemetry</h2>
-        <p>
-          TownCrier automatically tracks your broadcast sessions as you stream:
-        </p>
-        <ul>
-          <li><strong>Automatic Session Tracking:</strong> Detects broadcast start and end timestamps and maintains an active elapsed duration counter (<kbd>HH:MM:SS</kbd>).</li>
-          <li><strong>Sticky Stream Metrics:</strong> Real-time summary counters tracking total message volume, alert events (subscriptions, bits, Super Chats, gifts), and unique chatter counts.</li>
-          <li><strong>Session-Bound Filtering:</strong> Isolate events from your active broadcast session or filter chat to specific elapsed broadcast time ranges.</li>
-        </ul>
-      </section>
-
-      <!-- Feature: Search History -->
-      <section class="card">
-        <span class="badge">Search & Storage</span>
-        <h2>Instant SQLite FTS5 Full-Text Search History</h2>
-        <p>
-          Never lose a chat message or moderation event. TownCrier embeds an ultra-fast local SQLite database with full-text search indexing:
-        </p>
-        <ul>
-          <li><strong>FTS5 Trigram Search:</strong> Blazing-fast full-text search across millions of historical chat messages and alerts with instant, typo-tolerant search matches.</li>
-          <li><strong>Multi-Session & Date Filters:</strong> Query historical records by specific date ranges, multi-session broadcast selections, platforms, event kinds, or usernames.</li>
-          <li><strong>Automated Data Retention:</strong> Configure automatic database retention policies (pruning by age in days or total row limit) to keep disk space lean.</li>
-          <li><strong>100% Local Storage:</strong> All chat logs and search indexes reside on your machine in <code>%LOCALAPPDATA%</code> (Windows) or <code>~/.local/share</code> (Linux). Zero cloud synchronization.</li>
-        </ul>
-      </section>
-
-      <!-- Feature: Moderation & Stream Safety -->
-      <section class="card">
-        <span class="badge">Stream Safety</span>
-        <h2>In-Log Streamer Moderation & Safety Controls</h2>
-        <p>
-          Manage your stream safety directly from the chat feed with built-in moderation tools:
-        </p>
-        <ul>
-          <li><strong>Inline Moderation Actions:</strong> Delete messages, timeout chatters, or permanently ban users on Twitch and YouTube Live (via secure OAuth 2.0 PKCE) with a single click on any chat log row.</li>
-          <li><strong>Local TTS Mute:</strong> Instantly silence irritating or spammy viewers from speech synthesis without having to timeout or ban them on the streaming platform.</li>
-          <li><strong>Twitch AutoMod Held Queue:</strong> Review held messages in real-time with one-click approve or deny actions before they reach your stream.</li>
-          <li><strong>Sub-50&micro;s Emergency Panic Stop:</strong> Hit <strong>EMERGENCY STOP</strong>, press <kbd>Esc</kbd>, or trigger the global hotkey (<kbd>Ctrl+Shift+M</kbd>) to instantly cut audio buffers in under 50 microseconds and flush speech queues.</li>
-          <li><strong>Live Moderation Sync:</strong> Moderator deletions or timeouts on Twitch and Kick immediately purge queued speech items and halt playback mid-sentence.</li>
-          <li><strong>Bot & Profanity Filters:</strong> One-click common profanity filter toggle, custom blocked words/phrases, and known stream bot filtering (Nightbot, StreamElements, Fossabot, etc.) with per-viewer allow/ignore overrides.</li>
-        </ul>
-      </section>
-
-      <!-- Feature: Voice Packs & TTS Engine -->
-      <section class="card">
-        <span class="badge">Neural Audio</span>
-        <h2>Offline Neural Voice Packs & Hardware Presets</h2>
-        <p>
-          Experience natural speech synthesis without cloud subscriptions or character caps:
-        </p>
-        <ul>
-          <li><strong>Five Local Voice Model Families:</strong> Supertonic (default, ultra-fast 66M flow-matching model), Kokoro-82M (with Windows DirectML GPU acceleration), Kokoro International (Japanese, Mandarin, Spanish, French, Hindi, Italian, Brazilian Portuguese), Kitten Mini & Nano (distilled for single-PC streaming rigs), and Piper LibriTTS (904 distinct speakers).</li>
-          <li><strong>Hardware Presets & Impact Meters:</strong> One-click presets (<em>Ultra-Low Resource</em>, <em>Fast & Lean</em>, <em>Studio Quality</em>, <em>Crowd Mode</em>, <em>Full Arsenal</em>) with stacked color-coded bars displaying RAM, CPU math, and GPU acceleration usage.</li>
-          <li><strong>Priority Speech Queue:</strong> Subscriptions, Super Chats, Bits, Follows, and Raids bypass regular chat with zero queue expiration, while chat older than 30s drops during fast chat bursts to keep TTS synchronized with live stream events.</li>
-        </ul>
-        <div class="media-card">
-          <img src="screenshots/tts-hardware-presets.png" alt="TownCrier Neural Voice Packs and Hardware Presets">
-        </div>
-      </section>
-
-      <!-- Feature: Live Foreign Chat Translation -->
-      <section class="card">
-        <span class="badge">Multilingual</span>
-        <h2>Automatic Foreign Chat Detection &amp; Cascading Translation</h2>
-        <p>
-          Engage global viewers effortlessly with built-in sub-millisecond language detection, a two-tier sentence spam cache, and cascading multi-provider translation:
-        </p>
-        <ul role="list">
-          <li><strong>Zero-Setup Free Default + Official Providers:</strong> Works immediately out of the box via MyMemory (up to 50,000 free chars/day with an email address), or chain together <strong>Google Cloud Translation (Basic v2)</strong>, <strong>DeepL API (Free / Pro)</strong>, <strong>LibreTranslate</strong>, and <strong>Local LLMs via Ollama</strong> using Priority Failover or Round-Robin Load Balancing.</li>
-          <li><strong>Smart Sentence Splitting &amp; Two-Tier Cache:</strong> Splits messages into sentences so repeated greetings, copypastas, and bilingual chatters resolve cached or already-English sentences locally at 0 API cost. Phrases seen &ge;2 times promote to disk automatically.</li>
-          <li><strong>3-Note Notification Chime &amp; Dual-Language Logs:</strong> Plays a subtle 3-note ascending chime (or custom WAV/MP3) before speaking translated messages, and stores both original and translated text in Event Logs with a 1-click <code>文A</code> toggle.</li>
-        </ul>
-        <div class="btn-group">
-          <a class="btn btn-secondary" href="translation-guides.html">View Translation Setup Guides</a>
-        </div>
-      </section>
-
-      <!-- Feature: Portable Backups, Selective Import & Schema Snapshots -->
-      <section id="backups" class="card">
-        <span class="badge">Portability &amp; Recovery</span>
-        <h2>Portable <code>.zip</code> Backups, Selective Import &amp; Schema Snapshots</h2>
-        <p>
-          Move your setup between streaming PCs, temporarily load and inspect another streamer's configuration, or roll back across version upgrades in <strong>Settings &rarr; General &amp; Audio &rarr; Backup, Restore &amp; Migration</strong>:
-        </p>
-        <h3>Exporting a Backup Archive (<code>Export Backup&hellip;</code>)</h3>
-        <ul role="list">
-          <li><strong>Unified Versioned <code>.zip</code> Archive:</strong> Creates a portable <code>towncrier-backup-YYYY-MM-DD-HHMMSS-v&lt;version&gt;.zip</code> file where you choose exactly what to include:
-            <br>&bull; <strong>Configuration &amp; Chatter Profiles (<code>config-backup.json</code>):</strong> Checked by default. Includes all chatter voice/speed assignments, blocked words, custom bots, platform alert templates, and Live Log filter tabs. OAuth tokens, WebSocket auth tokens, and translation API keys are automatically scrubbed.
-            <br>&bull; <strong>Event Log &amp; Chat History Database (<code>events.db</code>):</strong> Checked by default. Captures a consistent, WAL-checkpointed SQLite snapshot of your chat history and stream sessions.
-            <br>&bull; <strong>Application Log (<code>towncrier.log</code>):</strong> Unchecked by default; optionally check when sharing a diagnostic bundle for troubleshooting, along with optional notes (<code>support-notes.txt</code>).
-          </li>
-        </ul>
-        <h3>Importing &amp; Switching Configurations (<code>Import Backup&hellip;</code>)</h3>
-        <ul role="list">
-          <li><strong>Selective Merge Mode (Default):</strong> Combine specific sections from a backup (Chatter Voice Overrides, Blocked Words &amp; Bots, Global/Platform Rules, Live Log Filter Presets, or Translation Preferences) into your existing configuration without overwriting your current setup.</li>
-          <li><strong>Full Restore &amp; Profile Swapping:</strong> Back up your own settings, import a friend's or partner's <code>.zip</code> backup in <strong>Full Restore</strong> mode (and/or restore their <code>events.db</code>) to test or troubleshoot their configuration, then import your own backup later to return right where you left off.</li>
-          <li><strong>Preserve Local PC Hardware &amp; Paths:</strong> Keep <em>&ldquo;Preserve this PC's audio output device, hardware preset &amp; local file paths&rdquo;</em> checked when importing from another computer so your WASAPI audio sink, GPU preset, and local sound file paths stay matched to your machine while your OS Keyring credentials remain untouched.</li>
-        </ul>
-        <h3>Automatic Schema Snapshots &amp; Downgrade Protection (<code>Schema Snapshots&hellip;</code>)</h3>
-        <ul role="list">
-          <li><strong>Versioned Pre-Upgrade &amp; Pre-Restore Snapshots:</strong> Before any schema migration or full restore, TownCrier automatically saves timestamped snapshots of your configuration (<code>config.YYYY-MM-DD-HHMMSS-v&lt;schema&gt;.json</code>) and database (<code>events.YYYY-MM-DD-HHMMSS-v&lt;schema&gt;.db</code>).</li>
-          <li><strong>Startup Downgrade Detection:</strong> If you ever install an older TownCrier version after upgrading, TownCrier detects the newer schema version on disk at startup and offers a one-click restore of your compatible pre-upgrade snapshot.</li>
-        </ul>
-      </section>
-
-      <!-- Legal & Privacy -->
-      <section class="card">
-        <span class="badge">Compliance</span>
-        <h2>Legal, Licensing &amp; Privacy</h2>
-        <p>
-          TownCrier is free, open-source software licensed under the <a href="https://github.com/mrpoundsign/TownCrier/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GNU Affero General Public License v3.0 (AGPL-3.0)</a>.
-        </p>
-        <p>
-          We operate zero backend servers, telemetry, or user databases. For full details regarding our Google API Services Limited Use compliance and terms for optional platform integrations:
-        </p>
-        <div class="btn-group">
-          <a class="btn btn-secondary" href="privacy.html">Privacy Policy</a>
-          <a class="btn btn-secondary" href="terms.html">Terms of Service</a>
-          <a class="btn btn-secondary" href="https://github.com/mrpoundsign/TownCrier/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">AGPL-3.0 License</a>
-        </div>
-      </section>
-    </main>
-
-    <footer>
-      <div>&copy; TownCrier Open Source Project. Licensed under GNU AGPLv3.</div>
-      <nav aria-label="Footer">
-        <a href="index.html">Home</a>
-        <a href="translation-guides.html">Translation Guides</a>
-        <a href="privacy.html">Privacy Policy</a>
-        <a href="terms.html">Terms of Service</a>
-        <a href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>
-      </nav>
-    </footer>
+    </div>
   </div>
+  <script src="site.js" defer></script>
 </body>
 </html>

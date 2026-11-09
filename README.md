@@ -105,6 +105,7 @@ Audio routes directly to any selected playback device—such as a virtual audio 
 TownCrier is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See [`LICENSE`](LICENSE) for the full license text and [`THIRDPARTY_NOTICES.md`](THIRDPARTY_NOTICES.md) for third-party library and model attributions.
 
 - [Official Website & Documentation](https://mrpoundsign.com/TownCrier/)
+- [Features & Configuration Guide](https://mrpoundsign.com/TownCrier/features.html)
 - [Live Chat Translation Setup Guides](https://mrpoundsign.com/TownCrier/translation-guides.html)
 - [Privacy Policy](https://mrpoundsign.com/TownCrier/privacy.html)
 - [Terms of Service](https://mrpoundsign.com/TownCrier/terms.html)
