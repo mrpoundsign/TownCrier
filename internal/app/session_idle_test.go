@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrpoundsign/TownCrier/internal/chat"
-	"github.com/mrpoundsign/TownCrier/internal/config"
-	"github.com/mrpoundsign/TownCrier/internal/queue"
-	"github.com/mrpoundsign/TownCrier/internal/secrets"
+	"github.com/mrpoundsign/TownCrier/pkg/audio"
+	"github.com/mrpoundsign/TownCrier/pkg/chat"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/queue"
+	"github.com/mrpoundsign/TownCrier/pkg/secrets"
 )
 
 type alertCapturePlayer struct {
@@ -17,6 +18,10 @@ type alertCapturePlayer struct {
 }
 
 func (p *alertCapturePlayer) Play(samples []float32, sampleRate int) error {
+	p.playCount.Add(1)
+	return nil
+}
+func (p *alertCapturePlayer) PlayWithOptions(samples []float32, sampleRate int, opts audio.PlayOptions) error {
 	p.playCount.Add(1)
 	return nil
 }

@@ -18,8 +18,8 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/ws/controlv1"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
 )
 
 // SpeakRequest represents a custom TTS synthesis command from a WebSocket or HTTP client.

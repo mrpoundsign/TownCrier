@@ -54,15 +54,21 @@ TownCrier/
 │   └── towncrier/        # Main desktop application GUI entry point (main.go)
 ├── internal/
 │   ├── app/              # Application lifecycle, session coordination, and wiring
-│   ├── audio/            # Audio device enumeration (WASAPI), mixing, gain, emergency abort
+│   ├── eventlog/         # SQLite event logging, session tracking, and FTS5 search
+│   ├── logging/          #Rotating file logger and debug diagnostics
+│   ├── streamdeck/       # Elgato Stream Deck plugin installer and bundler
+│   ├── ui/               # Fyne GUI components (dashboard, voices, viewers, settings, platform tabs)
+│   └── ws/               # Local Protobuf + JSON WebSocket and HTTP REST control server
+├── pkg/                  # Exported reusable core libraries (imported by TownCrier & Hearsay)
+│   ├── audio/            # Audio device enumeration (WASAPI), stereo panning, earcons, emergency abort
 │   ├── bots/             # Known-bot matcher, embedded bot list, ignore/allow overrides
 │   ├── chat/             # Unified event model, emote stripping, phonetic filtering, voice router
 │   ├── config/           # Configuration schema, global rules, platform overrides, atomic persistence
-│   ├── platform/         # Platform connectors (Twitch EventSub, YouTube, Kick, TikTok)
+│   ├── platform/         # Platform connectors (Twitch EventSub/IRC, YouTube, Kick, TikTok)
 │   ├── queue/            # Priority speech queue with 30s staleness TTL and fast catchup
 │   ├── secrets/          # OS Keyring credentials management wrapper
-│   ├── tts/              # Offline neural TTS engine, voice management, model downloader
-│   └── ui/               # Fyne GUI components (dashboard, voices, viewers, settings, platform tabs)
+│   ├── translate/        # Offline language detection, multi-provider translation, two-tier cache
+│   └── tts/              # Offline neural TTS engine, voice management, model downloader
 ├── models/               # Local ONNX model weights and voice files (gitignored)
 ├── planning/             # Local-only planning repository (PRDs, task lists, research)
 ├── build.sh              # WSL cross-compilation pipeline script
@@ -100,5 +106,5 @@ TownCrier/
    - Chat messages follow a long-tail distribution. Never cache one-offs. Use frequency gating (promote to disk in `%LOCALAPPDATA%\com.github.mrpoundsign.towncrier\cache\audio\` only when count ≥ 2 or for alert templates) to maintain near-zero RAM usage.
 9. **Unified Installer, Portable Launcher & Self-Updater (`@skill:goreleaser-installer-updater`)**:
    - Uses `github.com/mrpoundsign/appinstaller` (`../appinstaller`) and `.goreleaser.yaml` (GoReleaser v2 OSS).
-   - `cmd/installer` is compiled with `-tags nosherpa` so `TownCrier-Setup.exe` runs as a standalone Fyne setup wizard with zero external DLL dependencies while still reusing `internal/tts` to optionally pre-download Supertonic/Kokoro model packs.
+   - `cmd/installer` is compiled with `-tags nosherpa` so `TownCrier-Setup.exe` runs as a standalone Fyne setup wizard with zero external DLL dependencies while still reusing `pkg/tts` to optionally pre-download Supertonic/Kokoro model packs.
    - Startup update checks suppress modal dialogs whenever `session.IsStreamLive()` is true, showing only the header bar `"⬆ Update"` badge and status message.

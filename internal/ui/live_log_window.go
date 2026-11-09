@@ -12,7 +12,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
 )
 
 // liveLogWindow represents an active zero-chrome pop-out Live Log window for a saved preset.

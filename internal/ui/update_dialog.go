@@ -12,7 +12,7 @@ import (
 	"github.com/mrpoundsign/appinstaller/pkg/updaterui"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
-	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
 )
 
 // NewTownCrierUpdater returns a GitHub Releases Checker configured for mrpoundsign/TownCrier.

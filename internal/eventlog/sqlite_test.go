@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrpoundsign/TownCrier/internal/chat"
+	"github.com/mrpoundsign/TownCrier/pkg/chat"
 )
 
 type mockWebhookSink struct {

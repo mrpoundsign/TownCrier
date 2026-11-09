@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mrpoundsign/TownCrier/internal/chat"
+	"github.com/mrpoundsign/TownCrier/pkg/chat"
 )
 
 // EventOutcome represents the pipeline or speech queue fate of an inbound stream event.

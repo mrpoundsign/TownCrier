@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mrpoundsign/TownCrier/internal/chat"
-	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
-	"github.com/mrpoundsign/TownCrier/internal/platform/twitch"
+	"github.com/mrpoundsign/TownCrier/pkg/chat"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/platform/twitch"
 )
 
 // HeldMessages returns a snapshot of all currently pending AutoMod/Blocked-Term held messages

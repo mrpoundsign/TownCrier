@@ -18,10 +18,10 @@ import (
 
 	"golang.org/x/net/websocket"
 
-	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
 	"github.com/mrpoundsign/TownCrier/internal/ws"
 	"github.com/mrpoundsign/TownCrier/internal/ws/controlv1"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
 )
 
 func TestInstallPlugin(t *testing.T) {

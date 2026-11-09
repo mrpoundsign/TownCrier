@@ -19,10 +19,10 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
-	"github.com/mrpoundsign/TownCrier/internal/bots"
-	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
-	"github.com/mrpoundsign/TownCrier/internal/translate"
+	"github.com/mrpoundsign/TownCrier/pkg/bots"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/translate"
 )
 
 const (

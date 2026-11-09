@@ -9,7 +9,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/mrpoundsign/TownCrier/internal/tts"
+	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
 
 // ModelFamilyColor returns the distinct visual color assigned to a model family (or "base") on stacked hardware impact graphs.

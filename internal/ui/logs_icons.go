@@ -12,7 +12,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
-	"github.com/mrpoundsign/TownCrier/internal/tts"
+	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
 
 // Vector SVG resources for platform badges, user role tags, filter status, spoken status, and voice.

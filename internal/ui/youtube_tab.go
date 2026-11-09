@@ -11,7 +11,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
-	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
 )
 
 // YouTubeTabView provides the Fyne UI controls for zero-config YouTube Live integration.

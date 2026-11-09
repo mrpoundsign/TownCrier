@@ -6,9 +6,9 @@ import (
 	"fyne.io/fyne/v2/test"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
-	"github.com/mrpoundsign/TownCrier/internal/config"
-	"github.com/mrpoundsign/TownCrier/internal/platform/kick"
-	"github.com/mrpoundsign/TownCrier/internal/secrets"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/platform/kick"
+	"github.com/mrpoundsign/TownCrier/pkg/secrets"
 )
 
 func TestKickTabViewBuild(t *testing.T) {

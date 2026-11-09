@@ -13,7 +13,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
-	"github.com/mrpoundsign/TownCrier/internal/tts"
+	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
 
 const defaultPreviewSampleText = "Hello! I am reading your livestream chat with natural neural speech."

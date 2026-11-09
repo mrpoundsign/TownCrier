@@ -11,12 +11,12 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
 	"github.com/mrpoundsign/TownCrier/internal/app"
-	"github.com/mrpoundsign/TownCrier/internal/chat"
-	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
-	"github.com/mrpoundsign/TownCrier/internal/platform/twitch"
-	"github.com/mrpoundsign/TownCrier/internal/platform/youtube"
-	"github.com/mrpoundsign/TownCrier/internal/secrets"
+	"github.com/mrpoundsign/TownCrier/pkg/chat"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/platform/twitch"
+	"github.com/mrpoundsign/TownCrier/pkg/platform/youtube"
+	"github.com/mrpoundsign/TownCrier/pkg/secrets"
 )
 
 func TestLogsViewLiveTailAndSearch(t *testing.T) {

@@ -26,7 +26,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 	_ "golang.org/x/image/webp" // Register WebP decoder for Kick/YouTube emotes
 
-	"github.com/mrpoundsign/TownCrier/internal/chat"
+	"github.com/mrpoundsign/TownCrier/pkg/chat"
 )
 
 const (

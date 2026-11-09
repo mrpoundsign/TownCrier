@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrpoundsign/TownCrier/internal/chat"
-	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
-	"github.com/mrpoundsign/TownCrier/internal/queue"
-	"github.com/mrpoundsign/TownCrier/internal/secrets"
-	"github.com/mrpoundsign/TownCrier/internal/translate"
+	"github.com/mrpoundsign/TownCrier/pkg/chat"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/queue"
+	"github.com/mrpoundsign/TownCrier/pkg/secrets"
+	"github.com/mrpoundsign/TownCrier/pkg/translate"
 )
 
 func TestSessionLifecycle(t *testing.T) {

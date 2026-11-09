@@ -14,7 +14,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
-	"github.com/mrpoundsign/TownCrier/internal/platform/twitch"
+	"github.com/mrpoundsign/TownCrier/pkg/platform/twitch"
 )
 
 func (v *LogsView) buildHeldQueueBanner() *fyne.Container {

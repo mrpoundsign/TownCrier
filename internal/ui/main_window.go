@@ -20,7 +20,7 @@ import (
 	"github.com/mrpoundsign/appinstaller/pkg/updater"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
-	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
 )
 
 // Tab index constants for the top-level main window views.

@@ -19,13 +19,13 @@ import (
 
 	"github.com/mrpoundsign/TownCrier/assets"
 	"github.com/mrpoundsign/TownCrier/internal/app"
-	"github.com/mrpoundsign/TownCrier/internal/audio"
-	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 	"github.com/mrpoundsign/TownCrier/internal/logging"
-	"github.com/mrpoundsign/TownCrier/internal/secrets"
-	"github.com/mrpoundsign/TownCrier/internal/tts"
 	"github.com/mrpoundsign/TownCrier/internal/ui"
+	"github.com/mrpoundsign/TownCrier/pkg/audio"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/secrets"
+	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
 
 func parseLogFlagEarly() string {

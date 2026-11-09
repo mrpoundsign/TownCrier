@@ -13,7 +13,7 @@ import (
 
 	"github.com/mrpoundsign/TownCrier/assets"
 	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
-	"github.com/mrpoundsign/TownCrier/internal/tts"
+	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
 
 //go:embed payload/*
