@@ -713,7 +713,7 @@ INSERT INTO event_logs (
 	if err != nil {
 		t.Fatalf("ListBackups failed: %v", err)
 	}
-	if len(backups) != 1 || !strings.Contains(backups[0], ".v2.") {
+	if len(backups) != 1 || !strings.Contains(backups[0], "-v2.db") {
 		t.Fatalf("expected 1 v2 backup file, got %v", backups)
 	}
 
@@ -1338,6 +1338,89 @@ func TestTranslatedTextStorageAndFTS5Search(t *testing.T) {
 		t.Fatalf("expected 1 entry matching original text, got %d", len(resOrig.Entries))
 	}
 }
+
+func TestDBSchemaDowngradeRegressionAndRestore(t *testing.T) {
+	ctx := context.Background()
+	dbFile := filepath.Join(t.TempDir(), "events.db")
+
+	// 1. Create a v2 schema database with an event so opening it creates a v2 pre-migration backup
+	rawDB, err := sql.Open("sqlite", dbFile)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := rawDB.Exec(sqliteBaseTablesSchema); err != nil {
+		t.Fatalf("create base tables: %v", err)
+	}
+	if _, err := rawDB.Exec(`PRAGMA user_version = 2;`); err != nil {
+		t.Fatalf("set user_version=2: %v", err)
+	}
+	if _, err := rawDB.Exec(`
+		INSERT INTO event_logs (id, created_at, updated_at, platform, channel, kind, user_id, user_name, display_name, raw_text, outcome)
+		VALUES ('orig-v2', 1700000000000, 1700000000000, 'twitch', 'streamer', 'message', 'u1', 'alice', 'Alice', 'hello from v2', 'spoken');
+	`); err != nil {
+		t.Fatalf("insert orig-v2: %v", err)
+	}
+	_ = rawDB.Close()
+
+	// 2. Open with NewSQLiteBackend (migrates to CurrentSchemaVersion and creates events.v2.*.bak.db)
+	backend, err := NewSQLiteBackend(dbFile)
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	_ = backend.Close()
+
+	// 3. Simulate a newer version of TownCrier upgrading user_version to 99 and adding a new row
+	rawDB2, err := sql.Open("sqlite", dbFile)
+	if err != nil {
+		t.Fatalf("sql.Open 2: %v", err)
+	}
+	if _, err := rawDB2.Exec(`PRAGMA user_version = 99;`); err != nil {
+		t.Fatalf("set user_version=99: %v", err)
+	}
+	if _, err := rawDB2.Exec(`
+		INSERT INTO event_logs (id, created_at, updated_at, platform, channel, kind, user_id, user_name, display_name, raw_text, outcome)
+		VALUES ('future-v99', 1700000005000, 1700000005000, 'twitch', 'streamer', 'message', 'u2', 'bob', 'Bob', 'from future v99', 'spoken');
+	`); err != nil {
+		t.Fatalf("insert future-v99: %v", err)
+	}
+	_ = rawDB2.Close()
+
+	// 4. Re-open with NewSQLiteBackend + Manager and verify CheckSchemaRegression detects v99 > CurrentSchemaVersion
+	reopened, err := NewSQLiteBackend(dbFile)
+	if err != nil {
+		t.Fatalf("reopen NewSQLiteBackend: %v", err)
+	}
+	mgr := NewManager(RetentionPolicy{}, reopened)
+	defer func() { _ = mgr.Close() }()
+
+	savedVer, supVer, candidate, regressed := mgr.CheckSchemaRegression()
+	if !regressed {
+		t.Fatalf("expected CheckSchemaRegression=true for v99 > v%d", CurrentSchemaVersion)
+	}
+	if savedVer != 99 || supVer != CurrentSchemaVersion {
+		t.Errorf("expected savedVer=99, supVer=%d, got %d, %d", CurrentSchemaVersion, savedVer, supVer)
+	}
+	if candidate == nil || candidate.SchemaVersion != 2 {
+		t.Fatalf("expected candidate backup with SchemaVersion=2, got %+v", candidate)
+	}
+
+	// 5. Restore the backup via Manager.RestoreBackup and verify the DB is restored & migrated in place
+	if err := mgr.RestoreBackup(candidate.Path); err != nil {
+		t.Fatalf("mgr.RestoreBackup failed: %v", err)
+	}
+	if _, _, _, stillRegressed := mgr.CheckSchemaRegression(); stillRegressed {
+		t.Error("expected CheckSchemaRegression=false after RestoreBackup")
+	}
+
+	qRes, err := mgr.Query(ctx, QueryFilter{})
+	if err != nil {
+		t.Fatalf("Query after RestoreBackup failed: %v", err)
+	}
+	if qRes.TotalCount != 1 || qRes.Entries[0].ID != "orig-v2" {
+		t.Errorf("expected restored DB to contain only 'orig-v2', got %+v", qRes.Entries)
+	}
+}
+
 
 
 

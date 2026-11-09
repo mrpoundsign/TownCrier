@@ -177,6 +177,13 @@ type SettingsView struct {
 	newWordEntry         *ScrollPassEntry
 	addWordBtn           *widget.Button
 	wordDeleteBtns       []*widget.Button
+	knownBotsCheck       *widget.Check
+	refreshWords         func()
+	refreshBots          func()
+	exportBackupBtn      *widget.Button
+	importBackupBtn      *widget.Button
+	schemaSnapshotsBtn   *widget.Button
+	onBackupApplied      func(newCfg *config.Config, dbRestored bool)
 	ttsEnabled           bool
 	loggingEnabled       bool
 	translationEnabled   bool
@@ -266,6 +273,11 @@ func (v *SettingsView) SetServicesChangedHandler(fn func()) {
 // SetModelsChangedHandler registers a callback invoked when enabled TTS voice model packs change.
 func (v *SettingsView) SetModelsChangedHandler(fn func()) {
 	v.onModelsChanged = fn
+}
+
+// SetBackupAppliedHandler registers a callback invoked when a backup or schema snapshot is applied.
+func (v *SettingsView) SetBackupAppliedHandler(fn func(newCfg *config.Config, dbRestored bool)) {
+	v.onBackupApplied = fn
 }
 
 // SetOnAssignVoice registers a callback invoked when a viewer voice is assigned from the Event Logs sub-tab.
@@ -507,6 +519,21 @@ func (v *SettingsView) SyncFromConfig() {
 	if v.globalVoiceField != nil {
 		v.globalVoiceField.SetVoiceAndSpeed(v.cfg.GlobalChatRules.DefaultVoice, v.cfg.GlobalChatRules.DefaultSpeed)
 	}
+	if v.rulesNamesCheck != nil {
+		v.rulesNamesCheck.SetChecked(v.cfg.GlobalChatRules.SpeakNames)
+	}
+	if v.rulesEmotesCheck != nil {
+		v.rulesEmotesCheck.SetChecked(v.cfg.GlobalChatRules.SpeakEmotes)
+	}
+	if v.rulesDedupeCheck != nil {
+		v.rulesDedupeCheck.SetChecked(v.cfg.GlobalChatRules.DeduplicateEmotes)
+	}
+	if v.rulesDupWordsSelect != nil {
+		v.rulesDupWordsSelect.SetSelected(DuplicateWordsToOption(v.cfg.GlobalChatRules.MaxDuplicateWords))
+	}
+	if v.rulesPlatformCheck != nil {
+		v.rulesPlatformCheck.SetChecked(v.cfg.GlobalChatRules.SpeakPlatformName)
+	}
 	if v.rulesMentionsModeSelect != nil {
 		v.rulesMentionsModeSelect.SetSelected(IgnoreMentionsModeToOption(v.cfg.GlobalChatRules.IgnoreMentionsMode))
 	}
@@ -526,6 +553,22 @@ func (v *SettingsView) SyncFromConfig() {
 			v.rulesPlayAlertIgnoredMentionCheck.Disable()
 		}
 	}
+	if v.defaultBadWordsCheck != nil {
+		v.defaultBadWordsCheck.SetChecked(v.cfg.Safety.BlockDefaultBadWords)
+	}
+	if v.knownBotsCheck != nil {
+		v.knownBotsCheck.SetChecked(v.cfg.Bots.IgnoreKnownBots)
+	}
+	if v.refreshWords != nil {
+		v.refreshWords()
+	}
+	if v.refreshBots != nil {
+		v.refreshBots()
+	}
+	if v.syncTTSControls != nil {
+		v.syncTTSControls()
+	}
+	v.refreshPlatformOverrides()
 	if v.ttsOutputModeSelect != nil {
 		v.ttsOutputModeSelect.SetSelected(FormatTTSOutputModeLabel(v.cfg.TTS.OutputMode))
 	}
@@ -636,6 +679,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	v.audioCard = v.buildAudioCard()
 	botsCard := v.buildBotsCard()
 	displayCard := v.buildDisplayCard()
+	backupCard := v.buildBackupCard()
 	ttsCard := v.buildTTSCard()
 	rulesCard := v.buildRulesCard()
 	safetyCard := v.buildSafetyCard()
@@ -655,6 +699,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		v.audioCard,
 		botsCard,
 		displayCard,
+		backupCard,
 	)
 
 	generalTabContent := newPanelVScroll(v.generalBox)
@@ -1473,6 +1518,66 @@ func (v *SettingsView) buildDisplayCard() *widget.Card {
 	)
 
 	return widget.NewCard("Display & Scaling", "Lock DPI scaling or customize interface zoom", cardContent)
+}
+
+func (v *SettingsView) buildBackupCard() *widget.Card {
+	descLbl := widget.NewLabel(
+		"Export a portable .zip backup containing your configuration, chatter voice profiles, and Event Log database (OAuth tokens & API keys are never exported), import a backup to merge or switch configurations, or restore an automatic schema snapshot.",
+	)
+	descLbl.Wrapping = fyne.TextWrapWord
+
+	applyImportedOrRestored := func(newCfg *config.Config, modelsChanged bool, dbRestored bool) {
+		if newCfg != nil {
+			v.cfg = newCfg.Clone()
+		}
+		v.SyncFromConfig()
+		v.SyncTTSState(v.cfg.TTS.Enabled)
+		v.SyncLoggingState(v.cfg.Logging.Enabled)
+		v.SyncPlatformTabVisibility()
+		if v.onServicesChanged != nil {
+			v.onServicesChanged()
+		}
+		if v.onModelsChanged != nil {
+			v.onModelsChanged()
+		}
+		if v.onBackupApplied != nil {
+			v.onBackupApplied(v.cfg, dbRestored)
+		}
+		if modelsChanged && !testing.Testing() {
+			v.reloadTTSEngine(nil)
+		}
+	}
+
+	v.exportBackupBtn = widget.NewButtonWithIcon("Export Backup…", theme.DownloadIcon(), func() {
+		dlg := NewSupportBackupDialog(v.window, v.session, v.setStatus)
+		dlg.Show()
+	})
+	v.exportBackupBtn.Importance = widget.HighImportance
+
+	v.importBackupBtn = widget.NewButtonWithIcon("Import Backup…", theme.UploadIcon(), func() {
+		ShowBackupImportFilePicker(v.window, v.session, func(newCfg *config.Config, modelsChanged bool) {
+			applyImportedOrRestored(newCfg, modelsChanged, true)
+		}, v.setStatus)
+	})
+
+	v.schemaSnapshotsBtn = widget.NewButtonWithIcon("Schema Snapshots…", theme.HistoryIcon(), func() {
+		ShowSchemaSnapshotsDialog(v.window, v.session, func(newCfg *config.Config, dbRestored bool) {
+			applyImportedOrRestored(newCfg, false, dbRestored)
+		}, v.setStatus)
+	})
+
+	btnRow := container.NewHBox(
+		v.exportBackupBtn,
+		v.importBackupBtn,
+		v.schemaSnapshotsBtn,
+	)
+
+	cardContent := container.NewVBox(
+		descLbl,
+		btnRow,
+	)
+
+	return widget.NewCard("Backup, Restore & Migration", "Export or import .zip backups across PCs or roll back schema snapshots", cardContent)
 }
 
 func (v *SettingsView) buildTTSCard() *widget.Card {
@@ -2670,6 +2775,7 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 	}
 
 	refreshWords()
+	v.refreshWords = refreshWords
 
 	newWordEntry := NewScrollPassEntry()
 	newWordEntry.SetPlaceHolder("Enter word or pattern to block (e.g. slurs, bad words)")
@@ -2775,6 +2881,7 @@ func (v *SettingsView) buildBotsCard() *widget.Card {
 		})
 	})
 	knownBotsCheck.SetChecked(v.cfg.Bots.IgnoreKnownBots)
+	v.knownBotsCheck = knownBotsCheck
 
 	botListContainer := container.NewVBox()
 	var refreshBots func()
@@ -2803,6 +2910,7 @@ func (v *SettingsView) buildBotsCard() *widget.Card {
 		botListContainer.Refresh()
 	}
 	refreshBots()
+	v.refreshBots = refreshBots
 
 	newBotEntry := NewScrollPassEntry()
 	newBotEntry.SetPlaceHolder("Enter custom bot username (e.g. mychannelbot)...")

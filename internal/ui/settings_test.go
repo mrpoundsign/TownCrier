@@ -1,6 +1,10 @@
 package ui
 
 import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +17,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/internal/audio"
 	"github.com/mrpoundsign/TownCrier/internal/config"
+	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
 	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
 	"github.com/mrpoundsign/TownCrier/internal/tts"
@@ -705,5 +710,202 @@ func TestSettingsView_VoiceReplacementWizard(t *testing.T) {
 		t.Errorf("expected Global Default Voice reassigned to supertonic:f1, got %q", finalCfg.GlobalChatRules.DefaultVoice)
 	}
 }
+
+func TestBackupImportDialogFlow(t *testing.T) {
+	fyneApp := test.NewApp()
+	defer fyneApp.Quit()
+
+	win := fyneApp.NewWindow("Test Backup Import")
+
+	baseCfg := config.DefaultConfig()
+	baseCfg.Audio.DeviceName = "Local OBS Cable"
+	baseCfg.Viewers["twitch:local_viewer"] = config.ViewerConfig{
+		Platform: "twitch",
+		UserID:   "local_viewer",
+		Voice:    "supertonic:m1",
+		Speed:    1.0,
+	}
+
+	cStore := config.NewMemoryStore(baseCfg)
+	sess := app.NewSession(baseCfg, secrets.NewMemoryStore(), cStore)
+	defer func() { _ = sess.Close() }()
+
+	incoming := config.DefaultConfig()
+	incoming.Audio.DeviceName = "Other PC Device"
+	incoming.Viewers["youtube:remote_viewer"] = config.ViewerConfig{
+		Platform: "youtube",
+		UserID:   "remote_viewer",
+		Voice:    "kokoro:af_bella",
+		Speed:    1.2,
+	}
+	incoming.Safety.BlockedWords = []string{"imported_badword"}
+	incoming.Bots.CustomBots = []string{"imported_bot"}
+
+	rawBytes, err := config.ExportBackup(incoming, "0.0.9")
+	if err != nil {
+		t.Fatalf("ExportBackup failed: %v", err)
+	}
+	bundle, err := config.ParseBackup(rawBytes)
+	if err != nil {
+		t.Fatalf("ParseBackup failed: %v", err)
+	}
+
+	var appliedCfg *config.Config
+	var modelsChangedFlag bool
+	var statusMsg string
+
+	dlg := NewBackupImportDialog(win, sess, bundle, "test-backup.json", func(newCfg *config.Config, modelsChanged bool) {
+		appliedCfg = newCfg
+		modelsChangedFlag = modelsChanged
+	}, func(msg string) {
+		statusMsg = msg
+	})
+
+	// Uncheck BlockedAndBotsCheck so only Viewers/Rules/LiveLogs/Translation merge
+	dlg.BlockedAndBotsCheck.SetChecked(false)
+	test.Tap(dlg.ImportBtn)
+
+	if appliedCfg == nil {
+		t.Fatal("expected onApply callback to receive merged config")
+	}
+	if !modelsChangedFlag {
+		t.Error("expected modelsChangedFlag=true because kokoro model was auto-enabled for imported viewer")
+	}
+	if appliedCfg.Audio.DeviceName != "Local OBS Cable" {
+		t.Errorf("expected local audio device preserved, got %q", appliedCfg.Audio.DeviceName)
+	}
+	if _, ok := appliedCfg.Viewers["twitch:local_viewer"]; !ok {
+		t.Error("expected local_viewer preserved in selective merge")
+	}
+	if _, ok := appliedCfg.Viewers["youtube:remote_viewer"]; !ok {
+		t.Error("expected remote_viewer added in selective merge")
+	}
+	if len(appliedCfg.Safety.BlockedWords) != 0 {
+		t.Errorf("expected BlockedWords not merged when checkbox unchecked, got %v", appliedCfg.Safety.BlockedWords)
+	}
+	if !strings.Contains(statusMsg, "Configuration backup imported") {
+		t.Errorf("unexpected status message: %q", statusMsg)
+	}
+}
+
+func TestWriteSupportBackupZipAndDialog(t *testing.T) {
+	fyneApp := test.NewApp()
+	defer fyneApp.Quit()
+
+	win := fyneApp.NewWindow("Test Support Backup")
+	tmpDir := t.TempDir()
+
+	baseCfg := config.DefaultConfig()
+	baseCfg.WebSocket.AuthToken = "secret-ws-token-must-not-appear"
+	baseCfg.Translation.APIKey = "secret-api-key-must-not-appear"
+
+	cStore := config.NewMemoryStore(baseCfg)
+	sess := app.NewSession(baseCfg, secrets.NewMemoryStore(), cStore)
+	defer func() { _ = sess.Close() }()
+
+	// Attach a temporary SQLite event log database with an entry
+	dbPath := filepath.Join(tmpDir, "events.db")
+	sqlBackend, err := eventlog.NewSQLiteBackend(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{}, sqlBackend)
+	sess.SetEventLogger(logMgr)
+	if err := logMgr.Append(context.Background(), &eventlog.Entry{
+		ID:       "ev-support-1",
+		Platform: "twitch",
+		Channel:  "streamer",
+		Kind:     "message",
+		UserID:   "u1",
+		UserName: "alice",
+		RawText:  "support test message",
+		Outcome:  eventlog.OutcomeSpoken,
+	}); err != nil {
+		t.Fatalf("logMgr.Append: %v", err)
+	}
+
+	// Create a temporary log file
+	logFile := filepath.Join(tmpDir, "towncrier.log")
+	if err := os.WriteFile(logFile, []byte("2026/11/08 18:00:00 test log line\n"), 0o600); err != nil {
+		t.Fatalf("write test log file: %v", err)
+	}
+
+	dlg := NewSupportBackupDialog(win, sess, nil)
+	if dlg.IncludeLogsCheck.Checked {
+		t.Error("expected IncludeLogsCheck to be unchecked by default")
+	}
+	if !dlg.IncludeConfigCheck.Checked || !dlg.IncludeDBCheck.Checked {
+		t.Error("expected IncludeConfigCheck and IncludeDBCheck to be checked by default")
+	}
+	dlg.IncludeLogsCheck.SetChecked(true)
+	dlg.NotesEntry.SetText("Steps to reproduce: clicked test button")
+	opts := dlg.Options()
+	opts.LogFilePath = logFile
+
+	var buf bytes.Buffer
+	files, err := WriteSupportBackupZip(&buf, sess, opts)
+	if err != nil {
+		t.Fatalf("WriteSupportBackupZip failed: %v", err)
+	}
+
+	expectedFiles := []string{
+		"support-notes.txt",
+		"config-backup.json",
+		"towncrier.log",
+		"events.db",
+		"support-manifest.json",
+	}
+	if !slices.Equal(files, expectedFiles) {
+		t.Fatalf("expected archived files %v, got %v", expectedFiles, files)
+	}
+
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("zip.NewReader: %v", err)
+	}
+
+	foundEntries := make(map[string]string)
+	for _, zf := range zr.File {
+		rc, openErr := zf.Open()
+		if openErr != nil {
+			t.Fatalf("open zip entry %s: %v", zf.Name, openErr)
+		}
+		b, _ := io.ReadAll(rc)
+		_ = rc.Close()
+		foundEntries[zf.Name] = string(b)
+	}
+
+	if strings.Contains(foundEntries["config-backup.json"], "secret-ws-token-must-not-appear") ||
+		strings.Contains(foundEntries["config-backup.json"], "secret-api-key-must-not-appear") {
+		t.Error("expected secrets to be scrubbed from config-backup.json in support zip")
+	}
+	if !strings.Contains(foundEntries["support-notes.txt"], "Steps to reproduce: clicked test button") {
+		t.Errorf("unexpected support-notes.txt content: %q", foundEntries["support-notes.txt"])
+	}
+	if !strings.Contains(foundEntries["towncrier.log"], "test log line") {
+		t.Errorf("unexpected towncrier.log content: %q", foundEntries["towncrier.log"])
+	}
+	if len(foundEntries["events.db"]) == 0 {
+		t.Error("expected non-empty events.db snapshot in support zip")
+	}
+
+	// Verify round-trip parsing of the .zip archive via ParseBackupArchiveBytes & NewBackupArchiveImportDialog
+	arch, err := ParseBackupArchiveBytes(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ParseBackupArchiveBytes failed: %v", err)
+	}
+	if arch.Bundle == nil || len(arch.DatabaseBytes) == 0 {
+		t.Fatalf("expected parsed archive to contain both Config bundle and DatabaseBytes")
+	}
+	impDlg := NewBackupArchiveImportDialog(win, sess, arch, "towncrier-backup-2026-11-08-190000-v0.0.9.zip", nil, nil)
+	if impDlg.RestoreDBCheck == nil || !impDlg.RestoreDBCheck.Checked {
+		t.Error("expected RestoreDBCheck to be present and checked by default for .zip containing events.db")
+	}
+	if _, err := impDlg.TriggerImport(); err != nil {
+		t.Fatalf("impDlg.TriggerImport on .zip archive failed: %v", err)
+	}
+}
+
+
 
 

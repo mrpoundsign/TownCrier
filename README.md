@@ -21,6 +21,10 @@ Audio routes directly to any selected playback device—such as a virtual audio 
 - **Ultra-Fast Launch (<100ms) & Near-Zero RAM**: When TTS is disabled, TownCrier skips ONNX runtime initialization and model downloads entirely, running as a lean stream monitor and event logger with ~35–45 MB baseline RAM.
 - **Dynamic UI Removal**: Disabling features cleanly removes non-applicable navigation tabs, settings sub-tabs, volume sliders, panic buttons, and queue controls rather than simply greying them out.
 - **Full Configuration Retention**: All voice assignments, audio devices, hardware presets, speech templates, platform overrides, and retention rules are retained in `config.json` when features are toggled.
+- **Portable `.zip` Backups, Selective Import & Schema Snapshots**:
+  - **Export Backup (`Export Backup…`)**: Package a versioned `towncrier-backup-YYYY-MM-DD-HHMMSS-v<version>.zip` archive containing your Configuration & Chatter Profiles (`config-backup.json` with OAuth tokens & API keys automatically scrubbed), a WAL-checkpointed snapshot of your SQLite Event Log database (`events.db`), and optionally your application log (`towncrier.log`, unchecked by default) and notes.
+  - **Selective Merge vs. Full Restore (`Import Backup…`)**: Merge specific sections (Chatter Voice Overrides, Blocked Words & Bots, Global/Platform Rules, Live Log Presets, or Translation) into your setup, or run a Full Restore (with optional preservation of your PC's local audio device, hardware preset, and file paths) and/or restore `events.db`—making it easy to move between PCs or temporarily load and test another streamer's backup before restoring your own.
+  - **Schema-Versioned Snapshots & Downgrade Protection (`Schema Snapshots…`)**: Automatically snapshots `config.YYYY-MM-DD-HHMMSS-v<schema>.json` and `events.YYYY-MM-DD-HHMMSS-v<schema>.db` before schema migrations or full restores, and offers a 1-click rollback on startup if you ever downgrade to an older TownCrier version.
 
 <p align="center">
   <img src="assets/screenshots/general-audio-features.png" alt="TownCrier Application Features and Settings" width="750">

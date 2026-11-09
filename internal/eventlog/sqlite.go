@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,10 +20,13 @@ import (
 	_ "modernc.org/sqlite" // Pure-Go SQLite driver
 )
 
+// CurrentSchemaVersion is the current SQLite user_version schema level for event_logs.
+const CurrentSchemaVersion = 4
+
 const (
 	defaultQueryLimit      = 100
 	maxQueryLimit          = 1000
-	currentSchemaVersion   = 4
+	currentSchemaVersion   = CurrentSchemaVersion
 	maxDBBackups           = 5
 	historicalSessionGapMs = 4 * 60 * 60 * 1000 // 4 hour inactivity gap splits historical stream sessions
 )
@@ -155,9 +159,10 @@ var requiredStreamSessionColumns = []columnSpec{
 // SQLiteBackend implements Backend using pure-Go SQLite (modernc.org/sqlite) with WAL mode
 // and dynamic created_at-based retention pruning.
 type SQLiteBackend struct {
-	mu     sync.Mutex
-	db     *sql.DB
-	dbPath string
+	mu                  sync.Mutex
+	db                  *sql.DB
+	dbPath              string
+	loadedSchemaVersion int
 }
 
 // NewSQLiteBackend opens or initializes the SQLite event log database at dbPath.
@@ -193,14 +198,25 @@ func NewSQLiteBackend(dbPath string) (*SQLiteBackend, error) {
 		return nil, fmt.Errorf("configure sqlite auto_vacuum: %w", err)
 	}
 
+	initialVer := getUserVersion(db)
+	if initialVer <= 0 {
+		initialVer = currentSchemaVersion
+	}
+
 	if err := migrateAndRecover(db, cleanFile); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 
+	loadedVer := getUserVersion(db)
+	if initialVer > currentSchemaVersion {
+		loadedVer = initialVer
+	}
+
 	return &SQLiteBackend{
-		db:     db,
-		dbPath: cleanFile,
+		db:                  db,
+		dbPath:              cleanFile,
+		loadedSchemaVersion: loadedVer,
 	}, nil
 }
 
@@ -398,17 +414,16 @@ func createPreMigrationBackup(db *sql.DB, cleanFile string, oldVersion int) erro
 		stem = base
 	}
 
-	ts := time.Now().UTC().Format("20060102-150405.000")
-	ts = strings.ReplaceAll(ts, ".", "")
-	backupName := fmt.Sprintf("%s.v%d.%s.bak.db", stem, oldVersion, ts)
+	ts := time.Now().UTC().Format("2006-01-02-150405")
+	backupName := fmt.Sprintf("%s.%s-v%d.db", stem, ts, oldVersion)
 	backupPath := filepath.Join(dir, backupName)
 
-	// Avoid collision if called multiple times within the same millisecond in tests
+	// Avoid collision if called multiple times within the same second in tests
 	for seq := 1; ; seq++ {
 		if _, statErr := os.Stat(backupPath); os.IsNotExist(statErr) {
 			break
 		}
-		backupName = fmt.Sprintf("%s.v%d.%s-%d.bak.db", stem, oldVersion, ts, seq)
+		backupName = fmt.Sprintf("%s.%s-%d-v%d.db", stem, ts, seq, oldVersion)
 		backupPath = filepath.Join(dir, backupName)
 	}
 
@@ -441,6 +456,56 @@ func copyFileContents(src, dst string) error {
 	return out.Close()
 }
 
+// DBBackupInfo describes a versioned SQLite pre-migration schema backup on disk.
+type DBBackupInfo struct {
+	Path          string
+	SchemaVersion int
+	CreatedAt     time.Time
+	SizeBytes     int64
+}
+
+func parseDBBackupFilename(fileName, stem string) (int, time.Time, bool) {
+	// Format 1 (canonical): <stem>.YYYY-MM-DD-HHMMSS[-seq]-v<ver>.db
+	dotPrefix := stem + "."
+	if strings.HasPrefix(fileName, dotPrefix) && strings.HasSuffix(fileName, ".db") && !strings.HasSuffix(fileName, ".bak.db") && fileName != stem+".db" {
+		mid := strings.TrimSuffix(strings.TrimPrefix(fileName, dotPrefix), ".db")
+		if vIdx := strings.LastIndex(mid, "-v"); vIdx > 0 {
+			tsPart := mid[:vIdx]
+			verStr := mid[vIdx+2:]
+			if ver, err := strconv.Atoi(verStr); err == nil && ver >= 0 && len(tsPart) >= 17 {
+				if t, tErr := time.ParseInLocation("2006-01-02-150405", tsPart[:17], time.UTC); tErr == nil {
+					return ver, t, true
+				}
+			}
+		}
+	}
+
+	// Format 2 (legacy): <stem>.v<ver>.<ts>.bak.db
+	prefix := stem + ".v"
+	suffix := ".bak.db"
+	if !strings.HasPrefix(fileName, prefix) || !strings.HasSuffix(fileName, suffix) {
+		return 0, time.Time{}, false
+	}
+	mid := strings.TrimSuffix(strings.TrimPrefix(fileName, prefix), suffix)
+	verStr, tsPart, ok := strings.Cut(mid, ".")
+	if !ok || verStr == "" || tsPart == "" {
+		return 0, time.Time{}, false
+	}
+	ver, err := strconv.Atoi(verStr)
+	if err != nil || ver < 0 {
+		return 0, time.Time{}, false
+	}
+	parts := strings.Split(tsPart, "-")
+	var parsedTime time.Time
+	if len(parts) >= 2 && len(parts[0]) == 8 && len(parts[1]) >= 6 {
+		secStr := parts[0] + "-" + parts[1][:6]
+		if t, tErr := time.ParseInLocation("20060102-150405", secStr, time.UTC); tErr == nil {
+			parsedTime = t
+		}
+	}
+	return ver, parsedTime, true
+}
+
 // ListBackups returns all backup database file paths for dbPath sorted oldest-first.
 func ListBackups(dbPath string) ([]string, error) {
 	cleanFile := cleanDBFilePath(dbPath)
@@ -456,21 +521,74 @@ func ListBackups(dbPath string) ([]string, error) {
 		return nil, err
 	}
 
-	prefix := stem + ".v"
-	suffix := ".bak.db"
 	var matches []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, suffix) {
+		if _, _, ok := parseDBBackupFilename(name, stem); ok {
 			matches = append(matches, filepath.Join(dir, name))
 		}
 	}
 
 	sort.Strings(matches)
 	return matches, nil
+}
+
+// ListBackupInfos returns metadata for all versioned SQLite backups for dbPath, sorted newest-first.
+func ListBackupInfos(dbPath string) ([]DBBackupInfo, error) {
+	cleanFile := cleanDBFilePath(dbPath)
+	if isMemoryPath(cleanFile) || strings.TrimSpace(cleanFile) == "" {
+		return nil, nil
+	}
+	dir := filepath.Dir(cleanFile)
+	base := filepath.Base(cleanFile)
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	if stem == "" {
+		stem = base
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var infos []DBBackupInfo
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		ver, ts, ok := parseDBBackupFilename(e.Name(), stem)
+		if !ok {
+			continue
+		}
+		fullPath := filepath.Join(dir, e.Name())
+		var size int64
+		if fi, statErr := e.Info(); statErr == nil {
+			size = fi.Size()
+			if ts.IsZero() {
+				ts = fi.ModTime().UTC()
+			}
+		}
+		infos = append(infos, DBBackupInfo{
+			Path:          fullPath,
+			SchemaVersion: ver,
+			CreatedAt:     ts,
+			SizeBytes:     size,
+		})
+	}
+
+	sort.Slice(infos, func(i, j int) bool {
+		if !infos[i].CreatedAt.Equal(infos[j].CreatedAt) {
+			return infos[i].CreatedAt.After(infos[j].CreatedAt)
+		}
+		return infos[i].Path > infos[j].Path
+	})
+	return infos, nil
 }
 
 func pruneOldBackups(dir, stem string, keep int) error {
@@ -482,27 +600,48 @@ func pruneOldBackups(dir, stem string, keep int) error {
 		return err
 	}
 
-	prefix := stem + ".v"
-	suffix := ".bak.db"
-	var names []string
+	type item struct {
+		name string
+		ver  int
+	}
+	var all []item
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		name := e.Name()
-		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, suffix) {
-			names = append(names, name)
+		ver, _, ok := parseDBBackupFilename(e.Name(), stem)
+		if ok {
+			all = append(all, item{name: e.Name(), ver: ver})
 		}
 	}
 
-	sort.Strings(names)
-	if len(names) <= keep {
+	if len(all) <= keep {
 		return nil
 	}
 
-	toDelete := names[:len(names)-keep]
-	for _, name := range toDelete {
-		_ = os.Remove(filepath.Join(dir, name))
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].name < all[j].name
+	})
+
+	latestForVer := make(map[int]string)
+	for _, it := range all {
+		latestForVer[it.ver] = it.name
+	}
+	protected := make(map[string]bool, len(latestForVer))
+	for _, name := range latestForVer {
+		protected[name] = true
+	}
+
+	remaining := len(all)
+	for _, it := range all {
+		if remaining <= keep {
+			break
+		}
+		if protected[it.name] {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, it.name))
+		remaining--
 	}
 	return nil
 }
@@ -704,6 +843,174 @@ func (s *SQLiteBackend) Name() string {
 // Path returns the active database file path.
 func (s *SQLiteBackend) Path() string {
 	return s.dbPath
+}
+
+// CheckSchemaRegression reports whether the active database on disk has a higher user_version
+// than CurrentSchemaVersion (indicating a downgrade) and returns the best compatible backup (<= CurrentSchemaVersion).
+func (s *SQLiteBackend) CheckSchemaRegression() (savedVersion int, supportedVersion int, candidate *DBBackupInfo, regressed bool) {
+	supportedVersion = CurrentSchemaVersion
+	s.mu.Lock()
+	savedVersion = s.loadedSchemaVersion
+	dbPath := s.dbPath
+	if savedVersion <= 0 && s.db != nil {
+		savedVersion = getUserVersion(s.db)
+	}
+	s.mu.Unlock()
+
+	if savedVersion <= supportedVersion {
+		return savedVersion, supportedVersion, nil, false
+	}
+
+	backups, _ := ListBackupInfos(dbPath)
+	for i := range backups {
+		b := backups[i]
+		if b.SchemaVersion <= supportedVersion {
+			if candidate == nil || b.SchemaVersion > candidate.SchemaVersion {
+				bCopy := b
+				candidate = &bCopy
+			}
+		}
+	}
+	return savedVersion, supportedVersion, candidate, true
+}
+
+// ListBackupInfos returns all versioned schema backups for this SQLite database, sorted newest-first.
+func (s *SQLiteBackend) ListBackupInfos() ([]DBBackupInfo, error) {
+	s.mu.Lock()
+	dbPath := s.dbPath
+	s.mu.Unlock()
+	return ListBackupInfos(dbPath)
+}
+
+// RestoreBackup safely closes the current SQLite database, replaces it with backupPath,
+// runs any needed migrations, and re-opens the live connection in place.
+func (s *SQLiteBackend) RestoreBackup(backupPath string) error {
+	if strings.TrimSpace(backupPath) == "" {
+		return errors.New("backup path cannot be empty")
+	}
+	info, err := os.Stat(backupPath)
+	if err != nil || info.IsDir() || info.Size() == 0 {
+		return fmt.Errorf("invalid database backup file %q", backupPath)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if isMemoryPath(s.dbPath) || strings.TrimSpace(s.dbPath) == "" {
+		return errors.New("cannot restore file backup onto an in-memory database")
+	}
+
+	cleanFile := cleanDBFilePath(s.dbPath)
+	if s.db != nil {
+		_, _ = s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE);`)
+		_ = s.db.Close()
+		s.db = nil
+	}
+
+	_ = os.Remove(cleanFile + "-wal")
+	_ = os.Remove(cleanFile + "-shm")
+
+	if err := copyFileContents(backupPath, cleanFile); err != nil {
+		return fmt.Errorf("copy database backup: %w", err)
+	}
+
+	dsn := cleanFile + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-4000)&_pragma=foreign_keys(ON)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("reopen restored sqlite database: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	_, _ = db.Exec(`PRAGMA auto_vacuum = INCREMENTAL;`)
+
+	if err := migrateAndRecover(db, cleanFile); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("migrate restored sqlite database: %w", err)
+	}
+
+	s.db = db
+	s.loadedSchemaVersion = getUserVersion(db)
+	return nil
+}
+
+// RestoreFromBytes snapshots the current on-disk database into a `.YYYY-MM-DD-HHMMSS-v<ver>.db` backup,
+// replaces the active SQLite database with dbBytes, runs any needed migrations, and re-opens the connection.
+func (s *SQLiteBackend) RestoreFromBytes(dbBytes []byte) error {
+	if len(dbBytes) == 0 {
+		return errors.New("database payload is empty")
+	}
+
+	s.mu.Lock()
+	cleanFile := cleanDBFilePath(s.dbPath)
+	if isMemoryPath(cleanFile) || strings.TrimSpace(cleanFile) == "" {
+		s.mu.Unlock()
+		return errors.New("cannot restore database bytes onto an in-memory database")
+	}
+	curVer := s.loadedSchemaVersion
+	if curVer <= 0 && s.db != nil {
+		curVer = getUserVersion(s.db)
+	}
+	if curVer <= 0 {
+		curVer = CurrentSchemaVersion
+	}
+	if s.db != nil {
+		_ = createPreMigrationBackup(s.db, cleanFile, curVer)
+	}
+	s.mu.Unlock()
+
+	tmpPath := cleanFile + fmt.Sprintf(".import-tmp.%d", os.Getpid())
+	if err := os.WriteFile(tmpPath, dbBytes, 0o600); err != nil {
+		return fmt.Errorf("write temporary imported database: %w", err)
+	}
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	return s.RestoreBackup(tmpPath)
+}
+
+// DBFileSize returns the size in bytes of the on-disk SQLite database file (0 if in-memory or missing).
+func (s *SQLiteBackend) DBFileSize() int64 {
+	s.mu.Lock()
+	cleanFile := cleanDBFilePath(s.dbPath)
+	s.mu.Unlock()
+	if isMemoryPath(cleanFile) || strings.TrimSpace(cleanFile) == "" {
+		return 0
+	}
+	info, err := os.Stat(cleanFile)
+	if err != nil {
+		return 0
+	}
+	var walSize int64
+	if walInfo, walErr := os.Stat(cleanFile + "-wal"); walErr == nil {
+		walSize = walInfo.Size()
+	}
+	return info.Size() + walSize
+}
+
+// WriteSnapshot checkpoints any active WAL frames into the main SQLite database file
+// and streams a consistent copy of the database into w.
+func (s *SQLiteBackend) WriteSnapshot(w io.Writer) error {
+	if w == nil {
+		return errors.New("snapshot writer cannot be nil")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cleanFile := cleanDBFilePath(s.dbPath)
+	if isMemoryPath(cleanFile) || strings.TrimSpace(cleanFile) == "" {
+		return errors.New("cannot snapshot an in-memory database")
+	}
+	if s.db != nil {
+		_, _ = s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE);`)
+	}
+	in, err := os.Open(cleanFile)
+	if err != nil {
+		return fmt.Errorf("open database for snapshot: %w", err)
+	}
+	defer func() { _ = in.Close() }()
+	if _, err := io.Copy(w, in); err != nil {
+		return fmt.Errorf("stream database snapshot: %w", err)
+	}
+	return nil
 }
 
 // StartSession creates a new open StreamSession row (ended_at = 0) and returns it with its assigned ID.

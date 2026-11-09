@@ -12,12 +12,16 @@ import (
 	"testing"
 )
 
-const CurrentVersion = 1
+const (
+	CurrentVersion   = 2
+	maxConfigBackups = 5
+)
 
 // Config represents the application configuration hierarchy.
 type Config struct {
-	Version         int                       `json:"version"`
-	UIScale         string                    `json:"ui_scale,omitempty"`
+	Version             int                       `json:"version"`
+	LoadedSchemaVersion int                       `json:"-"`
+	UIScale             string                    `json:"ui_scale,omitempty"`
 	Update          UpdateConfig              `json:"update"`
 	Audio           AudioConfig               `json:"audio"`
 	TTS             TTSConfig                 `json:"tts"`
@@ -741,8 +745,9 @@ func LookupViewer(viewers map[string]ViewerConfig, platform, userID, userName st
 // DefaultConfig returns a new Config initialized with production defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		Version: CurrentVersion,
-		UIScale: "1.0",
+		Version:             CurrentVersion,
+		LoadedSchemaVersion: CurrentVersion,
+		UIScale:             "1.0",
 		Update: UpdateConfig{
 			CheckOnStartup: true,
 		},
@@ -1309,6 +1314,7 @@ func (c *Config) Clone() *Config {
 	if err := json.Unmarshal(data, &clone); err != nil {
 		return DefaultConfig()
 	}
+	clone.LoadedSchemaVersion = c.LoadedSchemaVersion
 	return &clone
 }
 
@@ -1356,6 +1362,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg := DefaultConfig()
+	cfg.Version = 0
 	cfg.TTS.Preset = ""
 	cfg.TTS.EnabledModels = nil
 	cfg.Translation.Providers = nil
@@ -1363,8 +1370,24 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config json: %w", err)
 	}
 
+	rawVersion := cfg.Version
+	if rawVersion <= 0 {
+		rawVersion = 1
+	}
+	cfg.LoadedSchemaVersion = rawVersion
+
+	if rawVersion < CurrentVersion {
+		if err := createPreMigrationConfigBackup(path, data, rawVersion); err != nil {
+			return nil, fmt.Errorf("backup config before schema migration: %w", err)
+		}
+	}
+
 	if err := migrate(cfg); err != nil {
 		return nil, fmt.Errorf("migrate config: %w", err)
+	}
+
+	if rawVersion < CurrentVersion {
+		_ = saveLocked(path, cfg)
 	}
 
 	return cfg, nil
@@ -1414,6 +1437,10 @@ func saveLocked(path string, cfg *Config) error {
 		return fmt.Errorf("atomic rename config: %w", err)
 	}
 
+	if cfg != nil && cfg.Version > 0 {
+		cfg.LoadedSchemaVersion = cfg.Version
+	}
+
 	return nil
 }
 
@@ -1439,10 +1466,8 @@ func voiceFamilyFromID(voiceID string) string {
 }
 
 func migrate(cfg *Config) error {
-	// Baseline migration runner: upgrade configs older than CurrentVersion
-	if cfg.Version < 1 {
-		cfg.Version = 1
-	}
+	// Baseline migration runner: normalize in-memory schema version to CurrentVersion
+	cfg.Version = CurrentVersion
 
 	if len(cfg.TTS.EnabledModels) == 0 {
 		cfg.TTS.EnabledModels = cfg.TTS.EffectiveEnabledModels()

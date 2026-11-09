@@ -179,9 +179,34 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 		cleanup()
 	})
 
+	mw.startStartupSchemaRegressionCheck()
 	mw.startStartupUpdateCheck()
 
 	return mw
+}
+
+func (mw *MainWindow) startStartupSchemaRegressionCheck() {
+	if testing.Testing() || mw.Session == nil {
+		return
+	}
+	CheckAndOfferSchemaDowngradeRestore(mw.Window, mw.Session, func(newCfg *config.Config, dbRestored bool) {
+		if mw.settingsTab != nil {
+			if newCfg != nil {
+				mw.settingsTab.cfg = newCfg.Clone()
+			}
+			mw.settingsTab.SyncFromConfig()
+		}
+		if mw.viewersTab != nil {
+			mw.viewersTab.Refresh()
+		}
+		if mw.chatLogsTab != nil {
+			mw.chatLogsTab.SyncFromConfig()
+			if dbRestored {
+				mw.chatLogsTab.RefreshQuery()
+			}
+		}
+		mw.syncServiceVisibility()
+	}, mw.SetStatus)
 }
 
 func (mw *MainWindow) startStartupUpdateCheck() {
@@ -414,6 +439,17 @@ func (mw *MainWindow) initViews() {
 		}
 		if mw.viewersTab != nil {
 			mw.viewersTab.Refresh()
+		}
+	})
+	mw.settingsTab.SetBackupAppliedHandler(func(_ *config.Config, dbRestored bool) {
+		if mw.viewersTab != nil {
+			mw.viewersTab.Refresh()
+		}
+		if mw.chatLogsTab != nil {
+			mw.chatLogsTab.SyncFromConfig()
+			if dbRestored {
+				mw.chatLogsTab.RefreshQuery()
+			}
 		}
 	})
 

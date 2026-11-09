@@ -78,6 +78,21 @@ func Init(customPath string) (string, error) {
 	return target, nil
 }
 
+// LogPath returns the currently active persistent log file path, or DefaultLogPath() if not initialized.
+func LogPath() string {
+	mu.Lock()
+	p := logPath
+	mu.Unlock()
+	if p != "" {
+		return p
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "towncrier.log"
+	}
+	return filepath.Join(configDir, "com.github.mrpoundsign.towncrier", "logs", "towncrier.log")
+}
+
 // Sync flushes pending buffered log writes to disk.
 func Sync() {
 	mu.Lock()
