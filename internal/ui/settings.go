@@ -4,15 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -21,6 +25,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/audio"
 	"github.com/mrpoundsign/TownCrier/internal/config"
 	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
+	"github.com/mrpoundsign/TownCrier/internal/translate"
 	"github.com/mrpoundsign/TownCrier/internal/tts"
 )
 
@@ -45,10 +50,11 @@ type SettingsView struct {
 	onModelsChanged           func()
 	onAssignVoice             func(platform, username string)
 	subTabs           *container.AppTabs
-	generalTabItem    *container.TabItem
-	ttsTabItem        *container.TabItem
-	rulesTabItem      *container.TabItem
-	logsTabItem       *container.TabItem
+	generalTabItem     *container.TabItem
+	ttsTabItem         *container.TabItem
+	translationTabItem *container.TabItem
+	rulesTabItem       *container.TabItem
+	logsTabItem        *container.TabItem
 	twitchTab         *TwitchTabView
 	youtubeTab        *YouTubeTabView
 	tiktokTab         *TikTokTabView
@@ -96,18 +102,59 @@ type SettingsView struct {
 	streamDeckStatusLabel *widget.Label
 	streamDeckPluginsDir  string
 	generalBox           *fyne.Container
-	enableTTSCheck       *widget.Check
-	enableLogCheck       *widget.Check
-	checkUpdatesCheck    *widget.Check
+	enableTTSCheck            *widget.Check
+	enableLogCheck            *widget.Check
+	enableTranslationCheck    *widget.Check
+	checkUpdatesCheck         *widget.Check
+	translationTargetSelect   *widget.Select
+	translationConfSelect     *widget.Select
+	translationRoutingSelect  *widget.Select
+	translationNodesBox       *fyne.Container
+	translationNodeHoverLbl   *widget.Label
+	translationRefreshNodes   func()
+	translationSelectedNode      string
+	translationConfigDrawer      *fyne.Container
+	translationDoneConfigBtn     *widget.Button
+	translationProviderSelect    *widget.Select
+	translationLimitLabel        *widget.Label
+	translationGuideLink         *widget.Hyperlink
+	translationKeyLink           *widget.Hyperlink
+	translationTOSLink           *widget.Hyperlink
+	translationQuotaLink         *widget.Hyperlink
+	translationQuotaSep          *widget.Label
+	translationEmailEntry        *ScrollPassEntry
+	translationEndpointEntry     *ScrollPassEntry
+	translationModelEntry        *ScrollPassEntry
+	translationAPIKeyEntry       *ScrollPassEntry
+	translationTestEntry         *ScrollPassEntry
+	translationTestBtn           *widget.Button
+	translationTestResultLbl     *widget.Label
+	translationCacheStatsLbl     *widget.Label
+	translationClearCacheBtn     *widget.Button
+	translationRefreshCacheStats func()
+	translationTooltipLayer      *fyne.Container
+	translationTooltipBubble     *fyne.Container
+	translationTooltipText       *canvas.Text
+	translationEmailBox          *fyne.Container
+	translationEndpointBox    *fyne.Container
+	translationModelBox       *fyne.Container
+	translationAPIKeyBox      *fyne.Container
+	translationChimeCheck     *widget.Check
+	translationChimeEntry     *ScrollPassEntry
+	translationChimeBrowseBtn *widget.Button
+	translationChimeClearBtn  *widget.Button
+	translationChimeTestBtn   *widget.Button
 	globalVoiceCard      *widget.Card
 	audioCard            *widget.Card
 	presetSelect         *widget.Select
 	gpuCheck             *widget.Check
 	threadsSlider        *widget.Slider
-	idleSelect           *widget.Select
-	modelChecks          map[string]*widget.Check
-	deviceRefreshBtn     *widget.Button
+	idleSelect              *widget.Select
+	modelChecks             map[string]*widget.Check
+	activeReplacementWizard *VoiceReplacementWizard
+	deviceRefreshBtn        *widget.Button
 	rulesNamesCheck                  *widget.Check
+	rulesCoalesceSelect              *widget.Select
 	rulesEmotesCheck                 *widget.Check
 	rulesDedupeCheck                 *widget.Check
 	rulesDupWordsSelect              *widget.Select
@@ -131,32 +178,43 @@ type SettingsView struct {
 	newWordEntry         *ScrollPassEntry
 	addWordBtn           *widget.Button
 	wordDeleteBtns       []*widget.Button
+	knownBotsCheck       *widget.Check
+	refreshWords         func()
+	refreshBots          func()
+	exportBackupBtn      *widget.Button
+	importBackupBtn      *widget.Button
+	schemaSnapshotsBtn   *widget.Button
+	onBackupApplied      func(newCfg *config.Config, dbRestored bool)
 	ttsEnabled           bool
 	loggingEnabled       bool
+	translationEnabled   bool
 }
 
 // NewSettingsView constructs a SettingsView for configuring audio, TTS hardware, and global rules.
 func NewSettingsView(w fyne.Window, cfg *config.Config, player audio.Player, engine tts.Engine) *SettingsView {
 	ttsOn := true
 	loggingOn := true
+	translationOn := false
 	if cfg != nil {
 		ttsOn = cfg.TTS.Enabled
 		loggingOn = cfg.Logging.Enabled
+		translationOn = cfg.Translation.Enabled
 	}
 	return &SettingsView{
-		window:         w,
-		cfg:            cfg,
-		player:         player,
-		engine:         engine,
-		modelDir:       tts.DefaultModelDir(),
-		deviceMap:      make(map[string]string),
-		deviceEnum:     audio.EnumeratePlaybackDevices,
-		prevModels:     slices.Clone(cfg.TTS.EffectiveEnabledModels()),
-		prevPreset:     cfg.TTS.Preset,
-		prevUseGPU:     cfg.TTS.UseGPU,
-		ttsEnabled:     ttsOn,
-		loggingEnabled: loggingOn,
-		modelChecks:    make(map[string]*widget.Check),
+		window:             w,
+		cfg:                cfg,
+		player:             player,
+		engine:             engine,
+		modelDir:           tts.DefaultModelDir(),
+		deviceMap:          make(map[string]string),
+		deviceEnum:         audio.EnumeratePlaybackDevices,
+		prevModels:         slices.Clone(cfg.TTS.EffectiveEnabledModels()),
+		prevPreset:         cfg.TTS.Preset,
+		prevUseGPU:         cfg.TTS.UseGPU,
+		ttsEnabled:         ttsOn,
+		loggingEnabled:     loggingOn,
+		translationEnabled: translationOn,
+		modelChecks:        make(map[string]*widget.Check),
 	}
 }
 
@@ -218,6 +276,11 @@ func (v *SettingsView) SetModelsChangedHandler(fn func()) {
 	v.onModelsChanged = fn
 }
 
+// SetBackupAppliedHandler registers a callback invoked when a backup or schema snapshot is applied.
+func (v *SettingsView) SetBackupAppliedHandler(fn func(newCfg *config.Config, dbRestored bool)) {
+	v.onBackupApplied = fn
+}
+
 // SetOnAssignVoice registers a callback invoked when a viewer voice is assigned from the Event Logs sub-tab.
 func (v *SettingsView) SetOnAssignVoice(fn func(platform, username string)) {
 	v.onAssignVoice = fn
@@ -273,6 +336,9 @@ func (v *SettingsView) SyncPlatformTabVisibility() {
 	if v.ttsEnabled && v.ttsTabItem != nil {
 		items = append(items, v.ttsTabItem)
 	}
+	if v.translationEnabled && v.translationTabItem != nil {
+		items = append(items, v.translationTabItem)
+	}
 
 	addIfVisible := func(platform string, item *container.TabItem) {
 		if item == nil {
@@ -296,11 +362,6 @@ func (v *SettingsView) SyncPlatformTabVisibility() {
 		items = append(items, v.logsTabItem)
 	}
 	v.subTabs.SetItems(items)
-}
-
-// LogsView returns the embedded Event Logs sub-tab view.
-func (v *SettingsView) LogsView() *LogsView {
-	return v.logsView
 }
 
 func (v *SettingsView) currentConfig() *config.Config {
@@ -459,6 +520,29 @@ func (v *SettingsView) SyncFromConfig() {
 	if v.globalVoiceField != nil {
 		v.globalVoiceField.SetVoiceAndSpeed(v.cfg.GlobalChatRules.DefaultVoice, v.cfg.GlobalChatRules.DefaultSpeed)
 	}
+	if v.rulesNamesCheck != nil {
+		v.rulesNamesCheck.SetChecked(v.cfg.GlobalChatRules.SpeakNames)
+	}
+	if v.rulesCoalesceSelect != nil {
+		v.rulesCoalesceSelect.SetSelected(CoalesceSecondsToOption(v.cfg.GlobalChatRules.CoalesceConsecutiveSeconds))
+		if v.cfg.GlobalChatRules.SpeakNames {
+			v.rulesCoalesceSelect.Enable()
+		} else {
+			v.rulesCoalesceSelect.Disable()
+		}
+	}
+	if v.rulesEmotesCheck != nil {
+		v.rulesEmotesCheck.SetChecked(v.cfg.GlobalChatRules.SpeakEmotes)
+	}
+	if v.rulesDedupeCheck != nil {
+		v.rulesDedupeCheck.SetChecked(v.cfg.GlobalChatRules.DeduplicateEmotes)
+	}
+	if v.rulesDupWordsSelect != nil {
+		v.rulesDupWordsSelect.SetSelected(DuplicateWordsToOption(v.cfg.GlobalChatRules.MaxDuplicateWords))
+	}
+	if v.rulesPlatformCheck != nil {
+		v.rulesPlatformCheck.SetChecked(v.cfg.GlobalChatRules.SpeakPlatformName)
+	}
 	if v.rulesMentionsModeSelect != nil {
 		v.rulesMentionsModeSelect.SetSelected(IgnoreMentionsModeToOption(v.cfg.GlobalChatRules.IgnoreMentionsMode))
 	}
@@ -478,6 +562,22 @@ func (v *SettingsView) SyncFromConfig() {
 			v.rulesPlayAlertIgnoredMentionCheck.Disable()
 		}
 	}
+	if v.defaultBadWordsCheck != nil {
+		v.defaultBadWordsCheck.SetChecked(v.cfg.Safety.BlockDefaultBadWords)
+	}
+	if v.knownBotsCheck != nil {
+		v.knownBotsCheck.SetChecked(v.cfg.Bots.IgnoreKnownBots)
+	}
+	if v.refreshWords != nil {
+		v.refreshWords()
+	}
+	if v.refreshBots != nil {
+		v.refreshBots()
+	}
+	if v.syncTTSControls != nil {
+		v.syncTTSControls()
+	}
+	v.refreshPlatformOverrides()
 	if v.ttsOutputModeSelect != nil {
 		v.ttsOutputModeSelect.SetSelected(FormatTTSOutputModeLabel(v.cfg.TTS.OutputMode))
 	}
@@ -505,10 +605,36 @@ func (v *SettingsView) SyncFromConfig() {
 	if v.checkUpdatesCheck != nil {
 		v.checkUpdatesCheck.SetChecked(v.cfg.Update.CheckOnStartup)
 	}
+	if v.enableTranslationCheck != nil {
+		v.translationEnabled = v.cfg.Translation.Enabled
+		v.enableTranslationCheck.SetChecked(v.cfg.Translation.Enabled)
+	}
+	if v.translationTargetSelect != nil {
+		v.translationTargetSelect.SetSelected(FormatTranslationTargetLangOption(v.cfg.Translation.TargetLang))
+	}
+	if v.translationConfSelect != nil {
+		v.translationConfSelect.SetSelected(FormatTranslationConfidenceOption(v.cfg.Translation.MinConfidence))
+	}
+	if v.translationProviderSelect != nil {
+		v.translationProviderSelect.SetSelected(FormatTranslationProviderOption(v.cfg.Translation.Provider))
+	}
+	if v.translationEndpointEntry != nil {
+		v.translationEndpointEntry.SetText(v.cfg.Translation.EndpointURL)
+	}
+	if v.translationModelEntry != nil {
+		v.translationModelEntry.SetText(v.cfg.Translation.Model)
+	}
+	if v.translationAPIKeyEntry != nil {
+		keyVal := v.cfg.Translation.APIKey
+		if v.session != nil {
+			keyVal = v.session.TranslationAPIKey()
+		}
+		v.translationAPIKeyEntry.SetText(keyVal)
+	}
+	v.syncTranslationProviderFields()
 	v.refreshWSStatusLabel()
 	if v.logsView != nil {
 		v.logsView.SyncFromConfig()
-		v.logsView.RefreshQuery()
 	}
 }
 
@@ -561,6 +687,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	v.audioCard = v.buildAudioCard()
 	botsCard := v.buildBotsCard()
 	displayCard := v.buildDisplayCard()
+	backupCard := v.buildBackupCard()
 	ttsCard := v.buildTTSCard()
 	rulesCard := v.buildRulesCard()
 	safetyCard := v.buildSafetyCard()
@@ -580,6 +707,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		v.audioCard,
 		botsCard,
 		displayCard,
+		backupCard,
 	)
 
 	generalTabContent := newPanelVScroll(v.generalBox)
@@ -602,6 +730,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 
 	v.generalTabItem = container.NewTabItemWithIcon("General & Audio", theme.VolumeUpIcon(), generalTabContent)
 	v.ttsTabItem = container.NewTabItemWithIcon("TTS & Hardware", theme.ComputerIcon(), ttsTabContent)
+	v.translationTabItem = container.NewTabItemWithIcon("Translation", resLogTranslated, v.buildTranslationTab())
 	v.rulesTabItem = container.NewTabItemWithIcon("Rules & Safety", theme.ConfirmIcon(), rulesTabContent)
 	v.logsTabItem = container.NewTabItemWithIcon("Event Logs", theme.DocumentIcon(), logsTabContent)
 
@@ -698,6 +827,24 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 	})
 	v.enableLogCheck.SetChecked(cfg.Logging.Enabled)
 
+	v.enableTranslationCheck = widget.NewCheck("Enable Chat Translation (Auto-Detect & Translate Foreign Chat)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.Translation.Enabled = checked
+		})
+		v.translationEnabled = checked
+		v.SyncPlatformTabVisibility()
+		v.refreshPlatformOverrides()
+		if checked {
+			v.setStatus("✓ Chat Translation enabled. Configure target language and provider in the Translation tab.")
+		} else {
+			v.setStatus("Chat Translation disabled.")
+		}
+	})
+	v.enableTranslationCheck.SetChecked(cfg.Translation.Enabled)
+
 	v.checkUpdatesCheck = widget.NewCheck("Automatically check for updates on startup", func(checked bool) {
 		if v.initializing {
 			return
@@ -717,6 +864,7 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 	cardContent := container.NewVBox(
 		v.enableTTSCheck,
 		v.enableLogCheck,
+		v.enableTranslationCheck,
 		updateRow,
 	)
 
@@ -1380,6 +1528,66 @@ func (v *SettingsView) buildDisplayCard() *widget.Card {
 	return widget.NewCard("Display & Scaling", "Lock DPI scaling or customize interface zoom", cardContent)
 }
 
+func (v *SettingsView) buildBackupCard() *widget.Card {
+	descLbl := widget.NewLabel(
+		"Export a portable .zip backup containing your configuration, chatter voice profiles, and Event Log database (OAuth tokens & API keys are never exported), import a backup to merge or switch configurations, or restore an automatic schema snapshot.",
+	)
+	descLbl.Wrapping = fyne.TextWrapWord
+
+	applyImportedOrRestored := func(newCfg *config.Config, modelsChanged bool, dbRestored bool) {
+		if newCfg != nil {
+			v.cfg = newCfg.Clone()
+		}
+		v.SyncFromConfig()
+		v.SyncTTSState(v.cfg.TTS.Enabled)
+		v.SyncLoggingState(v.cfg.Logging.Enabled)
+		v.SyncPlatformTabVisibility()
+		if v.onServicesChanged != nil {
+			v.onServicesChanged()
+		}
+		if v.onModelsChanged != nil {
+			v.onModelsChanged()
+		}
+		if v.onBackupApplied != nil {
+			v.onBackupApplied(v.cfg, dbRestored)
+		}
+		if modelsChanged && !testing.Testing() {
+			v.reloadTTSEngine(nil)
+		}
+	}
+
+	v.exportBackupBtn = widget.NewButtonWithIcon("Export Backup…", theme.DownloadIcon(), func() {
+		dlg := NewSupportBackupDialog(v.window, v.session, v.setStatus)
+		dlg.Show()
+	})
+	v.exportBackupBtn.Importance = widget.HighImportance
+
+	v.importBackupBtn = widget.NewButtonWithIcon("Import Backup…", theme.UploadIcon(), func() {
+		ShowBackupImportFilePicker(v.window, v.session, func(newCfg *config.Config, modelsChanged bool) {
+			applyImportedOrRestored(newCfg, modelsChanged, true)
+		}, v.setStatus)
+	})
+
+	v.schemaSnapshotsBtn = widget.NewButtonWithIcon("Schema Snapshots…", theme.HistoryIcon(), func() {
+		ShowSchemaSnapshotsDialog(v.window, v.session, func(newCfg *config.Config, dbRestored bool) {
+			applyImportedOrRestored(newCfg, false, dbRestored)
+		}, v.setStatus)
+	})
+
+	btnRow := container.NewHBox(
+		v.exportBackupBtn,
+		v.importBackupBtn,
+		v.schemaSnapshotsBtn,
+	)
+
+	cardContent := container.NewVBox(
+		descLbl,
+		btnRow,
+	)
+
+	return widget.NewCard("Backup, Restore & Migration", "Export or import .zip backups across PCs or roll back schema snapshots", cardContent)
+}
+
 func (v *SettingsView) buildTTSCard() *widget.Card {
 	v.modelStatus = widget.NewLabel(v.formatModelStatusText())
 	v.modelStatus.Wrapping = fyne.TextWrapWord
@@ -1618,18 +1826,6 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 				return
 			}
 			cfg := v.currentConfig()
-			if !checked {
-				if usages := tts.FindVoiceUsages(cfg, []string{famSpec.ID}); len(usages) > 0 {
-					syncingControls = true
-					chk.SetChecked(true)
-					syncingControls = false
-					v.setStatus(fmt.Sprintf("⚠️ Cannot disable %s — %d assigned voice(s) in use.", famSpec.ShortName, len(usages)))
-					if v.window != nil {
-						dialog.ShowInformation("Cannot Disable Model Pack — Voices In Use", tts.FormatVoiceUsagesWarning(usages), v.window)
-					}
-					return
-				}
-			}
 
 			var selectedModels []string
 			for _, s := range tts.AllModelFamilies {
@@ -1643,6 +1839,53 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 				syncingControls = false
 				v.setStatus("⚠️ At least one voice model pack must remain enabled.")
 				return
+			}
+
+			if !checked {
+				if usages := tts.FindVoiceUsages(cfg, []string{famSpec.ID}); len(usages) > 0 {
+					syncingControls = true
+					chk.SetChecked(true)
+					syncingControls = false
+					v.setStatus(fmt.Sprintf("⚠️ %s has %d assigned voice(s) — choose replacement voices to disable.", famSpec.ShortName, len(usages)))
+					v.activeReplacementWizard = ShowVoiceReplacementWizard(
+						v.window,
+						v.session,
+						cfg,
+						usages,
+						selectedModels,
+						func(replacements []tts.VoiceReplacement) {
+							v.activeReplacementWizard = nil
+							syncingControls = true
+							chk.SetChecked(false)
+							syncingControls = false
+
+							if slices.Contains(selectedModels, tts.ModelKokoro) || slices.Contains(selectedModels, tts.ModelKokoroIntl) {
+								gpuCheck.Enable()
+							} else {
+								gpuCheck.Disable()
+							}
+
+							v.updateConfig(func(c *config.Config) {
+								tts.ApplyVoiceUsageReplacements(c, usages, replacements)
+								c.TTS.Preset = tts.PresetCustom
+								c.TTS.EnabledModels = selectedModels
+							})
+							markCustomPreset()
+							updateImpactUI()
+							v.RefreshVoices()
+							if v.onModelsChanged != nil {
+								v.onModelsChanged()
+							}
+							v.reloadTTSEngine(refreshPackLabels)
+						},
+						func() {
+							v.activeReplacementWizard = nil
+							v.setStatus("Model pack removal cancelled.")
+						},
+						v.onStatus,
+					)
+					return
+				}
 			}
 
 			if slices.Contains(selectedModels, tts.ModelKokoro) || slices.Contains(selectedModels, tts.ModelKokoroIntl) {
@@ -1693,10 +1936,39 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		disabledFamilies := tts.DisabledModelFamilies(cfg.TTS.EffectiveEnabledModels(), pSpec.EnabledModels)
 		if usages := tts.FindVoiceUsages(cfg, disabledFamilies); len(usages) > 0 {
 			syncWidgetsFromConfig()
-			v.setStatus(fmt.Sprintf("⚠️ Cannot switch preset — %d assigned voice(s) use a model pack that would be disabled.", len(usages)))
-			if v.window != nil {
-				dialog.ShowInformation("Cannot Disable Model Pack — Voices In Use", tts.FormatVoiceUsagesWarning(usages), v.window)
-			}
+			v.setStatus(fmt.Sprintf("⚠️ Switching to %s disables a pack with %d assigned voice(s) — choose replacements to continue.", pSpec.Label, len(usages)))
+			v.activeReplacementWizard = ShowVoiceReplacementWizard(
+				v.window,
+				v.session,
+				cfg,
+				usages,
+				pSpec.EnabledModels,
+				func(replacements []tts.VoiceReplacement) {
+					v.activeReplacementWizard = nil
+					presetDescLabel.SetText(pSpec.Description)
+					v.updateConfig(func(c *config.Config) {
+						tts.ApplyVoiceUsageReplacements(c, usages, replacements)
+						c.TTS.Preset = pSpec.ID
+						c.TTS.EnabledModels = slices.Clone(pSpec.EnabledModels)
+						c.TTS.UseGPU = pSpec.UseGPU
+						c.TTS.NumThreads = pSpec.NumThreads
+						c.TTS.MaxClauseWords = pSpec.MaxClauseWords
+						c.TTS.IdleUnloadMinutes = pSpec.IdleUnloadMinutes
+					})
+
+					syncWidgetsFromConfig()
+					v.RefreshVoices()
+					if v.onModelsChanged != nil {
+						v.onModelsChanged()
+					}
+					v.reloadTTSEngine(refreshPackLabels)
+				},
+				func() {
+					v.activeReplacementWizard = nil
+					v.setStatus("Preset change cancelled.")
+				},
+				v.onStatus,
+			)
 			return
 		}
 
@@ -2126,6 +2398,60 @@ func OptionToDuplicateWords(opt string) int {
 	}
 }
 
+var CoalesceSpeakerOptions = []string{
+	"Off (Always Speak Name)",
+	"10 seconds",
+	"15 seconds",
+	"20 seconds (Default)",
+	"30 seconds",
+	"60 seconds",
+}
+
+func CoalesceSecondsToOption(val int) string {
+	switch val {
+	case -1:
+		return "Off (Always Speak Name)"
+	case 10:
+		return "10 seconds"
+	case 15:
+		return "15 seconds"
+	case 20, 0:
+		return "20 seconds (Default)"
+	case 30:
+		return "30 seconds"
+	case 60:
+		return "60 seconds"
+	default:
+		if val < 0 {
+			return "Off (Always Speak Name)"
+		}
+		return fmt.Sprintf("%d seconds", val)
+	}
+}
+
+func OptionToCoalesceSeconds(opt string) int {
+	switch opt {
+	case "Off (Always Speak Name)", "off", "-1":
+		return -1
+	case "10 seconds", "10":
+		return 10
+	case "15 seconds", "15":
+		return 15
+	case "20 seconds (Default)", "20":
+		return 20
+	case "30 seconds", "30":
+		return 30
+	case "60 seconds", "60":
+		return 60
+	default:
+		var n int
+		if _, err := fmt.Sscanf(opt, "%d", &n); err == nil && n > 0 {
+			return n
+		}
+		return config.DefaultCoalesceConsecutiveSeconds
+	}
+}
+
 const (
 	IgnoreMentionsOptionOff               = "Read All Mentions & Replies"
 	IgnoreMentionsOptionRepliesAndLeading = "Ignore Replies & Starting @ Mentions"
@@ -2161,7 +2487,29 @@ func OptionToIgnoreMentionsMode(opt string) string {
 }
 
 func (v *SettingsView) buildRulesCard() *widget.Card {
+	coalesceSelect := widget.NewSelect(CoalesceSpeakerOptions, func(s string) {
+		val := OptionToCoalesceSeconds(s)
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.CoalesceConsecutiveSeconds = val
+		})
+		v.refreshPlatformOverrides()
+	})
+	coalesceSelect.SetSelected(CoalesceSecondsToOption(v.cfg.GlobalChatRules.CoalesceConsecutiveSeconds))
+	if !v.cfg.GlobalChatRules.SpeakNames {
+		coalesceSelect.Disable()
+	}
+	v.rulesCoalesceSelect = coalesceSelect
+	coalesceRow := container.NewHBox(
+		widget.NewLabel("Coalesce Consecutive Messages (Same Speaker):"),
+		coalesceSelect,
+	)
+
 	checkNames := widget.NewCheck("Speak Chatter Names (e.g. 'User says...')", func(b bool) {
+		if b {
+			coalesceSelect.Enable()
+		} else {
+			coalesceSelect.Disable()
+		}
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.SpeakNames = b
 		})
@@ -2257,6 +2605,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 
 	cardContent := container.NewVBox(
 		checkNames,
+		coalesceRow,
 		checkEmotes,
 		checkDedupe,
 		dupWordsRow,
@@ -2511,6 +2860,7 @@ func (v *SettingsView) buildSafetyCard() *widget.Card {
 	}
 
 	refreshWords()
+	v.refreshWords = refreshWords
 
 	newWordEntry := NewScrollPassEntry()
 	newWordEntry.SetPlaceHolder("Enter word or pattern to block (e.g. slurs, bad words)")
@@ -2616,6 +2966,7 @@ func (v *SettingsView) buildBotsCard() *widget.Card {
 		})
 	})
 	knownBotsCheck.SetChecked(v.cfg.Bots.IgnoreKnownBots)
+	v.knownBotsCheck = knownBotsCheck
 
 	botListContainer := container.NewVBox()
 	var refreshBots func()
@@ -2644,6 +2995,7 @@ func (v *SettingsView) buildBotsCard() *widget.Card {
 		botListContainer.Refresh()
 	}
 	refreshBots()
+	v.refreshBots = refreshBots
 
 	newBotEntry := NewScrollPassEntry()
 	newBotEntry.SetPlaceHolder("Enter custom bot username (e.g. mychannelbot)...")
@@ -2674,3 +3026,1160 @@ func (v *SettingsView) buildBotsCard() *widget.Card {
 
 	return widget.NewCard("Bot Filters", "Filter out automated stream bots", cardContent)
 }
+
+// TranslationProviderOptions lists the selectable translation backends in the UI.
+var TranslationProviderOptions = []string{
+	"MyMemory Translated API (Free — Zero Setup, 5k–50k chars/day)",
+	"Google Cloud Translation API v2 (Official API Key — 500k chars/mo Free)",
+	"DeepL API Free / Pro (Official API Key — 500k chars/mo Free)",
+	"LibreTranslate (Local / Self-Hosted)",
+	"Local LLM (Ollama / OpenAI API)",
+}
+
+// FormatTranslationProviderOption converts a canonical provider identifier into its UI display label.
+func FormatTranslationProviderOption(provider string) string {
+	switch config.NormalizeTranslationProvider(provider) {
+	case config.TranslationProviderGoogle:
+		return "Google Cloud Translation API v2 (Official API Key — 500k chars/mo Free)"
+	case config.TranslationProviderDeepL:
+		return "DeepL API Free / Pro (Official API Key — 500k chars/mo Free)"
+	case config.TranslationProviderLibreTranslate:
+		return "LibreTranslate (Local / Self-Hosted)"
+	case config.TranslationProviderOllama:
+		return "Local LLM (Ollama / OpenAI API)"
+	default:
+		return "MyMemory Translated API (Free — Zero Setup, 5k–50k chars/day)"
+	}
+}
+
+// ParseTranslationProviderOption converts a UI display label back into its canonical provider identifier.
+func ParseTranslationProviderOption(option string) string {
+	switch option {
+	case "Google Cloud Translation API v2 (Official API Key — 500k chars/mo Free)":
+		return config.TranslationProviderGoogle
+	case "DeepL API Free / Pro (Official API Key — 500k chars/mo Free)":
+		return config.TranslationProviderDeepL
+	case "LibreTranslate (Local / Self-Hosted)":
+		return config.TranslationProviderLibreTranslate
+	case "Local LLM (Ollama / OpenAI API)":
+		return config.TranslationProviderOllama
+	default:
+		return config.TranslationProviderMyMemory
+	}
+}
+
+// TranslationConfidenceOptions lists the selectable language detection sensitivity presets.
+var TranslationConfidenceOptions = []string{
+	"Strict (0.80 — High certainty only)",
+	"Balanced (0.65 — Recommended)",
+	"Aggressive (0.45 — Translate short phrases)",
+}
+
+// FormatTranslationConfidenceOption converts a numeric confidence threshold into its UI preset label.
+func FormatTranslationConfidenceOption(val float64) string {
+	norm := config.NormalizeTranslationMinConfidence(val)
+	switch {
+	case norm >= 0.75:
+		return "Strict (0.80 — High certainty only)"
+	case norm <= 0.55:
+		return "Aggressive (0.45 — Translate short phrases)"
+	default:
+		return "Balanced (0.65 — Recommended)"
+	}
+}
+
+// ParseTranslationConfidenceOption converts a UI preset label into its numeric confidence threshold.
+func ParseTranslationConfidenceOption(option string) float64 {
+	switch option {
+	case "Strict (0.80 — High certainty only)":
+		return 0.80
+	case "Aggressive (0.45 — Translate short phrases)":
+		return 0.45
+	default:
+		return 0.65
+	}
+}
+
+// TranslationTargetLangOptions returns the selectable target language labels (`Name (code)`).
+func TranslationTargetLangOptions() []string {
+	opts := make([]string, 0, len(translate.TargetLanguages))
+	for _, lang := range translate.TargetLanguages {
+		opts = append(opts, fmt.Sprintf("%s (%s)", lang.Name, lang.Code))
+	}
+	return opts
+}
+
+// FormatTranslationTargetLangOption formats a canonical ISO-639-1 code into its UI dropdown label.
+func FormatTranslationTargetLangOption(code string) string {
+	norm := config.NormalizeTranslationTargetLang(code)
+	for _, lang := range translate.TargetLanguages {
+		if lang.Code == norm {
+			return fmt.Sprintf("%s (%s)", lang.Name, lang.Code)
+		}
+	}
+	return "English (en)"
+}
+
+// ParseTranslationTargetLangOption extracts the canonical ISO-639-1 code from a UI dropdown label.
+func ParseTranslationTargetLangOption(option string) string {
+	if openIdx := strings.LastIndex(option, "("); openIdx >= 0 {
+		if closeIdx := strings.LastIndex(option, ")"); closeIdx > openIdx+1 {
+			return config.NormalizeTranslationTargetLang(option[openIdx+1 : closeIdx])
+		}
+	}
+	return config.NormalizeTranslationTargetLang(option)
+}
+
+const (
+	TranslationRoutingOptionPriority   = "Priority Fallback (Top-to-Bottom — Default)"
+	TranslationRoutingOptionRoundRobin = "Round-Robin Load Balancing"
+)
+
+// TranslationRoutingOptions lists the selectable multi-provider routing strategies.
+var TranslationRoutingOptions = []string{
+	TranslationRoutingOptionPriority,
+	TranslationRoutingOptionRoundRobin,
+}
+
+// FormatTranslationRoutingOption converts a canonical routing mode into its UI display label.
+func FormatTranslationRoutingOption(mode string) string {
+	if config.NormalizeTranslationRoutingMode(mode) == config.TranslationRoutingRoundRobin {
+		return TranslationRoutingOptionRoundRobin
+	}
+	return TranslationRoutingOptionPriority
+}
+
+// ParseTranslationRoutingOption converts a UI routing label into its canonical routing mode.
+func ParseTranslationRoutingOption(option string) string {
+	if option == TranslationRoutingOptionRoundRobin {
+		return config.TranslationRoutingRoundRobin
+	}
+	return config.TranslationRoutingPriority
+}
+
+// TranslationProviderShortName returns a concise human-readable title for a translation provider node.
+func TranslationProviderShortName(provider string) string {
+	switch config.NormalizeTranslationProvider(provider) {
+	case config.TranslationProviderGoogle:
+		return "Google Cloud Translation v2"
+	case config.TranslationProviderDeepL:
+		return "DeepL API (Free / Pro)"
+	case config.TranslationProviderLibreTranslate:
+		return "LibreTranslate"
+	case config.TranslationProviderOllama:
+		return "Local LLM (Ollama / OpenAI)"
+	default:
+		return "MyMemory Translated API (Free)"
+	}
+}
+
+// FormatTranslationNodeStatus returns the SVG icon resource, compact status badge text, and detailed
+// mouseover tooltip string for a translation provider node.
+func FormatTranslationNodeStatus(entry config.TranslationProviderEntry, st translate.ProviderStatus, now time.Time) (fyne.Resource, string, string) {
+	name := TranslationProviderShortName(entry.Provider)
+	if !entry.Enabled {
+		return resNodeDisabled,
+			"Disabled",
+			fmt.Sprintf("Node: %s — Disabled (Check the box to enable in routing chain)", name)
+	}
+	if st.InBackoff(now) {
+		rem := max(st.CooldownUntil.Sub(now).Round(time.Second), time.Second)
+		reason := strings.TrimSpace(st.LastError)
+		if reason == "" {
+			reason = "Rate limit or transient error"
+		}
+		tip := fmt.Sprintf("⚠️ Backoff Reason: %s • %s (%s remaining, failure #%d • %d ok / %d failed)", reason, name, rem, st.ConsecutiveFail, st.SuccessCount, st.FailureCount)
+		return resNodeBackoff, fmt.Sprintf("Backoff (%s)", rem), tip
+	}
+	badge := "Healthy (Ready)"
+	if st.SuccessCount > 0 {
+		badge = fmt.Sprintf("Healthy (%d ok, %dms)", st.SuccessCount, st.LastLatency.Milliseconds())
+	}
+	tip := fmt.Sprintf("Node: %s — Healthy (Ready) • Session: %d translated / %d failed", name, st.SuccessCount, st.FailureCount)
+	if st.LastLatency > 0 {
+		tip += fmt.Sprintf(" • Last Latency: %dms", st.LastLatency.Milliseconds())
+	}
+	if st.LastError != "" {
+		tip += " • Last Error: " + st.LastError
+	}
+	return resNodeHealthy, badge, tip
+}
+
+// nodeDragHandle is a compact drag-and-drop grip ("≡") that reorders a provider node row when dragged vertically.
+type nodeDragHandle struct {
+	widget.Label
+	onMove func(deltaSteps int)
+	accumY float32
+}
+
+var (
+	_ fyne.Draggable     = (*nodeDragHandle)(nil)
+	_ desktop.Cursorable = (*nodeDragHandle)(nil)
+)
+
+func newNodeDragHandle(onMove func(deltaSteps int)) *nodeDragHandle {
+	h := &nodeDragHandle{onMove: onMove}
+	h.Text = "≡"
+	h.Alignment = fyne.TextAlignCenter
+	h.TextStyle = fyne.TextStyle{Bold: true}
+	h.ExtendBaseWidget(h)
+	return h
+}
+
+func (h *nodeDragHandle) Cursor() desktop.Cursor {
+	return desktop.PointerCursor
+}
+
+func (h *nodeDragHandle) Dragged(ev *fyne.DragEvent) {
+	if ev == nil || h.onMove == nil {
+		return
+	}
+	h.accumY += ev.Dragged.DY
+	const stepThreshold = 32.0
+	if h.accumY <= -stepThreshold {
+		h.accumY = 0
+		h.onMove(-1)
+	} else if h.accumY >= stepThreshold {
+		h.accumY = 0
+		h.onMove(1)
+	}
+}
+
+func (h *nodeDragHandle) DragEnd() {
+	h.accumY = 0
+}
+
+// FormatTranslationRateLimitSummary returns the dynamic rate limit & pricing guidance text for the active provider.
+func FormatTranslationRateLimitSummary(provider string, hasAPIKey bool, hasEmail bool) string {
+	switch config.NormalizeTranslationProvider(provider) {
+	case config.TranslationProviderGoogle:
+		base := "Rate Limits & 4-Step Setup (Google Cloud Translation Basic v2 — Official API Key Required):\n"
+		if hasAPIKey {
+			base = "Rate Limits & Pricing (Google Cloud Translation Basic v2 — Active API Key):\n"
+		}
+		return base +
+			"• Why Basic (v2): Google's docs call v2 'Basic' and v3 'Advanced'. Basic (v2) accepts a simple API key and includes 500,000 FREE characters/month (~10,000 chat messages).\n" +
+			"• 4-Step Console Setup: (1) Create/Select a GCP Project → (2) Enable Cloud Translation API → (3) Go to APIs & Services > Credentials > + Create Credentials > API key → (4) In IAM & Admin > Quotas, set 'v2 and v3 general model characters per day' to 15,000 to guarantee $0.00 overages."
+	case config.TranslationProviderDeepL:
+		return "Rate Limits & Pricing (DeepL API Free / Pro — Official API Key Required):\n" +
+			"• Free Tier: 500,000 characters/month FREE (~10,000 chat messages) with a free DeepL developer key (ends in ':fx', hard-capped so you can never be charged overages).\n" +
+			"• DeepL Pro: Unlimited pay-as-you-go volume."
+	case config.TranslationProviderLibreTranslate:
+		return "Rate Limits & Pricing (LibreTranslate):\n" +
+			"• Local / Self-Hosted (http://localhost:5000): Unlimited messages, 100% offline & free.\n" +
+			"• Public / Hosted Instances: Subject to the instance operator's rate limits (API key optional)."
+	case config.TranslationProviderOllama:
+		return "Rate Limits & Pricing (Local LLM / OpenAI-Compatible API):\n" +
+			"• Local Ollama / LM Studio (http://localhost:11434): Unlimited messages, 100% offline & free on your GPU/CPU (recommended model: qwen2.5:3b).\n" +
+			"• Hosted OpenAI-Compatible Endpoints: Subject to your provider's token rate limits and pricing."
+	default:
+		if hasEmail {
+			return "Rate Limits & Pricing (MyMemory Translated API — 10x Email Quota Active):\n" +
+				"• Free Quota: Up to 50,000 characters/day (~1,000 foreign chat messages/day) FREE.\n" +
+				"• Official public REST API by Translated.net (no account signup, password, or credit card required)."
+		}
+		return "Rate Limits & Pricing (MyMemory Translated API — Default Zero-Setup Free Mode):\n" +
+			"• Anonymous Free Quota: 5,000 characters/day (~100 foreign chat messages/day) with zero setup.\n" +
+			"• 10x Free Upgrade: Enter your email address below to boost your free quota to 50,000 characters/day (~1,000 messages/day) with no signup or credit card."
+	}
+}
+
+// TranslationProviderGuideURL returns the anchored URL on the TownCrier website for a provider's setup guide.
+func TranslationProviderGuideURL(provider string) string {
+	norm := config.NormalizeTranslationProvider(provider)
+	return "https://mrpoundsign.com/TownCrier/translation-guides.html#" + norm
+}
+
+// TranslationProviderLinks returns the display text and URLs for getting an API key/setup guide and viewing the provider's Terms of Service.
+func TranslationProviderLinks(provider string) (keyText, keyURL, tosText, tosURL string) {
+	switch config.NormalizeTranslationProvider(provider) {
+	case config.TranslationProviderGoogle:
+		return "Open Google Cloud Credentials (Create API Key)",
+			"https://console.cloud.google.com/apis/credentials",
+			"Google Cloud Terms & Pricing",
+			"https://cloud.google.com/terms/service-terms"
+	case config.TranslationProviderDeepL:
+		return "Get Free DeepL API Key (500k chars/mo)",
+			"https://www.deepl.com/pro-api",
+			"DeepL API Terms & Privacy Policy",
+			"https://www.deepl.com/pro-license"
+	case config.TranslationProviderLibreTranslate:
+		return "LibreTranslate Self-Host Guide & API Keys",
+			"https://github.com/LibreTranslate/LibreTranslate",
+			"LibreTranslate Public Portal & Terms",
+			"https://portal.libretranslate.com"
+	case config.TranslationProviderOllama:
+		return "Download Ollama & Local LLM Setup",
+			"https://ollama.com/download",
+			"Ollama Terms of Service & Privacy",
+			"https://ollama.com/terms"
+	default:
+		return "MyMemory API & Free Quota Docs",
+			"https://mymemory.translated.net/doc/usagelimits.php",
+			"MyMemory Terms of Service & GDPR Privacy",
+			"https://mymemory.translated.net/doc/terms.php"
+	}
+}
+
+func (v *SettingsView) selectedTranslationProvider() string {
+	if v.translationSelectedNode != "" {
+		return config.NormalizeTranslationProvider(v.translationSelectedNode)
+	}
+	cfg := v.currentConfig()
+	return config.NormalizeTranslationProvider(cfg.Translation.Provider)
+}
+
+func (v *SettingsView) providerEntryFor(provider string) config.TranslationProviderEntry {
+	norm := config.NormalizeTranslationProvider(provider)
+	cfg := v.currentConfig()
+	tCfg := cfg.Translation
+	config.NormalizeTranslationProviders(&tCfg)
+	for _, p := range tCfg.Providers {
+		if config.NormalizeTranslationProvider(p.Provider) == norm {
+			return p
+		}
+	}
+	return config.TranslationProviderEntry{Provider: norm}
+}
+
+func (v *SettingsView) updateProviderEntry(provider string, fn func(entry *config.TranslationProviderEntry)) {
+	norm := config.NormalizeTranslationProvider(provider)
+	v.updateConfig(func(c *config.Config) {
+		config.NormalizeTranslationProviders(&c.Translation)
+		for i := range c.Translation.Providers {
+			if config.NormalizeTranslationProvider(c.Translation.Providers[i].Provider) == norm {
+				fn(&c.Translation.Providers[i])
+				if norm == config.TranslationProviderMyMemory {
+					c.Translation.ContactEmail = c.Translation.Providers[i].ContactEmail
+				}
+				if c.Translation.Provider == norm {
+					c.Translation.EndpointURL = c.Translation.Providers[i].EndpointURL
+					c.Translation.Model = c.Translation.Providers[i].Model
+				}
+				break
+			}
+		}
+	})
+	if v.session != nil && v.session.Translator() != nil {
+		v.session.Translator().ResetProviderBackoff(norm)
+	}
+}
+
+func (v *SettingsView) syncTranslationProviderFields() {
+	prov := v.selectedTranslationProvider()
+	entry := v.providerEntryFor(prov)
+
+	wasInit := v.initializing
+	v.initializing = true
+	if v.translationProviderSelect != nil {
+		v.translationProviderSelect.SetSelected(FormatTranslationProviderOption(prov))
+	}
+	if v.translationEmailEntry != nil {
+		v.translationEmailEntry.SetText(entry.ContactEmail)
+	}
+	if v.translationEndpointEntry != nil {
+		v.translationEndpointEntry.SetText(entry.EndpointURL)
+	}
+	if v.translationModelEntry != nil {
+		v.translationModelEntry.SetText(entry.Model)
+	}
+	var keyVal string
+	if v.session != nil {
+		keyVal = v.session.TranslationProviderAPIKey(prov)
+	} else {
+		keyVal = entry.APIKey
+	}
+	if v.translationAPIKeyEntry != nil {
+		v.translationAPIKeyEntry.SetText(keyVal)
+	}
+	v.initializing = wasInit
+
+	hasKey := strings.TrimSpace(keyVal) != ""
+	hasEmail := strings.TrimSpace(entry.ContactEmail) != ""
+
+	if v.translationLimitLabel != nil {
+		v.translationLimitLabel.SetText(FormatTranslationRateLimitSummary(prov, hasKey, hasEmail))
+	}
+
+	if v.translationGuideLink != nil {
+		v.translationGuideLink.SetText("Setup Guide (" + TranslationProviderShortName(prov) + ")")
+		if u, err := url.Parse(TranslationProviderGuideURL(prov)); err == nil {
+			v.translationGuideLink.SetURL(u)
+		}
+	}
+
+	keyText, keyRawURL, tosText, tosRawURL := TranslationProviderLinks(prov)
+	if v.translationKeyLink != nil {
+		v.translationKeyLink.SetText(keyText)
+		if u, err := url.Parse(keyRawURL); err == nil {
+			v.translationKeyLink.SetURL(u)
+		}
+	}
+	if v.translationTOSLink != nil {
+		v.translationTOSLink.SetText(tosText)
+		if u, err := url.Parse(tosRawURL); err == nil {
+			v.translationTOSLink.SetURL(u)
+		}
+	}
+	if v.translationQuotaLink != nil && v.translationQuotaSep != nil {
+		if prov == config.TranslationProviderGoogle {
+			v.translationQuotaSep.Show()
+			v.translationQuotaLink.Show()
+		} else {
+			v.translationQuotaSep.Hide()
+			v.translationQuotaLink.Hide()
+		}
+	}
+
+	if v.translationEmailBox != nil {
+		if prov == config.TranslationProviderMyMemory {
+			v.translationEmailBox.Show()
+		} else {
+			v.translationEmailBox.Hide()
+		}
+	}
+
+	if v.translationAPIKeyEntry != nil {
+		switch prov {
+		case config.TranslationProviderGoogle:
+			v.translationAPIKeyEntry.SetPlaceHolder("Required — Enter Google Cloud Translation API v2 key (stored in OS Keyring)")
+		case config.TranslationProviderDeepL:
+			v.translationAPIKeyEntry.SetPlaceHolder("Required — Enter DeepL API Free (:fx) or Pro key (stored in OS Keyring)")
+		default:
+			v.translationAPIKeyEntry.SetPlaceHolder("Optional — Leave blank for free mode, or enter API key (stored in OS Keyring)")
+		}
+	}
+
+	if v.translationEndpointBox != nil {
+		switch prov {
+		case config.TranslationProviderLibreTranslate:
+			if v.translationEndpointEntry != nil {
+				v.translationEndpointEntry.SetPlaceHolder(config.DefaultLibreTranslateURL)
+			}
+			v.translationEndpointBox.Show()
+		case config.TranslationProviderOllama:
+			if v.translationEndpointEntry != nil {
+				v.translationEndpointEntry.SetPlaceHolder(config.DefaultOllamaURL)
+			}
+			v.translationEndpointBox.Show()
+		default:
+			v.translationEndpointBox.Hide()
+		}
+	}
+
+	if v.translationModelBox != nil {
+		if prov == config.TranslationProviderOllama {
+			v.translationModelBox.Show()
+		} else {
+			v.translationModelBox.Hide()
+		}
+	}
+
+	if v.translationConfigDrawer != nil {
+		if v.translationSelectedNode != "" {
+			v.translationConfigDrawer.Show()
+		} else {
+			v.translationConfigDrawer.Hide()
+		}
+	}
+
+	if v.translationTestBtn != nil {
+		if v.translationSelectedNode != "" {
+			v.translationTestBtn.SetText("Test " + TranslationProviderShortName(v.translationSelectedNode))
+		} else {
+			v.translationTestBtn.SetText("Test Translation Chain")
+		}
+	}
+}
+
+func (v *SettingsView) showTranslationTooltip(obj fyne.CanvasObject, tip string, hovered bool) {
+	defaultHoverMsg := "Hover over any node status icon or badge above to inspect live health, latency, and backoff reason."
+	if v.translationNodeHoverLbl != nil {
+		if hovered && tip != "" {
+			v.translationNodeHoverLbl.SetText("🔍 " + tip)
+		} else {
+			v.translationNodeHoverLbl.SetText(defaultHoverMsg)
+		}
+	}
+	if !hovered || tip == "" {
+		if v.translationTooltipBubble != nil {
+			v.translationTooltipBubble.Hide()
+		}
+		return
+	}
+	if v.translationTooltipBubble == nil || v.translationTooltipText == nil || v.translationTooltipLayer == nil {
+		return
+	}
+	shortTip := truncateTooltip(tip, 125)
+	v.translationTooltipText.Text = shortTip
+	v.translationTooltipText.Refresh()
+	bubbleSize := v.translationTooltipBubble.MinSize()
+	v.translationTooltipBubble.Resize(bubbleSize)
+
+	appInstance := fyne.CurrentApp()
+	if appInstance == nil || appInstance.Driver() == nil {
+		return
+	}
+	objPos := appInstance.Driver().AbsolutePositionForObject(obj)
+	layerPos := appInstance.Driver().AbsolutePositionForObject(v.translationTooltipLayer)
+	relX := objPos.X - layerPos.X
+	relY := objPos.Y - layerPos.Y
+
+	layerWidth := v.translationTooltipLayer.Size().Width
+	if layerWidth <= 0 && v.window != nil && v.window.Canvas() != nil {
+		layerWidth = v.window.Canvas().Size().Width - 32
+	}
+	if layerWidth <= 0 {
+		layerWidth = 880
+	}
+
+	x := max(relX-bubbleSize.Width+obj.Size().Width, float32(8))
+	if x+bubbleSize.Width > layerWidth-8 {
+		x = max(layerWidth-bubbleSize.Width-8, float32(8))
+	}
+	y := relY - bubbleSize.Height - 4
+	if y < 4 {
+		y = relY + obj.Size().Height + 4
+	}
+	v.translationTooltipBubble.Move(fyne.NewPos(x, y))
+	v.translationTooltipBubble.Show()
+	v.translationTooltipBubble.Refresh()
+}
+
+// FormatTestTranslationOutput formats the multi-line test result showing input, per-sentence cache/API resolution, and final output.
+func FormatTestTranslationOutput(input, detName, detISO, tgtName, tgtLang, elapsedStr string, res translate.Result) string {
+	srcLang := res.SourceLang
+	if srcLang == "" || srcLang == "auto" {
+		srcLang = detISO
+	}
+	srcName := translate.LanguageName(srcLang)
+	if strings.TrimSpace(res.TranslatedText) == "" {
+		return fmt.Sprintf(
+			"Input — %s (%s): %q\nOutput — Already matches target language %s (%s) (short-circuited locally, 0 API characters used).",
+			srcName, srcLang, input, tgtName, tgtLang,
+		)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Input — %s (%s): %q\n", srcName, srcLang, input)
+
+	for _, st := range res.Sentences {
+		tier := "RAM"
+		if st.PromotedToDisk {
+			tier = "RAM + Disk"
+		}
+		provName := TranslationProviderShortName(st.Provider)
+		switch {
+		case st.FromCache && st.LiveTranslated != "":
+			fmt.Fprintf(&b, "  • Sentence #%d [Cached (Hits: %d, %s) + Live API Verified via %s]:\n      Cached: %q | Live API: %q\n",
+				st.Index, st.CacheHits, tier, provName, st.Translated, st.LiveTranslated)
+		case st.FromCache:
+			fmt.Fprintf(&b, "  • Sentence #%d [Cached — Hits: %d, %s (skipped API)]: %q → %q\n",
+				st.Index, st.CacheHits, tier, st.Original, st.Translated)
+		case st.SkippedTarget:
+			fmt.Fprintf(&b, "  • Sentence #%d [Skipped — Already %s (%s)]: %q\n",
+				st.Index, tgtName, tgtLang, st.Original)
+		default:
+			fmt.Fprintf(&b, "  • Sentence #%d [Live API — %s, saved to %s cache (Hits: %d)]: %q → %q\n",
+				st.Index, provName, tier, max(st.CacheHits, 1), st.Original, st.Translated)
+		}
+	}
+
+	viaStr := elapsedStr
+	if res.Provider != "" {
+		viaStr = fmt.Sprintf("%s, %s", TranslationProviderShortName(res.Provider), elapsedStr)
+	}
+	fmt.Fprintf(&b, "Output — %s (%s) (%s): %q", tgtName, tgtLang, viaStr, res.TranslatedText)
+	return b.String()
+}
+
+func (v *SettingsView) buildTranslationTab() fyne.CanvasObject {
+	v.updateConfig(func(c *config.Config) {
+		config.NormalizeTranslationProviders(&c.Translation)
+	})
+	cfg := v.currentConfig()
+
+	v.translationTooltipBubble, v.translationTooltipText = buildTooltipBubble()
+	v.translationTooltipLayer = container.NewWithoutLayout(v.translationTooltipBubble)
+
+	v.translationTargetSelect = widget.NewSelect(TranslationTargetLangOptions(), func(selected string) {
+		if v.initializing {
+			return
+		}
+		code := ParseTranslationTargetLangOption(selected)
+		v.updateConfig(func(c *config.Config) {
+			c.Translation.TargetLang = code
+		})
+		v.setStatus("✓ Target translation language set to " + selected)
+	})
+	v.translationTargetSelect.SetSelected(FormatTranslationTargetLangOption(cfg.Translation.TargetLang))
+
+	v.translationConfSelect = widget.NewSelect(TranslationConfidenceOptions, func(selected string) {
+		if v.initializing {
+			return
+		}
+		conf := ParseTranslationConfidenceOption(selected)
+		v.updateConfig(func(c *config.Config) {
+			c.Translation.MinConfidence = conf
+		})
+		v.setStatus(fmt.Sprintf("✓ Language detection sensitivity set to %.2f", conf))
+	})
+	v.translationConfSelect.SetSelected(FormatTranslationConfidenceOption(cfg.Translation.MinConfidence))
+
+	makeFieldRow := func(label string, ctrl fyne.CanvasObject) *fyne.Container {
+		lbl := widget.NewLabel(label)
+		return container.NewBorder(nil, nil, container.NewGridWrap(fyne.NewSize(230, 36), lbl), nil, ctrl)
+	}
+
+	detectDesc := widget.NewLabelWithStyle(
+		"Foreign chat messages are automatically detected in-process (<0.1ms) and split into sentences so repeated greetings, copypastas, and mixed-language messages resolve cached or target-language sentences locally at 0 API cost.",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	detectDesc.Wrapping = fyne.TextWrapWord
+
+	v.translationCacheStatsLbl = widget.NewLabel("")
+	v.translationRefreshCacheStats = func() {
+		if v.translationCacheStatsLbl == nil {
+			return
+		}
+		memCount, diskCount := 0, 0
+		if v.session != nil {
+			memCount, diskCount = v.session.TranslationCacheStats()
+		}
+		v.translationCacheStatsLbl.SetText(fmt.Sprintf("%d in RAM (L1) • %d promoted to Disk (L2, ≥2 hits)", memCount, diskCount))
+	}
+	v.translationClearCacheBtn = widget.NewButtonWithIcon("Clear Translation Cache", theme.DeleteIcon(), func() {
+		if v.session != nil {
+			_ = v.session.ClearTranslationCache()
+		}
+		if v.translationRefreshCacheStats != nil {
+			v.translationRefreshCacheStats()
+		}
+		v.setStatus("✓ Cleared RAM and Disk translation caches.")
+	})
+	v.translationRefreshCacheStats()
+	cacheRow := makeFieldRow("Sentence Cache (Spam Protection):", container.NewBorder(nil, nil, nil, v.translationClearCacheBtn, v.translationCacheStatsLbl))
+
+	langCard := widget.NewCard(
+		"Language Detection, Target Language & Sentence Cache",
+		"Choose your target language and manage the two-tier sentence translation cache",
+		container.NewVBox(
+			detectDesc,
+			makeFieldRow("Target Language:", v.translationTargetSelect),
+			makeFieldRow("Detection Sensitivity:", v.translationConfSelect),
+			cacheRow,
+		),
+	)
+
+	// --- Translation Notification Chime Card ---
+	v.translationChimeCheck = widget.NewCheck("Play 3-note notification chime before speaking translated messages", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.Translation.PlayChimeBeforeSpeak = checked
+		})
+	})
+	v.translationChimeCheck.SetChecked(cfg.Translation.PlayChimeBeforeSpeak)
+
+	chimeEntry := NewScrollPassEntry()
+	chimeEntry.SetPlaceHolder("Built-in 3-note ascending chime (or select a custom .wav / .mp3 file)")
+	chimeEntry.SetText(cfg.Translation.ChimeSoundPath)
+	chimeEntry.OnChanged = func(text string) {
+		if v.initializing {
+			return
+		}
+		trimmed := strings.TrimSpace(text)
+		v.updateConfig(func(c *config.Config) {
+			c.Translation.ChimeSoundPath = trimmed
+		})
+	}
+	v.translationChimeEntry = chimeEntry
+
+	chimeBrowseBtn := widget.NewButtonWithIcon("Browse...", theme.FolderOpenIcon(), func() {
+		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil {
+				v.setStatus("⚠️ Failed to open file: " + err.Error())
+				return
+			}
+			if reader == nil {
+				return
+			}
+			_ = reader.Close()
+			chosen := reader.URI().Path()
+			chimeEntry.SetText(chosen)
+			v.setStatus("✓ Custom translation chime set to " + chosen)
+		}, v.window)
+		fd.SetFilter(storage.NewExtensionFileFilter([]string{".wav", ".wave", ".mp3"}))
+		fd.Show()
+	})
+	v.translationChimeBrowseBtn = chimeBrowseBtn
+
+	chimeClearBtn := widget.NewButtonWithIcon("Use Built-in 3-Note Chime", theme.ContentClearIcon(), func() {
+		chimeEntry.SetText("")
+		v.setStatus("✓ Reset translation sound to built-in 3-note harmonic chime.")
+	})
+	v.translationChimeClearBtn = chimeClearBtn
+
+	chimeTestBtn := widget.NewButtonWithIcon("Test Sound", theme.MediaPlayIcon(), func() {
+		go func() {
+			var err error
+			if v.session != nil {
+				err = v.session.PlayTranslationChime()
+			} else if v.player != nil {
+				cache := audio.NewAlertSoundCache()
+				samples, rate, loadErr := cache.ResolveTranslationChime(strings.TrimSpace(chimeEntry.Text))
+				if loadErr != nil {
+					err = loadErr
+				} else {
+					err = v.player.Play(samples, rate)
+				}
+			}
+			if err != nil {
+				v.setStatus("⚠️ Translation chime error: " + err.Error())
+			} else {
+				v.setStatus("🔊 Played 3-note translation notification chime preview.")
+			}
+		}()
+	})
+	v.translationChimeTestBtn = chimeTestBtn
+
+	chimeBtns := container.NewHBox(chimeBrowseBtn, chimeClearBtn, chimeTestBtn)
+	chimeFileRow := container.NewBorder(nil, nil, widget.NewLabel("Translation Sound:"), chimeBtns, chimeEntry)
+
+	chimeCard := widget.NewCard(
+		"Translation Notification Sound",
+		"Audio cue played immediately before a translated foreign message is read aloud",
+		container.NewVBox(
+			v.translationChimeCheck,
+			chimeFileRow,
+		),
+	)
+
+	// --- Multi-Provider Routing Mode & Reorderable Node List ---
+	v.translationRoutingSelect = widget.NewSelect(TranslationRoutingOptions, func(selected string) {
+		if v.initializing {
+			return
+		}
+		mode := ParseTranslationRoutingOption(selected)
+		v.updateConfig(func(c *config.Config) {
+			c.Translation.RoutingMode = mode
+		})
+		v.setStatus("✓ Translation routing mode set to " + selected)
+	})
+	v.translationRoutingSelect.SetSelected(FormatTranslationRoutingOption(cfg.Translation.RoutingMode))
+
+	v.translationNodesBox = container.NewVBox()
+	defaultHoverMsg := "Hover over any node status icon or badge above to inspect live health, latency, and backoff reason."
+	v.translationNodeHoverLbl = widget.NewLabelWithStyle(defaultHoverMsg, fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
+	v.translationNodeHoverLbl.Wrapping = fyne.TextWrapWord
+
+	moveNode := func(fromIdx, delta int) {
+		cur := v.currentConfig()
+		tCfg := cur.Translation
+		config.NormalizeTranslationProviders(&tCfg)
+		toIdx := fromIdx + delta
+		if fromIdx < 0 || fromIdx >= len(tCfg.Providers) || toIdx < 0 || toIdx >= len(tCfg.Providers) {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			config.NormalizeTranslationProviders(&c.Translation)
+			c.Translation.Providers[fromIdx], c.Translation.Providers[toIdx] = c.Translation.Providers[toIdx], c.Translation.Providers[fromIdx]
+			for _, p := range c.Translation.Providers {
+				if p.Enabled {
+					c.Translation.Provider = p.Provider
+					break
+				}
+			}
+		})
+		if v.translationRefreshNodes != nil {
+			v.translationRefreshNodes()
+		}
+	}
+
+	v.translationRefreshNodes = func() {
+		if v.translationNodesBox == nil {
+			return
+		}
+		cur := v.currentConfig()
+		tCfg := cur.Translation
+		config.NormalizeTranslationProviders(&tCfg)
+
+		var statuses map[string]translate.ProviderStatus
+		if v.session != nil && v.session.Translator() != nil {
+			statuses = v.session.Translator().ProviderStatuses()
+		}
+		now := time.Now()
+		v.translationNodesBox.Objects = nil
+
+		for idx, entry := range tCfg.Providers {
+			rowIdx := idx
+			nodeEntry := entry
+			prov := config.NormalizeTranslationProvider(nodeEntry.Provider)
+			st := statuses[prov]
+
+			iconRes, badgeText, tipText := FormatTranslationNodeStatus(nodeEntry, st, now)
+
+			dragGrip := newNodeDragHandle(func(deltaSteps int) {
+				moveNode(rowIdx, deltaSteps)
+			})
+
+			upBtn := widget.NewButtonWithIcon("", theme.MoveUpIcon(), func() {
+				moveNode(rowIdx, -1)
+			})
+			if rowIdx == 0 {
+				upBtn.Disable()
+			}
+			downBtn := widget.NewButtonWithIcon("", theme.MoveDownIcon(), func() {
+				moveNode(rowIdx, 1)
+			})
+			if rowIdx == len(tCfg.Providers)-1 {
+				downBtn.Disable()
+			}
+
+			rankLbl := widget.NewLabelWithStyle(fmt.Sprintf("#%d", rowIdx+1), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+
+			enableChk := widget.NewCheck(TranslationProviderShortName(prov), func(checked bool) {
+				v.updateProviderEntry(prov, func(e *config.TranslationProviderEntry) {
+					e.Enabled = checked
+				})
+				if v.translationRefreshNodes != nil {
+					v.translationRefreshNodes()
+				}
+			})
+			enableChk.Checked = nodeEntry.Enabled
+
+			hoverIcon := &hoverIconWidget{
+				res:     iconRes,
+				minSize: fyne.NewSize(20, 20),
+				tooltip: tipText,
+				onHover: v.showTranslationTooltip,
+			}
+			hoverIcon.ExtendBaseWidget(hoverIcon)
+
+			badgeLbl := &hoverCellLabel{
+				tooltip: tipText,
+				onHover: v.showTranslationTooltip,
+			}
+			badgeLbl.Text = badgeText
+			badgeLbl.TextStyle = fyne.TextStyle{Italic: true}
+			badgeLbl.Truncation = fyne.TextTruncateOff
+			badgeLbl.ExtendBaseWidget(badgeLbl)
+
+			isConfiguring := v.translationSelectedNode == prov
+			cfgBtnLabel := "Configure"
+			cfgBtnIcon := theme.SettingsIcon()
+			cfgBtnImp := widget.MediumImportance
+			if isConfiguring {
+				cfgBtnLabel = "Done"
+				cfgBtnIcon = theme.ConfirmIcon()
+				cfgBtnImp = widget.HighImportance
+			}
+			cfgBtn := widget.NewButtonWithIcon(cfgBtnLabel, cfgBtnIcon, func() {
+				if v.translationSelectedNode == prov {
+					v.translationSelectedNode = ""
+				} else {
+					v.translationSelectedNode = prov
+				}
+				v.syncTranslationProviderFields()
+				if v.translationRefreshNodes != nil {
+					v.translationRefreshNodes()
+				}
+			})
+			cfgBtn.Importance = cfgBtnImp
+
+			rightControls := []fyne.CanvasObject{hoverIcon, badgeLbl}
+			if st.InBackoff(now) {
+				resetNodeBtn := widget.NewButtonWithIcon("Reset", theme.ViewRefreshIcon(), func() {
+					if v.session != nil && v.session.Translator() != nil {
+						v.session.Translator().ResetProviderBackoff(prov)
+					}
+					if v.translationRefreshNodes != nil {
+						v.translationRefreshNodes()
+					}
+					v.setStatus("✓ Cleared backoff cooldown for " + TranslationProviderShortName(prov))
+				})
+				rightControls = append(rightControls, resetNodeBtn)
+			}
+			rightControls = append(rightControls, cfgBtn)
+
+			leftControls := container.NewHBox(
+				container.NewGridWrap(fyne.NewSize(24, 32), dragGrip),
+				upBtn,
+				downBtn,
+				rankLbl,
+				enableChk,
+			)
+			row := container.NewBorder(nil, nil, leftControls, container.NewHBox(rightControls...), widget.NewLabel(""))
+			v.translationNodesBox.Add(row)
+		}
+		v.translationNodesBox.Refresh()
+	}
+
+	resetAllBtn := widget.NewButtonWithIcon("Reset All Backoffs", theme.ViewRefreshIcon(), func() {
+		if v.session != nil && v.session.Translator() != nil {
+			v.session.Translator().ResetAllBackoffs()
+		}
+		if v.translationRefreshNodes != nil {
+			v.translationRefreshNodes()
+		}
+		v.setStatus("✓ Reset all translation provider backoff timers.")
+	})
+
+	routingHeader := container.NewBorder(
+		nil,
+		nil,
+		container.NewGridWrap(fyne.NewSize(230, 36), widget.NewLabel("Routing & Failover Mode:")),
+		resetAllBtn,
+		v.translationRoutingSelect,
+	)
+
+	chainDesc := widget.NewLabelWithStyle(
+		"Drag '≡' or click ▲/▼ to reorder providers. When a provider fails (HTTP 429, quota exhausted, or offline), TownCrier automatically cascades to the next enabled node and applies exponential backoff (15s → 30s → 1m → 2m → 5m → 15m → 30m → max 1h).",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	chainDesc.Wrapping = fyne.TextWrapWord
+
+	// --- Collapsible Selected Provider Configuration Drawer ---
+	v.translationLimitLabel = widget.NewLabel("")
+	v.translationLimitLabel.Wrapping = fyne.TextWrapWord
+	limitBannerRow := container.NewBorder(
+		nil,
+		nil,
+		container.NewVBox(widget.NewIcon(theme.InfoIcon())),
+		nil,
+		v.translationLimitLabel,
+	)
+
+	v.translationGuideLink = widget.NewHyperlink("", nil)
+	v.translationKeyLink = widget.NewHyperlink("", nil)
+	v.translationTOSLink = widget.NewHyperlink("", nil)
+	quotaURL, _ := url.Parse("https://console.cloud.google.com/iam-admin/quotas")
+	v.translationQuotaLink = widget.NewHyperlink("Set $0 Daily Quota Cap (Prevent Overages)", quotaURL)
+	v.translationQuotaSep = widget.NewLabel("•")
+	linksRow := container.NewHBox(
+		widget.NewIcon(theme.HelpIcon()),
+		v.translationGuideLink,
+		widget.NewLabel("•"),
+		v.translationKeyLink,
+		widget.NewLabel("•"),
+		widget.NewIcon(theme.DocumentIcon()),
+		v.translationTOSLink,
+		v.translationQuotaSep,
+		v.translationQuotaLink,
+	)
+
+	v.translationProviderSelect = widget.NewSelect(TranslationProviderOptions, func(selected string) {
+		if v.initializing {
+			return
+		}
+		prov := ParseTranslationProviderOption(selected)
+		v.translationSelectedNode = prov
+		v.syncTranslationProviderFields()
+		if v.translationRefreshNodes != nil {
+			v.translationRefreshNodes()
+		}
+	})
+
+	v.translationDoneConfigBtn = widget.NewButtonWithIcon("Done Configuring", theme.ConfirmIcon(), func() {
+		v.translationSelectedNode = ""
+		v.syncTranslationProviderFields()
+		if v.translationRefreshNodes != nil {
+			v.translationRefreshNodes()
+		}
+	})
+	v.translationDoneConfigBtn.Importance = widget.HighImportance
+
+	configHeaderRow := makeFieldRow(
+		"Configuring Provider Node:",
+		container.NewBorder(nil, nil, nil, v.translationDoneConfigBtn, v.translationProviderSelect),
+	)
+
+	v.translationEmailEntry = NewScrollPassEntry()
+	v.translationEmailEntry.SetPlaceHolder("Optional — Enter your email to boost free MyMemory quota 10x (50,000 chars/day, no signup)")
+	v.translationEmailEntry.OnChanged = func(text string) {
+		if v.initializing {
+			return
+		}
+		trimmed := strings.TrimSpace(text)
+		v.updateProviderEntry(v.selectedTranslationProvider(), func(e *config.TranslationProviderEntry) {
+			e.ContactEmail = trimmed
+		})
+		v.syncTranslationProviderFields()
+	}
+	v.translationEmailBox = makeFieldRow("Email (10x Free Quota):", v.translationEmailEntry)
+
+	v.translationEndpointEntry = NewScrollPassEntry()
+	v.translationEndpointEntry.SetPlaceHolder(config.DefaultLibreTranslateURL)
+	v.translationEndpointEntry.OnChanged = func(text string) {
+		if v.initializing {
+			return
+		}
+		trimmed := strings.TrimSpace(text)
+		v.updateProviderEntry(v.selectedTranslationProvider(), func(e *config.TranslationProviderEntry) {
+			e.EndpointURL = trimmed
+		})
+	}
+	v.translationEndpointBox = makeFieldRow("Server Endpoint URL:", v.translationEndpointEntry)
+
+	v.translationModelEntry = NewScrollPassEntry()
+	v.translationModelEntry.SetPlaceHolder(config.DefaultOllamaModel + " (e.g. qwen2.5:3b, llama3.2:3b, gemma2:2b)")
+	v.translationModelEntry.OnChanged = func(text string) {
+		if v.initializing {
+			return
+		}
+		trimmed := strings.TrimSpace(text)
+		v.updateProviderEntry(v.selectedTranslationProvider(), func(e *config.TranslationProviderEntry) {
+			e.Model = trimmed
+		})
+	}
+	v.translationModelBox = makeFieldRow("LLM Model Name:", v.translationModelEntry)
+
+	v.translationAPIKeyEntry = NewScrollPassEntry()
+	v.translationAPIKeyEntry.Password = true
+	v.translationAPIKeyEntry.SetPlaceHolder("Optional — Leave blank for free zero-setup mode, or enter API key (stored in OS Keyring)")
+	v.translationAPIKeyEntry.OnChanged = func(text string) {
+		if v.initializing {
+			return
+		}
+		trimmed := strings.TrimSpace(text)
+		prov := v.selectedTranslationProvider()
+		if v.session != nil {
+			_ = v.session.SetTranslationProviderAPIKey(prov, trimmed)
+		}
+		v.updateProviderEntry(prov, func(e *config.TranslationProviderEntry) {
+			e.APIKey = ""
+		})
+		v.syncTranslationProviderFields()
+		if v.translationRefreshNodes != nil {
+			v.translationRefreshNodes()
+		}
+	}
+
+	clearKeyBtn := widget.NewButtonWithIcon("Clear Key", theme.ContentClearIcon(), func() {
+		prov := v.selectedTranslationProvider()
+		v.translationAPIKeyEntry.SetText("")
+		if v.session != nil {
+			_ = v.session.SetTranslationProviderAPIKey(prov, "")
+		}
+		v.syncTranslationProviderFields()
+		if v.translationRefreshNodes != nil {
+			v.translationRefreshNodes()
+		}
+		v.setStatus("✓ Cleared API key for " + TranslationProviderShortName(prov))
+	})
+	v.translationAPIKeyBox = makeFieldRow("API Key (OS Keyring):", container.NewBorder(nil, nil, nil, clearKeyBtn, v.translationAPIKeyEntry))
+
+	v.translationConfigDrawer = container.NewVBox(
+		widget.NewSeparator(),
+		configHeaderRow,
+		limitBannerRow,
+		linksRow,
+		widget.NewSeparator(),
+		v.translationEmailBox,
+		v.translationEndpointBox,
+		v.translationModelBox,
+		v.translationAPIKeyBox,
+	)
+
+	v.translationTestEntry = NewScrollPassEntry()
+	v.translationTestEntry.SetPlaceHolder("Enter foreign text (single or multi-sentence) to test...")
+	v.translationTestEntry.SetText("Hola amigos, este directo está increíble hoy!")
+
+	v.translationTestResultLbl = widget.NewLabelWithStyle("Click 'Test' to verify translation and inspect per-sentence cache hits.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
+	v.translationTestResultLbl.Wrapping = fyne.TextWrapWord
+
+	v.translationTestBtn = widget.NewButtonWithIcon("Test Translation Chain", theme.MediaPlayIcon(), func() {
+		sample := strings.TrimSpace(v.translationTestEntry.GetText())
+		if sample == "" {
+			sample = "Hola amigos, este directo está increíble hoy!"
+		}
+		curCfg := v.currentConfig()
+		targetLang := config.NormalizeTranslationTargetLang(curCfg.Translation.TargetLang)
+		targetName := translate.LanguageName(targetLang)
+		detectedISO := translate.DetectSourceLang(sample, targetLang)
+		detectedName := translate.LanguageName(detectedISO)
+		targetProv := v.translationSelectedNode
+
+		v.translationTestBtn.Disable()
+		v.translationTestResultLbl.SetText(fmt.Sprintf("⏳ Detected Language: %s (%s) → Translating to %s (%s)...", detectedName, detectedISO, targetName, targetLang))
+
+		go func(input, detISO, detName, tgtLang, tgtName, specificProv string) {
+			var res translate.Result
+			var elapsedStr string
+			var err error
+			if v.session != nil {
+				r, dur, e := v.session.TestTranslationForProvider(context.Background(), specificProv, input)
+				res = r
+				elapsedStr = fmt.Sprintf("%dms", dur.Milliseconds())
+				err = e
+			} else {
+				svc := translate.NewService()
+				prov := v.selectedTranslationProvider()
+				entry := v.providerEntryFor(prov)
+				r, e := svc.TranslateChain(context.Background(), input, tgtLang, detISO, config.TranslationRoutingPriority, []translate.Options{
+					{
+						Provider:     prov,
+						TargetLang:   tgtLang,
+						SourceLang:   detISO,
+						ContactEmail: entry.ContactEmail,
+						EndpointURL:  entry.EndpointURL,
+						Model:        entry.Model,
+						APIKey:       strings.TrimSpace(v.translationAPIKeyEntry.GetText()),
+					},
+				})
+				res = r
+				elapsedStr = "ok"
+				err = e
+			}
+			fyne.Do(func() {
+				v.translationTestBtn.Enable()
+				if v.translationRefreshNodes != nil {
+					v.translationRefreshNodes()
+				}
+				if v.translationRefreshCacheStats != nil {
+					v.translationRefreshCacheStats()
+				}
+				if err != nil {
+					msg := fmt.Sprintf("⚠️ Input — %s (%s): %q\nError: %v", detName, detISO, input, err)
+					v.translationTestResultLbl.SetText(msg)
+					v.setStatus("⚠️ Translation test failed: " + err.Error())
+					return
+				}
+				outMsg := FormatTestTranslationOutput(input, detName, detISO, tgtName, tgtLang, elapsedStr, res)
+				v.translationTestResultLbl.SetText(outMsg)
+				v.setStatus("✓ Translation test complete.")
+			})
+		}(sample, detectedISO, detectedName, targetLang, targetName, targetProv)
+	})
+
+	testRow := makeFieldRow("Test Sample Phrase:", container.NewBorder(nil, nil, nil, v.translationTestBtn, v.translationTestEntry))
+
+	v.syncTranslationProviderFields()
+	v.translationRefreshNodes()
+
+	providerCard := widget.NewCard(
+		"Translation Provider Chain, Load Balancing & Rate Limits",
+		"Click 'Configure' on any provider row to edit its API key/endpoint and test that service directly",
+		container.NewVBox(
+			routingHeader,
+			chainDesc,
+			v.translationNodesBox,
+			v.translationNodeHoverLbl,
+			v.translationConfigDrawer,
+			widget.NewSeparator(),
+			testRow,
+			v.translationTestResultLbl,
+		),
+	)
+
+	scrollBody := newPanelVScroll(container.NewVBox(
+		langCard,
+		chimeCard,
+		providerCard,
+	))
+	return container.NewStack(scrollBody, v.translationTooltipLayer)
+}
+

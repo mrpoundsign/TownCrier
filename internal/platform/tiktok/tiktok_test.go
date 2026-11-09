@@ -527,10 +527,10 @@ func TestIsOfflineErrorAndSummarizePollError(t *testing.T) {
 func TestHandleRawEvent_PointerAndValueDisconnectEvent(t *testing.T) {
 	c := NewConnector(nil, nil)
 
-	if !c.handleRawEvent(gotiktoklive.DisconnectEvent{}) {
+	if !c.handleRawEventWithStats(gotiktoklive.DisconnectEvent{}, nil) {
 		t.Error("expected value gotiktoklive.DisconnectEvent to trigger disconnect")
 	}
-	if !c.handleRawEvent(&gotiktoklive.DisconnectEvent{}) {
+	if !c.handleRawEventWithStats(&gotiktoklive.DisconnectEvent{}, nil) {
 		t.Error("expected pointer *gotiktoklive.DisconnectEvent to trigger disconnect")
 	}
 }

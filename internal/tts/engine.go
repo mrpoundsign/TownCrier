@@ -225,11 +225,6 @@ type StreamingEngine interface {
 	SynthesizeStream(text string, voiceID string, speed float32, onChunk StreamCallback) error
 }
 
-// ResolveSpeakerID resolves a string voice ID or display label to an integer speaker index for v0.19, falling back to 0.
-func ResolveSpeakerID(voiceID string) int {
-	return ResolveSpeakerIDForModel(voiceID, 11)
-}
-
 // ResolveSpeakerIDForModel resolves a voice ID or display label to the speaker index matching the loaded model's speaker count.
 func ResolveSpeakerIDForModel(voiceID string, numSpeakers int) int {
 	v := VoiceIDFromLabel(voiceID)

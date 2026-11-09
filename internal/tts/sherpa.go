@@ -31,13 +31,6 @@ type SherpaEngine struct {
 	closed         bool
 }
 
-// NewSherpaEngine creates a new Kokoro SherpaEngine instance from the specified model directory.
-// If useGPU is true, it attempts to use DirectML with the floating-point model (model.onnx),
-// falling back to CPU with the quantized model (model.int8.onnx) if unavailable.
-func NewSherpaEngine(modelDir string, numThreads int, useGPU bool) (*SherpaEngine, error) {
-	return NewFamilySherpaEngine(ModelKokoro, modelDir, numThreads, useGPU)
-}
-
 // NewFamilySherpaEngine creates a SherpaEngine for the specified model family ("kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper").
 func NewFamilySherpaEngine(family string, modelDir string, numThreads int, useGPU bool) (*SherpaEngine, error) {
 	if numThreads <= 0 {

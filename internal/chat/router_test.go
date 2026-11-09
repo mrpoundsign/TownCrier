@@ -2,6 +2,7 @@ package chat
 
 import (
 	"testing"
+	"time"
 
 	"github.com/mrpoundsign/TownCrier/internal/config"
 )
@@ -255,3 +256,141 @@ func TestRouterNotificationEvents(t *testing.T) {
 		t.Errorf("unexpected gift redemption speech: %q", res.Text)
 	}
 }
+
+func TestRouterCoalesceConsecutiveMessages(t *testing.T) {
+	router := NewRouter()
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	router.SetClock(func() time.Time { return now })
+
+	cfg := config.DefaultConfig()
+	cfg.GlobalChatRules.SpeakNames = true
+	cfg.GlobalChatRules.SpeakPlatformName = true
+	cfg.GlobalChatRules.CoalesceConsecutiveSeconds = 20
+
+	msg1 := &Event{
+		Platform: "twitch",
+		UserID:   "u-alice",
+		UserName: "alice",
+		Kind:     EventKindMessage,
+		Text:     "hey everyone!",
+	}
+	res1 := router.Resolve(msg1, cfg)
+	if res1.Coalesced {
+		t.Errorf("expected first message not to be coalesced")
+	}
+	if res1.Text != "twitch, alice says: hey everyone!" {
+		t.Errorf("unexpected first message text: %q", res1.Text)
+	}
+
+	// Second message from same viewer 5s later -> coalesced (omits both platform and '<User> says:')
+	now = now.Add(5 * time.Second)
+	msg2 := &Event{
+		Platform: "twitch",
+		UserID:   "u-alice",
+		UserName: "alice",
+		Kind:     EventKindMessage,
+		Text:     "how is the stream going?",
+	}
+	res2 := router.Resolve(msg2, cfg)
+	if !res2.Coalesced {
+		t.Errorf("expected second message within 20s window to be coalesced")
+	}
+	if res2.Text != "how is the stream going?" {
+		t.Errorf("expected coalesced text 'how is the stream going?', got %q", res2.Text)
+	}
+
+	// Third message after window expires (25s after msg2) -> speaks platform and name again
+	now = now.Add(25 * time.Second)
+	msg3 := &Event{
+		Platform: "twitch",
+		UserID:   "u-alice",
+		UserName: "alice",
+		Kind:     EventKindMessage,
+		Text:     "i am back!",
+	}
+	res3 := router.Resolve(msg3, cfg)
+	if res3.Coalesced {
+		t.Errorf("expected message after window expiry not to be coalesced")
+	}
+	if res3.Text != "twitch, alice says: i am back!" {
+		t.Errorf("unexpected text after window expiry: %q", res3.Text)
+	}
+
+	// TouchSpeaker refreshes the window (e.g. when long speech finishes playing)
+	now = now.Add(15 * time.Second)
+	router.TouchSpeaker(msg3)
+	now = now.Add(10 * time.Second) // 25s since msg3 resolved, but only 10s since TouchSpeaker
+	msg4 := &Event{
+		Platform: "twitch",
+		UserID:   "u-alice",
+		UserName: "alice",
+		Kind:     EventKindMessage,
+		Text:     "still within touched window",
+	}
+	res4 := router.Resolve(msg4, cfg)
+	if !res4.Coalesced || res4.Text != "still within touched window" {
+		t.Errorf("expected message within touched window to coalesce, got coalesced=%v text=%q", res4.Coalesced, res4.Text)
+	}
+
+	// Interleaved message from another viewer breaks the streak
+	now = now.Add(2 * time.Second)
+	bobMsg := &Event{
+		Platform: "twitch",
+		UserID:   "u-bob",
+		UserName: "bob",
+		Kind:     EventKindMessage,
+		Text:     "hi alice",
+	}
+	resBob := router.Resolve(bobMsg, cfg)
+	if resBob.Coalesced || resBob.Text != "twitch, bob says: hi alice" {
+		t.Errorf("unexpected bob speech: %+v", resBob)
+	}
+
+	now = now.Add(2 * time.Second)
+	res5 := router.Resolve(msg2, cfg)
+	if res5.Coalesced || res5.Text != "twitch, alice says: how is the stream going?" {
+		t.Errorf("expected alice after bob to re-announce name, got coalesced=%v text=%q", res5.Coalesced, res5.Text)
+	}
+
+	// Interleaved notification alert (e.g. sub) also resets speaker streak
+	now = now.Add(2 * time.Second)
+	subEv := &Event{
+		Platform: "twitch",
+		UserID:   "u-charlie",
+		UserName: "charlie",
+		Kind:     EventKindSub,
+	}
+	_ = router.Resolve(subEv, cfg)
+
+	now = now.Add(2 * time.Second)
+	res6 := router.Resolve(msg2, cfg)
+	if res6.Coalesced {
+		t.Errorf("expected alice after sub alert not to be coalesced")
+	}
+
+	// ResetSpeaker explicitly clears continuation state
+	now = now.Add(2 * time.Second)
+	router.ResetSpeaker()
+	res7 := router.Resolve(msg2, cfg)
+	if res7.Coalesced {
+		t.Errorf("expected alice after ResetSpeaker() not to be coalesced")
+	}
+
+	// ResolveWithOptions(..., commitState=false) does not advance state until RecordSpoken is called
+	router.ResetSpeaker()
+	preview := router.ResolveWithOptions(msg1, cfg, false)
+	if preview.Coalesced {
+		t.Errorf("expected preview not to coalesce")
+	}
+	secondWithoutCommit := router.ResolveWithOptions(msg2, cfg, false)
+	if secondWithoutCommit.Coalesced {
+		t.Errorf("expected second ResolveWithOptions(commitState=false) not to coalesce when first was not committed")
+	}
+	router.RecordSpoken(msg1, cfg)
+	now = now.Add(3 * time.Second)
+	afterCommit := router.ResolveWithOptions(msg2, cfg, false)
+	if !afterCommit.Coalesced || afterCommit.Text != "how is the stream going?" {
+		t.Errorf("expected ResolveWithOptions after RecordSpoken to coalesce, got %+v", afterCommit)
+	}
+}
+

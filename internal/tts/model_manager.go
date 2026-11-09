@@ -52,23 +52,6 @@ var (
 	PiperArchiveSize   int64 = 36406088
 )
 
-// ModelFile holds metadata for a downloadable model component.
-type ModelFile struct {
-	Name   string
-	URL    string
-	SHA256 string // Optional SHA256 hex verification
-}
-
-// ModelManager manages discovery, verification, and downloading of neural TTS models.
-type ModelManager struct {
-	baseDir string
-}
-
-// NewModelManager creates a ModelManager for the specified base directory.
-func NewModelManager(baseDir string) *ModelManager {
-	return &ModelManager{baseDir: baseDir}
-}
-
 // DefaultModelDir resolves the target directory for Kokoro model files.
 // It places models in the user's local cache/app data directory (%LOCALAPPDATA% on Windows,
 // ~/.cache on Linux) to prevent multi-hundred-megabyte binary weights from bloating roaming profiles.
@@ -236,85 +219,6 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// VerifyFileChecksum computes the SHA-256 hash of a file and verifies it against expected.
-func VerifyFileChecksum(filePath string, expectedSHA256 string) (bool, error) {
-	if expectedSHA256 == "" {
-		return true, nil
-	}
-
-	f, err := os.Open(filePath)
-	if err != nil {
-		return false, fmt.Errorf("open file for checksum: %w", err)
-	}
-	defer func() {
-		_ = f.Close()
-	}()
-
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, f); err != nil {
-		return false, fmt.Errorf("hash file: %w", err)
-	}
-
-	computed := hex.EncodeToString(hasher.Sum(nil))
-	return computed == expectedSHA256, nil
-}
-
-// DownloadFile downloads a file from URL to destPath with atomic .part renaming and optional SHA-256 verification.
-func DownloadFile(url string, destPath string, expectedSHA256 string) (err error) {
-	destDir := filepath.Dir(destPath)
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("create dest directory: %w", err)
-	}
-
-	partPath := destPath + ".part"
-	partFile, err := os.Create(partPath)
-	if err != nil {
-		return fmt.Errorf("create part file: %w", err)
-	}
-	defer func() {
-		_ = partFile.Close()
-		if err != nil {
-			_ = os.Remove(partPath)
-		}
-	}()
-
-	resp, err := http.Get(url) //nolint:gosec // user model download URL
-	if err != nil {
-		return fmt.Errorf("fetch url %s: %w", url, err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download failed with HTTP status %d", resp.StatusCode)
-	}
-
-	hasher := sha256.New()
-	writer := io.MultiWriter(partFile, hasher)
-
-	if _, err := io.Copy(writer, resp.Body); err != nil {
-		return fmt.Errorf("write download data: %w", err)
-	}
-
-	if expectedSHA256 != "" {
-		computed := hex.EncodeToString(hasher.Sum(nil))
-		if computed != expectedSHA256 {
-			return fmt.Errorf("%w: expected %s, got %s", ErrChecksumMismatch, expectedSHA256, computed)
-		}
-	}
-
-	if err := partFile.Close(); err != nil {
-		return fmt.Errorf("close part file: %w", err)
-	}
-
-	if err := os.Rename(partPath, destPath); err != nil {
-		return fmt.Errorf("atomic rename part file: %w", err)
-	}
-
-	return nil
-}
-
 // DownloadProgressFunc reports progress during model downloads.
 type DownloadProgressFunc func(current, total int64)
 
@@ -346,11 +250,6 @@ func (p *progressHashReader) Read(buf []byte) (int, error) {
 		}
 	}
 	return n, err
-}
-
-// DownloadKokoroModel downloads and extracts any missing Kokoro model archives (FP32 + INT8) concurrently in parallel.
-func DownloadKokoroModel(destDir string, onProgress DownloadProgressFunc) error {
-	return DownloadKokoroModelForMode(destDir, true, onProgress)
 }
 
 // DownloadKokoroModelForMode downloads only the required Kokoro archive(s) for the requested execution mode.

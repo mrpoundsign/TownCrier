@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Features &amp; Configuration Guide | TownCrier</title>
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="site-header">
+      <a class="brand" href="index.html">
+        <img src="icon.png" alt="TownCrier Logo" width="56" height="56" fetchpriority="high">
+        <div>
+          <div class="brand-title">TownCrier</div>
+          <div class="brand-subtitle">Offline Neural TTS &amp; Multi-Platform Livestream Chat Aggregator</div>
+        </div>
+      </a>
+      <div class="header-actions">
+        <a class="btn" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Download Latest Release</a>
+        <a class="btn btn-secondary" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </div>
+    </header>
+
+    <div class="docs-layout">
+      <aside class="sidebar">
+        <nav aria-label="Documentation">
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Documentation</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="index.html">Overview &amp; Home</a></li>
+              <li>
+                <a class="sidebar-link" href="features.html" aria-current="page">Features &amp; Config Guide</a>
+                <ul class="sidebar-subnav" role="list">
+                  <li><a class="sidebar-sublink" href="#dashboard">1. Dashboard &amp; Header</a></li>
+                  <li><a class="sidebar-sublink" href="#general-audio">2. General &amp; Audio</a></li>
+                  <li><a class="sidebar-sublink" href="#backups">3. Backups &amp; Snapshots</a></li>
+                  <li><a class="sidebar-sublink" href="#tts-hardware">4. TTS &amp; Hardware</a></li>
+                  <li><a class="sidebar-sublink" href="#rules-safety">5. Rules &amp; Safety</a></li>
+                  <li><a class="sidebar-sublink" href="#platforms">6. Platform Tabs</a></li>
+                  <li><a class="sidebar-sublink" href="#viewers">7. Viewers &amp; Voices</a></li>
+                  <li><a class="sidebar-sublink" href="#logs-search">8. Live Logs &amp; Search</a></li>
+                  <li><a class="sidebar-sublink" href="#streamdeck-api">9. Stream Deck &amp; API</a></li>
+                </ul>
+              </li>
+              <li><a class="sidebar-link" href="translation-guides.html">Translation Setup Guides</a></li>
+            </ul>
+          </div>
+
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Legal &amp; Policies</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="privacy.html">Privacy Policy</a></li>
+              <li><a class="sidebar-link" href="terms.html">Terms of Service</a></li>
+            </ul>
+          </div>
+
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Project</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub Repository &#8599;</a></li>
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Releases &amp; Installer &#8599;</a></li>
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">Report an Issue &#8599;</a></li>
+            </ul>
+          </div>
+        </nav>
+      </aside>
+
+      <div class="content-column">
+        <main>
+          <div class="page-title-banner">
+            <h1>Features &amp; Configuration Guide</h1>
+            <p>Where every feature lives in TownCrier and how to configure your setup for streaming.</p>
+          </div>
+
+          <!-- 1. Dashboard & Top Header -->
+          <section id="dashboard" class="card">
+            <span class="badge">Live Control</span>
+            <h2>1. Dashboard, Header Bar &amp; Emergency Controls</h2>
+            <div class="path-pill">Location: Top Header Bar &bull; Dashboard Tab &bull; Bottom Status Bar</div>
+            <p>
+              The <strong>Dashboard</strong> is your real-time command center while live on stream, paired with global header and status bar controls visible from every tab:
+            </p>
+            <h3>Top Application Header</h3>
+            <ul>
+              <li><strong>Platform Status Badges:</strong> Vector indicator pills for <strong>Twitch</strong>, <strong>YouTube</strong>, <strong>TikTok</strong>, and <strong>Kick</strong> illuminate as each service connects and detects an active broadcast. Hover over any badge to view connection details.</li>
+              <li><strong>TTS Output Mode Selector:</strong> Quickly switch between <strong>Always On</strong>, <strong>Auto-AFK</strong> (speaks only when your keyboard/mouse has been idle), and <strong>Always Off</strong>, or press <kbd>Ctrl+Shift+T</kbd> from any game or window.</li>
+              <li><strong>Master Volume Slider:</strong> Adjust playback gain in real time from <code>0%</code> to <code>200%</code> without leaving your current tab.</li>
+              <li><strong>Update Indicator (<code>&#11014; Update</code>):</strong> Appears automatically when a new GitHub Release is available. If a broadcast is currently live, TownCrier suppresses modal prompts so your stream is never interrupted.</li>
+            </ul>
+            <h3>Dashboard Speech Queue &amp; Recent Chatters</h3>
+            <ul>
+              <li><strong>Now Speaking &amp; Queue Controls:</strong> Displays the currently speaking message, active voice ID, and pending queue depth, with 1-click buttons to <strong>Pause / Resume Queue</strong>, <strong>Skip Current</strong>, or <strong>Clear Queue</strong>.</li>
+              <li><strong>Recent Spoken Messages &amp; <code>文A</code> Toggle:</strong> Shows the most recent spoken events. When foreign chat translation is active, click the <code>文A</code> button in the card header to toggle between translated speech text and the chatter's original language.</li>
+              <li><strong>Quick Voice Assignment:</strong> Click <strong>Assign Voice</strong> next to any chatter in the recent list to immediately customize their personal voice or playback speed.</li>
+            </ul>
+            <h3>Bottom Status Bar &amp; Panic Mute</h3>
+            <ul>
+              <li><strong>Emergency Panic Mute (<kbd>Esc</kbd> / <kbd>Ctrl+Shift+M</kbd>):</strong> Clicking the red <strong>PANIC MUTE</strong> button (or pressing <kbd>Esc</kbd> inside the app or <kbd>Ctrl+Shift+M</kbd> globally) zeroes the WASAPI audio buffer in under 50 microseconds and flushes the speech queue. Click <strong>UNMUTE</strong> (or press the hotkey again) to resume.</li>
+            </ul>
+          </section>
+
+          <!-- 2. General & Audio -->
+          <section id="general-audio" class="card">
+            <span class="badge">Core Setup</span>
+            <h2>2. Application Features, Audio Output &amp; General Settings</h2>
+            <div class="path-pill">Location: Settings &rarr; General &amp; Audio</div>
+            <p>
+              All core subsystem toggles, audio output routing, default voices, and UI scaling live in the first Settings sub-tab:
+            </p>
+            <h3>Application Features Card</h3>
+            <ul>
+              <li><strong>Enable Text-to-Speech (TTS):</strong> Uncheck to run TownCrier as a lightweight, chat-only aggregator and logger (&lt;40 MB RAM, &lt;100ms startup) without loading ONNX voice models.</li>
+              <li><strong>Enable Event Logging:</strong> Toggle local SQLite chat/event recording and the <strong>Logs</strong> navigation tab.</li>
+              <li><strong>Enable Foreign Chat Translation (Beta):</strong> Shows the <strong>Settings &rarr; Translation</strong> sub-tab and translates non-target-language chat messages before speaking. (See the <a href="translation-guides.html">Translation Setup Guides</a> for provider walkthroughs.)</li>
+              <li><strong>Check for TownCrier updates on startup:</strong> Queries GitHub Releases asynchronously on launch and verifies SHA-256 checksums before applying updates.</li>
+            </ul>
+            <h3>TTS Output Mode, Auto-AFK &amp; Inactive Alert Sounds</h3>
+            <ul>
+              <li><strong>Output Mode:</strong> Choose <strong>Always On</strong>, <strong>Auto-AFK (Speak When Idle)</strong>, or <strong>Always Off (Muted)</strong>.</li>
+              <li><strong>AFK Idle Timeout:</strong> Set how long your keyboard and mouse must be untouched (<code>15s</code>, <code>30s</code>, <code>1m</code>, <code>2m</code>, <code>5m</code>, or <code>10m</code>) before <strong>Auto-AFK</strong> activates speech. Moving the mouse or pressing a key immediately silences playback and flushes queued chat.</li>
+              <li><strong>Play notification sound when TTS is inactive:</strong> Plays a built-in harmonic chime or a custom <code>.wav</code> / <code>.mp3</code> file (with a 3-second anti-spam cooldown) whenever a qualifying message arrives while TTS is muted or while you are active at your desk in Auto-AFK mode.</li>
+            </ul>
+            <h3>Audio Output Device &amp; Global Default Voice</h3>
+            <ul>
+              <li><strong>Playback Device:</strong> Select any Windows WASAPI or Linux audio sink (such as <em>VB-Audio Virtual Cable</em> or <em>Wave Link</em>) so OBS Studio can capture TownCrier on an isolated audio track. Click <strong>Refresh Devices</strong> after plugging in headsets or virtual cables.</li>
+              <li><strong>Global Default Voice &amp; Speed:</strong> Choose the default fallback voice and speech rate (<code>0.50x</code> to <code>2.00x</code>) used whenever a chatter or platform does not have a specific voice override. Click the speaker icon to hear a sample phrase.</li>
+            </ul>
+            <h3>Streaming Services, Known Bots &amp; Display Scaling</h3>
+            <ul>
+              <li><strong>Streaming Services Card:</strong> Check or uncheck <strong>Twitch</strong>, <strong>YouTube</strong>, <strong>TikTok</strong>, or <strong>Kick</strong> to show or hide their configuration tabs in the interface.</li>
+              <li><strong>Bot Filtering Card:</strong> Toggle <strong>Ignore known stream bots</strong> (built-in list of common bots like <code>Nightbot</code>, <code>StreamElements</code>, <code>Fossabot</code>, <code>Moobot</code>, <code>Sery_Bot</code>, etc.) and add or remove custom bot usernames.</li>
+              <li><strong>Display &amp; Scaling Card:</strong> Lock interface DPI zoom with <strong>UI Scale</strong> (<code>Auto (System Default)</code>, <code>80%</code>, <code>90%</code>, <code>100%</code>, <code>110%</code>, <code>125%</code>, <code>150%</code>, or <code>175%</code>).</li>
+            </ul>
+          </section>
+
+          <!-- 3. Backups, Selective Import & Schema Snapshots -->
+          <section id="backups" class="card">
+            <span class="badge">Portability &amp; Recovery</span>
+            <h2>3. Portable <code>.zip</code> Backups, Selective Import &amp; Schema Snapshots</h2>
+            <div class="path-pill">Location: Settings &rarr; General &amp; Audio &rarr; Backup, Restore &amp; Migration</div>
+            <p>
+              TownCrier uses a unified <code>.zip</code> backup workflow so you can migrate across PCs, share a setup with another streamer, temporarily load someone else's backup to test or inspect their settings and restore your own afterward, or roll back across version updates:
+            </p>
+            <h3>How to Export a Backup (<code>Export Backup&hellip;</code>)</h3>
+            <ol>
+              <li>Open <strong>Settings &rarr; General &amp; Audio</strong>, scroll to <strong>Backup, Restore &amp; Migration</strong>, and click <strong>Export Backup&hellip;</strong>.</li>
+              <li>Choose which components to include in the archive:
+                <ul>
+                  <li><strong>Configuration &amp; Chatter Profiles (<code>config-backup.json</code>):</strong> <em>Checked by default.</em> Exports all chatter voice profiles, blocked words, custom bots, chat rules, platform alert templates, and Live Log tabs. OAuth tokens, WebSocket tokens, and translation API keys are automatically scrubbed.</li>
+                  <li><strong>Event Log &amp; Chat History Database (<code>events.db</code>):</strong> <em>Checked by default.</em> Creates a consistent, WAL-checkpointed SQLite snapshot of your chat history and broadcast sessions.</li>
+                  <li><strong>Application Log (<code>towncrier.log</code>):</strong> <em>Unchecked by default.</em> Check this only if you want to include diagnostic log output for troubleshooting.</li>
+                </ul>
+              </li>
+              <li>Optionally type a note in the notes field (saved as <code>support-notes.txt</code> inside the archive) and click <strong>Create Backup (.zip)&hellip;</strong>.</li>
+              <li>Save the file—by default named <code>towncrier-backup-YYYY-MM-DD-HHMMSS-v&lt;version&gt;.zip</code> (for example, <code>towncrier-backup-2026-11-08-190046-v0.0.9.zip</code>).</li>
+            </ol>
+            <h3>How to Import a Backup or Swap Profiles (<code>Import Backup&hellip;</code>)</h3>
+            <ol>
+              <li>Click <strong>Import Backup&hellip;</strong> and select any TownCrier <code>.zip</code> archive (or standalone <code>.json</code> config backup).</li>
+              <li>Review the summary banner showing the archive version, export timestamp, chatter profile count, blocked word count, configured platforms, and whether an <code>events.db</code> database is included.</li>
+              <li>If importing <strong>Configuration &amp; Chatter Profiles</strong>, choose your <strong>Configuration Mode</strong>:
+                <ul>
+                  <li><strong>Selective Merge (Default &amp; Recommended):</strong> Combines the selected categories (<em>Chatter Voice &amp; Speed Overrides</em>, <em>Blocked Words &amp; Custom Bot Lists</em>, <em>Global Chat Rules &amp; Platform Alert Templates</em>, <em>Live Log Filter Presets</em>, and <em>Translation Preferences</em>) into your existing settings without wiping your current setup.</li>
+                  <li><strong>Full Restore:</strong> Replaces your active configuration with the backup (after automatically saving a timestamped snapshot of your current <code>config.json</code> so you can roll back anytime).</li>
+                </ul>
+              </li>
+              <li>Keep <strong>&ldquo;Preserve this PC's audio output device, hardware preset &amp; local file paths&rdquo;</strong> checked when importing a backup created on another computer so your local WASAPI playback device, DirectML GPU toggle, and local alert sound paths keep working on your machine.</li>
+              <li>If the <code>.zip</code> contains <code>events.db</code>, check or uncheck <strong>Restore Event Log &amp; Chat History Database</strong>. Restoring <code>events.db</code> automatically backs up your current database first before swapping it in place.</li>
+              <li>Click <strong>Import &amp; Apply Backup</strong>. All tabs, voices, and Live Logs update immediately without restarting the app.</li>
+            </ol>
+            <div class="callout">
+              <p><strong>Tip — Testing Another User's Backup:</strong> Click <strong>Export Backup&hellip;</strong> to save your own <code>.zip</code> first, then use <strong>Import Backup&hellip;</strong> in <strong>Full Restore</strong> mode to load your friend's or partner's <code>.zip</code>. When you finish inspecting or testing their setup, simply import your own <code>.zip</code> (or restore your snapshot from <strong>Schema Snapshots&hellip;</strong>) to return to your exact setup.</p>
+            </div>
+            <h3>Migrating Your Config &amp; Chat History to a New PC</h3>
+            <p>
+              To move your entire TownCrier setup—including all chatter voice overrides, alert templates, blocked words, custom bots, Live Log tabs, and historical chat database—from one computer to another:
+            </p>
+            <ol>
+              <li><strong>On Your Old PC:</strong> Open <strong>Settings &rarr; General &amp; Audio</strong>, click <strong>Export Backup&hellip;</strong>, leave both <strong>Configuration &amp; Chatter Profiles (<code>config-backup.json</code>)</strong> and <strong>Event Log &amp; Chat History Database (<code>events.db</code>)</strong> checked, and save the <code>towncrier-backup-YYYY-MM-DD-HHMMSS-v&lt;version&gt;.zip</code> file to a USB drive, network share, or cloud folder.</li>
+              <li><strong>On Your New PC (Install &amp; Import):</strong> Install and launch TownCrier, open <strong>Settings &rarr; General &amp; Audio</strong>, click <strong>Import Backup&hellip;</strong>, and select your <code>.zip</code> archive:
+                <ul>
+                  <li>Set <strong>Configuration Mode</strong> to <strong>Full Restore (Replace settings with backup)</strong>.</li>
+                  <li>Leave <strong>&ldquo;Preserve this PC's audio output device, hardware preset &amp; local file paths&rdquo;</strong> checked so TownCrier does not point at a WASAPI audio device ID or file path that only existed on your old PC.</li>
+                  <li>Leave <strong>Restore Event Log &amp; Chat History Database (<code>events.db</code>)</strong> checked so all past broadcast sessions and FTS5 search history transfer over.</li>
+                  <li>Click <strong>Import &amp; Apply Backup</strong>.</li>
+                </ul>
+              </li>
+              <li><strong>Post-Migration Checklist on the New PC:</strong>
+                <ul>
+                  <li><strong>Select Your Audio Output Device:</strong> In <strong>Settings &rarr; General &amp; Audio</strong>, pick the playback device (e.g., virtual audio cable) on the new PC.</li>
+                  <li><strong>Download Voice Packs Used by Your Profiles:</strong> Open <strong>Settings &rarr; TTS &amp; Hardware</strong> and check any additional voice packs (such as <em>Kokoro-82M</em> or <em>Piper LibriTTS</em>) that your chatter profiles use so TownCrier downloads the model weights onto the new PC.</li>
+                  <li><strong>Reconnect Platform OAuth &amp; API Keys:</strong> Because OAuth tokens and translation API keys are stored in each machine's local OS keyring and scrubbed from backups for security, click <strong>Connect with Twitch / YouTube (OAuth)</strong> on your platform tabs and re-enter any translation API keys in <strong>Settings &rarr; Translation</strong>.</li>
+                </ul>
+              </li>
+            </ol>
+            <h3>Automatic Schema Snapshots &amp; Downgrade Recovery (<code>Schema Snapshots&hellip;</code>)</h3>
+            <ul>
+              <li>Whenever TownCrier upgrades its configuration schema or SQLite database schema—or before you apply a Full Restore—it automatically writes a versioned backup in your data directory:
+                <ul>
+                  <li>Config snapshots: <code>config.YYYY-MM-DD-HHMMSS-v&lt;schemaVersion&gt;.json</code></li>
+                  <li>Database snapshots: <code>events.YYYY-MM-DD-HHMMSS-v&lt;schemaVersion&gt;.db</code></li>
+                </ul>
+              </li>
+              <li>Click <strong>Schema Snapshots&hellip;</strong> at any time to view all saved configuration and database snapshots and restore any snapshot with one click.</li>
+              <li><strong>Automatic Downgrade Detection:</strong> If you ever install an older version of TownCrier after running a newer release, TownCrier detects on startup that the on-disk schema version is newer than supported and offers a one-click restore of your compatible pre-upgrade snapshot.</li>
+            </ul>
+          </section>
+
+          <!-- 4. TTS & Hardware -->
+          <section id="tts-hardware" class="card">
+            <span class="badge">Neural Engine</span>
+            <h2>4. Neural Voice Packs, Performance Presets &amp; Hardware Acceleration</h2>
+            <div class="path-pill">Location: Settings &rarr; TTS &amp; Hardware</div>
+            <p>
+              Configure which offline neural TTS voice packs are loaded into memory and tune CPU/GPU resource consumption:
+            </p>
+            <h3>Performance Presets &amp; Impact Meters</h3>
+            <ul>
+              <li>Select a one-click preset—<strong>Ultra-Low Resource</strong> (Kitten Nano), <strong>Fast &amp; Lean</strong> (Supertonic default), <strong>Studio Quality</strong> (Kokoro-82M), <strong>Crowd Mode</strong> (Piper 904-speaker catalog), or <strong>Full Arsenal</strong> (all models)—or toggle individual voice packs manually to switch to <strong>Custom</strong>.</li>
+              <li>Real-time stacked impact bars display estimated <strong>Process RAM</strong>, <strong>CPU Inference Math</strong>, and <strong>DirectML GPU Acceleration</strong> for your selected combination.</li>
+            </ul>
+            <h3>Voice Model Packs &amp; Guided Voice Replacement Wizard</h3>
+            <ul>
+              <li><strong>Available Packs:</strong> <em>Supertonic</em> (10 voices), <em>Kokoro-82M</em> (34 US/UK voices, DirectML GPU support), <em>Kokoro International</em> (25 multilingual voices for Japanese, Mandarin, Spanish, French, Hindi, Italian, and Brazilian Portuguese), <em>Kitten Mini</em> (8 voices), <em>Kitten Nano</em> (8 voices), and <em>Piper LibriTTS-High</em> (904 voices).</li>
+              <li><strong>Guided Replacement Voice Assignment Wizard:</strong> If you uncheck a voice pack (or select a preset that disables a pack) while any chatter profile, platform default, or stream alert is still assigned to a voice from that pack, TownCrier opens an interactive wizard listing every affected assignment so you can bulk-reassign them, preview replacement voices, or clear overrides before the pack is unloaded.</li>
+            </ul>
+            <h3>Hardware Acceleration &amp; Idle Memory Unloading</h3>
+            <ul>
+              <li><strong>Use GPU Acceleration (DirectML):</strong> Runs Kokoro FP32 (<code>model.onnx</code>) on any DirectX 12 compatible GPU on Windows, automatically falling back to multi-threaded INT8 CPU execution (<code>model.int8.onnx</code>) if unavailable.</li>
+              <li><strong>CPU Threads Slider:</strong> Controls how many CPU threads ONNX Runtime uses for speech synthesis.</li>
+              <li><strong>Unload Idle Models After:</strong> Automatically releases ONNX model weights from RAM after a period of chat inactivity and transparently reloads them on the next message.</li>
+            </ul>
+          </section>
+
+          <!-- 5. Rules & Safety -->
+          <section id="rules-safety" class="card">
+            <span class="badge">Moderation &amp; Filtering</span>
+            <h2>5. Global Chat Rules, Global Hotkeys &amp; Profanity Safety</h2>
+            <div class="path-pill">Location: Settings &rarr; Rules &amp; Safety</div>
+            <p>
+              Define default chat reading rules (which all platforms inherit unless overridden), global keyboard shortcuts, and blocked word lists:
+            </p>
+            <h3>Global Chat Rules</h3>
+            <ul>
+              <li><strong>Speak Chatter Names:</strong> Prepends <code>"&lt;Username&gt; says:"</code> when speaking chat messages (automatically omitted if the same chatter speaks consecutively within a short window).</li>
+              <li><strong>Speak Platform Name:</strong> Includes the streaming service name (e.g., <code>"Alice on Twitch says:"</code>) when multi-streaming.</li>
+              <li><strong>Speak Emotes &amp; Emojis:</strong> Reads emote names and Unicode emoji descriptions aloud; uncheck to strip emotes silently from speech.</li>
+              <li><strong>Deduplicate Emotes:</strong> Collapses repeated emotes in a single message (e.g., <code>Kappa Kappa Kappa</code> is spoken once as <code>Kappa</code>).</li>
+              <li><strong>Max Duplicate Words:</strong> Limits consecutive repeated words or copypasta spam (<code>Allow All</code>, <code>Max 1 (No Repeats)</code>, <code>Max 2</code>, <code>Max 3</code>, or <code>Max 5</code>).</li>
+              <li><strong>Ignore @Mentions &amp; Replies:</strong> Skip chatters conversing with each other so TTS only reads messages meant for the stream:
+                <ul>
+                  <li><code>Off (Speak All Messages)</code></li>
+                  <li><code>Ignore Thread Replies Only</code></li>
+                  <li><code>Ignore Thread Replies &amp; Leading @Mentions</code></li>
+                  <li><code>Ignore All @Mentions &amp; Thread Replies</code></li>
+                </ul>
+                When enabled, you can check <strong>Always speak @mentions of the broadcaster's own channel name</strong> and <strong>Play notification alert sound when a message is skipped by @mention/reply filter</strong>.
+              </li>
+            </ul>
+            <h3>Global Hotkeys &amp; Profanity Filter</h3>
+            <ul>
+              <li><strong>Emergency Panic Mute Hotkey:</strong> Click <strong>Record Hotkey</strong> to bind any modifier + key combination (default <kbd>Ctrl+Shift+M</kbd>).</li>
+              <li><strong>TTS Output Mode Toggle Hotkey:</strong> Cycles <code>Always On &rarr; Auto-AFK &rarr; Always Off</code> from anywhere (default <kbd>Ctrl+Shift+T</kbd>).</li>
+              <li><strong>Profanity &amp; Blocked Words:</strong> Check <strong>Block common profanity &amp; slurs (default filter)</strong> and add custom blocked words or phrases below. Any message matching a blocked word is dropped from TTS and recorded as filtered in Event Logs.</li>
+            </ul>
+          </section>
+
+          <!-- 6. Platform Tabs -->
+          <section id="platforms" class="card">
+            <span class="badge">Stream Connections</span>
+            <h2>6. Platform Connections, Rule Overrides &amp; Alert Templates</h2>
+            <div class="path-pill">Location: Settings &rarr; Twitch &bull; YouTube &bull; TikTok &bull; Kick</div>
+            <p>
+              Each enabled streaming platform has its own dedicated Settings sub-tab:
+            </p>
+            <h3>Connecting Each Platform</h3>
+            <ul>
+              <li><strong>Twitch:</strong> Enter your channel name and click <strong>Enable Twitch</strong> for instant zero-login IRC chat, or click <strong>Connect with Twitch (OAuth)</strong> to unlock full EventSub alerts (Subscriptions, Resubs, Gift Subs, Bits, Raids, Follows, Watch Streaks, Sub Upgrades, Channel Point Redemptions, Charity Donations, Announcements), Twitch AutoMod queue moderation, and inline chat moderation.</li>
+              <li><strong>YouTube Live:</strong> Enter your channel <code>@handle</code>, channel URL, or live video URL and click <strong>Enable YouTube</strong> (no API key required for public streams). Optionally click <strong>Connect YouTube (OAuth)</strong> to enable inline chat moderation (delete/timeout/ban) and automatic detection of private or unlisted test broadcasts.</li>
+              <li><strong>TikTok Live:</strong> Enter your <code>@username</code> and click <strong>Enable TikTok</strong> to read live chat, follows, shares, Super Fan subscriptions, and grouped gift combos.</li>
+              <li><strong>Kick:</strong> Enter your Kick channel slug and click <strong>Enable Kick</strong> to read live chat, subscriptions, gifted subscriptions, reward redemptions, and live moderation events.</li>
+            </ul>
+            <h3>Granular Per-Setting Override Pulldowns</h3>
+            <ul>
+              <li>Every chat rule on a platform tab features an individual pulldown set to <code>Use Global (...)</code> by default. Switch any individual rule (such as <em>Speak Platform Name</em> or <em>Ignore @Mentions &amp; Replies</em>) to <code>Override: ...</code> without affecting the rest of your global rules.</li>
+              <li>Optionally enable a <strong>Platform Default Voice Override</strong> so all chatters on that platform use a distinct default voice and speed.</li>
+            </ul>
+            <h3>Stream Event Alert Templates &amp; Voices</h3>
+            <ul>
+              <li>Toggle individual event types (Subs, Resubs, Gift Subs, Bits / Super Chats / Gifts, Raids, Follows, Redemptions, Charity, etc.), customize the spoken template string using placeholders like <code>{user}</code>, <code>{amount}</code>, <code>{tier}</code>, <code>{months}</code>, <code>{viewers}</code>, <code>{recipient}</code>, and <code>{message}</code> (click the <code>{?}</code> button next to any template for a clickable reference of variables), and assign a dedicated voice and speed per alert type.</li>
+            </ul>
+          </section>
+
+          <!-- 7. Viewers Tab -->
+          <section id="viewers" class="card">
+            <span class="badge">Chatter Profiles</span>
+            <h2>7. Viewers &amp; Chatter Voice Management</h2>
+            <div class="path-pill">Location: Viewers Navigation Tab</div>
+            <p>
+              Give regular chatters their own signature voice or manage per-viewer moderation overrides in the top-level <strong>Viewers</strong> tab:
+            </p>
+            <ul>
+              <li><strong>Multi-Platform Search &amp; Filtering:</strong> Search by username or filter by platform (<code>All</code>, <code>Twitch</code>, <code>YouTube</code>, <code>TikTok</code>, <code>Kick</code>).</li>
+              <li><strong>Custom Voice &amp; Speed Assignment:</strong> Select any voice from your enabled voice packs and set a custom playback speed for that specific viewer.</li>
+              <li><strong>Local TTS Mute:</strong> Silence a specific chatter from TTS synthesis while leaving them unbanned in your stream chat.</li>
+              <li><strong>Per-Viewer Bot Override:</strong> Override the global bot matcher per user with <code>Default</code>, <code>Always Allow (Not a Bot)</code>, or <code>Always Ignore (Treat as Bot)</code>.</li>
+            </ul>
+          </section>
+
+          <!-- 8. Live Logs, Pop-Outs & Search History -->
+          <section id="logs-search" class="card">
+            <span class="badge">Chat Feed &amp; Database</span>
+            <h2>8. Centralized Live Logs, Pop-Out Overlays &amp; Search History</h2>
+            <div class="path-pill">Location: Logs Navigation Tab &bull; Settings &rarr; Event Logs</div>
+            <p>
+              The <strong>Logs</strong> tab combines a multi-platform live chat monitor with an instant full-text historical search engine:
+            </p>
+            <h3>Live Logs &amp; Streamlined Pop-Out Windows (<code>Logs &rarr; Live Logs</code>)</h3>
+            <ul>
+              <li><strong>Custom Filter Tabs (<code>+</code>):</strong> Create multiple customized Live Log tabs (for example, <em>All Chat</em>, <em>Alerts &amp; Subs Only</em>, or <em>Twitch + YouTube</em>) filtered by platform, event kind, spoken/dropped status, or current broadcast session.</li>
+              <li><strong>Independent Chat Font Scaling:</strong> Adjust chat readability with 1-click zoom presets (<code>80%</code>, <code>100%</code>, <code>125%</code>, <code>150%</code>) or a custom percentage slider.</li>
+              <li><strong>Pop-Out Overlay Windows:</strong> Click <strong>Pop Out</strong> to open a floating, distraction-free chat window showing only the live feed and sticky stream metrics—ideal for a vertical secondary monitor or OBS Window Capture.</li>
+              <li><strong>Inline Moderation &amp; AutoMod Queue:</strong> Click moderation icons directly on any chat row to Delete, Timeout, Ban (Twitch &amp; YouTube OAuth), Local TTS Mute, or Assign Voice, and approve/deny held messages in the Twitch AutoMod banner.</li>
+            </ul>
+            <h3>FTS5 Search History &amp; Data Retention (<code>Logs &rarr; Search History</code> &amp; <code>Settings &rarr; Event Logs</code>)</h3>
+            <ul>
+              <li><strong>Instant Trigram Search:</strong> Search across your entire local SQLite history by keyword, username, broadcast session(s), calendar date range, platform, or event outcome.</li>
+              <li><strong>Database Retention Policy:</strong> Open <strong>Settings &rarr; Event Logs</strong> to configure automatic pruning by maximum age in days or maximum row count, or run a manual prune at any time.</li>
+            </ul>
+          </section>
+
+          <!-- 9. Elgato Stream Deck & Control API -->
+          <section id="streamdeck-api" class="card">
+            <span class="badge">Hardware &amp; Automation</span>
+            <h2>9. Elgato Stream Deck Plugin &amp; Local Control API</h2>
+            <div class="path-pill">Location: Settings &rarr; General &amp; Audio &rarr; Stream Deck &amp; WebSocket Control Server</div>
+            <p>
+              Control TownCrier from hardware macro pads, Streamer.bot, Touch Portal, or custom scripts:
+            </p>
+            <ul>
+              <li><strong>1-Click Elgato Stream Deck Installer:</strong> Click <strong>Install / Update Elgato Stream Deck Plugin</strong> in <strong>Settings &rarr; General &amp; Audio</strong> to install the native plugin (<code>com.github.mrpoundsign.towncrier.sdPlugin</code>) with 5 actions: <em>TTS Output Mode</em>, <em>Emergency Panic Mute</em>, <em>Speech Queue Control</em>, <em>Custom TTS Announcement</em>, and <em>Master Volume</em> (including Stream Deck + rotary dial support).</li>
+              <li><strong>Dual-Mode WebSocket &amp; HTTP REST Server:</strong> Runs locally on <code>127.0.0.1:8765</code> by default (configurable host, port, and optional Bearer auth token), supporting binary Protocol Buffers (<code>/ws?format=protobuf</code>), JSON WebSocket (<code>/ws</code>), and REST endpoints (<code>/api/status</code>, <code>/api/speak</code>, <code>/api/mode</code>, <code>/api/panic</code>, <code>/api/queue</code>, <code>/api/volume</code>).</li>
+            </ul>
+          </section>
+        </main>
+
+        <footer>
+          <div>&copy; TownCrier Open Source Project. Licensed under GNU AGPLv3.</div>
+          <nav aria-label="Footer">
+            <a href="index.html">Home</a>
+            <a href="features.html">Features &amp; Config Guide</a>
+            <a href="translation-guides.html">Translation Guides</a>
+            <a href="privacy.html">Privacy Policy</a>
+            <a href="terms.html">Terms of Service</a>
+            <a href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>
+          </nav>
+        </footer>
+      </div>
+    </div>
+  </div>
+  <script src="site.js" defer></script>
+</body>
+</html>

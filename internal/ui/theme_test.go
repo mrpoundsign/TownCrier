@@ -4,8 +4,6 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2/theme"
-
-	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
 func TestObsidianThemeColors(t *testing.T) {
@@ -90,15 +88,6 @@ func TestChatScaleHelpers(t *testing.T) {
 	}
 	if got := ParseCustomChatScaleInput("invalid", 125); got != 125 {
 		t.Errorf("expected fallback 125, got %d", got)
-	}
-
-	pInherit := config.LiveLogPreset{ChatScale: 0}
-	if got := EffectivePresetChatScale(pInherit, 150); got != 150 {
-		t.Errorf("expected inherited 150, got %d", got)
-	}
-	pOverride := config.LiveLogPreset{ChatScale: 200}
-	if got := EffectivePresetChatScale(pOverride, 150); got != 200 {
-		t.Errorf("expected override 200, got %d", got)
 	}
 }
 

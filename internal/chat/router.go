@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/mrpoundsign/TownCrier/internal/config"
 )
@@ -14,19 +16,151 @@ type ResolvedSpeech struct {
 	VoiceID     string
 	Speed       float32
 	SpeakEmotes bool
+	Coalesced   bool
 	Event       *Event
 }
 
-// Router coordinates voice resolution and text formatting across global and platform rules.
-type Router struct{}
+// Router coordinates voice resolution, text formatting, and consecutive-speaker coalescing across global and platform rules.
+type Router struct {
+	mu             sync.Mutex
+	nowFn          func() time.Time
+	lastSpeakerKey string
+	lastSpokenName string
+	lastSpeakerAt  time.Time
+}
 
 // NewRouter creates a new speech router.
 func NewRouter() *Router {
-	return &Router{}
+	return &Router{
+		nowFn: time.Now,
+	}
 }
 
-// Resolve applies the 4-tier voice resolution hierarchy and formatting rules to an event.
+// SetClock overrides the time source used for consecutive-speaker coalescing windows (useful for unit tests).
+func (r *Router) SetClock(fn func() time.Time) {
+	if fn == nil {
+		fn = time.Now
+	}
+	r.mu.Lock()
+	r.nowFn = fn
+	r.mu.Unlock()
+}
+
+func (r *Router) now() time.Time {
+	r.mu.Lock()
+	fn := r.nowFn
+	r.mu.Unlock()
+	if fn == nil {
+		return time.Now()
+	}
+	return fn()
+}
+
+// ResetSpeaker clears any active consecutive-speaker continuation state (e.g. on Panic Mute, mode toggle, or session reset).
+func (r *Router) ResetSpeaker() {
+	r.mu.Lock()
+	r.lastSpeakerKey = ""
+	r.lastSpokenName = ""
+	r.lastSpeakerAt = time.Time{}
+	r.mu.Unlock()
+}
+
+// SpeakerKey returns the canonical lowercased "platform:userid" (or username fallback) speaker key for an event.
+func SpeakerKey(event *Event) string {
+	if event == nil {
+		return ""
+	}
+	idOrName := strings.TrimSpace(event.UserID)
+	if idOrName == "" {
+		idOrName = strings.TrimSpace(event.UserName)
+	}
+	if idOrName == "" {
+		idOrName = strings.TrimSpace(event.DisplayName)
+	}
+	idOrName = strings.TrimLeft(idOrName, "@")
+	if idOrName == "" {
+		return ""
+	}
+	return config.ViewerKey(event.Platform, idOrName)
+}
+
+func resolveSpokenName(event *Event, cfg *config.Config) string {
+	if event == nil {
+		return ""
+	}
+	var viewerNickname string
+	if cfg != nil && len(cfg.Viewers) > 0 {
+		if v, ok := config.LookupViewer(cfg.Viewers, event.Platform, event.UserID, event.UserName); ok {
+			viewerNickname = v.Nickname
+		}
+	}
+	spokenName := viewerNickname
+	if spokenName == "" {
+		spokenName = event.DisplayName
+	}
+	if spokenName == "" {
+		spokenName = event.UserName
+	}
+	return strings.TrimLeft(strings.TrimSpace(spokenName), "@")
+}
+
+func (r *Router) recordSpokenLocked(event *Event, speakNames bool, spokenName string, now time.Time) {
+	if event != nil && event.Kind == EventKindMessage && speakNames && spokenName != "" && strings.TrimSpace(event.Text) != "" {
+		if spKey := SpeakerKey(event); spKey != "" {
+			r.lastSpeakerKey = spKey
+			r.lastSpokenName = spokenName
+			r.lastSpeakerAt = now
+			return
+		}
+	}
+	r.lastSpeakerKey = ""
+	r.lastSpokenName = ""
+	r.lastSpeakerAt = time.Time{}
+}
+
+// RecordSpoken updates the consecutive-speaker continuation state after an event has passed all filters and been accepted for speech.
+func (r *Router) RecordSpoken(event *Event, cfg *config.Config) {
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+	var speakNames bool
+	var spokenName string
+	if event != nil {
+		speakNames, _, _, _, _, _, _ = cfg.EffectiveChatRules(event.Platform)
+		spokenName = resolveSpokenName(event, cfg)
+	}
+	now := r.now()
+	r.mu.Lock()
+	r.recordSpokenLocked(event, speakNames, spokenName, now)
+	r.mu.Unlock()
+}
+
+// TouchSpeaker refreshes the continuation timestamp when an enqueued message from the active consecutive speaker finishes playing.
+func (r *Router) TouchSpeaker(event *Event) {
+	if event == nil || event.Kind != EventKindMessage {
+		return
+	}
+	spKey := SpeakerKey(event)
+	if spKey == "" {
+		return
+	}
+	now := r.now()
+	r.mu.Lock()
+	if r.lastSpeakerKey == spKey {
+		r.lastSpeakerAt = now
+	}
+	r.mu.Unlock()
+}
+
+// Resolve applies the 4-tier voice resolution hierarchy, consecutive-speaker coalescing, and formatting rules to an event.
 func (r *Router) Resolve(event *Event, cfg *config.Config) ResolvedSpeech {
+	return r.ResolveWithOptions(event, cfg, true)
+}
+
+// ResolveWithOptions resolves voice, speed, and formatted speech text for an event.
+// When commitState is true, the router immediately updates its consecutive-speaker tracking state.
+// When commitState is false, the caller is responsible for calling RecordSpoken once the event is actually enqueued for speech.
+func (r *Router) ResolveWithOptions(event *Event, cfg *config.Config, commitState bool) ResolvedSpeech {
 	if event == nil {
 		return ResolvedSpeech{
 			VoiceID: "af_bella",
@@ -40,18 +174,17 @@ func (r *Router) Resolve(event *Event, cfg *config.Config) ResolvedSpeech {
 
 	// 1. Determine effective rules (Per-Setting Platform Overrides vs Global Rules)
 	speakNames, speakEmotes, _, _, speakPlatformName, effectiveDefaultVoice, effectiveDefaultSpeed := cfg.EffectiveChatRules(event.Platform)
+	coalesceSec := cfg.EffectiveCoalesceSeconds(event.Platform)
 	pCfg := cfg.Platforms[event.Platform]
 
 	// 2. Lookup Viewer Overrides (case-insensitive)
 	var viewerVoice string
 	var viewerSpeed float32
-	var viewerNickname string
 
 	if len(cfg.Viewers) > 0 {
 		if v, ok := config.LookupViewer(cfg.Viewers, event.Platform, event.UserID, event.UserName); ok {
 			viewerVoice = v.Voice
 			viewerSpeed = v.Speed
-			viewerNickname = v.Nickname
 		}
 	}
 
@@ -77,28 +210,39 @@ func (r *Router) Resolve(event *Event, cfg *config.Config) ResolvedSpeech {
 	}
 
 	// 5. Determine Spoken Display Name (strip leading '@' so TTS never speaks "at")
-	spokenName := viewerNickname
-	if spokenName == "" {
-		spokenName = event.DisplayName
-	}
-	if spokenName == "" {
-		spokenName = event.UserName
-	}
-	spokenName = strings.TrimLeft(strings.TrimSpace(spokenName), "@")
+	spokenName := resolveSpokenName(event, cfg)
 
-	// 6. Format Spoken Text
+	// 6. Check Consecutive Speaker Coalescing
+	spKey := SpeakerKey(event)
+	coalesced := false
+	now := r.now()
+
+	r.mu.Lock()
+	if event.Kind == EventKindMessage && speakNames && spokenName != "" && coalesceSec > 0 && spKey != "" {
+		if r.lastSpeakerKey == spKey && r.lastSpokenName == spokenName && !r.lastSpeakerAt.IsZero() {
+			if now.Sub(r.lastSpeakerAt) <= time.Duration(coalesceSec)*time.Second {
+				coalesced = true
+			}
+		}
+	}
+	if commitState {
+		r.recordSpokenLocked(event, speakNames, spokenName, now)
+	}
+	r.mu.Unlock()
+
+	// 7. Format Spoken Text
 	var text string
 	if event.Kind != EventKindMessage {
 		text = r.formatEventText(event, spokenName, pCfg)
 	} else {
-		if speakNames && spokenName != "" {
+		if speakNames && spokenName != "" && !coalesced {
 			text = fmt.Sprintf("%s says: %s", spokenName, event.Text)
 		} else {
 			text = event.Text
 		}
 	}
 
-	if speakPlatformName && event.Platform != "" {
+	if speakPlatformName && event.Platform != "" && !coalesced {
 		text = fmt.Sprintf("%s, %s", event.Platform, text)
 	}
 
@@ -107,6 +251,7 @@ func (r *Router) Resolve(event *Event, cfg *config.Config) ResolvedSpeech {
 		VoiceID:     voiceID,
 		Speed:       speed,
 		SpeakEmotes: speakEmotes,
+		Coalesced:   coalesced,
 		Event:       event,
 	}
 }

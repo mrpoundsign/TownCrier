@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Translation Setup Guides | TownCrier</title>
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="site-header">
+      <a class="brand" href="index.html">
+        <img src="icon.png" alt="TownCrier Logo" width="56" height="56" fetchpriority="high">
+        <div>
+          <div class="brand-title">TownCrier</div>
+          <div class="brand-subtitle">Offline Neural TTS &amp; Multi-Platform Livestream Chat Aggregator</div>
+        </div>
+      </a>
+      <div class="header-actions">
+        <a class="btn" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Download Latest Release</a>
+        <a class="btn btn-secondary" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </div>
+    </header>
+
+    <div class="docs-layout">
+      <aside class="sidebar">
+        <nav aria-label="Documentation">
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Documentation</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="index.html">Overview &amp; Home</a></li>
+              <li><a class="sidebar-link" href="features.html">Features &amp; Config Guide</a></li>
+              <li>
+                <a class="sidebar-link" href="translation-guides.html" aria-current="page">Translation Setup Guides</a>
+                <ul class="sidebar-subnav" role="list">
+                  <li><a class="sidebar-sublink" href="#overview">Architecture &amp; Caching</a></li>
+                  <li><a class="sidebar-sublink" href="#mymemory">1. MyMemory (Default Free)</a></li>
+                  <li><a class="sidebar-sublink" href="#google">2. Google Cloud (Basic v2)</a></li>
+                  <li><a class="sidebar-sublink" href="#deepl">3. DeepL API (Free / Pro)</a></li>
+                  <li><a class="sidebar-sublink" href="#libretranslate">4. LibreTranslate</a></li>
+                  <li><a class="sidebar-sublink" href="#ollama">5. Local LLM (Ollama)</a></li>
+                </ul>
+              </li>
+            </ul>
+          </div>
+
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Legal &amp; Policies</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="privacy.html">Privacy Policy</a></li>
+              <li><a class="sidebar-link" href="terms.html">Terms of Service</a></li>
+            </ul>
+          </div>
+
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Project</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub Repository &#8599;</a></li>
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Releases &amp; Installer &#8599;</a></li>
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">Report an Issue &#8599;</a></li>
+            </ul>
+          </div>
+        </nav>
+      </aside>
+
+      <div class="content-column">
+        <main>
+          <div class="page-title-banner">
+            <h1>Live Chat Translation Setup Guides</h1>
+            <p>Cascading failover, load balancing, sentence caching, and official provider setup walkthroughs.</p>
+          </div>
+
+          <section id="overview" class="card">
+            <span class="badge">Architecture</span>
+            <h2>How TownCrier Translation Works</h2>
+            <p>
+              TownCrier detects foreign livestream chat messages in-process in under 0.1ms and translates them before speaking them aloud (with an optional 3-note ascending chime) and recording both the original and translated text in your Event Logs.
+            </p>
+            <ul>
+              <li><strong>Zero-Cost Target Language Short-Circuit:</strong> Emote codes, URLs, @mentions, and universal stream slang (<code>gg</code>, <code>pog</code>, <code>lul</code>) are stripped before detection. Any message or sentence already in your target language short-circuits locally without sending a single network packet.</li>
+              <li><strong>Sentence Splitting &amp; Two-Tier Spam Cache:</strong> Incoming messages are split into individual sentences. Repeated greetings (e.g., <code>&iexcl;Hola amigos!</code>), copypastas, and raid spam hit an in-memory <strong>L1 LRU cache</strong> (1,000 sentences) at 0ms and 0 API cost. Any sentence seen <strong>2 or more times</strong> is automatically promoted to the persistent <strong>L2 Disk Cache</strong> (<code>cache/translations.json</code>, up to 5,000 sentences) across app restarts.</li>
+              <li><strong>Cascading Priority Fallback &amp; Round-Robin Load Balancing:</strong> Enable multiple providers and drag <code>&equiv;</code> or click <code>&#9650;</code>/<code>&#9660;</code> to order them. In <strong>Priority</strong> mode, TownCrier uses your #1 provider and automatically cascades down the list if a node hits a rate limit. In <strong>Round-Robin</strong> mode, TownCrier distributes requests evenly across all healthy enabled nodes.</li>
+              <li><strong>Exponential Backoff (Up to 1 Hour):</strong> Transient errors or HTTP 429 rate limits place that node into an escalating cooldown (<code>15s &rarr; 30s &rarr; 1m &rarr; 2m &rarr; 5m &rarr; 15m &rarr; 30m &rarr; 1h</code>), while hard quota exhaustion or invalid API keys immediately cool down that node for <code>1h</code>. Hover over any node's status icon or badge in Settings to see the exact backoff reason.</li>
+            </ul>
+          </section>
+
+          <section id="mymemory" class="card">
+            <span class="badge">Default #1 Node</span>
+            <h2>1. MyMemory Translated API (Zero-Setup Free)</h2>
+            <p>
+              <strong>MyMemory</strong> (operated by <a href="https://mymemory.translated.net" target="_blank" rel="noopener noreferrer">Translated.net</a>) is enabled by default at priority #1 so translation works out of the box with zero registration or API keys.
+            </p>
+            <h3>Free Quotas &amp; 10x Email Upgrade (As of November 9, 2026)</h3>
+            <ul>
+              <li><strong>Anonymous Mode (Default):</strong> <strong>5,000 characters/day</strong> (~100 foreign chat messages/day) free with all fields left blank.</li>
+              <li><strong>10x Free Email Mode (Recommended):</strong> Click <strong>Configure</strong> on the MyMemory row in <strong>Settings &rarr; Translation</strong> and enter a valid email address in the <strong>Email (10x Free Quota)</strong> field to unlock <strong>50,000 characters/day</strong> (~1,000 foreign chat messages/day) with no signup, password, or credit card.</li>
+            </ul>
+            <div class="callout">
+              <p><strong>Privacy &amp; Terms Note (As of November 9, 2026):</strong> Per Translated S.r.l.'s published documentation as of November 9, 2026, the optional <code>de</code> email parameter is used as an abuse-prevention contact header, and anonymous/free MyMemory translations contribute to their public translation memory archive. Because third-party terms and quotas may change at any time, please review the current <a href="https://mymemory.translated.net/doc/usagelimits.php" target="_blank" rel="noopener noreferrer">MyMemory Usage Limits</a> and <a href="https://translated.com/privacy-policy" target="_blank" rel="noopener noreferrer">Translated S.r.l. Privacy Policy</a> directly.</p>
+            </div>
+          </section>
+
+          <section id="google" class="card">
+            <span class="badge">500,000 Free Chars / Mo</span>
+            <h2>2. Google Cloud Translation API (Basic v2)</h2>
+            <p>
+              As of November 9, 2026, Google Cloud provides <strong>500,000 characters/month FREE</strong> (~10,000 chat messages/month; see <a href="https://cloud.google.com/translate/pricing" target="_blank" rel="noopener noreferrer">current Google Cloud Translation Pricing</a> and <a href="https://cloud.google.com/terms/cloud-privacy-notice" target="_blank" rel="noopener noreferrer">Google Cloud Privacy Notice</a>). Follow the 4-step console walkthrough below to set it up:
+            </p>
+            <div class="callout">
+              <p><strong>Why Basic (v2) instead of Advanced (v3)?</strong> In Google's documentation sidebar, API v2 is called <strong>"Basic"</strong> and API v3 is called <strong>"Advanced"</strong>. Advanced (v3) requires complex IAM Service Account JSON keyfiles and OAuth2 token exchanges, whereas <strong>Basic (v2)</strong> accepts a standard API key string and shares the exact same 500,000 free characters/month tier.</p>
+            </div>
+            <h3>4-Step Setup in Google Cloud Console</h3>
+            <ol>
+              <li>
+                <strong>Create or Select a Google Cloud Project:</strong>
+                Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener noreferrer">Google Cloud Project Create</a>, name your project (e.g., <code>TownCrier</code>), and click <strong>Create</strong> (or use your existing default project).
+              </li>
+              <li>
+                <strong>Enable the Cloud Translation API:</strong>
+                Open the <a href="https://console.cloud.google.com/apis/library/translate.googleapis.com" target="_blank" rel="noopener noreferrer">Cloud Translation API Library page</a> and click <strong>Enable</strong>. (Google requires linking a billing account to enable Cloud APIs, but you can hard-cap usage to $0.00 in Step 4).
+              </li>
+              <li>
+                <strong>Create &amp; Restrict Your API Key:</strong>
+                Open <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">APIs &amp; Services &rarr; Credentials</a>, click <strong>+ Create credentials &rarr; API key</strong>, and copy the <code>AIza...</code> key into TownCrier's Google Cloud <strong>API Key</strong> field.
+                <br><em>Recommended Security Practice:</em> Click your newly created key in the Credentials list, scroll to <strong>API restrictions</strong>, select <strong>Restrict key</strong>, check <strong>Cloud Translation API</strong>, and click <strong>Save</strong>.
+              </li>
+              <li>
+                <strong>Guarantee $0.00 Overages (Set a Daily Quota Cap):</strong>
+                Open <a href="https://console.cloud.google.com/iam-admin/quotas" target="_blank" rel="noopener noreferrer">IAM &amp; Admin &rarr; Quotas</a>, filter by <code>Cloud Translation API</code>, select <code>v2 and v3 general model characters per day</code>, click <strong>Edit Quotas</strong>, and set the daily limit to <code>15,000</code> characters/day (<code>15,000 &times; 31 = 465,000 chars/month</code>, safely below the 500,000 free monthly tier). If a stream ever hits 15,000 characters in a single day, Google returns HTTP 429 and TownCrier automatically cascades to your next provider without charging you a cent.
+              </li>
+            </ol>
+          </section>
+
+          <section id="deepl" class="card">
+            <span class="badge">500,000 Free Chars / Mo</span>
+            <h2>3. DeepL API (Free / Pro)</h2>
+            <p>
+              As of November 9, 2026, <strong>DeepL API Free</strong> provides <strong>500,000 characters/month FREE</strong> (~10,000 chat messages/month) with a <strong>hard $0.00 cap</strong> (see <a href="https://www.deepl.com/pro-api" target="_blank" rel="noopener noreferrer">current DeepL API Pricing</a> and <a href="https://www.deepl.com/pro-data-security" target="_blank" rel="noopener noreferrer">DeepL Data Security &amp; Privacy Policy</a>).
+            </p>
+            <h3>Setup Steps</h3>
+            <ol>
+              <li>Sign up for a free developer account at <a href="https://www.deepl.com/pro-api" target="_blank" rel="noopener noreferrer">deepl.com/pro-api</a>.</li>
+              <li>Open your <a href="https://www.deepl.com/your-account/keys" target="_blank" rel="noopener noreferrer">DeepL Account &rarr; API Keys</a> tab and copy your key (Free keys end with <code>:fx</code>).</li>
+              <li>In TownCrier, click <strong>Configure</strong> on the <strong>DeepL API</strong> row, paste the key into <strong>API Key (OS Keyring)</strong>, check the box to enable the node, and click <strong>Done</strong>.</li>
+            </ol>
+          </section>
+
+          <section id="libretranslate" class="card">
+            <span class="badge">Self-Hosted / Open Source</span>
+            <h2>4. LibreTranslate (Self-Hosted Docker or Managed API)</h2>
+            <p>
+              <strong>LibreTranslate</strong> is an open-source machine translation server powered by Argos Translate that you can run 100% locally on your own machine or LAN with unlimited free translations.
+            </p>
+            <h3>Run Locally via Docker (Unlimited &amp; Free)</h3>
+            <pre tabindex="0"><code>docker run -ti --rm -p 5000:5000 libretranslate/libretranslate</code></pre>
+            <p>
+              Leave the <strong>Server Endpoint URL</strong> in TownCrier set to <code>http://localhost:5000</code> (or visit <a href="https://portal.libretranslate.com" target="_blank" rel="noopener noreferrer">portal.libretranslate.com</a> if using a hosted API key).
+            </p>
+          </section>
+
+          <section id="ollama" class="card">
+            <span class="badge">100% Offline Local AI</span>
+            <h2>5. Local LLM via Ollama / OpenAI-Compatible Server</h2>
+            <p>
+              Run a compact multilingual LLM locally on your GPU or CPU via <a href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">Ollama</a> or LM Studio for unlimited, 100% offline chat translation with zero cloud accounts or rate limits.
+            </p>
+            <h3>Quick Start with Ollama</h3>
+            <ol>
+              <li>Install Ollama from <a href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">ollama.com/download</a>.</li>
+              <li>Pull a fast, lightweight multilingual model in your terminal:</li>
+            </ol>
+            <pre tabindex="0"><code>ollama pull qwen2.5:3b</code></pre>
+            <p>
+              In TownCrier's <strong>Local LLM (Ollama / OpenAI)</strong> configuration drawer, verify the endpoint is <code>http://localhost:11434</code> and the model name is <code>qwen2.5:3b</code> (or any installed model such as <code>llama3.2:3b</code> or <code>gemma2:2b</code>).
+            </p>
+          </section>
+        </main>
+
+        <footer>
+          <div>&copy; TownCrier Open Source Project. Licensed under GNU AGPLv3.</div>
+          <nav aria-label="Footer">
+            <a href="index.html">Home</a>
+            <a href="features.html">Features &amp; Config Guide</a>
+            <a href="translation-guides.html">Translation Guides</a>
+            <a href="privacy.html">Privacy Policy</a>
+            <a href="terms.html">Terms of Service</a>
+            <a href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>
+          </nav>
+        </footer>
+      </div>
+    </div>
+  </div>
+  <script src="site.js" defer></script>
+</body>
+</html>

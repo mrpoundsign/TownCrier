@@ -13,11 +13,6 @@ type GlobalHotkeyManager struct {
 	onTrigger func()
 }
 
-// NewGlobalHotkeyManager creates a new global hotkey manager stub.
-func NewGlobalHotkeyManager(onTrigger func()) *GlobalHotkeyManager {
-	return NewGlobalHotkeyManagerWithID(HotkeyIDPanic, onTrigger)
-}
-
 // NewGlobalHotkeyManagerWithID creates a new global hotkey manager stub with a specific ID.
 func NewGlobalHotkeyManagerWithID(id uintptr, onTrigger func()) *GlobalHotkeyManager {
 	return &GlobalHotkeyManager{

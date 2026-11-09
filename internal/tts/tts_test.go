@@ -17,41 +17,41 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/config"
 )
 
-func TestResolveSpeakerID(t *testing.T) {
-	if id := ResolveSpeakerID("af"); id != 0 {
+func TestResolveSpeakerIDForModel(t *testing.T) {
+	if id := ResolveSpeakerIDForModel("af", 11); id != 0 {
 		t.Errorf("expected 0 for af, got %d", id)
 	}
-	if id := ResolveSpeakerID("af_bella"); id != 1 {
+	if id := ResolveSpeakerIDForModel("af_bella", 11); id != 1 {
 		t.Errorf("expected 1 for af_bella, got %d", id)
 	}
-	if id := ResolveSpeakerID("af_nicole"); id != 2 {
+	if id := ResolveSpeakerIDForModel("af_nicole", 11); id != 2 {
 		t.Errorf("expected 2 for af_nicole, got %d", id)
 	}
-	if id := ResolveSpeakerID("  AF_SARAH  "); id != 3 {
+	if id := ResolveSpeakerIDForModel("  AF_SARAH  ", 11); id != 3 {
 		t.Errorf("expected 3 for uppercase spaced AF_SARAH, got %d", id)
 	}
-	if id := ResolveSpeakerID("af_sky"); id != 4 {
+	if id := ResolveSpeakerIDForModel("af_sky", 11); id != 4 {
 		t.Errorf("expected 4 for af_sky, got %d", id)
 	}
-	if id := ResolveSpeakerID("am_adam"); id != 5 {
+	if id := ResolveSpeakerIDForModel("am_adam", 11); id != 5 {
 		t.Errorf("expected 5 for am_adam, got %d", id)
 	}
-	if id := ResolveSpeakerID("am_michael"); id != 6 {
+	if id := ResolveSpeakerIDForModel("am_michael", 11); id != 6 {
 		t.Errorf("expected 6 for am_michael, got %d", id)
 	}
-	if id := ResolveSpeakerID("bf_emma"); id != 7 {
+	if id := ResolveSpeakerIDForModel("bf_emma", 11); id != 7 {
 		t.Errorf("expected 7 for bf_emma, got %d", id)
 	}
-	if id := ResolveSpeakerID("bf_isabella"); id != 8 {
+	if id := ResolveSpeakerIDForModel("bf_isabella", 11); id != 8 {
 		t.Errorf("expected 8 for bf_isabella, got %d", id)
 	}
-	if id := ResolveSpeakerID("bm_george"); id != 9 {
+	if id := ResolveSpeakerIDForModel("bm_george", 11); id != 9 {
 		t.Errorf("expected 9 for bm_george, got %d", id)
 	}
-	if id := ResolveSpeakerID("bm_lewis"); id != 10 {
+	if id := ResolveSpeakerIDForModel("bm_lewis", 11); id != 10 {
 		t.Errorf("expected 10 for bm_lewis, got %d", id)
 	}
-	if id := ResolveSpeakerID("Bella — US Female (af_bella)"); id != 1 {
+	if id := ResolveSpeakerIDForModel("Bella — US Female (af_bella)", 11); id != 1 {
 		t.Errorf("expected 1 for display label Bella, got %d", id)
 	}
 	if id := ResolveSpeakerIDForModel("af_bella", 53); id != 2 {
@@ -66,80 +66,8 @@ func TestResolveSpeakerID(t *testing.T) {
 	if got := VoiceDisplayName("am_michael"); got != "Michael — US Male (am_michael)" {
 		t.Errorf("unexpected display name: %q", got)
 	}
-	if id := ResolveSpeakerID("non_existent_voice"); id != 0 {
+	if id := ResolveSpeakerIDForModel("non_existent_voice", 11); id != 0 {
 		t.Errorf("expected fallback 0 for unknown voice, got %d", id)
-	}
-}
-
-func TestVerifyFileChecksum(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "sample.txt")
-	content := []byte("Kokoro TTS Test Content")
-
-	if err := os.WriteFile(testFile, content, 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	h := sha256.Sum256(content)
-	expectedHash := hex.EncodeToString(h[:])
-
-	ok, err := VerifyFileChecksum(testFile, expectedHash)
-	if err != nil {
-		t.Fatalf("VerifyFileChecksum failed: %v", err)
-	}
-	if !ok {
-		t.Error("expected checksum match")
-	}
-
-	ok, err = VerifyFileChecksum(testFile, "0000000000000000000000000000000000000000000000000000000000000000")
-	if err != nil {
-		t.Fatalf("VerifyFileChecksum failed: %v", err)
-	}
-	if ok {
-		t.Error("expected checksum mismatch for bad hash")
-	}
-}
-
-func TestDownloadFileWithChecksum(t *testing.T) {
-	testData := "Download test data for atomic part rename"
-	h := sha256.Sum256([]byte(testData))
-	expectedHash := hex.EncodeToString(h[:])
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(testData))
-	}))
-	defer server.Close()
-
-	tmpDir := t.TempDir()
-	destFile := filepath.Join(tmpDir, "downloaded.txt")
-
-	// 1. Success case
-	err := DownloadFile(server.URL, destFile, expectedHash)
-	if err != nil {
-		t.Fatalf("DownloadFile failed: %v", err)
-	}
-
-	data, err := os.ReadFile(destFile)
-	if err != nil {
-		t.Fatalf("ReadFile failed: %v", err)
-	}
-	if string(data) != testData {
-		t.Errorf("content mismatch: got %q", string(data))
-	}
-
-	// Verify .part file was cleaned up
-	if _, err := os.Stat(destFile + ".part"); !os.IsNotExist(err) {
-		t.Error("part file should not remain after successful download")
-	}
-
-	// 2. Checksum mismatch case
-	badDestFile := filepath.Join(tmpDir, "bad.txt")
-	err = DownloadFile(server.URL, badDestFile, "badhash123")
-	if !errors.Is(err, ErrChecksumMismatch) {
-		t.Errorf("expected ErrChecksumMismatch, got %v", err)
-	}
-	if _, err := os.Stat(badDestFile); !os.IsNotExist(err) {
-		t.Error("target file should not exist after failed checksum")
 	}
 }
 
@@ -213,12 +141,12 @@ func TestDownloadKokoroModelParallel(t *testing.T) {
 
 	destDir := t.TempDir()
 	var lastCur, lastTot int64
-	err = DownloadKokoroModel(destDir, func(cur, tot int64) {
+	err = DownloadKokoroModelForMode(destDir, true, func(cur, tot int64) {
 		lastCur = cur
 		lastTot = tot
 	})
 	if err != nil {
-		t.Fatalf("DownloadKokoroModel failed: %v", err)
+		t.Fatalf("DownloadKokoroModelForMode failed: %v", err)
 	}
 
 	if !IsModelInstalled(destDir) {
@@ -245,7 +173,7 @@ func TestDownloadKokoroModelParallel(t *testing.T) {
 	// Verify checksum failure cleans up staged files and returns ErrChecksumMismatch
 	badDir := t.TempDir()
 	KokoroINT8ArchiveSHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
-	err = DownloadKokoroModel(badDir, nil)
+	err = DownloadKokoroModelForMode(badDir, true, nil)
 	if !errors.Is(err, ErrChecksumMismatch) {
 		t.Fatalf("expected ErrChecksumMismatch, got %v", err)
 	}
@@ -280,9 +208,9 @@ func TestSherpaEngineSynthesis(t *testing.T) {
 		t.Skip("local Kokoro model not installed, skipping live synthesis test")
 	}
 
-	engine, err := NewSherpaEngine(modelDir, 2, false)
+	engine, err := NewFamilySherpaEngine(ModelKokoro, modelDir, 2, false)
 	if err != nil {
-		t.Fatalf("NewSherpaEngine failed: %v", err)
+		t.Fatalf("NewFamilySherpaEngine failed: %v", err)
 	}
 	defer func() { _ = engine.Close() }()
 
@@ -302,64 +230,27 @@ func TestSherpaEngineSynthesis(t *testing.T) {
 	}
 }
 
-func TestSplitIntoClauses(t *testing.T) {
-	if got := SplitIntoClauses("   ", 10); len(got) != 0 {
+func TestSplitIntoSentences(t *testing.T) {
+	if got := SplitIntoSentences("   "); len(got) != 0 {
 		t.Errorf("expected nil/empty for blank text, got %v", got)
 	}
 
 	short := "Hello streamer welcome to the stream"
-	if got := SplitIntoClauses(short, 10); len(got) != 1 || got[0] != short {
-		t.Errorf("expected single clause %q, got %v", short, got)
+	if got := SplitIntoSentences(short); len(got) != 1 || got[0] != short {
+		t.Errorf("expected single sentence %q, got %v", short, got)
 	}
 
-	// Regression test: single-word sentence "Hello!" followed by a 10-word sentence must NOT
-	// eat into the second sentence's word budget and orphan "speech." at the end!
 	previewText := "Hello! I am reading your livestream chat with natural neural speech."
-	for _, limit := range []int{10, 18} {
-		got := SplitIntoClauses(previewText, limit)
-		if len(got) != 2 || got[0] != "Hello!" || got[1] != "I am reading your livestream chat with natural neural speech." {
-			t.Errorf("limit=%d: expected [\"Hello!\", \"I am reading your livestream chat with natural neural speech.\"], got %q", limit, got)
-		}
+	got := SplitIntoSentences(previewText)
+	if len(got) != 2 || got[0] != "Hello!" || got[1] != "I am reading your livestream chat with natural neural speech." {
+		t.Errorf("expected [\"Hello!\", \"I am reading your livestream chat with natural neural speech.\"], got %q", got)
 	}
 
-	// Unpunctuated 46-word stream chat message should be split into clauses of <= 10 words with no 1-word orphans
-	longUnpunct := "hey streamer i have been watching your channel for three years now and i just wanted to say that your gameplay today on this boss fight was absolutely incredible even when the whole team wiped twice in a row you kept going and clutched the win"
-	clauses := SplitIntoClauses(longUnpunct, 10)
-	if len(clauses) < 5 {
-		t.Fatalf("expected at least 5 clauses for 46-word message, got %d: %v", len(clauses), clauses)
+	abbr := "Dr. Smith and Mr. Jones are here! Welcome to St. Louis."
+	abbrGot := SplitIntoSentences(abbr)
+	if len(abbrGot) != 2 || abbrGot[0] != "Dr. Smith and Mr. Jones are here!" || abbrGot[1] != "Welcome to St. Louis." {
+		t.Errorf("unexpected sentence split with abbreviations: %q", abbrGot)
 	}
-	for i, c := range clauses {
-		words := len(splitWordsTest(c))
-		if words < 2 || words > 10 {
-			t.Errorf("clause %d has %d words (expected 2..10): %q", i, words, c)
-		}
-	}
-
-	// Sentence punctuation split
-	punct := "First sentence here! Second sentence is also here, and it continues nicely for a bit."
-	pClauses := SplitIntoClauses(punct, 10)
-	if len(pClauses) < 2 || pClauses[0] != "First sentence here!" {
-		t.Errorf("expected first clause 'First sentence here!', got %v", pClauses)
-	}
-}
-
-func splitWordsTest(s string) []string {
-	var out []string
-	cur := ""
-	for _, r := range s {
-		if r == ' ' || r == '\t' || r == '\n' {
-			if cur != "" {
-				out = append(out, cur)
-				cur = ""
-			}
-		} else {
-			cur += string(r)
-		}
-	}
-	if cur != "" {
-		out = append(out, cur)
-	}
-	return out
 }
 
 func TestDownloadKokoroModelUnified(t *testing.T) {
@@ -505,28 +396,92 @@ func TestMultiModelPresetsAndHardwareImpact(t *testing.T) {
 	}
 }
 
-func TestFindVoiceUsages(t *testing.T) {
+func TestFindVoiceUsagesAndReplacements(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.GlobalChatRules.DefaultVoice = "supertonic:f1"
+	cfg.GlobalChatRules.DefaultSpeed = 1.15
 	cfg.Viewers["twitch:alice"] = config.ViewerConfig{
 		Platform: "twitch",
 		UserID:   "alice",
 		Voice:    "kitten_nano:f4",
+		Speed:    1.25,
 	}
+	cfg.Viewers["twitch:bob"] = config.ViewerConfig{
+		Platform: "twitch",
+		UserID:   "bob",
+		Nickname: "Bobby",
+		Voice:    "kitten_nano:m1",
+		Speed:    1.0,
+	}
+	twitchCfg := cfg.Platforms["twitch"]
+	twitchCfg.Overrides.VoiceOverrideMode = config.OverrideModeCustom
+	twitchCfg.Overrides.DefaultVoice = "supertonic:m2"
+	twitchCfg.Overrides.DefaultSpeed = 1.10
+	if twitchCfg.Notifications == nil {
+		twitchCfg.Notifications = make(map[string]config.NotificationEventConfig)
+	}
+	twitchCfg.Notifications["sub"] = config.NotificationEventConfig{
+		Enabled:  true,
+		Template: "{user} subscribed!",
+		Voice:    "kitten_nano:f2",
+	}
+	cfg.Platforms["twitch"] = twitchCfg
 
 	usages := FindVoiceUsages(cfg, []string{ModelSupertonic, ModelKittenNano})
-	if len(usages) != 2 {
-		t.Fatalf("expected 2 voice usages, got %d: %+v", len(usages), usages)
+	if len(usages) != 5 {
+		t.Fatalf("expected 5 voice usages, got %d: %+v", len(usages), usages)
 	}
 
 	warning := FormatVoiceUsagesWarning(usages)
-	if !strings.Contains(warning, "Global Default Voice") || !strings.Contains(warning, "alice") {
-		t.Errorf("expected warning to list both Global Default Voice and alice, got: %s", warning)
+	if !strings.Contains(warning, "Global Default Voice") || !strings.Contains(warning, "alice") || !strings.Contains(warning, "Twitch Platform Default Voice Override") {
+		t.Errorf("expected warning to list Global Default Voice, alice, and Twitch override, got: %s", warning)
 	}
 
 	disabled := DisabledModelFamilies([]string{ModelSupertonic, ModelKittenNano}, []string{ModelSupertonic})
 	if len(disabled) != 1 || disabled[0] != ModelKittenNano {
 		t.Errorf("expected disabled=[kitten_nano], got %v", disabled)
+	}
+
+	// DefaultReplacementVoice prefers global default if it belongs to remainingModels
+	if got := DefaultReplacementVoice(cfg, []string{ModelSupertonic}); got != "supertonic:f1" {
+		t.Errorf("expected DefaultReplacementVoice to keep supertonic:f1 when supertonic remains enabled, got %q", got)
+	}
+	// Otherwise picks the first voice of remainingModels
+	if got := DefaultReplacementVoice(cfg, []string{ModelKokoro}); got != "af" {
+		t.Errorf("expected DefaultReplacementVoice for kokoro to be af, got %q", got)
+	}
+
+	// Test ApplyVoiceUsageReplacements:
+	// - Reassign Global Default Voice to af_bella @ 1.2x
+	// - Clear alice viewer override (no nickname -> removed from cfg.Viewers)
+	// - Clear bob viewer override (has nickname -> kept in cfg.Viewers with empty Voice)
+	// - Clear Twitch Platform Override (resets to global)
+	// - Reassign Twitch sub alert to am_michael
+	replacements := []VoiceReplacement{
+		{VoiceID: "af_bella", Speed: 1.20},
+		{VoiceID: "", Speed: 1.25},
+		{VoiceID: "", Speed: 1.0},
+		{VoiceID: "", Speed: 1.10},
+		{VoiceID: "am_michael", Speed: 1.0},
+	}
+	ApplyVoiceUsageReplacements(cfg, usages, replacements)
+
+	if cfg.GlobalChatRules.DefaultVoice != "af_bella" || cfg.GlobalChatRules.DefaultSpeed != 1.20 {
+		t.Errorf("expected global voice af_bella @ 1.20, got %q @ %v", cfg.GlobalChatRules.DefaultVoice, cfg.GlobalChatRules.DefaultSpeed)
+	}
+	if _, exists := cfg.Viewers["twitch:alice"]; exists {
+		t.Error("expected twitch:alice viewer override with no nickname/flags to be deleted when cleared")
+	}
+	if bob, exists := cfg.Viewers["twitch:bob"]; !exists || bob.Voice != "" || bob.Nickname != "Bobby" {
+		t.Errorf("expected twitch:bob to remain with Nickname='Bobby' and Voice='', got exists=%v %+v", exists, bob)
+	}
+	updatedTwitch := cfg.Platforms["twitch"]
+	if updatedTwitch.Overrides.VoiceOverrideMode != config.OverrideModeGlobal || updatedTwitch.Overrides.DefaultVoice != "" {
+		t.Errorf("expected Twitch platform voice override to reset to global, got mode=%q voice=%q",
+			updatedTwitch.Overrides.VoiceOverrideMode, updatedTwitch.Overrides.DefaultVoice)
+	}
+	if updatedTwitch.Notifications["sub"].Voice != "am_michael" {
+		t.Errorf("expected Twitch sub alert voice 'am_michael', got %q", updatedTwitch.Notifications["sub"].Voice)
 	}
 }
 

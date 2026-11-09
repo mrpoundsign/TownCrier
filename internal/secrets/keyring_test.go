@@ -12,6 +12,7 @@ import (
 type fakeKeyringProvider struct {
 	mu      sync.Mutex
 	entries map[string]map[string]string
+	getHits int
 	failErr error
 }
 
@@ -37,6 +38,7 @@ func (f *fakeKeyringProvider) Set(service, user, password string) error {
 func (f *fakeKeyringProvider) Get(service, user string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.getHits++
 	if f.failErr != nil {
 		return "", f.failErr
 	}
@@ -131,6 +133,36 @@ func TestKeyringStoreWithFallback(t *testing.T) {
 	fbVal, err := k.Get("fallback_key")
 	if err != nil || fbVal != "fallback_secret" {
 		t.Fatalf("expected fallback_secret, got %q (err=%v)", fbVal, err)
+	}
+}
+
+func TestKeyringStoreReadCache(t *testing.T) {
+	fake := newFakeKeyringProvider()
+	k := newKeyringStoreWithProvider("TownCrierCacheTest", fake)
+
+	// 1. Missing key should query provider once, then serve ErrNotFound from memory cache
+	if _, err := k.Get("missing_token"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+	if _, err := k.Get("missing_token"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected cached ErrNotFound, got %v", err)
+	}
+	if fake.getHits != 1 {
+		t.Fatalf("expected 1 provider Get call for repeated missing key lookups, got %d", fake.getHits)
+	}
+
+	// 2. Setting the key updates the cache; subsequent Get calls should not hit provider
+	if err := k.Set("missing_token", "live_secret"); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+	for range 5 {
+		got, err := k.Get("missing_token")
+		if err != nil || got != "live_secret" {
+			t.Fatalf("expected cached 'live_secret', got %q (err=%v)", got, err)
+		}
+	}
+	if fake.getHits != 1 {
+		t.Fatalf("expected 0 additional provider Get calls for cached secret, got %d total", fake.getHits)
 	}
 }
 

@@ -215,33 +215,44 @@ func (f *VoiceSpeedField) Speed() float32 {
 	return f.speed
 }
 
-// Enable enables the Edit button.
-func (f *VoiceSpeedField) Enable() {
-	if f.EditBtn != nil {
-		f.EditBtn.Enable()
-	}
-}
-
-// Disable disables the Edit button.
-func (f *VoiceSpeedField) Disable() {
-	if f.EditBtn != nil {
-		f.EditBtn.Disable()
-	}
-}
-
-// Disabled reports whether the Edit button is currently disabled.
-func (f *VoiceSpeedField) Disabled() bool {
-	if f.EditBtn == nil {
-		return false
-	}
-	return f.EditBtn.Disabled()
-}
-
 // ShowVoiceSpeedDialog opens a modal dialog to select a voice (grouped by enabled model packs with no dropdowns),
 // adjust speech speed, and preview the voice with sample text before saving.
 func ShowVoiceSpeedDialog(
 	w fyne.Window,
 	session *app.Session,
+	title string,
+	initialVoice string,
+	initialSpeed float32,
+	onSave func(voiceID string, speed float32),
+	onStatus func(msg string),
+) {
+	var enabledModels []string
+	if session != nil {
+		enabledModels = session.Config().TTS.EffectiveEnabledModels()
+	}
+	showVoiceSpeedDialogInternal(w, session, enabledModels, true, title, initialVoice, initialSpeed, onSave, onStatus)
+}
+
+// ShowVoiceSpeedDialogForModels opens the voice & speed selection and preview dialog restricted strictly
+// to the specified allowedModels (excluding disabled model packs even if initialVoice belonged to one).
+func ShowVoiceSpeedDialogForModels(
+	w fyne.Window,
+	session *app.Session,
+	allowedModels []string,
+	title string,
+	initialVoice string,
+	initialSpeed float32,
+	onSave func(voiceID string, speed float32),
+	onStatus func(msg string),
+) {
+	showVoiceSpeedDialogInternal(w, session, allowedModels, false, title, initialVoice, initialSpeed, onSave, onStatus)
+}
+
+func showVoiceSpeedDialogInternal(
+	w fyne.Window,
+	session *app.Session,
+	enabledModels []string,
+	includeCurrentIfDisabled bool,
 	title string,
 	initialVoice string,
 	initialSpeed float32,
@@ -258,14 +269,25 @@ func ShowVoiceSpeedDialog(
 		initialSpeed = 1.0
 	}
 
-	var enabledModels []string
-	if session != nil {
-		enabledModels = session.Config().TTS.EffectiveEnabledModels()
+	fallbackCurrent := ""
+	if includeCurrentIfDisabled {
+		fallbackCurrent = initialVoice
 	}
-
-	groups := BuildVoiceGroupsForModels(enabledModels, initialVoice)
+	groups := BuildVoiceGroupsForModels(enabledModels, fallbackCurrent)
 	selectedVoice := tts.VoiceIDFromLabel(initialVoice)
-	if strings.TrimSpace(initialVoice) == "" && len(groups) > 0 && len(groups[0].Voices) > 0 {
+	foundInitial := false
+	for _, grp := range groups {
+		for _, vo := range grp.Voices {
+			if vo.ID == selectedVoice {
+				foundInitial = true
+				break
+			}
+		}
+		if foundInitial {
+			break
+		}
+	}
+	if (!foundInitial || strings.TrimSpace(initialVoice) == "") && len(groups) > 0 && len(groups[0].Voices) > 0 {
 		selectedVoice = groups[0].Voices[0].ID
 	}
 

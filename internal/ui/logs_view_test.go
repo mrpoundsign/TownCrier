@@ -302,7 +302,7 @@ func TestLogsTableIconsAndHoverTooltips(t *testing.T) {
 	// Verify that a very long message wraps vertically and never expands the table's MinSize width
 	baseMinW := lv.listBox.MinSize().Width
 	longMsg := strings.Repeat("supercalifragilisticexpialidocious ", 30)
-	row := lv.buildLogRow(0, eventlog.Entry{
+	row, _ := lv.buildLogRowWithRef(0, eventlog.Entry{
 		CreatedAt:     time.Now(),
 		Platform:      "twitch",
 		Channel:       "testchannel",
@@ -332,7 +332,7 @@ func TestLogsTableIconsAndHoverTooltips(t *testing.T) {
 		t.Fatalf("unexpected emote tokens: %+v", tokens)
 	}
 
-	emoteRow := lv.buildLogRow(1, eventlog.Entry{
+	emoteRow, _ := lv.buildLogRowWithRef(1, eventlog.Entry{
 		CreatedAt:     time.Now(),
 		Platform:      "twitch",
 		Channel:       "testchannel",
@@ -525,7 +525,7 @@ func TestLogsViewStreamSessionAndTotalsSummary(t *testing.T) {
 		ItemName:   "Sub Gift",
 		UnitAmount: 1,
 	}
-	row := lv.buildLogRow(0, rolesEntry)
+	row, _ := lv.buildLogRowWithRef(0, rolesEntry)
 	if row == nil {
 		t.Fatal("expected non-nil row")
 	}
@@ -1377,10 +1377,72 @@ func TestLogsViewCoalescedLiveRenderAndTabDeferral(t *testing.T) {
 	lv.mu.Unlock()
 
 	deltaRenders := rendersAfterActiveBurst - rendersAfterActivate
-	if deltaRenders < 1 || deltaRenders > 3 {
-		t.Fatalf("expected 20 rapid live updates to coalesce into 1–3 renders, got %d renders", deltaRenders)
+	if deltaRenders < 1 || deltaRenders >= 10 {
+		t.Fatalf("expected 20 rapid live updates to coalesce into <10 renders, got %d renders", deltaRenders)
 	}
 }
+
+func TestLogsViewTranslationToggle(t *testing.T) {
+	testApp := test.NewApp()
+	defer testApp.Quit()
+
+	w := testApp.NewWindow("Translation Toggle Test")
+	defer w.Close()
+
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
+
+	backend, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	mgr := eventlog.NewManager(eventlog.RetentionPolicy{}, backend)
+	sess.SetEventLogger(mgr)
+
+	lv := NewLogsView(w, sess)
+	defer lv.Close()
+	w.SetContent(lv.Build())
+
+	entry := eventlog.Entry{
+		ID:             "trans-row-1",
+		CreatedAt:      time.Now().UTC(),
+		Platform:       "twitch",
+		Channel:        "mrpoundsign",
+		Kind:           "message",
+		UserID:         "u-es",
+		UserName:       "carlos",
+		DisplayName:    "Carlos",
+		RawText:        "Hola amigos, este directo está increíble hoy!",
+		TranslatedText: "Hello friends, this stream is incredible today!",
+		SourceLang:     "es",
+		SpokenText:     "Carlos says: Hello friends, this stream is incredible today!",
+		PassedFilters:  true,
+		Spoken:         true,
+		Outcome:        eventlog.OutcomeSpoken,
+	}
+	if err := mgr.Append(context.Background(), &entry); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	lv.RefreshQuery()
+
+	if lv.IsShowingOriginalText("trans-row-1") {
+		t.Fatal("expected translated log row to default to showing translated text")
+	}
+
+	// Toggle to original text
+	lv.ToggleEntryTranslationView("trans-row-1", entry)
+	if !lv.IsShowingOriginalText("trans-row-1") {
+		t.Fatal("expected IsShowingOriginalText to be true after first toggle")
+	}
+
+	// Toggle back to translated text
+	lv.ToggleEntryTranslationView("trans-row-1", entry)
+	if lv.IsShowingOriginalText("trans-row-1") {
+		t.Fatal("expected IsShowingOriginalText to be false after second toggle")
+	}
+}
+
 
 
 

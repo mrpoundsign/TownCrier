@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -23,10 +24,13 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/platform/youtube"
 	"github.com/mrpoundsign/TownCrier/internal/queue"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
+	"github.com/mrpoundsign/TownCrier/internal/translate"
 	"github.com/mrpoundsign/TownCrier/internal/tts"
 	"github.com/mrpoundsign/TownCrier/internal/ws"
 	"github.com/mrpoundsign/TownCrier/internal/ws/controlv1"
 )
+
+const translationAPIKeySecretKey = "translation_api_key"
 
 var (
 	ErrAlreadyStarted = errors.New("session already started")
@@ -41,14 +45,15 @@ type Session struct {
 	cfg     *config.Config
 	secrets secrets.Store
 
-	player    audio.Player
-	engine    tts.Engine
-	queue     *queue.Queue
-	router    *chat.Router
-	sanitizer *chat.Sanitizer
-	bots      *bots.Matcher
-	eventLog  *eventlog.Manager
-	eventSeq  atomic.Uint64
+	player     audio.Player
+	engine     tts.Engine
+	queue      *queue.Queue
+	router     *chat.Router
+	sanitizer  *chat.Sanitizer
+	bots       *bots.Matcher
+	translator *translate.Service
+	eventLog   *eventlog.Manager
+	eventSeq   atomic.Uint64
 
 	twitchConnector   *twitch.Connector
 	twitchOAuth       *twitch.OAuthManager
@@ -104,6 +109,10 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 
 	cfgClone := cfg.Clone()
 	initMode := config.NormalizeTTSOutputMode(cfgClone.TTS.OutputMode)
+	trSvc := translate.NewService()
+	if loc := strings.TrimSpace(configStore.Location()); loc != "" {
+		trSvc.SetDiskCachePath(filepath.Join(filepath.Dir(loc), "cache", "translations.json"))
+	}
 	s := &Session{
 		cfg:             cfgClone,
 		secrets:         store,
@@ -111,6 +120,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		router:          router,
 		sanitizer:       sanitizer,
 		bots:            matcher,
+		translator:      trSvc,
 		twitchOAuth:     twitch.NewOAuthManager("", store),
 		youtubeOAuth:    youtube.NewOAuthManager("", "", store),
 		kickOAuth:       kick.NewOAuthManager("", "", store),
@@ -219,7 +229,17 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 
 	s.queue = queue.NewQueue(nil, nil, s.Config)
 	s.queue.SetOnItemOutcome(func(item *queue.Item, spoken bool, outcome string, detail string) {
-		if item == nil || item.ID == "" {
+		if item == nil {
+			return
+		}
+		if s.router != nil {
+			if spoken && item.Event != nil {
+				s.router.TouchSpeaker(item.Event)
+			} else if !spoken {
+				s.router.ResetSpeaker()
+			}
+		}
+		if item.ID == "" {
 			return
 		}
 		elog := s.EventLogger()
@@ -415,6 +435,16 @@ func (s *Session) Config() *config.Config {
 	return s.cfg.Clone()
 }
 
+// ChatScale returns the configured default chat panel scale percentage without cloning the full Config.
+func (s *Session) ChatScale() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cfg == nil {
+		return 100
+	}
+	return s.cfg.Logging.ChatScale
+}
+
 // Secrets returns the secret store.
 func (s *Session) Secrets() secrets.Store {
 	s.mu.RLock()
@@ -450,6 +480,9 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 			ChatRetentionDays:  newCfg.Logging.ChatRetentionDays,
 			EventRetentionDays: newCfg.Logging.EventRetentionDays,
 		})
+	}
+	if !newCfg.TTS.Enabled && s.router != nil {
+		s.router.ResetSpeaker()
 	}
 	s.EvaluateIdleState()
 	return nil
@@ -573,6 +606,259 @@ func (s *Session) KickOAuth() *kick.OAuthManager {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.kickOAuth
+}
+
+// Translator returns the chat translation service.
+func (s *Session) Translator() *translate.Service {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.translator
+}
+
+// SetTranslator attaches or overrides the chat translation service.
+func (s *Session) SetTranslator(tr *translate.Service) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.translator = tr
+}
+
+func translationProviderSecretKey(provider string) string {
+	return translationAPIKeySecretKey + "_" + config.NormalizeTranslationProvider(provider)
+}
+
+// TranslationProviderAPIKey returns the stored API key for a specific translation provider from OS Keyring,
+// falling back to the provider entry in config or the legacy single-provider key if not present.
+func (s *Session) TranslationProviderAPIKey(provider string) string {
+	norm := config.NormalizeTranslationProvider(provider)
+	s.mu.RLock()
+	sec := s.secrets
+	var fallback string
+	var legacyProvider string
+	var legacyKey string
+	if s.cfg != nil {
+		legacyProvider = config.NormalizeTranslationProvider(s.cfg.Translation.Provider)
+		legacyKey = strings.TrimSpace(s.cfg.Translation.APIKey)
+		for _, p := range s.cfg.Translation.Providers {
+			if config.NormalizeTranslationProvider(p.Provider) == norm && strings.TrimSpace(p.APIKey) != "" {
+				fallback = strings.TrimSpace(p.APIKey)
+				break
+			}
+		}
+	}
+	s.mu.RUnlock()
+
+	if sec != nil {
+		if val, err := sec.Get(translationProviderSecretKey(norm)); err == nil && strings.TrimSpace(val) != "" {
+			return strings.TrimSpace(val)
+		}
+		if norm == legacyProvider {
+			if val, err := sec.Get(translationAPIKeySecretKey); err == nil && strings.TrimSpace(val) != "" {
+				return strings.TrimSpace(val)
+			}
+		}
+	}
+	if fallback != "" {
+		return fallback
+	}
+	if norm == legacyProvider {
+		return legacyKey
+	}
+	return ""
+}
+
+// SetTranslationProviderAPIKey persists the API key for a specific translation provider in the OS Keyring
+// (or deletes it when empty) and resets any active backoff cooldown for that provider.
+func (s *Session) SetTranslationProviderAPIKey(provider, key string) error {
+	norm := config.NormalizeTranslationProvider(provider)
+	trimmed := strings.TrimSpace(key)
+	s.mu.RLock()
+	sec := s.secrets
+	tr := s.translator
+	s.mu.RUnlock()
+
+	if tr != nil {
+		tr.ResetProviderBackoff(norm)
+	}
+	if sec != nil {
+		secretKey := translationProviderSecretKey(norm)
+		if trimmed == "" {
+			_ = sec.Delete(secretKey)
+		} else if err := sec.Set(secretKey, trimmed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TranslationAPIKey returns the stored translation provider API key from OS Keyring for the primary provider,
+// falling back to the configuration file if not present in the keyring.
+func (s *Session) TranslationAPIKey() string {
+	cfg := s.Config()
+	if cfg != nil {
+		return s.TranslationProviderAPIKey(cfg.Translation.Provider)
+	}
+	return s.TranslationProviderAPIKey(config.TranslationProviderMyMemory)
+}
+
+// SetTranslationAPIKey persists the translation API key in the OS Keyring (or deletes it when empty).
+func (s *Session) SetTranslationAPIKey(key string) error {
+	trimmed := strings.TrimSpace(key)
+	s.mu.RLock()
+	sec := s.secrets
+	prov := config.TranslationProviderMyMemory
+	if s.cfg != nil {
+		prov = config.NormalizeTranslationProvider(s.cfg.Translation.Provider)
+	}
+	s.mu.RUnlock()
+
+	if sec != nil {
+		if trimmed == "" {
+			_ = sec.Delete(translationAPIKeySecretKey)
+		} else if err := sec.Set(translationAPIKeySecretKey, trimmed); err != nil {
+			return err
+		}
+	}
+	return s.SetTranslationProviderAPIKey(prov, trimmed)
+}
+
+func (s *Session) buildTranslationChain(cfg *config.Config) []translate.Options {
+	if cfg == nil {
+		return nil
+	}
+	tCfg := cfg.Translation
+	config.NormalizeTranslationProviders(&tCfg)
+	chain := make([]translate.Options, 0, len(tCfg.Providers))
+	for _, entry := range tCfg.Providers {
+		if !entry.Enabled {
+			continue
+		}
+		prov := config.NormalizeTranslationProvider(entry.Provider)
+		chain = append(chain, translate.Options{
+			Provider:     prov,
+			TargetLang:   tCfg.TargetLang,
+			ContactEmail: entry.ContactEmail,
+			EndpointURL:  entry.EndpointURL,
+			Model:        entry.Model,
+			APIKey:       s.TranslationProviderAPIKey(prov),
+		})
+	}
+	return chain
+}
+
+func (s *Session) buildSingleProviderOptions(cfg *config.Config, provider string) translate.Options {
+	norm := config.NormalizeTranslationProvider(provider)
+	var entry config.TranslationProviderEntry
+	if cfg != nil {
+		tCfg := cfg.Translation
+		config.NormalizeTranslationProviders(&tCfg)
+		for _, p := range tCfg.Providers {
+			if config.NormalizeTranslationProvider(p.Provider) == norm {
+				entry = p
+				break
+			}
+		}
+	}
+	target := "en"
+	if cfg != nil {
+		target = cfg.Translation.TargetLang
+	}
+	return translate.Options{
+		Provider:     norm,
+		TargetLang:   target,
+		ContactEmail: entry.ContactEmail,
+		EndpointURL:  entry.EndpointURL,
+		Model:        entry.Model,
+		APIKey:       s.TranslationProviderAPIKey(norm),
+	}
+}
+
+// TestTranslation runs an interactive test translation using the active Translation routing chain and returns the result and elapsed duration.
+func (s *Session) TestTranslation(ctx context.Context, sampleText string) (translate.Result, time.Duration, error) {
+	return s.TestTranslationForProvider(ctx, "", sampleText)
+}
+
+// TestTranslationForProvider runs an interactive test translation.
+// When provider is non-empty (e.g. while configuring a specific provider in Settings), it tests that specific
+// provider directly even if disabled or lower in priority; when provider is empty, it tests the active routing chain.
+func (s *Session) TestTranslationForProvider(ctx context.Context, provider string, sampleText string) (translate.Result, time.Duration, error) {
+	tr := s.Translator()
+	if tr == nil {
+		return translate.Result{}, 0, errors.New("translation service is not initialized")
+	}
+	cfg := s.Config()
+	if strings.TrimSpace(sampleText) == "" {
+		sampleText = "Hola amigos, este directo está increíble hoy!"
+	}
+	detectedLang := translate.DetectSourceLang(sampleText, cfg.Translation.TargetLang)
+	start := time.Now()
+	tCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	var chain []translate.Options
+	routingMode := cfg.Translation.RoutingMode
+	if strings.TrimSpace(provider) != "" {
+		chain = []translate.Options{s.buildSingleProviderOptions(cfg, provider)}
+		routingMode = config.TranslationRoutingPriority
+	} else {
+		chain = s.buildTranslationChain(cfg)
+	}
+
+	res, err := tr.TranslateChain(tCtx, sampleText, cfg.Translation.TargetLang, detectedLang, routingMode, chain)
+	if err != nil {
+		return res, time.Since(start), err
+	}
+	if res.SourceLang == "" {
+		res.SourceLang = detectedLang
+	}
+
+	// If 100% of the sentences were already resolved from the cache, also verify the live API
+	// so clicking "Test" always exercises the live API while reporting the cached value too.
+	if res.Cached && len(chain) > 0 {
+		bypassChain := slices.Clone(chain)
+		for i := range bypassChain {
+			bypassChain[i].BypassCache = true
+		}
+		liveRes, liveErr := tr.TranslateChain(tCtx, sampleText, cfg.Translation.TargetLang, detectedLang, routingMode, bypassChain)
+		if liveErr != nil {
+			return translate.Result{}, time.Since(start), liveErr
+		}
+		res.TranslatedText = liveRes.TranslatedText
+		res.Provider = liveRes.Provider
+		for i := range res.Sentences {
+			if i < len(liveRes.Sentences) {
+				res.Sentences[i].LiveTranslated = liveRes.Sentences[i].Translated
+				res.Sentences[i].Provider = liveRes.Provider
+				if liveRes.Sentences[i].CacheHits > res.Sentences[i].CacheHits {
+					res.Sentences[i].CacheHits = liveRes.Sentences[i].CacheHits
+				}
+				if liveRes.Sentences[i].PromotedToDisk {
+					res.Sentences[i].PromotedToDisk = true
+				}
+			}
+		}
+	}
+
+	return res, time.Since(start), nil
+}
+
+// TranslationCacheStats returns the current L1 (RAM) and L2 (Disk) entry counts in the sentence cache.
+func (s *Session) TranslationCacheStats() (memoryCount int, diskCount int) {
+	tr := s.Translator()
+	if tr == nil {
+		return 0, 0
+	}
+	return tr.CacheStats()
+}
+
+// ClearTranslationCache wipes all entries from the L1 (RAM) and L2 (Disk) translation caches.
+func (s *Session) ClearTranslationCache() error {
+	tr := s.Translator()
+	if tr == nil || tr.SentenceCache() == nil {
+		return nil
+	}
+	err := tr.SentenceCache().Clear()
+	tr.ClearCache()
+	return err
 }
 
 // SetOnTwitchStatus registers a callback for Twitch connection status changes.
@@ -831,6 +1117,9 @@ func (s *Session) UpdatePlatformStreamState(platform, channel string, live bool)
 }
 
 func (s *Session) endActiveStreamSession() {
+	if s.router != nil {
+		s.router.ResetSpeaker()
+	}
 	elog := s.EventLogger()
 	s.streamMu.Lock()
 	sid := s.activeSessionID
@@ -918,6 +1207,9 @@ func (s *Session) DetectLiveStatus(ctx context.Context) {
 
 // Panic immediately halts audio playback (<50ms), purges the speech queue, and latches Panic Mode (D28).
 func (s *Session) Panic() {
+	if s.router != nil {
+		s.router.ResetSpeaker()
+	}
 	if s.queue != nil {
 		s.queue.Panic()
 	}
@@ -925,6 +1217,9 @@ func (s *Session) Panic() {
 
 // ClearPanic unlatches Panic Mode and resumes speech processing.
 func (s *Session) ClearPanic() {
+	if s.router != nil {
+		s.router.ResetSpeaker()
+	}
 	if s.queue != nil {
 		s.queue.ClearPanic()
 	}
@@ -932,6 +1227,9 @@ func (s *Session) ClearPanic() {
 
 // TogglePanic toggles Emergency Panic Mute mode on or off, returning the new panicked state.
 func (s *Session) TogglePanic() bool {
+	if s.router != nil {
+		s.router.ResetSpeaker()
+	}
 	if s.queue != nil {
 		return s.queue.TogglePanic()
 	}
@@ -1082,6 +1380,9 @@ func (s *Session) EvaluateIdleState() {
 	cb := s.onTTSModeState
 	s.mu.Unlock()
 
+	if (deactivated || (changed && !nowSpeakActive)) && s.router != nil {
+		s.router.ResetSpeaker()
+	}
 	if deactivated && q != nil {
 		flushed := q.FlushPendingForActivity()
 		if flushed > 0 {
@@ -1246,6 +1547,9 @@ func (s *Session) SpeakCustom(req ws.SpeakRequest) error {
 		Text:        text,
 	}
 
+	if s.router != nil {
+		s.router.ResetSpeaker()
+	}
 	return q.Enqueue(&queue.Item{
 		ID:         ev.ID,
 		Event:      ev,
@@ -1282,11 +1586,58 @@ func (s *Session) ExecuteQueueAction(action controlv1.QueueAction) error {
 	case controlv1.QueueAction_QUEUE_ACTION_RESUME:
 		q.Resume()
 	case controlv1.QueueAction_QUEUE_ACTION_SKIP:
+		if s.router != nil {
+			s.router.ResetSpeaker()
+		}
 		q.Skip()
 	case controlv1.QueueAction_QUEUE_ACTION_CLEAR:
+		if s.router != nil {
+			s.router.ResetSpeaker()
+		}
 		q.Clear()
 	default:
 		return errors.New("unsupported queue action")
+	}
+	return nil
+}
+
+// SetAudioVolume updates the in-memory configuration's master audio volume and applies it to the active player
+// immediately without re-synchronizing platform connectors or writing to disk.
+func (s *Session) SetAudioVolume(gain float32) {
+	if gain < 0.0 {
+		gain = 0.0
+	} else if gain > 1.0 {
+		gain = 1.0
+	}
+	s.mu.Lock()
+	if s.cfg != nil {
+		s.cfg.Audio.Volume = gain
+	}
+	p := s.player
+	s.mu.Unlock()
+
+	if p != nil {
+		p.SetVolume(gain)
+	}
+}
+
+// PersistVolume updates the active configuration's audio volume and saves it to the ConfigStore
+// without re-synchronizing platform connectors or restarting background services.
+func (s *Session) PersistVolume(gain float32) error {
+	s.SetAudioVolume(gain)
+
+	s.mu.RLock()
+	var cfgSnap *config.Config
+	if s.cfg != nil {
+		cfgSnap = s.cfg.Clone()
+	}
+	cStore := s.configStore
+	s.mu.RUnlock()
+
+	if cStore != nil && cfgSnap != nil {
+		if err := cStore.Save(cfgSnap); err != nil {
+			return fmt.Errorf("save config: %w", err)
+		}
 	}
 	return nil
 }
@@ -1318,12 +1669,7 @@ func (s *Session) AdjustVolume(volume *float32, delta *float32) error {
 		target = 1.0
 	}
 
-	if p := s.Player(); p != nil {
-		p.SetVolume(target)
-	}
-	err := s.UpdateConfig(func(c *config.Config) {
-		c.Audio.Volume = target
-	})
+	err := s.PersistVolume(target)
 
 	s.mu.RLock()
 	volCb := s.onVolumeChanged
@@ -1397,6 +1743,34 @@ func (s *Session) playAlertSoundInternal(force bool, requireDisabledToggle bool)
 	return player.Play(samples, rate)
 }
 
+// PlayTranslationChime plays the configured 3-note translation notification chime (or custom .wav/.mp3 sound)
+// immediately through the active audio player for UI previewing.
+func (s *Session) PlayTranslationChime() error {
+	if s.IsPanicked() {
+		return nil
+	}
+	s.mu.RLock()
+	cfg := s.cfg
+	player := s.player
+	cache := s.alertCache
+	s.mu.RUnlock()
+
+	if cfg == nil {
+		return nil
+	}
+	if cache == nil {
+		cache = audio.NewAlertSoundCache()
+	}
+	samples, rate, err := cache.ResolveTranslationChime(cfg.Translation.ChimeSoundPath)
+	if err != nil {
+		return err
+	}
+	if player == nil {
+		return nil
+	}
+	return player.Play(samples, rate)
+}
+
 func (s *Session) startIdleMonitor() {
 	s.mu.Lock()
 	if s.idleStopCh != nil {
@@ -1454,37 +1828,39 @@ func (s *Session) buildLogEntry(event *chat.Event, rawText string, rawEmotes []c
 		itemName = strings.TrimSpace(event.RewardTitle)
 	}
 	return &eventlog.Entry{
-		ID:            event.ID,
-		SessionID:     s.ActiveSessionID(),
-		CreatedAt:     ts,
-		UpdatedAt:     time.Now().UTC(),
-		Platform:      event.Platform,
-		Channel:       event.Channel,
-		Kind:          string(event.Kind),
-		IsPaidOrEvent: event.IsPaidOrEvent(),
-		UserID:        event.UserID,
-		UserName:      event.UserName,
-		DisplayName:   displayName,
-		Roles:         event.Roles,
-		RawText:       rawText,
-		Emotes:        emotesCopy,
-		SpokenText:    spokenText,
-		VoiceID:       voiceID,
-		Speed:         speed,
-		Amount:        event.Amount,
-		UnitAmount:    event.UnitAmount,
-		Currency:      event.Currency,
-		ItemName:      itemName,
-		SubTier:       event.SubTier,
-		Recipient:     event.Recipient,
-		RewardID:      event.RewardID,
-		RewardTitle:   event.RewardTitle,
-		Months:        event.Months,
-		Count:         event.Count,
-		PassedFilters: passedFilters,
-		Spoken:        false,
-		Outcome:       outcome,
-		OutcomeDetail: detail,
+		ID:             event.ID,
+		SessionID:      s.ActiveSessionID(),
+		CreatedAt:      ts,
+		UpdatedAt:      time.Now().UTC(),
+		Platform:       event.Platform,
+		Channel:        event.Channel,
+		Kind:           string(event.Kind),
+		IsPaidOrEvent:  event.IsPaidOrEvent(),
+		UserID:         event.UserID,
+		UserName:       event.UserName,
+		DisplayName:    displayName,
+		Roles:          event.Roles,
+		RawText:        rawText,
+		Emotes:         emotesCopy,
+		TranslatedText: event.TranslatedText,
+		SourceLang:     event.SourceLang,
+		SpokenText:     spokenText,
+		VoiceID:        voiceID,
+		Speed:          speed,
+		Amount:         event.Amount,
+		UnitAmount:     event.UnitAmount,
+		Currency:       event.Currency,
+		ItemName:       itemName,
+		SubTier:        event.SubTier,
+		Recipient:      event.Recipient,
+		RewardID:       event.RewardID,
+		RewardTitle:    event.RewardTitle,
+		Months:         event.Months,
+		Count:          event.Count,
+		PassedFilters:  passedFilters,
+		Spoken:         false,
+		Outcome:        outcome,
+		OutcomeDetail:  detail,
 	}
 }
 
@@ -1931,6 +2307,39 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		}
 	}
 
+	// 2c. Automatic Foreign Chat Detection & Translation (Issue #119)
+	if cfg.EffectiveTranslationEnabled(event.Platform) && strings.TrimSpace(event.Text) != "" {
+		tr := s.Translator()
+		if tr != nil {
+			shouldTrans, detectedLang, probeText := translate.ShouldTranslate(
+				event.Text,
+				event.EmoteSpans,
+				cfg.Translation.TargetLang,
+				cfg.Translation.MinConfidence,
+			)
+			if shouldTrans {
+				tCtx, tCancel := context.WithTimeout(context.Background(), translate.DefaultTimeout)
+				chain := s.buildTranslationChain(cfg)
+				res, tErr := tr.TranslateChain(tCtx, probeText, cfg.Translation.TargetLang, detectedLang, cfg.Translation.RoutingMode, chain)
+				tCancel()
+				if tErr != nil {
+					log.Printf("[Session] Translation failed (falling back to original): user=%q lang=%s err=%v", event.UserName, detectedLang, tErr)
+				} else if translated := strings.TrimSpace(res.TranslatedText); translated != "" && !strings.EqualFold(translated, strings.TrimSpace(probeText)) {
+					srcLang := res.SourceLang
+					if srcLang == "" || srcLang == "auto" {
+						srcLang = detectedLang
+					}
+					event.SourceLang = srcLang
+					event.Text = translated
+					event.EmoteSpans = nil
+					transLogText, _ := formatEventLogRawTextAndEmotes(event)
+					event.TranslatedText = transLogText
+					log.Printf("[Session] Translated chat message via %s (%s -> %s): %q -> %q", res.Provider, srcLang, cfg.Translation.TargetLang, rawText, event.TranslatedText)
+				}
+			}
+		}
+	}
+
 	// 3. Text & Emote Sanitizer on raw message text
 	// Emote offsets are relative to event.Text before chatter name prefixing.
 	_, speakEmotes, deduplicateEmotes, maxDuplicateWords, _, _, _ := cfg.EffectiveChatRules(event.Platform)
@@ -1956,8 +2365,8 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		}
 	}
 
-	// 4. Resolve Voice, Speed, and Template
-	resolved := s.router.Resolve(event, cfg)
+	// 4. Resolve Voice, Speed, and Template (defer speaker continuation state commit until enqueued)
+	resolved := s.router.ResolveWithOptions(event, cfg, false)
 	if resolved.Text == "" {
 		log.Printf("[Session] Event resolved to empty text: user=%q", event.UserName)
 		s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Resolved template text is empty"))
@@ -2044,6 +2453,9 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	if err := s.queue.Enqueue(item); err != nil {
 		return err
 	}
+	if !s.IsPanicked() && s.router != nil {
+		s.router.RecordSpoken(event, cfg)
+	}
 
 	s.mu.RLock()
 	onDispatched := s.onEventDispatched
@@ -2103,6 +2515,10 @@ func (s *Session) DispatchModeration(modEvent *chat.ModerationEvent) {
 		Outcome:       eventlog.OutcomeModerationEvent,
 		OutcomeDetail: detail,
 	})
+
+	if s.router != nil {
+		s.router.ResetSpeaker()
+	}
 
 	switch modEvent.Action {
 	case chat.ModActionDeleteMessage:

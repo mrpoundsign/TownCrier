@@ -4,45 +4,24 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mrpoundsign/appinstaller/pkg/launcher"
 )
 
 func TestGetRuntimeDir(t *testing.T) {
-	dir, err := getRuntimeDir()
+	dir, err := launcher.GetRuntimeDir(AppID, AppVersion)
 	if err != nil {
-		t.Fatalf("getRuntimeDir failed: %v", err)
+		t.Fatalf("GetRuntimeDir failed: %v", err)
 	}
 	if dir == "" {
 		t.Error("expected non-empty runtime dir")
 	}
 }
 
-func TestMatchesExisting(t *testing.T) {
-	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "test.bin")
-	data := []byte("hello world payload data")
-
-	if matchesExisting(filePath, data) {
-		t.Error("expected non-existent file to not match")
-	}
-
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
-
-	if !matchesExisting(filePath, data) {
-		t.Error("expected identical content to match")
-	}
-
-	diffData := []byte("different data")
-	if matchesExisting(filePath, diffData) {
-		t.Error("expected different content not to match")
-	}
-}
-
 func TestExtractPayloadIfNeeded(t *testing.T) {
 	tmpDir := t.TempDir()
-	if err := extractPayloadIfNeeded(tmpDir); err != nil {
-		t.Fatalf("extractPayloadIfNeeded failed: %v", err)
+	if err := launcher.ExtractPayloadIfNeeded(payloadFS, "payload", tmpDir); err != nil {
+		t.Fatalf("ExtractPayloadIfNeeded failed: %v", err)
 	}
 }
 
@@ -58,8 +37,8 @@ func TestCleanupOldVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := cleanupOldVersions(baseDir, "0.0.7"); err != nil {
-		t.Fatalf("cleanupOldVersions failed: %v", err)
+	if err := launcher.CleanupOldVersions(baseDir, "0.0.7"); err != nil {
+		t.Fatalf("CleanupOldVersions failed: %v", err)
 	}
 
 	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {

@@ -2,8 +2,11 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +16,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 	"github.com/mrpoundsign/TownCrier/internal/queue"
 	"github.com/mrpoundsign/TownCrier/internal/secrets"
+	"github.com/mrpoundsign/TownCrier/internal/translate"
 )
 
 func TestSessionLifecycle(t *testing.T) {
@@ -1353,6 +1357,236 @@ func TestSingleInstanceLock(t *testing.T) {
 	}
 	release2()
 }
+
+func TestSessionDispatchEventTranslation(t *testing.T) {
+	ctx := context.Background()
+
+	// Spin up local mock LibreTranslate endpoint
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"translatedText": "Hello friends, this stream is incredible today!",
+		})
+	}))
+	defer ts.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Translation.Enabled = true
+	cfg.Translation.Provider = config.TranslationProviderLibreTranslate
+	cfg.Translation.TargetLang = "en"
+	cfg.Translation.MinConfidence = 0.65
+	cfg.Translation.EndpointURL = ts.URL
+
+	sqlStore, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend failed: %v", err)
+	}
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{}, sqlStore)
+	defer func() { _ = logMgr.Close() }()
+
+	secStore := secrets.NewMemoryStore()
+	session := NewSession(cfg, secStore, config.NewMemoryStore(cfg))
+	session.SetEventLogger(logMgr)
+	trSvc := translate.NewService()
+	trSvc.SetHTTPClient(ts.Client())
+	session.SetTranslator(trSvc)
+
+	if err := session.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer func() { _ = session.Stop() }()
+
+	itemCh := make(chan *queue.Item, 4)
+	session.Queue().SetOnItemStarted(func(item *queue.Item) {
+		itemCh <- item
+	})
+
+	dispatchedCh := make(chan *chat.Event, 4)
+	session.SetOnEventDispatched(func(ev *chat.Event, _ string) {
+		dispatchedCh <- ev
+	})
+
+	// 1. Keyring API key helper roundtrip (legacy + per-provider)
+	if err := session.SetTranslationAPIKey("secret-key-123"); err != nil {
+		t.Fatalf("SetTranslationAPIKey: %v", err)
+	}
+	if got := session.TranslationAPIKey(); got != "secret-key-123" {
+		t.Errorf("TranslationAPIKey() = %q, want 'secret-key-123'", got)
+	}
+	if err := session.SetTranslationProviderAPIKey(config.TranslationProviderDeepL, "deepl-key-456"); err != nil {
+		t.Fatalf("SetTranslationProviderAPIKey: %v", err)
+	}
+	if got := session.TranslationProviderAPIKey(config.TranslationProviderDeepL); got != "deepl-key-456" {
+		t.Errorf("TranslationProviderAPIKey(deepl) = %q, want 'deepl-key-456'", got)
+	}
+
+	// 2. Dispatch a Spanish chat message -> should be translated for TTS and dual-stored
+	ev := &chat.Event{
+		ID:          "msg-es-1",
+		Platform:    "twitch",
+		Channel:     "mrpoundsign",
+		UserID:      "u-carlos",
+		UserName:    "carlos",
+		DisplayName: "Carlos",
+		Kind:        chat.EventKindMessage,
+		Text:        "Hola amigos, este directo está increíble hoy!",
+	}
+	if err := session.DispatchEvent(ev); err != nil {
+		t.Fatalf("DispatchEvent failed: %v", err)
+	}
+
+	select {
+	case item := <-itemCh:
+		wantTTS := "Carlos says: Hello friends, this stream is incredible today!"
+		if item.Text != wantTTS {
+			t.Errorf("TTS item text = %q, want %q", item.Text, wantTTS)
+		}
+		if item.Event == nil || item.Event.TranslatedText == "" {
+			t.Errorf("expected TTS item Event.TranslatedText to be populated")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for translated TTS item")
+	}
+
+	select {
+	case dispEv := <-dispatchedCh:
+		if dispEv.Text != "Hola amigos, este directo está increíble hoy!" {
+			t.Errorf("dispatched RawText = %q, want original Spanish", dispEv.Text)
+		}
+		if dispEv.TranslatedText != "Hello friends, this stream is incredible today!" {
+			t.Errorf("dispatched TranslatedText = %q, want English translation", dispEv.TranslatedText)
+		}
+		if dispEv.SourceLang != "es" {
+			t.Errorf("dispatched SourceLang = %q, want 'es'", dispEv.SourceLang)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for OnEventDispatched")
+	}
+
+	res, err := logMgr.Query(ctx, eventlog.QueryFilter{})
+	if err != nil {
+		t.Fatalf("logMgr.Query failed: %v", err)
+	}
+	if len(res.Entries) != 1 {
+		t.Fatalf("expected 1 log entry, got %d", len(res.Entries))
+	}
+	if res.Entries[0].RawText != "Hola amigos, este directo está increíble hoy!" {
+		t.Errorf("log entry RawText = %q", res.Entries[0].RawText)
+	}
+	if res.Entries[0].TranslatedText != "Hello friends, this stream is incredible today!" {
+		t.Errorf("log entry TranslatedText = %q", res.Entries[0].TranslatedText)
+	}
+	if res.Entries[0].SourceLang != "es" {
+		t.Errorf("log entry SourceLang = %q", res.Entries[0].SourceLang)
+	}
+
+	// 3. Interactive TestTranslation helper
+	testRes, elapsed, err := session.TestTranslation(ctx, "こんにちは、今日の配信最高ですね！")
+	if err != nil {
+		t.Fatalf("TestTranslation failed: %v", err)
+	}
+	if testRes.TranslatedText == "" || elapsed < 0 {
+		t.Errorf("unexpected TestTranslation result: %+v (%v)", testRes, elapsed)
+	}
+}
+
+func TestSessionCoalesceConsecutiveViewerMessages(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.GlobalChatRules.SpeakNames = true
+	cfg.GlobalChatRules.SpeakPlatformName = true
+	cfg.GlobalChatRules.CoalesceConsecutiveSeconds = 20
+
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = session.Close() }()
+
+	var clockMu sync.Mutex
+	now := time.Date(2026, 11, 9, 15, 0, 0, 0, time.UTC)
+	advanceClock := func(d time.Duration) {
+		clockMu.Lock()
+		now = now.Add(d)
+		clockMu.Unlock()
+	}
+	session.Router().SetClock(func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	})
+
+	items := make(chan *queue.Item, 8)
+	session.Queue().SetOnItemStarted(func(item *queue.Item) {
+		items <- item
+	})
+
+	// 1. First message from Alice includes platform + "alice says:"
+	if err := session.DispatchEvent(&chat.Event{
+		ID:       "m1",
+		Platform: "twitch",
+		UserID:   "u-alice",
+		UserName: "alice",
+		Kind:     chat.EventKindMessage,
+		Text:     "first message",
+	}); err != nil {
+		t.Fatalf("DispatchEvent m1: %v", err)
+	}
+
+	select {
+	case it := <-items:
+		if it.Text != "twitch, alice says: first message" {
+			t.Fatalf("m1 text = %q, want 'twitch, alice says: first message'", it.Text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for m1")
+	}
+
+	// 2. Second message from Alice 4s later coalesces (omits platform and "alice says:")
+	advanceClock(4 * time.Second)
+	if err := session.DispatchEvent(&chat.Event{
+		ID:       "m2",
+		Platform: "twitch",
+		UserID:   "u-alice",
+		UserName: "alice",
+		Kind:     chat.EventKindMessage,
+		Text:     "second message right after",
+	}); err != nil {
+		t.Fatalf("DispatchEvent m2: %v", err)
+	}
+
+	select {
+	case it := <-items:
+		if it.Text != "second message right after" {
+			t.Fatalf("m2 text = %q, want 'second message right after'", it.Text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for m2")
+	}
+
+	// 3. Panic + ClearPanic resets the speaker streak so Alice's next message announces her name again
+	session.Panic()
+	session.ClearPanic()
+
+	advanceClock(2 * time.Second)
+	if err := session.DispatchEvent(&chat.Event{
+		ID:       "m3",
+		Platform: "twitch",
+		UserID:   "u-alice",
+		UserName: "alice",
+		Kind:     chat.EventKindMessage,
+		Text:     "message after panic reset",
+	}); err != nil {
+		t.Fatalf("DispatchEvent m3: %v", err)
+	}
+
+	select {
+	case it := <-items:
+		if it.Text != "twitch, alice says: message after panic reset" {
+			t.Fatalf("m3 text = %q, want 'twitch, alice says: message after panic reset'", it.Text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for m3")
+	}
+}
+
+
 
 
 

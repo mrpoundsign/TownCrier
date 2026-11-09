@@ -73,9 +73,11 @@ type Event struct {
 	IsReply       bool        `json:"is_reply,omitempty"`
 	ReplyToUser   string      `json:"reply_to_user,omitempty"`
 	Mentions      []string    `json:"mentions,omitempty"`
-	Text          string      `json:"text"`
-	EmoteSpans    []EmoteSpan `json:"emote_spans,omitempty"`
-	Amount        float64     `json:"amount,omitempty"`
+	Text           string      `json:"text"`
+	EmoteSpans     []EmoteSpan `json:"emote_spans,omitempty"`
+	TranslatedText string      `json:"translated_text,omitempty"`
+	SourceLang     string      `json:"source_lang,omitempty"`
+	Amount         float64     `json:"amount,omitempty"`
 	UnitAmount    float64     `json:"unit_amount,omitempty"`
 	Currency      string      `json:"currency,omitempty"`
 	ItemName      string      `json:"item_name,omitempty"`

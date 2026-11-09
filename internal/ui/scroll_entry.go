@@ -155,11 +155,18 @@ func (l *panelWidthClampLayout) Layout(objects []fyne.CanvasObject, size fyne.Si
 		if obj == nil || !obj.Visible() {
 			continue
 		}
-		h := max(size.Height, obj.MinSize().Height)
-		obj.Move(fyne.NewPos(0, 0))
-		obj.Resize(fyne.NewSize(size.Width, h))
-		if newH := max(size.Height, obj.MinSize().Height); newH != h {
-			obj.Resize(fyne.NewSize(size.Width, newH))
+		curPos := obj.Position()
+		if curPos.X != 0 || curPos.Y != 0 {
+			obj.Move(fyne.NewPos(0, 0))
+		}
+		curSize := obj.Size()
+		if curSize.Width != size.Width {
+			// Resize width first so word-wrapped children update their height for the new width
+			obj.Resize(fyne.NewSize(size.Width, max(size.Height, curSize.Height)))
+		}
+		targetH := max(size.Height, obj.MinSize().Height)
+		if obj.Size().Width != size.Width || obj.Size().Height != targetH {
+			obj.Resize(fyne.NewSize(size.Width, targetH))
 		}
 	}
 }

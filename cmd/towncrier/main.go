@@ -5,8 +5,11 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"net/http"
+	_ "net/http/pprof" // #nosec G108 -- only bound on loopback when -pprof flag is explicitly provided
 	"os"
 	"os/signal"
+	"runtime/pprof"
 	"strings"
 	"syscall"
 	"time"
@@ -71,8 +74,43 @@ func run() error {
 
 	logFlag := flag.String("log", "", "Path to custom log file")
 	twitchChannelFlag := flag.String("twitch-channel", "", "Twitch channel name to configure")
+	pprofFlag := flag.String("pprof", "", "Start pprof HTTP server on address (e.g. 127.0.0.1:6060)")
+	cpuProfileFlag := flag.String("cpuprofile", "", "Write CPU profile to file")
 	flag.Parse()
 	_ = logFlag
+
+	if *cpuProfileFlag != "" {
+		f, profErr := os.Create(*cpuProfileFlag)
+		if profErr != nil {
+			log.Printf("Warning: could not create CPU profile %s: %v", *cpuProfileFlag, profErr)
+		} else {
+			if startErr := pprof.StartCPUProfile(f); startErr != nil {
+				log.Printf("Warning: could not start CPU profile: %v", startErr)
+				_ = f.Close()
+			} else {
+				log.Printf("CPU profiling enabled -> %s", *cpuProfileFlag)
+				defer func() {
+					pprof.StopCPUProfile()
+					_ = f.Close()
+					log.Printf("CPU profile written to %s", *cpuProfileFlag)
+				}()
+			}
+		}
+	}
+
+	if *pprofFlag != "" {
+		addr := *pprofFlag
+		go func() {
+			log.Printf("Starting pprof HTTP server on http://%s/debug/pprof/", addr)
+			srv := &http.Server{
+				Addr:              addr,
+				ReadHeaderTimeout: 5 * time.Second,
+			}
+			if srvErr := srv.ListenAndServe(); srvErr != nil && !errors.Is(srvErr, http.ErrServerClosed) {
+				log.Printf("pprof server error: %v", srvErr)
+			}
+		}()
+	}
 
 	if os.Getenv("FYNE_DISABLE_DPI_DETECTION") == "" && os.Getenv("FYNE_SCALE") == "" {
 		initialScale := ui.UIScale100

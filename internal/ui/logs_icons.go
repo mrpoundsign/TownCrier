@@ -242,6 +242,40 @@ var (
 			`<rect x="11" y="7" width="2" height="6" rx="1" fill="#0F172A"/>`+
 			`<circle cx="12" cy="16" r="1.3" fill="#0F172A"/>`+
 			`</svg>`))
+
+	// Translation Toggle Icons (文A — Active Translated vs. Original View)
+	resLogTranslated = fyne.NewStaticResource("log_translated.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="1.5" y="1.5" width="21" height="21" rx="4" fill="#0F172A" stroke="#38BDF8" stroke-width="1.3"/>`+
+			`<path d="M7 5.2h1.4v1.6h4.2v1.3h-1.3c-.4 1.6-1.1 3-2.1 4.1 1 .9 2.2 1.6 3.6 2l-.6 1.3c-1.5-.5-2.8-1.3-3.9-2.3-1.1 1-2.5 1.8-4.1 2.3l-.6-1.3c1.5-.4 2.7-1.1 3.7-2-.9-1-1.6-2.2-2-3.6l1.2-.4c.3 1 .8 1.9 1.5 2.7.7-.9 1.2-2 1.5-3.2H4.2V6.8H7V5.2z" fill="#38BDF8"/>`+
+			`<path d="M15.8 10.2h1.6l3.2 8.6h-1.5l-.7-2h-3.5l-.7 2h-1.5l3.1-8.6zm-.5 5.3h2.6l-1.3-3.7-1.3 3.7z" fill="#F8FAFC"/>`+
+			`</svg>`))
+
+	resLogTranslatedOriginal = fyne.NewStaticResource("log_translated_orig.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<rect x="1.5" y="1.5" width="21" height="21" rx="4" fill="#1E293B" stroke="#64748B" stroke-width="1.2"/>`+
+			`<path d="M7 5.2h1.4v1.6h4.2v1.3h-1.3c-.4 1.6-1.1 3-2.1 4.1 1 .9 2.2 1.6 3.6 2l-.6 1.3c-1.5-.5-2.8-1.3-3.9-2.3-1.1 1-2.5 1.8-4.1 2.3l-.6-1.3c1.5-.4 2.7-1.1 3.7-2-.9-1-1.6-2.2-2-3.6l1.2-.4c.3 1 .8 1.9 1.5 2.7.7-.9 1.2-2 1.5-3.2H4.2V6.8H7V5.2z" fill="#94A3B8"/>`+
+			`<path d="M15.8 10.2h1.6l3.2 8.6h-1.5l-.7-2h-3.5l-.7 2h-1.5l3.1-8.6zm-.5 5.3h2.6l-1.3-3.7-1.3 3.7z" fill="#94A3B8"/>`+
+			`</svg>`))
+
+	// Translation Node Health Icons
+	resNodeHealthy = fyne.NewStaticResource("node_healthy.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<circle cx="12" cy="12" r="10" fill="#10B981"/>`+
+			`<path d="M9.5 16.2L5.8 12.5l1.4-1.4 2.3 2.3 6.3-6.3 1.4 1.4-7.7 7.7z" fill="#FFFFFF"/>`+
+			`</svg>`))
+
+	resNodeBackoff = fyne.NewStaticResource("node_backoff.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<circle cx="12" cy="12" r="10" fill="#F59E0B"/>`+
+			`<path d="M11 6h2v6l4.2 2.5-1 1.7L11 13V6z" fill="#0F172A"/>`+
+			`</svg>`))
+
+	resNodeDisabled = fyne.NewStaticResource("node_disabled.svg", []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">`+
+			`<circle cx="12" cy="12" r="9" fill="#334155" stroke="#64748B" stroke-width="1.5"/>`+
+			`<rect x="7.5" y="11" width="9" height="2" rx="1" fill="#94A3B8"/>`+
+			`</svg>`))
 )
 
 // platformIconAndTip returns the SVG icon resource and tooltip description for a platform.
@@ -660,8 +694,12 @@ func (l *wrappedCellLabel) MouseOut() {
 // logTableLayout aligns the 6 columns of the Event Logs table across the sticky header and all rows:
 // [0] Time | [1] Svc | [2] User & Tags | [3] Message (flex) | [4] TTS Status | [5] Mod Controls
 type logTableLayout struct {
-	getWidth func() float32
-	getScale func() float32
+	getWidth   func() float32
+	getScale   func() float32
+	lastLayout fyne.Size
+	lastScale  float32
+	cachedMin  fyne.Size
+	cachedMsgW float32
 }
 
 const (
@@ -674,7 +712,12 @@ const (
 	rowMinHeight       float32 = 30
 )
 
-func (l logTableLayout) effectiveScale() float32 {
+func (l *logTableLayout) Invalidate() {
+	l.cachedMsgW = 0
+	l.lastLayout = fyne.Size{}
+}
+
+func (l *logTableLayout) effectiveScale() float32 {
 	if l.getScale != nil {
 		if s := l.getScale(); s > 0 {
 			return s
@@ -696,12 +739,18 @@ func computeMsgColWidth(totalWidth, scale float32) float32 {
 	return msgWidth
 }
 
-func (l logTableLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+func (l *logTableLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	if len(objects) < 6 {
 		return
 	}
 
 	s := l.effectiveScale()
+	if l.lastLayout == size && l.lastScale == s {
+		return
+	}
+	l.lastLayout = size
+	l.lastScale = s
+
 	msgWidth := computeMsgColWidth(size.Width, s)
 
 	widths := [6]float32{
@@ -718,20 +767,33 @@ func (l logTableLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	for i := range 6 {
 		obj := objects[i]
 		w := widths[i]
-		obj.Move(fyne.NewPos(x, 0))
-		obj.Resize(fyne.NewSize(w, size.Height))
+		pos := fyne.NewPos(x, 0)
+		if obj.Position() != pos {
+			obj.Move(pos)
+		}
+		targetSz := fyne.NewSize(w, size.Height)
+		if obj.Size() != targetSz {
+			obj.Resize(targetSz)
+		}
 		x += w + gap
 	}
 }
 
-func (l logTableLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+func (l *logTableLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	s := l.effectiveScale()
+	var totalW float32
+	if l.lastLayout.Width > 0 {
+		totalW = l.lastLayout.Width
+	} else if l.getWidth != nil {
+		totalW = l.getWidth()
+	}
+	msgW := computeMsgColWidth(totalW, s)
+
+	if l.cachedMsgW == msgW && l.lastScale == s && l.cachedMin.Height > 0 {
+		return l.cachedMin
+	}
+
 	if len(objects) >= 4 && objects[3] != nil {
-		var totalW float32
-		if l.getWidth != nil {
-			totalW = l.getWidth()
-		}
-		msgW := computeMsgColWidth(totalW, s)
 		cur := objects[3].Size()
 		if cur.Width != msgW {
 			objects[3].Resize(fyne.NewSize(msgW, cur.Height))
@@ -749,7 +811,10 @@ func (l logTableLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	}
 	minW := colWidthTime + colWidthService + colWidthUser +
 		140 + colWidthTTSStatus + colWidthModControl + (5 * colGap)
-	return fyne.NewSize(minW, maxH)
+	l.cachedMsgW = msgW
+	l.lastScale = s
+	l.cachedMin = fyne.NewSize(minW, maxH)
+	return l.cachedMin
 }
 
 // ttsStatusIcons builds the collapsed 3-icon HBox for the "TTS Status" column:

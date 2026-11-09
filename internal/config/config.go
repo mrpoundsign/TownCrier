@@ -4,20 +4,26 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 )
 
-const CurrentVersion = 1
+const (
+	CurrentVersion   = 2
+	maxConfigBackups = 5
+)
 
 // Config represents the application configuration hierarchy.
 type Config struct {
-	Version         int                       `json:"version"`
-	UIScale         string                    `json:"ui_scale,omitempty"`
+	Version             int                       `json:"version"`
+	LoadedSchemaVersion int                       `json:"-"`
+	UIScale             string                    `json:"ui_scale,omitempty"`
 	Update          UpdateConfig              `json:"update"`
 	Audio           AudioConfig               `json:"audio"`
 	TTS             TTSConfig                 `json:"tts"`
@@ -26,9 +32,245 @@ type Config struct {
 	Bots            BotConfig                 `json:"bots"`
 	Logging         LoggingConfig             `json:"logging"`
 	WebSocket       WebSocketConfig           `json:"websocket"`
+	Translation     TranslationConfig         `json:"translation"`
 	GlobalChatRules GlobalChatRules           `json:"global_chat_rules"`
 	Viewers         map[string]ViewerConfig   `json:"viewers"`
 	Platforms       map[string]PlatformConfig `json:"platforms"`
+}
+
+const (
+	TranslationProviderMyMemory       = "mymemory"
+	TranslationProviderGoogle         = "google"
+	TranslationProviderDeepL          = "deepl"
+	TranslationProviderLibreTranslate = "libretranslate"
+	TranslationProviderOllama         = "ollama"
+
+	TranslationRoutingPriority   = "priority"
+	TranslationRoutingRoundRobin = "round_robin"
+
+	DefaultTranslationTargetLang    = "en"
+	DefaultTranslationMinConfidence = 0.65
+	DefaultLibreTranslateURL        = "http://localhost:5000"
+	DefaultOllamaURL                = "http://localhost:11434"
+	DefaultOllamaModel              = "qwen2.5:3b"
+)
+
+// AllTranslationProviders is the canonical ordered list of all supported translation provider IDs.
+var AllTranslationProviders = []string{
+	TranslationProviderMyMemory,
+	TranslationProviderGoogle,
+	TranslationProviderDeepL,
+	TranslationProviderLibreTranslate,
+	TranslationProviderOllama,
+}
+
+// TranslationProviderEntry configures a single translation provider node in the fallback/load-balancing chain.
+type TranslationProviderEntry struct {
+	Provider     string `json:"provider"`
+	Enabled      bool   `json:"enabled"`
+	ContactEmail string `json:"contact_email,omitempty"`
+	EndpointURL  string `json:"endpoint_url,omitempty"`
+	Model        string `json:"model,omitempty"`
+	APIKey       string `json:"api_key,omitempty"`
+}
+
+// TranslationConfig configures automatic language detection and foreign chat translation.
+type TranslationConfig struct {
+	Enabled              bool                       `json:"enabled"`
+	RoutingMode          string                     `json:"routing_mode,omitempty"`
+	PlayChimeBeforeSpeak bool                       `json:"play_chime_before_speak"`
+	ChimeSoundPath       string                     `json:"chime_sound_path,omitempty"`
+	Providers            []TranslationProviderEntry `json:"providers,omitempty"`
+	Provider             string                     `json:"provider"`
+	TargetLang           string                     `json:"target_lang"`
+	MinConfidence        float64                    `json:"min_confidence"`
+	ContactEmail         string                     `json:"contact_email,omitempty"`
+	EndpointURL          string                     `json:"endpoint_url,omitempty"`
+	Model                string                     `json:"model,omitempty"`
+	APIKey               string                     `json:"api_key,omitempty"`
+}
+
+// NormalizeTranslationRoutingMode returns a canonical routing mode ("priority" or "round_robin").
+func NormalizeTranslationRoutingMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case TranslationRoutingRoundRobin, "rr", "round-robin", "roundrobin":
+		return TranslationRoutingRoundRobin
+	default:
+		return TranslationRoutingPriority
+	}
+}
+
+// DefaultTranslationProviders returns the default 5-node translation provider list with MyMemory enabled first.
+func DefaultTranslationProviders() []TranslationProviderEntry {
+	return []TranslationProviderEntry{
+		{
+			Provider: TranslationProviderMyMemory,
+			Enabled:  true,
+		},
+		{
+			Provider: TranslationProviderGoogle,
+			Enabled:  false,
+		},
+		{
+			Provider: TranslationProviderDeepL,
+			Enabled:  false,
+		},
+		{
+			Provider:    TranslationProviderLibreTranslate,
+			Enabled:     false,
+			EndpointURL: DefaultLibreTranslateURL,
+		},
+		{
+			Provider:    TranslationProviderOllama,
+			Enabled:     false,
+			EndpointURL: DefaultOllamaURL,
+			Model:       DefaultOllamaModel,
+		},
+	}
+}
+
+func isUntouchedDefaultProviders(providers []TranslationProviderEntry) bool {
+	defs := DefaultTranslationProviders()
+	if len(providers) != len(defs) {
+		return false
+	}
+	for i := range defs {
+		if providers[i] != defs[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// NormalizeTranslationProviders ensures t.Providers contains all 5 canonical providers without duplicates,
+// migrating any legacy single-provider settings when t.Providers is empty or untouched from defaults.
+func NormalizeTranslationProviders(t *TranslationConfig) {
+	if t == nil {
+		return
+	}
+	t.RoutingMode = NormalizeTranslationRoutingMode(t.RoutingMode)
+	t.Provider = NormalizeTranslationProvider(t.Provider)
+	t.TargetLang = NormalizeTranslationTargetLang(t.TargetLang)
+	t.MinConfidence = NormalizeTranslationMinConfidence(t.MinConfidence)
+
+	legacyEmpty := len(t.Providers) == 0 || (isUntouchedDefaultProviders(t.Providers) && t.Provider != TranslationProviderMyMemory)
+	var out []TranslationProviderEntry
+	seen := make(map[string]bool, len(AllTranslationProviders))
+
+	if legacyEmpty {
+		legacyPrimary := NormalizeTranslationProvider(t.Provider)
+		if legacyPrimary != TranslationProviderMyMemory {
+			entry := TranslationProviderEntry{
+				Provider: legacyPrimary,
+				Enabled:  true,
+				APIKey:   strings.TrimSpace(t.APIKey),
+			}
+			switch legacyPrimary {
+			case TranslationProviderLibreTranslate:
+				entry.EndpointURL = strings.TrimSpace(t.EndpointURL)
+			case TranslationProviderOllama:
+				entry.EndpointURL = strings.TrimSpace(t.EndpointURL)
+				entry.Model = strings.TrimSpace(t.Model)
+			}
+			out = append(out, entry)
+			seen[legacyPrimary] = true
+		}
+		mmEntry := TranslationProviderEntry{
+			Provider:     TranslationProviderMyMemory,
+			Enabled:      true,
+			ContactEmail: strings.TrimSpace(t.ContactEmail),
+		}
+		out = append(out, mmEntry)
+		seen[TranslationProviderMyMemory] = true
+	} else {
+		for _, entry := range t.Providers {
+			p := NormalizeTranslationProvider(entry.Provider)
+			if seen[p] {
+				continue
+			}
+			seen[p] = true
+			entry.Provider = p
+			out = append(out, entry)
+		}
+	}
+
+	for _, def := range DefaultTranslationProviders() {
+		if !seen[def.Provider] {
+			seen[def.Provider] = true
+			out = append(out, def)
+		}
+	}
+
+	for i := range out {
+		switch out[i].Provider {
+		case TranslationProviderMyMemory:
+			if strings.TrimSpace(out[i].ContactEmail) == "" && strings.TrimSpace(t.ContactEmail) != "" {
+				out[i].ContactEmail = strings.TrimSpace(t.ContactEmail)
+			}
+		case TranslationProviderLibreTranslate:
+			if strings.TrimSpace(out[i].EndpointURL) == "" {
+				out[i].EndpointURL = DefaultLibreTranslateURL
+			}
+		case TranslationProviderOllama:
+			if strings.TrimSpace(out[i].EndpointURL) == "" {
+				out[i].EndpointURL = DefaultOllamaURL
+			}
+			if strings.TrimSpace(out[i].Model) == "" {
+				out[i].Model = DefaultOllamaModel
+			}
+		}
+	}
+
+	t.Providers = out
+	if len(t.Providers) > 0 {
+		for _, p := range t.Providers {
+			if p.Enabled {
+				t.Provider = p.Provider
+				break
+			}
+		}
+	}
+}
+
+// NormalizeTranslationProvider returns a canonical translation provider ("mymemory", "google", "deepl", "libretranslate", or "ollama").
+func NormalizeTranslationProvider(p string) string {
+	switch strings.ToLower(strings.TrimSpace(p)) {
+	case TranslationProviderGoogle, "google_cloud":
+		return TranslationProviderGoogle
+	case TranslationProviderDeepL:
+		return TranslationProviderDeepL
+	case TranslationProviderLibreTranslate, "libre":
+		return TranslationProviderLibreTranslate
+	case TranslationProviderOllama, "llm", "openai":
+		return TranslationProviderOllama
+	default:
+		return TranslationProviderMyMemory
+	}
+}
+
+// NormalizeTranslationTargetLang returns a canonical lowercased ISO-639-1 language code, defaulting to "en".
+func NormalizeTranslationTargetLang(lang string) string {
+	clean := strings.ToLower(strings.TrimSpace(lang))
+	switch clean {
+	case "en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh", "ru", "hi", "tl":
+		return clean
+	default:
+		return DefaultTranslationTargetLang
+	}
+}
+
+// NormalizeTranslationMinConfidence clamps confidence to [0.1, 0.99], defaulting to 0.65 when <= 0.
+func NormalizeTranslationMinConfidence(c float64) float64 {
+	if c <= 0 {
+		return DefaultTranslationMinConfidence
+	}
+	if c < 0.10 {
+		return 0.10
+	}
+	if c > 0.99 {
+		return 0.99
+	}
+	return c
 }
 
 // UpdateConfig configures application version checking and self-update preferences.
@@ -209,6 +451,8 @@ const (
 	IgnoreMentionsOff               = "off"
 	IgnoreMentionsRepliesAndLeading = "replies_and_leading"
 	IgnoreMentionsAll               = "all"
+
+	DefaultCoalesceConsecutiveSeconds = 20
 )
 
 // NormalizeIgnoreMentionsMode returns a canonical IgnoreMentionsMode ("off", "replies_and_leading", or "all").
@@ -224,16 +468,17 @@ func NormalizeIgnoreMentionsMode(mode string) string {
 }
 
 type GlobalChatRules struct {
-	SpeakNames                bool    `json:"speak_names"`
-	SpeakEmotes               bool    `json:"speak_emotes"`
-	DeduplicateEmotes         bool    `json:"deduplicate_emotes"`
-	MaxDuplicateWords         int     `json:"max_duplicate_words"`
-	SpeakPlatformName         bool    `json:"speak_platform_name"`
-	IgnoreMentionsMode        string  `json:"ignore_mentions_mode,omitempty"`
-	AllowBroadcasterMentions  bool    `json:"allow_broadcaster_mentions,omitempty"`
-	PlayAlertOnIgnoredMention bool    `json:"play_alert_on_ignored_mention,omitempty"`
-	DefaultVoice              string  `json:"default_voice"`
-	DefaultSpeed              float32 `json:"default_speed"`
+	SpeakNames                 bool    `json:"speak_names"`
+	CoalesceConsecutiveSeconds int     `json:"coalesce_consecutive_seconds,omitempty"`
+	SpeakEmotes                bool    `json:"speak_emotes"`
+	DeduplicateEmotes          bool    `json:"deduplicate_emotes"`
+	MaxDuplicateWords          int     `json:"max_duplicate_words"`
+	SpeakPlatformName          bool    `json:"speak_platform_name"`
+	IgnoreMentionsMode         string  `json:"ignore_mentions_mode,omitempty"`
+	AllowBroadcasterMentions   bool    `json:"allow_broadcaster_mentions,omitempty"`
+	PlayAlertOnIgnoredMention  bool    `json:"play_alert_on_ignored_mention,omitempty"`
+	DefaultVoice               string  `json:"default_voice"`
+	DefaultSpeed               float32 `json:"default_speed"`
 }
 
 const (
@@ -290,6 +535,32 @@ func DuplicateWordsToOverrideMode(val int) string {
 	return strconv.Itoa(val)
 }
 
+// NormalizeCoalesceOverrideMode returns "global", "off", or a positive seconds string (e.g. "10", "15", "20", "30", "60").
+func NormalizeCoalesceOverrideMode(mode string) string {
+	clean := strings.ToLower(strings.TrimSpace(mode))
+	clean = strings.TrimSuffix(clean, "s")
+	switch clean {
+	case OverrideModeOff, "-1", "0", "false", "no", "disabled":
+		return OverrideModeOff
+	default:
+		if n, err := strconv.Atoi(clean); err == nil && n > 0 {
+			return strconv.Itoa(n)
+		}
+		return OverrideModeGlobal
+	}
+}
+
+// CoalesceSecondsToOverrideMode converts a CoalesceConsecutiveSeconds integer into its explicit override mode string.
+func CoalesceSecondsToOverrideMode(val int) string {
+	if val < 0 {
+		return OverrideModeOff
+	}
+	if val == 0 {
+		return strconv.Itoa(DefaultCoalesceConsecutiveSeconds)
+	}
+	return strconv.Itoa(val)
+}
+
 // NormalizeIgnoreMentionsOverrideMode returns "global", "off", "replies_and_leading", or "all".
 func NormalizeIgnoreMentionsOverrideMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
@@ -315,6 +586,7 @@ func NormalizeVoiceOverrideMode(mode string) string {
 type PlatformOverrides struct {
 	OverrideRules                 bool    `json:"override_rules,omitempty"`
 	SpeakNamesMode                string  `json:"speak_names_mode,omitempty"`
+	CoalesceConsecutiveMode       string  `json:"coalesce_consecutive_mode,omitempty"`
 	SpeakEmotesMode               string  `json:"speak_emotes_mode,omitempty"`
 	DeduplicateEmotesMode         string  `json:"deduplicate_emotes_mode,omitempty"`
 	MaxDuplicateWordsMode         string  `json:"max_duplicate_words_mode,omitempty"`
@@ -322,8 +594,10 @@ type PlatformOverrides struct {
 	IgnoreMentionsOverride        string  `json:"ignore_mentions_override,omitempty"`
 	AllowBroadcasterMentionsMode  string  `json:"allow_broadcaster_mentions_mode,omitempty"`
 	PlayAlertOnIgnoredMentionMode string  `json:"play_alert_on_ignored_mention_mode,omitempty"`
+	TranslateMode                 string  `json:"translate_mode,omitempty"`
 	VoiceOverrideMode             string  `json:"voice_override_mode,omitempty"`
 	SpeakNames                    bool    `json:"speak_names"`
+	CoalesceConsecutiveSeconds    int     `json:"coalesce_consecutive_seconds,omitempty"`
 	SpeakEmotes                   bool    `json:"speak_emotes"`
 	DeduplicateEmotes             bool    `json:"deduplicate_emotes"`
 	MaxDuplicateWords             int     `json:"max_duplicate_words"`
@@ -504,8 +778,9 @@ func LookupViewer(viewers map[string]ViewerConfig, platform, userID, userName st
 // DefaultConfig returns a new Config initialized with production defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		Version: CurrentVersion,
-		UIScale: "1.0",
+		Version:             CurrentVersion,
+		LoadedSchemaVersion: CurrentVersion,
+		UIScale:             "1.0",
 		Update: UpdateConfig{
 			CheckOnStartup: true,
 		},
@@ -561,14 +836,25 @@ func DefaultConfig() *Config {
 			Port:      DefaultWebSocketPort,
 			AuthToken: "",
 		},
+		Translation: TranslationConfig{
+			Enabled:              false,
+			RoutingMode:          TranslationRoutingPriority,
+			PlayChimeBeforeSpeak: true,
+			ChimeSoundPath:       "",
+			Providers:            DefaultTranslationProviders(),
+			Provider:             TranslationProviderMyMemory,
+			TargetLang:           DefaultTranslationTargetLang,
+			MinConfidence:        DefaultTranslationMinConfidence,
+		},
 		GlobalChatRules: GlobalChatRules{
-			SpeakNames:        true,
-			SpeakEmotes:       false,
-			DeduplicateEmotes: true,
-			MaxDuplicateWords: 2,
-			SpeakPlatformName: false,
-			DefaultVoice:      "supertonic:f1",
-			DefaultSpeed:      1.0,
+			SpeakNames:                 true,
+			CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
+			SpeakEmotes:                false,
+			DeduplicateEmotes:          true,
+			MaxDuplicateWords:          2,
+			SpeakPlatformName:          false,
+			DefaultVoice:               "supertonic:f1",
+			DefaultSpeed:               1.0,
 		},
 		Viewers: make(map[string]ViewerConfig),
 		Platforms: map[string]PlatformConfig{
@@ -663,14 +949,15 @@ func DefaultConfig() *Config {
 					},
 				},
 				Overrides: PlatformOverrides{
-					OverrideRules:     false,
-					SpeakNames:        true,
-					SpeakEmotes:       false,
-					DeduplicateEmotes: true,
-					MaxDuplicateWords: 2,
-					SpeakPlatformName: false,
-					DefaultVoice:      "",
-					DefaultSpeed:      1.0,
+					OverrideRules:              false,
+					SpeakNames:                 true,
+					CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
+					SpeakEmotes:                false,
+					DeduplicateEmotes:          true,
+					MaxDuplicateWords:          2,
+					SpeakPlatformName:          false,
+					DefaultVoice:               "",
+					DefaultSpeed:               1.0,
 				},
 			},
 			"youtube": {
@@ -745,14 +1032,15 @@ func DefaultConfig() *Config {
 					},
 				},
 				Overrides: PlatformOverrides{
-					OverrideRules:     false,
-					SpeakNames:        true,
-					SpeakEmotes:       false,
-					DeduplicateEmotes: true,
-					MaxDuplicateWords: 2,
-					SpeakPlatformName: false,
-					DefaultVoice:      "",
-					DefaultSpeed:      1.0,
+					OverrideRules:              false,
+					SpeakNames:                 true,
+					CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
+					SpeakEmotes:                false,
+					DeduplicateEmotes:          true,
+					MaxDuplicateWords:          2,
+					SpeakPlatformName:          false,
+					DefaultVoice:               "",
+					DefaultSpeed:               1.0,
 				},
 			},
 			"tiktok": {
@@ -810,14 +1098,15 @@ func DefaultConfig() *Config {
 					},
 				},
 				Overrides: PlatformOverrides{
-					OverrideRules:     false,
-					SpeakNames:        true,
-					SpeakEmotes:       false,
-					DeduplicateEmotes: true,
-					MaxDuplicateWords: 2,
-					SpeakPlatformName: false,
-					DefaultVoice:      "",
-					DefaultSpeed:      1.0,
+					OverrideRules:              false,
+					SpeakNames:                 true,
+					CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
+					SpeakEmotes:                false,
+					DeduplicateEmotes:          true,
+					MaxDuplicateWords:          2,
+					SpeakPlatformName:          false,
+					DefaultVoice:               "",
+					DefaultSpeed:               1.0,
 				},
 			},
 			"kick": {
@@ -880,14 +1169,15 @@ func DefaultConfig() *Config {
 					},
 				},
 				Overrides: PlatformOverrides{
-					OverrideRules:     false,
-					SpeakNames:        true,
-					SpeakEmotes:       false,
-					DeduplicateEmotes: true,
-					MaxDuplicateWords: 2,
-					SpeakPlatformName: false,
-					DefaultVoice:      "",
-					DefaultSpeed:      1.0,
+					OverrideRules:              false,
+					SpeakNames:                 true,
+					CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
+					SpeakEmotes:                false,
+					DeduplicateEmotes:          true,
+					MaxDuplicateWords:          2,
+					SpeakPlatformName:          false,
+					DefaultVoice:               "",
+					DefaultSpeed:               1.0,
 				},
 			},
 		},
@@ -988,6 +1278,43 @@ func (c *Config) EffectiveChatRules(platform string) (speakNames, speakEmotes, d
 	return speakNames, speakEmotes, deduplicateEmotes, maxDuplicateWords, speakPlatformName, voice, speed
 }
 
+// EffectiveCoalesceSeconds returns the effective consecutive-speaker coalescing window in seconds
+// for a platform (or 0 when disabled), taking per-setting platform overrides into account.
+func (c *Config) EffectiveCoalesceSeconds(platform string) int {
+	if c == nil {
+		return DefaultCoalesceConsecutiveSeconds
+	}
+	speakNames, _, _, _, _, _, _ := c.EffectiveChatRules(platform)
+	if !speakNames {
+		return 0
+	}
+	val := c.GlobalChatRules.CoalesceConsecutiveSeconds
+	if val == 0 {
+		val = DefaultCoalesceConsecutiveSeconds
+	}
+
+	if p, ok := c.Platforms[platform]; ok {
+		ov := p.Overrides
+		switch mode := NormalizeCoalesceOverrideMode(ov.CoalesceConsecutiveMode); mode {
+		case OverrideModeOff:
+			val = -1
+		case OverrideModeGlobal:
+			if ov.OverrideRules && ov.CoalesceConsecutiveSeconds != 0 {
+				val = ov.CoalesceConsecutiveSeconds
+			}
+		default:
+			if n, err := strconv.Atoi(mode); err == nil {
+				val = n
+			}
+		}
+	}
+
+	if val < 0 {
+		return 0
+	}
+	return val
+}
+
 // EffectiveMentionRules returns the effective @mention and reply filtering rules for a platform,
 // taking per-setting platform overrides into account.
 func (c *Config) EffectiveMentionRules(platform string) (mode string, allowBroadcaster bool, playAlert bool) {
@@ -1035,16 +1362,55 @@ func (c *Config) EffectiveMentionRules(platform string) (mode string, allowBroad
 	return mode, allowBroadcaster, playAlert
 }
 
-// Clone creates a deep copy of the Config.
+// EffectiveTranslationEnabled reports whether foreign chat translation is enabled for a platform,
+// taking per-platform TranslateMode ("global", "on", "off") into account.
+func (c *Config) EffectiveTranslationEnabled(platform string) bool {
+	if c == nil {
+		return false
+	}
+	if p, ok := c.Platforms[platform]; ok {
+		switch NormalizeBoolOverrideMode(p.Overrides.TranslateMode) {
+		case OverrideModeOn:
+			return true
+		case OverrideModeOff:
+			return false
+		}
+	}
+	return c.Translation.Enabled
+}
+
+// Clone creates a deep copy of the Config without JSON serialization overhead.
 func (c *Config) Clone() *Config {
-	data, err := json.Marshal(c)
-	if err != nil {
+	if c == nil {
 		return DefaultConfig()
 	}
-	var clone Config
-	if err := json.Unmarshal(data, &clone); err != nil {
-		return DefaultConfig()
+	clone := *c
+	clone.TTS.EnabledModels = slices.Clone(c.TTS.EnabledModels)
+	clone.Safety.BlockedWords = slices.Clone(c.Safety.BlockedWords)
+	clone.Bots.CustomBots = slices.Clone(c.Bots.CustomBots)
+	clone.Logging.LiveLogs = slices.Clone(c.Logging.LiveLogs)
+	clone.Translation.Providers = slices.Clone(c.Translation.Providers)
+
+	if c.Viewers != nil {
+		clone.Viewers = make(map[string]ViewerConfig, len(c.Viewers))
+		for k, v := range c.Viewers {
+			v.Accounts = slices.Clone(v.Accounts)
+			clone.Viewers[k] = v
+		}
 	}
+
+	if c.Platforms != nil {
+		clone.Platforms = make(map[string]PlatformConfig, len(c.Platforms))
+		for k, p := range c.Platforms {
+			p.ReadRules.IgnoredPrefixes = slices.Clone(p.ReadRules.IgnoredPrefixes)
+			p.ReadRules.Roles = slices.Clone(p.ReadRules.Roles)
+			if p.Notifications != nil {
+				p.Notifications = maps.Clone(p.Notifications)
+			}
+			clone.Platforms[k] = p
+		}
+	}
+
 	return &clone
 }
 
@@ -1076,6 +1442,7 @@ func Load(path string) (*Config, error) {
 						cfg := DefaultConfig()
 						cfg.TTS.Preset = ""
 						cfg.TTS.EnabledModels = nil
+						cfg.Translation.Providers = nil
 						if errParse := json.Unmarshal(legacyData, cfg); errParse == nil {
 							_ = migrate(cfg)
 							// Migrate immediately to the new location
@@ -1091,14 +1458,32 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg := DefaultConfig()
+	cfg.Version = 0
 	cfg.TTS.Preset = ""
 	cfg.TTS.EnabledModels = nil
+	cfg.Translation.Providers = nil
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config json: %w", err)
 	}
 
+	rawVersion := cfg.Version
+	if rawVersion <= 0 {
+		rawVersion = 1
+	}
+	cfg.LoadedSchemaVersion = rawVersion
+
+	if rawVersion < CurrentVersion {
+		if err := createPreMigrationConfigBackup(path, data, rawVersion); err != nil {
+			return nil, fmt.Errorf("backup config before schema migration: %w", err)
+		}
+	}
+
 	if err := migrate(cfg); err != nil {
 		return nil, fmt.Errorf("migrate config: %w", err)
+	}
+
+	if rawVersion < CurrentVersion {
+		_ = saveLocked(path, cfg)
 	}
 
 	return cfg, nil
@@ -1148,6 +1533,10 @@ func saveLocked(path string, cfg *Config) error {
 		return fmt.Errorf("atomic rename config: %w", err)
 	}
 
+	if cfg != nil && cfg.Version > 0 {
+		cfg.LoadedSchemaVersion = cfg.Version
+	}
+
 	return nil
 }
 
@@ -1173,10 +1562,8 @@ func voiceFamilyFromID(voiceID string) string {
 }
 
 func migrate(cfg *Config) error {
-	// Baseline migration runner: upgrade configs older than CurrentVersion
-	if cfg.Version < 1 {
-		cfg.Version = 1
-	}
+	// Baseline migration runner: normalize in-memory schema version to CurrentVersion
+	cfg.Version = CurrentVersion
 
 	if len(cfg.TTS.EnabledModels) == 0 {
 		cfg.TTS.EnabledModels = cfg.TTS.EffectiveEnabledModels()
@@ -1328,10 +1715,16 @@ func migrate(cfg *Config) error {
 			if p.Overrides.MaxDuplicateWords == 0 {
 				p.Overrides.MaxDuplicateWords = 2
 			}
+			if p.Overrides.CoalesceConsecutiveSeconds == 0 {
+				p.Overrides.CoalesceConsecutiveSeconds = DefaultCoalesceConsecutiveSeconds
+			}
 			p.Overrides.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(p.Overrides.IgnoreMentionsMode)
 			if p.Overrides.OverrideRules {
 				if p.Overrides.SpeakNamesMode == "" {
 					p.Overrides.SpeakNamesMode = BoolToOverrideMode(p.Overrides.SpeakNames)
+				}
+				if p.Overrides.CoalesceConsecutiveMode == "" && p.Overrides.CoalesceConsecutiveSeconds != DefaultCoalesceConsecutiveSeconds {
+					p.Overrides.CoalesceConsecutiveMode = CoalesceSecondsToOverrideMode(p.Overrides.CoalesceConsecutiveSeconds)
 				}
 				if p.Overrides.SpeakEmotesMode == "" {
 					p.Overrides.SpeakEmotesMode = BoolToOverrideMode(p.Overrides.SpeakEmotes)
@@ -1366,7 +1759,11 @@ func migrate(cfg *Config) error {
 	if cfg.GlobalChatRules.MaxDuplicateWords == 0 {
 		cfg.GlobalChatRules.MaxDuplicateWords = 2
 	}
+	if cfg.GlobalChatRules.CoalesceConsecutiveSeconds == 0 {
+		cfg.GlobalChatRules.CoalesceConsecutiveSeconds = DefaultCoalesceConsecutiveSeconds
+	}
 	cfg.GlobalChatRules.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(cfg.GlobalChatRules.IgnoreMentionsMode)
+	NormalizeTranslationProviders(&cfg.Translation)
 
 	return nil
 }

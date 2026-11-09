@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -461,6 +462,122 @@ func (m *Manager) DistinctChannels(ctx context.Context, platform string) ([]stri
 	m.mu.RUnlock()
 
 	return primary.DistinctChannels(ctx, platform)
+}
+
+// CheckSchemaRegression inspects the primary SQLite backend (if present) for a schema downgrade
+// where user_version on disk exceeds CurrentSchemaVersion.
+func (m *Manager) CheckSchemaRegression() (savedVersion int, supportedVersion int, candidate *DBBackupInfo, regressed bool) {
+	supportedVersion = CurrentSchemaVersion
+	if m == nil {
+		return 0, supportedVersion, nil, false
+	}
+	m.mu.RLock()
+	if m.closed || len(m.backends) == 0 {
+		m.mu.RUnlock()
+		return 0, supportedVersion, nil, false
+	}
+	primary := m.backends[0]
+	m.mu.RUnlock()
+
+	if sqlBackend, ok := primary.(*SQLiteBackend); ok {
+		return sqlBackend.CheckSchemaRegression()
+	}
+	return 0, supportedVersion, nil, false
+}
+
+// ListBackupInfos returns all versioned schema backups from the primary SQLite backend, sorted newest-first.
+func (m *Manager) ListBackupInfos() ([]DBBackupInfo, error) {
+	if m == nil {
+		return nil, nil
+	}
+	m.mu.RLock()
+	if m.closed || len(m.backends) == 0 {
+		m.mu.RUnlock()
+		return nil, nil
+	}
+	primary := m.backends[0]
+	m.mu.RUnlock()
+
+	if sqlBackend, ok := primary.(*SQLiteBackend); ok {
+		return sqlBackend.ListBackupInfos()
+	}
+	return nil, nil
+}
+
+// RestoreBackup restores a versioned schema backup on the primary SQLite backend in place.
+func (m *Manager) RestoreBackup(backupPath string) error {
+	if m == nil {
+		return errors.New("event log manager is nil")
+	}
+	m.mu.RLock()
+	if m.closed || len(m.backends) == 0 {
+		m.mu.RUnlock()
+		return errors.New("no active event log backend")
+	}
+	primary := m.backends[0]
+	m.mu.RUnlock()
+
+	if sqlBackend, ok := primary.(*SQLiteBackend); ok {
+		return sqlBackend.RestoreBackup(backupPath)
+	}
+	return errors.New("primary backend does not support file backup restore")
+}
+
+// RestoreFromBytes snapshots the current database and replaces it with dbBytes on the primary SQLite backend.
+func (m *Manager) RestoreFromBytes(dbBytes []byte) error {
+	if m == nil {
+		return errors.New("event log manager is nil")
+	}
+	m.mu.RLock()
+	if m.closed || len(m.backends) == 0 {
+		m.mu.RUnlock()
+		return errors.New("no active event log backend")
+	}
+	primary := m.backends[0]
+	m.mu.RUnlock()
+
+	if sqlBackend, ok := primary.(*SQLiteBackend); ok {
+		return sqlBackend.RestoreFromBytes(dbBytes)
+	}
+	return errors.New("primary backend does not support database byte restore")
+}
+
+// DBFileSize returns the on-disk size in bytes of the primary SQLite database (or 0 if unavailable).
+func (m *Manager) DBFileSize() int64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	if m.closed || len(m.backends) == 0 {
+		m.mu.RUnlock()
+		return 0
+	}
+	primary := m.backends[0]
+	m.mu.RUnlock()
+
+	if sqlBackend, ok := primary.(*SQLiteBackend); ok {
+		return sqlBackend.DBFileSize()
+	}
+	return 0
+}
+
+// WriteSnapshot checkpoints WAL frames and writes a consistent copy of the primary SQLite database into w.
+func (m *Manager) WriteSnapshot(w io.Writer) error {
+	if m == nil {
+		return errors.New("event log manager is nil")
+	}
+	m.mu.RLock()
+	if m.closed || len(m.backends) == 0 {
+		m.mu.RUnlock()
+		return errors.New("no active event log backend")
+	}
+	primary := m.backends[0]
+	m.mu.RUnlock()
+
+	if sqlBackend, ok := primary.(*SQLiteBackend); ok {
+		return sqlBackend.WriteSnapshot(w)
+	}
+	return errors.New("primary backend does not support database snapshots")
 }
 
 // PruneNow executes retention pruning across all backends using the Manager's current RetentionPolicy.

@@ -3,317 +3,250 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Privacy Policy — TownCrier</title>
+  <title>Privacy Policy | TownCrier</title>
   <link rel="icon" type="image/png" href="icon.png">
-  <style>
-    :root {
-      --bg-color: #0F172A;
-      --card-bg: #1E293B;
-      --border-color: #334155;
-      --text-main: #F8FAFC;
-      --text-muted: #94A3B8;
-      --accent: #38BDF8;
-      --accent-hover: #0284C7;
-      --code-bg: #0B1120;
-    }
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-    body {
-      background-color: var(--bg-color);
-      color: var(--text-main);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.65;
-      padding: 2rem 1.5rem 4rem;
-    }
-    .container {
-      max-width: 820px;
-      margin: 0 auto;
-    }
-    header {
-      display: flex;
-      align-items: center;
-      gap: 1.25rem;
-      margin-bottom: 2rem;
-      padding-bottom: 1.5rem;
-      border-bottom: 1px solid var(--border-color);
-    }
-    header img {
-      width: 56px;
-      height: 56px;
-      border-radius: 12px;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
-    }
-    header h1 {
-      font-size: 1.85rem;
-      font-weight: 700;
-      color: var(--text-main);
-      letter-spacing: -0.02em;
-    }
-    header p {
-      color: var(--accent);
-      font-size: 0.95rem;
-      font-weight: 500;
-    }
-    nav {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1rem;
-      margin-bottom: 2rem;
-      padding: 0.75rem 1rem;
-      background: var(--card-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-    }
-    nav a {
-      color: var(--text-main);
-      text-decoration: none;
-      font-weight: 500;
-      font-size: 0.95rem;
-      transition: color 0.15s ease;
-    }
-    nav a:hover {
-      color: var(--accent);
-    }
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
-      padding: 1.75rem;
-      margin-bottom: 1.5rem;
-    }
-    h2 {
-      color: var(--text-main);
-      font-size: 1.35rem;
-      margin-bottom: 0.75rem;
-      font-weight: 600;
-    }
-    h3 {
-      color: var(--text-main);
-      font-size: 1.1rem;
-      margin-top: 1.25rem;
-      margin-bottom: 0.5rem;
-      font-weight: 600;
-    }
-    p {
-      color: var(--text-muted);
-      margin-bottom: 1rem;
-    }
-    p:last-child {
-      margin-bottom: 0;
-    }
-    ul {
-      list-style-type: none;
-      padding-left: 0;
-      margin-bottom: 1rem;
-    }
-    li {
-      color: var(--text-muted);
-      position: relative;
-      padding-left: 1.5rem;
-      margin-bottom: 0.5rem;
-    }
-    li::before {
-      content: "•";
-      color: var(--accent);
-      position: absolute;
-      left: 0.5rem;
-      font-weight: bold;
-    }
-    a {
-      color: var(--accent);
-      text-decoration: none;
-    }
-    a:hover {
-      text-decoration: underline;
-    }
-    .callout {
-      border-left: 4px solid var(--accent);
-      background: rgba(56, 189, 248, 0.08);
-      padding: 1rem 1.25rem;
-      border-radius: 0 8px 8px 0;
-      margin-bottom: 1.25rem;
-    }
-    .callout p {
-      color: var(--text-main);
-    }
-    code {
-      background: var(--code-bg);
-      color: var(--accent);
-      padding: 0.15rem 0.4rem;
-      border-radius: 4px;
-      font-size: 0.9em;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    }
-    footer {
-      margin-top: 3rem;
-      padding-top: 1.5rem;
-      border-top: 1px solid var(--border-color);
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      align-items: center;
-      gap: 1rem;
-      font-size: 0.875rem;
-      color: var(--text-muted);
-    }
-    footer nav {
-      background: transparent;
-      border: none;
-      padding: 0;
-      margin: 0;
-      gap: 1.25rem;
-    }
-    footer nav a {
-      color: var(--text-muted);
-    }
-    footer nav a:hover {
-      color: var(--accent);
-    }
-  </style>
+  <link rel="stylesheet" href="site.css">
 </head>
 <body>
-  <div class="container">
-    <header>
-      <img src="icon.png" alt="TownCrier Logo">
-      <div>
-        <h1>Privacy Policy</h1>
-        <p>TownCrier Open Source Project</p>
+  <div class="app-shell">
+    <header class="site-header">
+      <a class="brand" href="index.html">
+        <img src="icon.png" alt="TownCrier Logo" width="56" height="56" fetchpriority="high">
+        <div>
+          <div class="brand-title">TownCrier</div>
+          <div class="brand-subtitle">Offline Neural TTS &amp; Multi-Platform Livestream Chat Aggregator</div>
+        </div>
+      </a>
+      <div class="header-actions">
+        <a class="btn" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Download Latest Release</a>
+        <a class="btn btn-secondary" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub</a>
       </div>
     </header>
 
-    <nav aria-label="Main Navigation">
-      <a href="index.html">Home</a>
-      <a href="privacy.html"><strong>Privacy Policy</strong></a>
-      <a href="terms.html">Terms of Service</a>
-      <a href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
-      <a href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Releases</a>
-    </nav>
+    <div class="docs-layout">
+      <aside class="sidebar">
+        <nav aria-label="Documentation">
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Documentation</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="index.html">Overview &amp; Home</a></li>
+              <li><a class="sidebar-link" href="features.html">Features &amp; Config Guide</a></li>
+              <li><a class="sidebar-link" href="translation-guides.html">Translation Setup Guides</a></li>
+            </ul>
+          </div>
 
-    <main>
-      <div class="card">
-        <p><strong>Effective Date:</strong> October 24, 2026</p>
-        <p><strong>Last Updated:</strong> October 24, 2026</p>
-        <p>
-          This Privacy Policy explains how <strong>TownCrier</strong> ("we", "us", or "our"), an open-source desktop software application developed by mrpoundsign and community contributors, handles data.
-        </p>
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Legal &amp; Policies</div>
+            <ul class="sidebar-nav" role="list">
+              <li>
+                <a class="sidebar-link" href="privacy.html" aria-current="page">Privacy Policy</a>
+                <ul class="sidebar-subnav" role="list">
+                  <li><a class="sidebar-sublink" href="#local-only">1. Local-Only Architecture</a></li>
+                  <li><a class="sidebar-sublink" href="#youtube-google">2. YouTube &amp; Google Data</a></li>
+                  <li><a class="sidebar-sublink" href="#streaming-platforms">3. Twitch, TikTok &amp; Kick</a></li>
+                  <li><a class="sidebar-sublink" href="#translation-services">4. Translation Services</a></li>
+                  <li><a class="sidebar-sublink" href="#downloads-updates">5. Models, Updates &amp; Backups</a></li>
+                  <li><a class="sidebar-sublink" href="#open-source">6. Open Source</a></li>
+                  <li><a class="sidebar-sublink" href="#changes">7. Policy Changes</a></li>
+                  <li><a class="sidebar-sublink" href="#contact">8. Contact Us</a></li>
+                </ul>
+              </li>
+              <li><a class="sidebar-link" href="terms.html">Terms of Service</a></li>
+            </ul>
+          </div>
+
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Project</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub Repository &#8599;</a></li>
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Releases &amp; Installer &#8599;</a></li>
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">Report an Issue &#8599;</a></li>
+            </ul>
+          </div>
+        </nav>
+      </aside>
+
+      <div class="content-column">
+        <main>
+          <div class="page-title-banner">
+            <h1>Privacy Policy</h1>
+            <p>Effective Date: October 24, 2026 &bull; Last Updated: November 9, 2026</p>
+          </div>
+
+          <div class="card">
+            <p>
+              This Privacy Policy explains how <strong>TownCrier</strong> ("we", "us", or "our"), an open-source desktop software application developed by mrpoundsign and community contributors, handles data on your computer and when you choose to connect optional third-party services.
+            </p>
+            <div class="callout">
+              <p>
+                <strong>Note on Third-Party Services (As of November 9, 2026):</strong> TownCrier is an independent open-source application and is not affiliated with Google, YouTube, Twitch, TikTok, EulerStream, Kick, Translated S.r.l. (MyMemory), DeepL, LibreTranslate, Hugging Face, or GitHub. Any summaries of third-party service behavior or policies in this document are provided for convenience <strong>as of November 9, 2026</strong>. Because external providers may change their practices at any time without notice to us, we strongly encourage you to review each provider's current official Privacy Policy linked below before enabling those integrations.
+              </p>
+            </div>
+          </div>
+
+          <section id="local-only" class="card">
+            <h2>1. 100% Local-Only Architecture</h2>
+            <div class="callout">
+              <p><strong>TownCrier does not operate any centralized servers, cloud databases, user tracking, or telemetry services.</strong></p>
+            </div>
+            <p>
+              TownCrier is a standalone desktop application for Windows and Linux. All core features—including neural text-to-speech synthesis (TTS), chat log parsing, SQLite full-text search indexing, audio playback, and profanity/bot filtering—execute entirely on your local personal computer.
+            </p>
+            <p>
+              We do not collect, harvest, log, transmit, or sell your personal data, chat history, stream information, credentials, or usage analytics.
+            </p>
+          </section>
+
+          <section id="youtube-google" class="card">
+            <h2>2. YouTube API Services &amp; Google User Data</h2>
+            <p>
+              TownCrier provides an optional integration with <strong>YouTube API Services</strong> to allow streamers to view live chat (including private or unlisted testing broadcasts) and perform stream moderation directly from the application.
+            </p>
+            <p>
+              By using TownCrier's YouTube features, you acknowledge and agree that your use is subject to the <a href="http://www.google.com/policies/privacy" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a> (please review Google's current policy directly for the latest details).
+            </p>
+
+            <h3>Data Accessed via Google APIs</h3>
+            <p>
+              When you explicitly authenticate TownCrier with YouTube via Google OAuth 2.0 PKCE, the application requests the following scope:
+            </p>
+            <ul>
+              <li><code>https://www.googleapis.com/auth/youtube.force-ssl</code>: Used exclusively to identify the authenticated broadcaster/moderator channel, read live chat on your own broadcasts when authenticated, and execute moderation commands that you initiate.</li>
+            </ul>
+            <p>Specifically, TownCrier accesses only:</p>
+            <ul>
+              <li><strong>Channel &amp; Broadcast Identification:</strong> Your channel ID, title, custom URL/handle, and active broadcast chat ID (via <code>GET /youtube/v3/channels</code> and <code>GET /youtube/v3/liveBroadcasts</code>) to display your active account profile and connect to your stream chat.</li>
+              <li><strong>Live Chat Moderation Actions:</strong> Deleting a message (<code>DELETE /youtube/v3/liveChat/messages</code>) or timing out / banning a user (<code>POST /youtube/v3/liveChat/bans</code>) solely when you click the corresponding moderation button in TownCrier.</li>
+            </ul>
+
+            <h3>How Google User Data is Used</h3>
+            <p>
+              Any data received from Google APIs is processed strictly on your personal computer for the sole purpose of displaying your live chat, channel information, and carrying out moderation commands you request.
+            </p>
+            <p>
+              Google user data is <strong>never</strong>:
+            </p>
+            <ul>
+              <li>Transferred to external servers, cloud databases, or third parties;</li>
+              <li>Used for advertising, profiling, marketing, or behavioral tracking;</li>
+              <li>Used to train artificial intelligence or machine learning models;</li>
+              <li>Accessed or viewed by the TownCrier developers or any third party.</li>
+            </ul>
+
+            <h3>Storage &amp; Security of Google Credentials</h3>
+            <p>
+              OAuth 2.0 access and refresh tokens returned by Google are stored solely on your local device using your operating system's native credential manager (Windows Credential Manager via the OS keyring API, or secure memory fallback on Linux). Tokens are never uploaded to any remote host and are never included in exported configuration backups.
+            </p>
+
+            <h3>Limited Use Disclosure</h3>
+            <p>
+              TownCrier's use and transfer to any other app of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener noreferrer">Google API Services User Data Policy</a>, including the Limited Use requirements.
+            </p>
+
+            <h3>Revoking Access &amp; Data Deletion</h3>
+            <p>You have full control over your Google credentials and permissions at all times:</p>
+            <ul>
+              <li><strong>In the App:</strong> Open <strong>Settings &rarr; YouTube</strong> and click <strong>Disconnect</strong>. TownCrier immediately and permanently deletes all stored access and refresh tokens from your operating system's local credential store.</li>
+              <li><strong>From Google Account Settings:</strong> You can revoke TownCrier's access at any time via the <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">Google Security Settings Permissions page</a>.</li>
+            </ul>
+          </section>
+
+          <section id="streaming-platforms" class="card">
+            <h2>3. Twitch, TikTok Live &amp; Kick Integrations</h2>
+            <p>
+              When you enable a streaming platform tab in TownCrier, your computer connects directly to that platform's endpoints. Summaries below reflect how these integrations operate <strong>as of November 9, 2026</strong>; please consult each service's official privacy policy for their current data practices:
+            </p>
+
+            <h3>Twitch</h3>
+            <ul>
+              <li><strong>What TownCrier Sends &amp; Receives:</strong> In anonymous IRC mode, TownCrier connects read-only to <code>irc-ws.chat.twitch.tv</code> using your configured channel name. If you optionally click <strong>Connect with Twitch (OAuth)</strong>, TownCrier connects directly to Twitch (<code>id.twitch.tv</code>, <code>eventsub.wss.twitch.tv</code>, and <code>api.twitch.tv/helix</code>) to receive stream alerts (subscriptions, bits, raids, follows, channel point redemptions, charity donations, AutoMod queue) and to execute moderation actions you initiate (delete message, timeout/ban user, approve/deny AutoMod). Public emote and badge images are fetched from Twitch's CDN (<code>static-cdn.jtvnw.net</code>).</li>
+              <li><strong>Local Credential Storage:</strong> Twitch OAuth tokens are stored exclusively in your local OS keyring and can be wiped at any time by clicking <strong>Disconnect</strong> in <strong>Settings &rarr; Twitch</strong>.</li>
+              <li><strong>Official Policy:</strong> Review the <a href="https://www.twitch.tv/p/en/legal/privacy-notice/" target="_blank" rel="noopener noreferrer">Twitch Privacy Notice</a>.</li>
+            </ul>
+
+            <h3>TikTok Live &amp; EulerStream Signing</h3>
+            <ul>
+              <li><strong>What TownCrier Sends &amp; Receives:</strong> TownCrier connects to public TikTok Live rooms (<code>tiktok.com</code>) without requiring a TikTok account or login credentials, reading public chat, follows, shares, subscriptions, and gift events, and downloading public gift/badge icons from TikTok's CDN.</li>
+              <li><strong>EulerStream WebCast Signature Service (As of November 9, 2026):</strong> After verifying that a channel is live, the open-source TikTok Live client library transmits the target channel's public room ID (and your optional EulerStream API key, if configured) to <code>tiktok.eulerstream.com</code> to obtain a WebCast connection signature. No personal viewer or streamer login credentials are sent by TownCrier.</li>
+              <li><strong>Official Policies:</strong> Review the <a href="https://www.tiktok.com/legal/page/row/privacy-policy/en" target="_blank" rel="noopener noreferrer">TikTok Privacy Policy</a> and <a href="https://www.eulerstream.com/privacy" target="_blank" rel="noopener noreferrer">EulerStream Privacy Policy</a>.</li>
+            </ul>
+
+            <h3>Kick</h3>
+            <ul>
+              <li><strong>What TownCrier Sends &amp; Receives:</strong> TownCrier connects directly to Kick's public channel API (<code>kick.com</code>) and Pusher WebSocket service (<code>ws-us2.pusher.com</code>) to receive public chat messages, subscriptions, gifted subscriptions, channel reward redemptions, and moderation events, and fetches public emote images from <code>files.kick.com</code>. Any optional Kick credentials are stored exclusively in your local OS keyring.</li>
+              <li><strong>Official Policy:</strong> Review the <a href="https://kick.com/privacy-policy" target="_blank" rel="noopener noreferrer">Kick Privacy Policy</a>.</li>
+            </ul>
+          </section>
+
+          <section id="translation-services" class="card">
+            <h2>4. Optional Foreign Chat Translation Services</h2>
+            <p>
+              Foreign chat translation (<strong>Settings &rarr; General &amp; Audio &rarr; Enable Foreign Chat Translation</strong>) is <strong>disabled by default</strong>. When you opt in and enable translation:
+            </p>
+            <ul>
+              <li><strong>Direct Client-to-Provider Requests:</strong> Translation requests are sent directly from your PC to the provider(s) you enable in <strong>Settings &rarr; Translation</strong>—never through any TownCrier server.</li>
+              <li><strong>Data Sent for Translation:</strong> Only the foreign-language sentence text (with emote codes, URLs, and @mentions stripped where applicable) and source/target language codes are transmitted. Chatter usernames, user IDs, and stream OAuth tokens are never sent to translation providers. Messages already in your target language short-circuit locally without network traffic.</li>
+              <li><strong>Local Caching &amp; Key Storage:</strong> Translation API keys are stored in your local OS keyring (and scrubbed from exported backups). Frequently translated sentences are cached locally on your disk in <code>cache/translations.json</code>.</li>
+            </ul>
+            <p>
+              Provider-specific notes (<strong>as of November 9, 2026</strong>—please check each provider's current privacy policy directly before use):
+            </p>
+            <ul>
+              <li><strong>MyMemory (Translated S.r.l.):</strong> Sends sentence text to <code>api.mymemory.translated.net</code> (and your optional email address in the <code>de</code> parameter if you configure the 10x free quota). As of November 9, 2026, free/anonymous MyMemory translations contribute to MyMemory's public translation memory archive. Review the <a href="https://mymemory.translated.net/doc/usagelimits.php" target="_blank" rel="noopener noreferrer">MyMemory Terms</a> and <a href="https://translated.com/privacy-policy" target="_blank" rel="noopener noreferrer">Translated S.r.l. Privacy Policy</a>.</li>
+              <li><strong>Google Cloud Translation API (Basic v2):</strong> Sends sentence text directly to <code>translation.googleapis.com</code> authenticated with your own Google Cloud API key. Review the <a href="https://cloud.google.com/terms/cloud-privacy-notice" target="_blank" rel="noopener noreferrer">Google Cloud Privacy Notice</a> and <a href="https://cloud.google.com/translate/data-usage" target="_blank" rel="noopener noreferrer">Cloud Translation Data Usage FAQ</a>.</li>
+              <li><strong>DeepL API (Free / Pro):</strong> Sends sentence text directly to <code>api-free.deepl.com</code> or <code>api.deepl.com</code> authenticated with your own DeepL API key. Review the <a href="https://www.deepl.com/pro-data-security" target="_blank" rel="noopener noreferrer">DeepL Pro Data Security &amp; Privacy Policy</a>.</li>
+              <li><strong>LibreTranslate &amp; Local LLMs (Ollama / OpenAI-Compatible):</strong> When pointed at <code>http://localhost:5000</code> (LibreTranslate Docker) or <code>http://localhost:11434</code> (local Ollama), translation runs 100% offline on your own machine. If you configure a remote endpoint URL, requests are governed by the operator of that endpoint.</li>
+            </ul>
+          </section>
+
+          <section id="downloads-updates" class="card">
+            <h2>5. Voice Model Downloads, Update Checks &amp; Local Backups</h2>
+            <ul>
+              <li><strong>Neural Voice Pack Downloads:</strong> When you download an offline TTS voice model pack in TownCrier or its setup wizard, the application downloads the model archive directly from <a href="https://huggingface.co/privacy" target="_blank" rel="noopener noreferrer">Hugging Face</a> (<code>huggingface.co</code>) or <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener noreferrer">GitHub Releases</a> (<code>github.com</code>). Once downloaded, all speech synthesis runs 100% offline.</li>
+              <li><strong>Startup Update Checks:</strong> When <em>Check for TownCrier updates on startup</em> is enabled, TownCrier makes a standard HTTPS request to the public GitHub Releases API (<code>api.github.com</code>) to check the latest version tag and SHA-256 checksums. You can disable this check at any time in <strong>Settings &rarr; General &amp; Audio</strong>.</li>
+              <li><strong>Local Data &amp; Portable <code>.zip</code> Backups:</strong> All configuration files, automatic schema snapshots, and SQLite event logs reside locally on your computer (<code>%LOCALAPPDATA%\com.github.mrpoundsign.towncrier\</code> on Windows or <code>~/.local/share/towncrier/</code> on Linux). When you click <strong>Export Backup&hellip;</strong>, TownCrier creates a local <code>.zip</code> file at the path you choose and automatically scrubs OAuth tokens, WebSocket auth tokens, and translation API keys from <code>config-backup.json</code>. TownCrier never uploads backups anywhere; you control if and with whom you share a backup file.</li>
+            </ul>
+          </section>
+
+          <section id="open-source" class="card">
+            <h2>6. Open Source Transparency</h2>
+            <p>
+              Because TownCrier is licensed under the <a href="https://github.com/mrpoundsign/TownCrier/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GNU Affero General Public License v3.0</a>, the entire application codebase is publicly auditable. You can inspect all networking, storage, and API logic directly in the <a href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">TownCrier GitHub repository</a>.
+            </p>
+          </section>
+
+          <section id="changes" class="card">
+            <h2>7. Changes to This Privacy Policy</h2>
+            <p>
+              We may update this Privacy Policy from time to time to reflect changes in TownCrier's functionality or applicable regulations. Any updates will be posted to this page with an updated "Last Updated" date.
+            </p>
+          </section>
+
+          <section id="contact" class="card">
+            <h2>8. Contact Us</h2>
+            <p>
+              If you have questions, concerns, or requests regarding this Privacy Policy or TownCrier's privacy practices, please open an issue on GitHub:
+            </p>
+            <p>
+              <a href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">https://github.com/mrpoundsign/TownCrier/issues</a>
+            </p>
+          </section>
+        </main>
+
+        <footer>
+          <div>&copy; TownCrier Open Source Project. Licensed under GNU AGPLv3.</div>
+          <nav aria-label="Footer">
+            <a href="index.html">Home</a>
+            <a href="features.html">Features &amp; Config Guide</a>
+            <a href="translation-guides.html">Translation Guides</a>
+            <a href="privacy.html">Privacy Policy</a>
+            <a href="terms.html">Terms of Service</a>
+            <a href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>
+          </nav>
+        </footer>
       </div>
-
-      <section class="card">
-        <h2>1. 100% Local-Only Architecture</h2>
-        <div class="callout">
-          <p><strong>TownCrier does not operate any centralized servers, cloud databases, user tracking, or telemetry services.</strong></p>
-        </div>
-        <p>
-          TownCrier is a standalone desktop application for Windows and Linux. All core features—including text-to-speech synthesis (TTS), chat log parsing, SQLite search indexing, sound playback, and filtering—execute entirely on your local personal computer.
-        </p>
-        <p>
-          We do not collect, harvest, log, or sell your personal data, chat history, stream information, or usage analytics.
-        </p>
-      </section>
-
-      <section class="card">
-        <h2>2. YouTube API Services & Google User Data</h2>
-        <p>
-          TownCrier provides an optional integration with <strong>YouTube API Services</strong> to allow streamers to view live chat and perform stream moderation directly from the application.
-        </p>
-        <p>
-          By using TownCrier's YouTube features, you acknowledge and agree that your use is subject to the <a href="http://www.google.com/policies/privacy" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a>.
-        </p>
-
-        <h3>Data Accessed via Google APIs</h3>
-        <p>
-          When you explicitly authenticate TownCrier with YouTube via Google OAuth 2.0 PKCE, the application requests the following scope:
-        </p>
-        <ul>
-          <li><code>https://www.googleapis.com/auth/youtube.force-ssl</code>: Used exclusively to identify the authenticated broadcaster/moderator channel and to execute moderation commands that you initiate.</li>
-        </ul>
-        <p>Specifically, TownCrier accesses only:</p>
-        <ul>
-          <li><strong>Channel Identification:</strong> Your channel ID, title, and public custom URL / handle (via <code>GET /youtube/v3/channels?part=snippet&mine=true</code>) to display your active account profile in the Settings window.</li>
-          <li><strong>Live Chat Moderation Actions:</strong> Deleting a message (<code>DELETE /youtube/v3/liveChat/messages</code>) or timing out / banning a user (<code>POST /youtube/v3/liveChat/bans</code>) solely when you click the corresponding moderation button in TownCrier.</li>
-        </ul>
-
-        <h3>How Google User Data is Used</h3>
-        <p>
-          Any data received from Google APIs is processed strictly in real-time memory on your personal computer for the sole purpose of displaying channel information and carrying out moderation commands you request.
-        </p>
-        <p>
-          Google user data is <strong>never</strong>:
-        </p>
-        <ul>
-          <li>Transferred to external servers, cloud databases, or third parties;</li>
-          <li>Used for advertising, profiling, marketing, or behavioral tracking;</li>
-          <li>Used to train artificial intelligence or machine learning models;</li>
-          <li>Accessed or viewed by the TownCrier developers or any third party.</li>
-        </ul>
-
-        <h3>Storage & Security of Google Credentials</h3>
-        <p>
-          OAuth 2.0 access and refresh tokens returned by Google are stored solely on your local device. TownCrier stores credentials using your operating system's native secure credential manager (Windows Credential Manager via the OS keyring API, or secure memory fallback on Linux). Tokens are never uploaded to any remote host.
-        </p>
-
-        <h3>Limited Use Disclosure</h3>
-        <p>
-          TownCrier's use and transfer to any other app of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener noreferrer">Google API Services User Data Policy</a>, including the Limited Use requirements.
-        </p>
-
-        <h3>Revoking Access & Data Deletion</h3>
-        <p>You have full control over your Google credentials and permissions at all times:</p>
-        <ul>
-          <li><strong>In the App:</strong> Open <strong>Settings &rarr; YouTube</strong> and click <strong>Disconnect</strong>. TownCrier immediately and permanently deletes all stored access and refresh tokens from your operating system's local credential store.</li>
-          <li><strong>From Google Account Settings:</strong> You can revoke TownCrier's access at any time via the <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">Google Security Settings Permissions page</a>.</li>
-        </ul>
-      </section>
-
-      <section class="card">
-        <h2>3. Other Platform Integrations (Twitch, Kick, TikTok)</h2>
-        <p>
-          TownCrier connects directly from your local machine to third-party streaming platform APIs and chat sockets (Twitch IRC/Helix, Kick API/WebSockets, TikTok Live WebSockets):
-        </p>
-        <ul>
-          <li>Any platform credentials (such as Twitch OAuth tokens) are stored exclusively in your local operating system keyring.</li>
-          <li>Chat logs, event records, and search indexes are stored locally in an embedded SQLite database on your device (<code>%LOCALAPPDATA%\com.github.mrpoundsign.towncrier\</code> on Windows or <code>~/.local/share/towncrier/</code> on Linux).</li>
-          <li>No platform data is ever mirrored or forwarded to external servers.</li>
-        </ul>
-      </section>
-
-      <section class="card">
-        <h2>4. Open Source Transparency</h2>
-        <p>
-          Because TownCrier is licensed under the <a href="https://github.com/mrpoundsign/TownCrier/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GNU Affero General Public License v3.0</a>, the entire application codebase is publicly auditable. You can inspect all networking, storage, and API logic directly in the <a href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">TownCrier GitHub repository</a>.
-        </p>
-      </section>
-
-      <section class="card">
-        <h2>5. Changes to This Privacy Policy</h2>
-        <p>
-          We may update this Privacy Policy from time to time to reflect changes in functionality or applicable regulations. Any updates will be posted to this page with an updated "Last Updated" date.
-        </p>
-      </section>
-
-      <section class="card">
-        <h2>6. Contact Us</h2>
-        <p>
-          If you have questions, concerns, or requests regarding this Privacy Policy or TownCrier's privacy practices, please open an issue on GitHub:
-        </p>
-        <p>
-          <a href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">https://github.com/mrpoundsign/TownCrier/issues</a>
-        </p>
-      </section>
-    </main>
-
-    <footer>
-      <div>&copy; TownCrier Open Source Project. Licensed under GNU AGPLv3.</div>
-      <nav aria-label="Footer Navigation">
-        <a href="index.html">Home</a>
-        <a href="privacy.html">Privacy Policy</a>
-        <a href="terms.html">Terms of Service</a>
-        <a href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>
-      </nav>
-    </footer>
+    </div>
   </div>
+  <script src="site.js" defer></script>
 </body>
 </html>
