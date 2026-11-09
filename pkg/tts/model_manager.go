@@ -18,40 +18,44 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 var (
 	ErrChecksumMismatch = errors.New("downloaded file checksum mismatch")
 
 	// KokoroFP32ArchiveURL is the upstream sherpa-onnx release archive containing model.onnx (FP32 for DirectML GPU) and shared assets.
+	// SHA-256 digests are resolved dynamically from GitHub's Release API and recorded in <modelDir>/.manifest.json on disk.
 	KokoroFP32ArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2"
-	KokoroFP32ArchiveSHA256       = "60703707bc05ccd48d60e1eb723f38b07d6e474795a0b6a588d7220400e0f7a4"
+	KokoroFP32ArchiveSHA256       = ""
 	KokoroFP32ArchiveSize   int64 = 349886476
 
 	// KokoroINT8ArchiveURL is the upstream sherpa-onnx release archive containing model.int8.onnx (INT8 for CPU SIMD fallback).
 	KokoroINT8ArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_0.tar.bz2"
-	KokoroINT8ArchiveSHA256       = "72c347230107ef8a31098ec4d468a605244beef5f1ed00db97efa13518800653"
+	KokoroINT8ArchiveSHA256       = ""
 	KokoroINT8ArchiveSize   int64 = 132353410
 
 	// SupertonicArchiveURL is the upstream sherpa-onnx Supertonic INT8 model archive (10 voices, 44.1 kHz, ultra-fast CPU).
 	SupertonicArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-supertonic-tts-int8-2026-03-06.tar.bz2"
-	SupertonicArchiveSHA256       = "8c74359f63edd5045d47747f65331f0f6dbcbc91d7e898dd756d631295fe3259"
+	SupertonicArchiveSHA256       = ""
 	SupertonicArchiveSize   int64 = 84692981
 
 	// KittenMiniArchiveURL is the upstream sherpa-onnx Kitten v0.8 Mini model archive (8 voices, 24 kHz).
 	KittenMiniArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kitten-mini-en-v0_8.tar.bz2"
-	KittenMiniArchiveSHA256       = "518f9b130320f690d5b5476df77bde4215fca67773cda16710318e5081234b9d"
+	KittenMiniArchiveSHA256       = ""
 	KittenMiniArchiveSize   int64 = 67547594
 
 	// KittenNanoArchiveURL is the upstream sherpa-onnx Kitten v0.8 Nano INT8 model archive (8 voices, 24 kHz, ultra-low RAM).
 	KittenNanoArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kitten-nano-en-v0_8-int8.tar.bz2"
-	KittenNanoArchiveSHA256       = "6fa5be852612ce761094ba74ee6123b4fc4acfefa79bf64dc63acae4a83af2fd"
+	KittenNanoArchiveSHA256       = ""
 	KittenNanoArchiveSize   int64 = 31220690
 
 	// PiperArchiveURL is the upstream sherpa-onnx Piper LibriTTS-High INT8 model archive (904 speakers, 22.05 kHz).
 	PiperArchiveURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-libritts-high-int8.tar.bz2"
-	PiperArchiveSHA256       = "c35f249498fe9406c5ca3b6db1fc16749d7ee415ff2a09d5da9334206c2e0026"
+	PiperArchiveSHA256       = ""
 	PiperArchiveSize   int64 = 36406088
+
+	manifestMu sync.Mutex
 )
 
 // DefaultModelDir resolves the target directory for Kokoro model files.
@@ -479,11 +483,13 @@ func downloadAndExtractTarBz2(
 		return fmt.Errorf("drain %s archive stream: %w", task.name, drainErr)
 	}
 
-	if task.expectedSHA256 != "" {
-		computed := hex.EncodeToString(hasher.Sum(nil))
-		if computed != task.expectedSHA256 && !verifyGitHubReleaseAssetDigest(ctx, task.url, computed) {
-			return fmt.Errorf("%w (%s): expected %s, got %s", ErrChecksumMismatch, task.name, task.expectedSHA256, computed)
-		}
+	computed := hex.EncodeToString(hasher.Sum(nil))
+	expected := task.expectedSHA256
+	if expected == "" {
+		expected = fetchGitHubReleaseAssetDigest(ctx, task.url)
+	}
+	if expected != "" && !strings.EqualFold(computed, expected) {
+		return fmt.Errorf("%w (%s): expected %s, got %s", ErrChecksumMismatch, task.name, expected, computed)
 	}
 
 	for _, sf := range staged {
@@ -492,32 +498,62 @@ func downloadAndExtractTarBz2(
 		}
 	}
 
+	recordModelManifestHash(destDir, path.Base(task.url), computed)
 	return nil
 }
 
-// verifyGitHubReleaseAssetDigest checks GitHub's official release metadata for k2-fsa/sherpa-onnx
-// when an upstream mutable release tag (tts-models) has been re-uploaded with a newer SHA-256 digest.
-func verifyGitHubReleaseAssetDigest(ctx context.Context, archiveURL string, computedSHA256 string) bool {
+// ModelManifest records the installed archive SHA-256 digests and timestamp in <modelDir>/.manifest.json.
+type ModelManifest struct {
+	Archives    map[string]string `json:"archives"`
+	InstalledAt string            `json:"installed_at"`
+}
+
+func recordModelManifestHash(destDir, archiveName, sha256Hex string) {
+	if destDir == "" || archiveName == "" || sha256Hex == "" {
+		return
+	}
+	manifestMu.Lock()
+	defer manifestMu.Unlock()
+
+	manifestPath := filepath.Join(destDir, ".manifest.json")
+	var m ModelManifest
+	if data, err := os.ReadFile(manifestPath); err == nil {
+		_ = json.Unmarshal(data, &m)
+	}
+	if m.Archives == nil {
+		m.Archives = make(map[string]string)
+	}
+	m.Archives[archiveName] = strings.ToLower(sha256Hex)
+	m.InstalledAt = time.Now().UTC().Format(time.RFC3339)
+
+	if data, err := json.MarshalIndent(m, "", "  "); err == nil {
+		_ = os.WriteFile(manifestPath, data, 0644)
+	}
+}
+
+// fetchGitHubReleaseAssetDigest queries GitHub's official release metadata for k2-fsa/sherpa-onnx
+// to retrieve the live server-computed SHA-256 digest for an asset on the tts-models release tag.
+func fetchGitHubReleaseAssetDigest(ctx context.Context, archiveURL string) string {
 	const prefix = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/"
-	if !strings.HasPrefix(archiveURL, prefix) || computedSHA256 == "" {
-		return false
+	if !strings.HasPrefix(archiveURL, prefix) {
+		return ""
 	}
 	assetName := path.Base(archiveURL)
 	if assetName == "" || assetName == "." || assetName == "/" {
-		return false
+		return ""
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/tags/tts-models", nil)
 	if err != nil {
-		return false
+		return ""
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return false
+		return ""
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return false
+		return ""
 	}
 	var release struct {
 		Assets []struct {
@@ -526,15 +562,14 @@ func verifyGitHubReleaseAssetDigest(ctx context.Context, archiveURL string, comp
 		} `json:"assets"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&release); err != nil {
-		return false
+		return ""
 	}
-	wantDigest := "sha256:" + strings.ToLower(computedSHA256)
 	for _, a := range release.Assets {
-		if a.Name == assetName && strings.EqualFold(a.Digest, wantDigest) {
-			return true
+		if a.Name == assetName {
+			return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(a.Digest)), "sha256:")
 		}
 	}
-	return false
+	return ""
 }
 
 func stripTopLevelDir(entryName string) (string, bool) {

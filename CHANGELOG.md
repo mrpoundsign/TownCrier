@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.0.10 — 2026-11-09
+
+### Added
+- **Smart Gender Voice Matching & Viewer Pronoun Cache**:
+  - Added shared viewer pronoun & gender inference (`pkg/chat/gender.go`, `pkg/chat/pronouns.go`) combining an asynchronous Alejo.io Twitch Pronoun API lookup cache, self-referential pronoun regex scanning, and an offline 360+ common first-name lexicon to automatically assign matching feminine, masculine, or neutral TTS voices to chatters.
+- **Launch Window `"Skip & Launch App"` Recovery Option**:
+  - Added a **Skip & Launch App** button on the Launch Status Window whenever an optional TTS model download fails at startup so users are never trapped in a `Retry / Quit` loop and can immediately enter the main application with their installed fallback models.
+- **macOS `TownCrier.app` Application Bundle Packaging**:
+  - Updated macOS release packaging (`./build.sh package-mac`) to assemble a complete, ad-hoc signed `TownCrier.app` bundle (`Contents/MacOS/TownCrier`, `Contents/Resources/icon.icns`, and `Contents/Info.plist`) inside `TownCrier-v0.0.10-darwin-arm64.tar.gz`.
+
+### Fixed
+- **Dynamic GitHub Release SHA-256 Digest Verification for Voice Models**:
+  - Removed fragile hardcoded SHA-256 constants for `k2-fsa/sherpa-onnx` voice model archives (`tts-models` mutable release tag) in favor of querying GitHub's official Release API asset `digest` (`sha256:...`) dynamically during download and recording verified archive hashes in `<modelDir>/.manifest.json`. This fixes the Kokoro-82M SHA-256 mismatch caused by upstream re-uploading `kokoro-multi-lang-v1_0.tar.bz2` and `kokoro-int8-multi-lang-v1_0.tar.bz2` in-place.
+
+---
+
 ## v0.0.9 — 2026-11-09
 
 ### Added
