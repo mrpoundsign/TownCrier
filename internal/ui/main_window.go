@@ -68,11 +68,13 @@ type MainWindow struct {
 	statusMu         sync.RWMutex
 	platformStatuses map[string]platformStatusState
 
-	tooltipLayer   *fyne.Container
-	tooltipBubble  *fyne.Container
-	tooltipText    *canvas.Text
+	tooltipLayer       *fyne.Container
+	tooltipBubble      *fyne.Container
+	tooltipText        *canvas.Text
 	volumeSlider       *widget.Slider
 	volContainer       *fyne.Container
+	volumeMu           sync.Mutex
+	volumeSaveTimer    *time.Timer
 	updateBtn          *widget.Button
 	pendingRelease     *updater.ReleaseInfo
 	panicBtn           *widget.Button
@@ -137,6 +139,12 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	cleanup := func() {
 		closeOnce.Do(func() {
 			log.Println("[MainWindow] Close requested, shutting down subsystems...")
+			mw.volumeMu.Lock()
+			if mw.volumeSaveTimer != nil {
+				mw.volumeSaveTimer.Stop()
+				mw.volumeSaveTimer = nil
+			}
+			mw.volumeMu.Unlock()
 			if mw.hotkeyMgr != nil {
 				mw.hotkeyMgr.Close()
 			}
@@ -478,6 +486,9 @@ func (mw *MainWindow) initViews() {
 // SelectTab activates the specified main view (Dashboard, Viewers, Logs, or Settings).
 func (mw *MainWindow) SelectTab(index int) {
 	mw.currentTab = index
+	if mw.dashboardTab != nil {
+		mw.dashboardTab.SetTabActive(index == TabIndexDashboard)
+	}
 	if mw.chatLogsTab != nil {
 		mw.chatLogsTab.SetTabActive(index == TabIndexLogs)
 	}
@@ -534,7 +545,7 @@ func (mw *MainWindow) SelectTab(index int) {
 			mw.logsBtn.Importance = widget.HighImportance
 		}
 		if mw.chatLogsTab != nil {
-			mw.chatLogsTab.RefreshQuery()
+			mw.chatLogsTab.OnTabSelected()
 		}
 	case TabIndexSettings:
 		if mw.settingsObj != nil {
@@ -749,15 +760,19 @@ func (mw *MainWindow) initHeader() {
 		if syncingVolumeSlider {
 			return
 		}
-		if p := mw.Session.Player(); p != nil {
-			p.SetVolume(gain)
+		mw.Session.SetAudioVolume(gain)
+
+		mw.volumeMu.Lock()
+		if mw.volumeSaveTimer != nil {
+			mw.volumeSaveTimer.Stop()
 		}
-		_ = mw.Session.UpdateConfig(func(c *config.Config) {
-			c.Audio.Volume = gain
+		mw.volumeSaveTimer = time.AfterFunc(200*time.Millisecond, func() {
+			_ = mw.Session.PersistVolume(gain)
+			if wsSrv := mw.Session.WSServer(); wsSrv != nil {
+				wsSrv.BroadcastState()
+			}
 		})
-		if wsSrv := mw.Session.WSServer(); wsSrv != nil {
-			wsSrv.BroadcastState()
-		}
+		mw.volumeMu.Unlock()
 	}
 	mw.Session.SetOnVolumeChanged(func(newVol float32) {
 		fyne.Do(func() {

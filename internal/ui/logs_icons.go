@@ -694,8 +694,12 @@ func (l *wrappedCellLabel) MouseOut() {
 // logTableLayout aligns the 6 columns of the Event Logs table across the sticky header and all rows:
 // [0] Time | [1] Svc | [2] User & Tags | [3] Message (flex) | [4] TTS Status | [5] Mod Controls
 type logTableLayout struct {
-	getWidth func() float32
-	getScale func() float32
+	getWidth   func() float32
+	getScale   func() float32
+	lastLayout fyne.Size
+	lastScale  float32
+	cachedMin  fyne.Size
+	cachedMsgW float32
 }
 
 const (
@@ -708,7 +712,12 @@ const (
 	rowMinHeight       float32 = 30
 )
 
-func (l logTableLayout) effectiveScale() float32 {
+func (l *logTableLayout) Invalidate() {
+	l.cachedMsgW = 0
+	l.lastLayout = fyne.Size{}
+}
+
+func (l *logTableLayout) effectiveScale() float32 {
 	if l.getScale != nil {
 		if s := l.getScale(); s > 0 {
 			return s
@@ -730,12 +739,18 @@ func computeMsgColWidth(totalWidth, scale float32) float32 {
 	return msgWidth
 }
 
-func (l logTableLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+func (l *logTableLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	if len(objects) < 6 {
 		return
 	}
 
 	s := l.effectiveScale()
+	if l.lastLayout == size && l.lastScale == s {
+		return
+	}
+	l.lastLayout = size
+	l.lastScale = s
+
 	msgWidth := computeMsgColWidth(size.Width, s)
 
 	widths := [6]float32{
@@ -752,20 +767,33 @@ func (l logTableLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	for i := range 6 {
 		obj := objects[i]
 		w := widths[i]
-		obj.Move(fyne.NewPos(x, 0))
-		obj.Resize(fyne.NewSize(w, size.Height))
+		pos := fyne.NewPos(x, 0)
+		if obj.Position() != pos {
+			obj.Move(pos)
+		}
+		targetSz := fyne.NewSize(w, size.Height)
+		if obj.Size() != targetSz {
+			obj.Resize(targetSz)
+		}
 		x += w + gap
 	}
 }
 
-func (l logTableLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+func (l *logTableLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	s := l.effectiveScale()
+	var totalW float32
+	if l.lastLayout.Width > 0 {
+		totalW = l.lastLayout.Width
+	} else if l.getWidth != nil {
+		totalW = l.getWidth()
+	}
+	msgW := computeMsgColWidth(totalW, s)
+
+	if l.cachedMsgW == msgW && l.lastScale == s && l.cachedMin.Height > 0 {
+		return l.cachedMin
+	}
+
 	if len(objects) >= 4 && objects[3] != nil {
-		var totalW float32
-		if l.getWidth != nil {
-			totalW = l.getWidth()
-		}
-		msgW := computeMsgColWidth(totalW, s)
 		cur := objects[3].Size()
 		if cur.Width != msgW {
 			objects[3].Resize(fyne.NewSize(msgW, cur.Height))
@@ -783,7 +811,10 @@ func (l logTableLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	}
 	minW := colWidthTime + colWidthService + colWidthUser +
 		140 + colWidthTTSStatus + colWidthModControl + (5 * colGap)
-	return fyne.NewSize(minW, maxH)
+	l.cachedMsgW = msgW
+	l.lastScale = s
+	l.cachedMin = fyne.NewSize(minW, maxH)
+	return l.cachedMin
 }
 
 // ttsStatusIcons builds the collapsed 3-icon HBox for the "TTS Status" column:

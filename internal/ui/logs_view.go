@@ -166,6 +166,7 @@ type LogsView struct {
 
 	rowCache          map[string]*cachedLogRow
 	showOriginalByID  map[string]bool
+	lastExcludedUsers []string
 
 	onStatus           func(msg string)
 	onAssignVoice      func(platform, username string)
@@ -177,6 +178,7 @@ type cachedLogRow struct {
 	root          fyne.CanvasObject
 	rowBg         *canvas.Rectangle
 	rowCols       *fyne.Container
+	rowLayout     *logTableLayout
 	ttsStatusCell *fyne.Container
 }
 
@@ -215,6 +217,36 @@ func (v *LogsView) SetTabActive(active bool) {
 		fyne.Do(func() {
 			v.renderEntries()
 		})
+	}
+}
+
+// OnTabSelected is invoked when the Logs tab is selected in the main window.
+// When Live Tail is already subscribed and active on page 0, SetTabActive(true) renders
+// any deferred updates without blocking the UI thread on a redundant SQLite query,
+// unless the excluded bot list changed in Settings.
+func (v *LogsView) OnTabSelected() {
+	v.mu.Lock()
+	hasSub := v.unsubLive != nil
+	isLive := v.liveTail && v.currentPage == 0
+	hideBots := v.hideBots
+	lastExcl := slices.Clone(v.lastExcludedUsers)
+	v.mu.Unlock()
+
+	if !hasSub {
+		v.refreshSessionDropdown()
+		v.subscribeLiveTail()
+		v.RefreshQuery()
+		return
+	}
+	if !isLive {
+		v.runAsyncQuery()
+		return
+	}
+	if hideBots && v.session != nil {
+		curExcl := bots.ExcludedUserNames(v.session.Config())
+		if !slices.Equal(curExcl, lastExcl) {
+			v.runAsyncQuery()
+		}
 	}
 }
 
@@ -261,8 +293,8 @@ func (v *LogsView) SetOnChatScaleChanged(fn func(pct int)) {
 }
 
 func (v *LogsView) defaultChatScalePct() int {
-	if v.session != nil && v.session.Config() != nil {
-		return NormalizeChatScale(v.session.Config().Logging.ChatScale)
+	if v.session != nil {
+		return NormalizeChatScale(v.session.ChatScale())
 	}
 	return ChatScaleDefault
 }
@@ -739,7 +771,9 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 		_ = v.session.UpdateConfig(func(c *config.Config) {
 			c.Logging.ChatRetentionDays = days
 		})
-		v.RefreshQuery()
+		if v.subTabs != nil {
+			v.RefreshQuery()
+		}
 		v.setStatus("✓ Chat log retention updated.")
 	})
 	v.chatRetSel.SetSelected(formatRetentionDays(cfg.Logging.ChatRetentionDays))
@@ -753,7 +787,9 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 		_ = v.session.UpdateConfig(func(c *config.Config) {
 			c.Logging.EventRetentionDays = days
 		})
-		v.RefreshQuery()
+		if v.subTabs != nil {
+			v.RefreshQuery()
+		}
 		v.setStatus("✓ Alert/Paid log retention updated.")
 	})
 	v.eventRetSel.SetSelected(formatRetentionDays(cfg.Logging.EventRetentionDays))
@@ -767,7 +803,9 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 			v.setStatus("⚠️ Log prune error: " + err.Error())
 			return
 		}
-		v.RefreshQuery()
+		if v.subTabs != nil {
+			v.RefreshQuery()
+		}
 		v.setStatus(fmt.Sprintf("✓ Pruned %d expired log entries.", deleted))
 	})
 
@@ -1472,7 +1510,7 @@ func (v *LogsView) buildTableHeader() fyne.CanvasObject {
 		return widget.NewLabelWithStyle(title, align, fyne.TextStyle{Bold: true})
 	}
 
-	cols := container.New(logTableLayout{getWidth: v.currentTableWidth, getScale: v.chatScaleFactor},
+	cols := container.New(&logTableLayout{getWidth: v.currentTableWidth, getScale: v.chatScaleFactor},
 		colHdr("Time", fyne.TextAlignLeading),
 		colHdr("Svc", fyne.TextAlignCenter),
 		colHdr("User", fyne.TextAlignLeading),
@@ -1718,6 +1756,7 @@ func (v *LogsView) runAsyncQuery() {
 	}
 	v.entries = res.Entries
 	v.totalCount = res.TotalCount
+	v.lastExcludedUsers = slices.Clone(filter.ExcludedUsers)
 	if !filter.SkipSummary {
 		v.summary = res.Summary
 	}
@@ -1764,6 +1803,7 @@ func (v *LogsView) RefreshQuery() {
 	v.mu.Lock()
 	v.entries = res.Entries
 	v.totalCount = res.TotalCount
+	v.lastExcludedUsers = slices.Clone(filter.ExcludedUsers)
 	if !filter.SkipSummary {
 		v.summary = res.Summary
 	}
@@ -2245,7 +2285,8 @@ func (v *LogsView) buildLogRowWithRef(rowIdx int, e eventlog.Entry) (fyne.Canvas
 	// [5] Moderation Controls icon column ([Delete] [Timeout] [Ban] [Mute TTS])
 	modControlsCell := v.modControlIcons(e)
 
-	rowCols := container.New(logTableLayout{getWidth: v.currentTableWidth, getScale: v.chatScaleFactor},
+	rowLayout := &logTableLayout{getWidth: v.currentTableWidth, getScale: v.chatScaleFactor}
+	rowCols := container.New(rowLayout,
 		timeCell,
 		svcCell,
 		userCell,
@@ -2272,6 +2313,7 @@ func (v *LogsView) buildLogRowWithRef(rowIdx int, e eventlog.Entry) (fyne.Canvas
 		root:          root,
 		rowBg:         rowBg,
 		rowCols:       rowCols,
+		rowLayout:     rowLayout,
 		ttsStatusCell: ttsStatusCell,
 	}
 
@@ -2365,6 +2407,9 @@ func (v *LogsView) ToggleEntryTranslationView(entryID string, fallbackEntry even
 			entry = fallbackEntry
 		}
 		cached.rowCols.Objects[3] = v.buildMessageCell(entry, s)
+		if cached.rowLayout != nil {
+			cached.rowLayout.Invalidate()
+		}
 		cached.rowCols.Refresh()
 		if v.listBox != nil {
 			v.listBox.Refresh()

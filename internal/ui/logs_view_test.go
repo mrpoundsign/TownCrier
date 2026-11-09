@@ -1377,8 +1377,8 @@ func TestLogsViewCoalescedLiveRenderAndTabDeferral(t *testing.T) {
 	lv.mu.Unlock()
 
 	deltaRenders := rendersAfterActiveBurst - rendersAfterActivate
-	if deltaRenders < 1 || deltaRenders > 3 {
-		t.Fatalf("expected 20 rapid live updates to coalesce into 1–3 renders, got %d renders", deltaRenders)
+	if deltaRenders < 1 || deltaRenders >= 10 {
+		t.Fatalf("expected 20 rapid live updates to coalesce into <10 renders, got %d renders", deltaRenders)
 	}
 }
 

@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1377,17 +1379,38 @@ func (c *Config) EffectiveTranslationEnabled(platform string) bool {
 	return c.Translation.Enabled
 }
 
-// Clone creates a deep copy of the Config.
+// Clone creates a deep copy of the Config without JSON serialization overhead.
 func (c *Config) Clone() *Config {
-	data, err := json.Marshal(c)
-	if err != nil {
+	if c == nil {
 		return DefaultConfig()
 	}
-	var clone Config
-	if err := json.Unmarshal(data, &clone); err != nil {
-		return DefaultConfig()
+	clone := *c
+	clone.TTS.EnabledModels = slices.Clone(c.TTS.EnabledModels)
+	clone.Safety.BlockedWords = slices.Clone(c.Safety.BlockedWords)
+	clone.Bots.CustomBots = slices.Clone(c.Bots.CustomBots)
+	clone.Logging.LiveLogs = slices.Clone(c.Logging.LiveLogs)
+	clone.Translation.Providers = slices.Clone(c.Translation.Providers)
+
+	if c.Viewers != nil {
+		clone.Viewers = make(map[string]ViewerConfig, len(c.Viewers))
+		for k, v := range c.Viewers {
+			v.Accounts = slices.Clone(v.Accounts)
+			clone.Viewers[k] = v
+		}
 	}
-	clone.LoadedSchemaVersion = c.LoadedSchemaVersion
+
+	if c.Platforms != nil {
+		clone.Platforms = make(map[string]PlatformConfig, len(c.Platforms))
+		for k, p := range c.Platforms {
+			p.ReadRules.IgnoredPrefixes = slices.Clone(p.ReadRules.IgnoredPrefixes)
+			p.ReadRules.Roles = slices.Clone(p.ReadRules.Roles)
+			if p.Notifications != nil {
+				p.Notifications = maps.Clone(p.Notifications)
+			}
+			clone.Platforms[k] = p
+		}
+	}
+
 	return &clone
 }
 

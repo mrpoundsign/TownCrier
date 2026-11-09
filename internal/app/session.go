@@ -435,6 +435,16 @@ func (s *Session) Config() *config.Config {
 	return s.cfg.Clone()
 }
 
+// ChatScale returns the configured default chat panel scale percentage without cloning the full Config.
+func (s *Session) ChatScale() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cfg == nil {
+		return 100
+	}
+	return s.cfg.Logging.ChatScale
+}
+
 // Secrets returns the secret store.
 func (s *Session) Secrets() secrets.Store {
 	s.mu.RLock()
@@ -1591,6 +1601,47 @@ func (s *Session) ExecuteQueueAction(action controlv1.QueueAction) error {
 	return nil
 }
 
+// SetAudioVolume updates the in-memory configuration's master audio volume and applies it to the active player
+// immediately without re-synchronizing platform connectors or writing to disk.
+func (s *Session) SetAudioVolume(gain float32) {
+	if gain < 0.0 {
+		gain = 0.0
+	} else if gain > 1.0 {
+		gain = 1.0
+	}
+	s.mu.Lock()
+	if s.cfg != nil {
+		s.cfg.Audio.Volume = gain
+	}
+	p := s.player
+	s.mu.Unlock()
+
+	if p != nil {
+		p.SetVolume(gain)
+	}
+}
+
+// PersistVolume updates the active configuration's audio volume and saves it to the ConfigStore
+// without re-synchronizing platform connectors or restarting background services.
+func (s *Session) PersistVolume(gain float32) error {
+	s.SetAudioVolume(gain)
+
+	s.mu.RLock()
+	var cfgSnap *config.Config
+	if s.cfg != nil {
+		cfgSnap = s.cfg.Clone()
+	}
+	cStore := s.configStore
+	s.mu.RUnlock()
+
+	if cStore != nil && cfgSnap != nil {
+		if err := cStore.Save(cfgSnap); err != nil {
+			return fmt.Errorf("save config: %w", err)
+		}
+	}
+	return nil
+}
+
 // AdjustVolume implements ws.Controller, setting an absolute volume or applying a relative delta.
 func (s *Session) AdjustVolume(volume *float32, delta *float32) error {
 	if volume == nil && delta == nil {
@@ -1618,12 +1669,7 @@ func (s *Session) AdjustVolume(volume *float32, delta *float32) error {
 		target = 1.0
 	}
 
-	if p := s.Player(); p != nil {
-		p.SetVolume(target)
-	}
-	err := s.UpdateConfig(func(c *config.Config) {
-		c.Audio.Volume = target
-	})
+	err := s.PersistVolume(target)
 
 	s.mu.RLock()
 	volCb := s.onVolumeChanged

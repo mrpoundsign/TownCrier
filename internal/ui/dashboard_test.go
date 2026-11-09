@@ -73,3 +73,42 @@ func TestDashboardSyncTTSState(t *testing.T) {
 	}
 }
 
+func TestDashboardTabDeferral(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	win := appObj.NewWindow("TestTabDeferral")
+	cfg := config.DefaultConfig()
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = session.Close() }()
+
+	dash := NewDashboardView(win, session)
+	_ = dash.Build()
+
+	// Mark Dashboard tab inactive while user is on another tab
+	dash.SetTabActive(false)
+	dash.AddActivity(ActivityEntry{
+		Timestamp: time.Now(),
+		Platform:  "twitch",
+		UserName:  "bob",
+		Text:      "deferred message",
+		Kind:      "Chat",
+	})
+
+	if len(dash.activities) != 1 {
+		t.Fatalf("expected 1 activity buffered while inactive, got %d", len(dash.activities))
+	}
+	if !dash.feedDirty {
+		t.Fatal("expected feedDirty=true while inactive")
+	}
+
+	// Activate Dashboard tab -> should render the buffered activity and clear feedDirty
+	dash.SetTabActive(true)
+	if dash.feedDirty {
+		t.Fatal("expected feedDirty=false after activating tab")
+	}
+	if len(dash.feedContainer.Objects) != 1 {
+		t.Fatalf("expected 1 rendered feed row after activating tab, got %d", len(dash.feedContainer.Objects))
+	}
+}
+
+

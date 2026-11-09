@@ -635,7 +635,6 @@ func (v *SettingsView) SyncFromConfig() {
 	v.refreshWSStatusLabel()
 	if v.logsView != nil {
 		v.logsView.SyncFromConfig()
-		v.logsView.RefreshQuery()
 	}
 }
 

@@ -90,6 +90,8 @@ type DashboardView struct {
 
 	mu            sync.Mutex
 	activities    []ActivityEntry
+	tabActive     bool
+	feedDirty     bool
 	ttsEnabled    bool
 	syncingModeUI bool
 
@@ -117,6 +119,7 @@ func NewDashboardView(w fyne.Window, session *app.Session) *DashboardView {
 		window:        w,
 		session:       session,
 		feedContainer: container.NewVBox(),
+		tabActive:     true,
 		ttsEnabled:    ttsOn,
 	}
 
@@ -350,19 +353,48 @@ func (v *DashboardView) buildActivityCard() *widget.Card {
 	return widget.NewCard("Live Activity Feed", "Recent chatter messages and stream alerts", newPanelVScroll(v.feedContainer))
 }
 
+// SetTabActive notifies DashboardView whether its tab is currently visible in the main window.
+// While inactive, activity feed widget rebuilds are deferred until the tab becomes active again.
+func (v *DashboardView) SetTabActive(active bool) {
+	v.mu.Lock()
+	wasActive := v.tabActive
+	v.tabActive = active
+	dirty := v.feedDirty
+	if active {
+		v.feedDirty = false
+	}
+	v.mu.Unlock()
+
+	if active && !wasActive && dirty {
+		fyne.Do(func() {
+			v.mu.Lock()
+			v.refreshFeedLocked()
+			v.mu.Unlock()
+		})
+	}
+}
+
 // AddActivity appends a new event to the live activity feed (thread-safe).
 func (v *DashboardView) AddActivity(entry ActivityEntry) {
 	v.mu.Lock()
-	defer v.mu.Unlock()
 
 	// Keep last 50 entries
 	if len(v.activities) >= 50 {
 		v.activities = v.activities[1:]
 	}
 	v.activities = append(v.activities, entry)
+	if !v.tabActive {
+		v.feedDirty = true
+		v.mu.Unlock()
+		return
+	}
+	v.feedDirty = false
+	v.mu.Unlock()
 
 	fyne.Do(func() {
+		v.mu.Lock()
 		v.refreshFeedLocked()
+		v.mu.Unlock()
 	})
 }
 
