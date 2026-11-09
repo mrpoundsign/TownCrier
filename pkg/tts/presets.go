@@ -333,6 +333,31 @@ func VoiceDisplayLabelsForModels(enabledModels []string) []string {
 	return labels
 }
 
+// VoiceIDsForModels returns the canonical voice IDs for all voices in the enabled model families.
+func VoiceIDsForModels(enabledModels []string) []string {
+	if len(enabledModels) == 0 {
+		return KokoroVoiceNames
+	}
+	enabledSet := make(map[string]struct{}, len(enabledModels))
+	for _, m := range enabledModels {
+		enabledSet[strings.ToLower(strings.TrimSpace(m))] = struct{}{}
+	}
+
+	var ids []string
+	for _, spec := range AllModelFamilies {
+		if _, ok := enabledSet[spec.ID]; !ok {
+			continue
+		}
+		for _, v := range spec.Voices {
+			ids = append(ids, v.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return KokoroVoiceNames
+	}
+	return ids
+}
+
 // PresetSpec defines a curated Hardware & Performance Preset.
 type PresetSpec struct {
 	ID                string

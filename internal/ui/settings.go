@@ -159,9 +159,12 @@ type SettingsView struct {
 	rulesDedupeCheck                 *widget.Check
 	rulesDupWordsSelect              *widget.Select
 	rulesPlatformCheck               *widget.Check
-	rulesMentionsModeSelect          *widget.Select
-	rulesAllowBroadcasterCheck       *widget.Check
+	rulesMentionsModeSelect           *widget.Select
+	rulesAllowBroadcasterCheck        *widget.Check
 	rulesPlayAlertIgnoredMentionCheck *widget.Check
+	rulesHashVoicesCheck              *widget.Check
+	rulesSmartGenderCheck             *widget.Check
+	rulesUnknownGenderSelect          *widget.Select
 	hotkeyCtrlCheck      *widget.Check
 	hotkeyShiftCheck     *widget.Check
 	hotkeyAltCheck       *widget.Check
@@ -560,6 +563,25 @@ func (v *SettingsView) SyncFromConfig() {
 			v.rulesPlayAlertIgnoredMentionCheck.Enable()
 		} else {
 			v.rulesPlayAlertIgnoredMentionCheck.Disable()
+		}
+	}
+	if v.rulesHashVoicesCheck != nil {
+		v.rulesHashVoicesCheck.SetChecked(v.cfg.GlobalChatRules.HashChatterVoices)
+	}
+	if v.rulesSmartGenderCheck != nil {
+		v.rulesSmartGenderCheck.SetChecked(v.cfg.GlobalChatRules.SmartGenderVoices)
+		if v.cfg.GlobalChatRules.HashChatterVoices {
+			v.rulesSmartGenderCheck.Enable()
+		} else {
+			v.rulesSmartGenderCheck.Disable()
+		}
+	}
+	if v.rulesUnknownGenderSelect != nil {
+		v.rulesUnknownGenderSelect.SetSelected(UnknownGenderPolicyToOption(v.cfg.GlobalChatRules.UnknownGenderPolicy))
+		if v.cfg.GlobalChatRules.HashChatterVoices && v.cfg.GlobalChatRules.SmartGenderVoices {
+			v.rulesUnknownGenderSelect.Enable()
+		} else {
+			v.rulesUnknownGenderSelect.Disable()
 		}
 	}
 	if v.defaultBadWordsCheck != nil {
@@ -2486,6 +2508,46 @@ func OptionToIgnoreMentionsMode(opt string) string {
 	}
 }
 
+const (
+	UnknownGenderOptionBalanced        = "Balanced 50/50 (Feminine & Masculine)"
+	UnknownGenderOptionPreferFeminine  = "Prefer Feminine Voices"
+	UnknownGenderOptionPreferMasculine = "Prefer Masculine Voices"
+	UnknownGenderOptionDefaultVoice    = "Use Global Default Voice"
+)
+
+var UnknownGenderPolicyOptions = []string{
+	UnknownGenderOptionBalanced,
+	UnknownGenderOptionPreferFeminine,
+	UnknownGenderOptionPreferMasculine,
+	UnknownGenderOptionDefaultVoice,
+}
+
+func UnknownGenderPolicyToOption(policy string) string {
+	switch config.NormalizeUnknownGenderPolicy(policy) {
+	case config.UnknownGenderPreferFeminine:
+		return UnknownGenderOptionPreferFeminine
+	case config.UnknownGenderPreferMasculine:
+		return UnknownGenderOptionPreferMasculine
+	case config.UnknownGenderDefaultVoice:
+		return UnknownGenderOptionDefaultVoice
+	default:
+		return UnknownGenderOptionBalanced
+	}
+}
+
+func OptionToUnknownGenderPolicy(opt string) string {
+	switch opt {
+	case UnknownGenderOptionPreferFeminine:
+		return config.UnknownGenderPreferFeminine
+	case UnknownGenderOptionPreferMasculine:
+		return config.UnknownGenderPreferMasculine
+	case UnknownGenderOptionDefaultVoice:
+		return config.UnknownGenderDefaultVoice
+	default:
+		return config.UnknownGenderBalanced
+	}
+}
+
 func (v *SettingsView) buildRulesCard() *widget.Card {
 	coalesceSelect := widget.NewSelect(CoalesceSpeakerOptions, func(s string) {
 		val := OptionToCoalesceSeconds(s)
@@ -2603,6 +2665,58 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		mentionsModeSelect,
 	)
 
+	unknownGenderSelect := widget.NewSelect(UnknownGenderPolicyOptions, func(s string) {
+		pol := OptionToUnknownGenderPolicy(s)
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.UnknownGenderPolicy = pol
+		})
+	})
+	unknownGenderSelect.SetSelected(UnknownGenderPolicyToOption(v.cfg.GlobalChatRules.UnknownGenderPolicy))
+	v.rulesUnknownGenderSelect = unknownGenderSelect
+	unknownGenderRow := container.NewHBox(
+		widget.NewLabel("Unknown Gender Voice Pool:"),
+		unknownGenderSelect,
+	)
+
+	smartGenderCheck := widget.NewCheck("Smart Gender Detection (Chat Pronouns + Username Analysis)", func(b bool) {
+		if v.cfg.GlobalChatRules.HashChatterVoices && b {
+			unknownGenderSelect.Enable()
+		} else {
+			unknownGenderSelect.Disable()
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.SmartGenderVoices = b
+		})
+	})
+	smartGenderCheck.SetChecked(v.cfg.GlobalChatRules.SmartGenderVoices)
+	v.rulesSmartGenderCheck = smartGenderCheck
+
+	hashVoicesCheck := widget.NewCheck("Assign Unique Voices to Chatters Automatically (Deterministic Hash — Never Pollutes Viewers List)", func(b bool) {
+		if b {
+			smartGenderCheck.Enable()
+			if smartGenderCheck.Checked {
+				unknownGenderSelect.Enable()
+			} else {
+				unknownGenderSelect.Disable()
+			}
+		} else {
+			smartGenderCheck.Disable()
+			unknownGenderSelect.Disable()
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.HashChatterVoices = b
+		})
+	})
+	hashVoicesCheck.SetChecked(v.cfg.GlobalChatRules.HashChatterVoices)
+	v.rulesHashVoicesCheck = hashVoicesCheck
+
+	if !v.cfg.GlobalChatRules.HashChatterVoices {
+		smartGenderCheck.Disable()
+		unknownGenderSelect.Disable()
+	} else if !v.cfg.GlobalChatRules.SmartGenderVoices {
+		unknownGenderSelect.Disable()
+	}
+
 	cardContent := container.NewVBox(
 		checkNames,
 		coalesceRow,
@@ -2610,6 +2724,10 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		checkDedupe,
 		dupWordsRow,
 		checkPlatform,
+		widget.NewSeparator(),
+		hashVoicesCheck,
+		smartGenderCheck,
+		unknownGenderRow,
 		widget.NewSeparator(),
 		mentionsModeRow,
 		allowBroadcasterCheck,

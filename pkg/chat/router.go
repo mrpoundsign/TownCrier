@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
 
 // ResolvedSpeech contains the fully resolved voice, speed, and formatted text ready for TTS.
@@ -24,6 +25,8 @@ type ResolvedSpeech struct {
 type Router struct {
 	mu             sync.Mutex
 	nowFn          func() time.Time
+	pronouns       *PronounCache
+	voicePoolFn    func(cfg *config.Config) []string
 	lastSpeakerKey string
 	lastSpokenName string
 	lastSpeakerAt  time.Time
@@ -32,8 +35,41 @@ type Router struct {
 // NewRouter creates a new speech router.
 func NewRouter() *Router {
 	return &Router{
-		nowFn: time.Now,
+		nowFn:    time.Now,
+		pronouns: NewPronounCache(),
 	}
+}
+
+// PronounCache returns the router's two-tier pronoun cache.
+func (r *Router) PronounCache() *PronounCache {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pronouns == nil {
+		r.pronouns = NewPronounCache()
+	}
+	return r.pronouns
+}
+
+// SetVoicePoolProvider registers a callback returning the active pool of TTS voice IDs for chatter hashing.
+func (r *Router) SetVoicePoolProvider(fn func(cfg *config.Config) []string) {
+	r.mu.Lock()
+	r.voicePoolFn = fn
+	r.mu.Unlock()
+}
+
+func (r *Router) availableVoices(cfg *config.Config) []string {
+	r.mu.Lock()
+	fn := r.voicePoolFn
+	r.mu.Unlock()
+	if fn != nil {
+		if pool := fn(cfg); len(pool) > 0 {
+			return pool
+		}
+	}
+	if cfg != nil {
+		return tts.VoiceIDsForModels(cfg.TTS.EffectiveEnabledModels())
+	}
+	return tts.VoiceIDsForModels([]string{"supertonic"})
 }
 
 // SetClock overrides the time source used for consecutive-speaker coalescing windows (useful for unit tests).
@@ -188,10 +224,26 @@ func (r *Router) ResolveWithOptions(event *Event, cfg *config.Config, commitStat
 		}
 	}
 
-	// 3. Resolve Voice (Viewer -> Event -> Platform -> Global)
+	// 3. Resolve Voice (Viewer -> Event -> Smart Chatter Hash -> Platform -> Global)
 	voiceID := viewerVoice
 	if voiceID == "" {
 		voiceID = event.VoiceOverride
+	}
+	if voiceID == "" && event.Kind == EventKindMessage && cfg.GlobalChatRules.HashChatterVoices {
+		handle := strings.TrimSpace(event.UserName)
+		if handle == "" {
+			handle = strings.TrimSpace(event.UserID)
+		}
+		voiceID = SelectSmartChatterVoice(
+			event.Platform,
+			handle,
+			event.DisplayName,
+			r.availableVoices(cfg),
+			effectiveDefaultVoice,
+			cfg.GlobalChatRules.SmartGenderVoices,
+			cfg.GlobalChatRules.UnknownGenderPolicy,
+			r.PronounCache(),
+		)
 	}
 	if voiceID == "" {
 		voiceID = effectiveDefaultVoice

@@ -275,14 +275,69 @@ package_mac() {
     fi
 
     local tar_file="$DIST_DIR/TownCrier-v${VERSION}-darwin-${pkg_arch}.tar.gz"
-    echo "==> Packaging macOS (${pkg_arch}) distribution into $tar_file..."
+    echo "==> Packaging macOS (${pkg_arch}) TownCrier.app bundle into $tar_file..."
     rm -f "$tar_file"
 
     local staging="$BUILD_DIR/package_staging_mac"
+    local app_dir="$staging/TownCrier.app"
     rm -rf "$staging"
-    mkdir -p "$staging"
-    cp "$BIN_DIR/towncrier" "$staging/"
-    chmod +x "$staging/towncrier"
+    mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+
+    cp "$BIN_DIR/towncrier" "$app_dir/Contents/MacOS/TownCrier"
+    chmod +x "$app_dir/Contents/MacOS/TownCrier"
+
+    # Convert assets/icon.png into icon.icns if sips + iconutil are available on macOS
+    if [ -f "$ROOT_DIR/assets/icon.png" ] && command -v sips &>/dev/null && command -v iconutil &>/dev/null; then
+        local iconset="$BUILD_DIR/TownCrier.iconset"
+        rm -rf "$iconset"
+        mkdir -p "$iconset"
+        sips -z 16 16     "$ROOT_DIR/assets/icon.png" --out "$iconset/icon_16x16.png" >/dev/null 2>&1 || true
+        sips -z 32 32     "$ROOT_DIR/assets/icon.png" --out "$iconset/icon_16x16@2x.png" >/dev/null 2>&1 || true
+        sips -z 32 32     "$ROOT_DIR/assets/icon.png" --out "$iconset/icon_32x32.png" >/dev/null 2>&1 || true
+        sips -z 64 64     "$ROOT_DIR/assets/icon.png" --out "$iconset/icon_32x32@2x.png" >/dev/null 2>&1 || true
+        sips -z 128 128   "$ROOT_DIR/assets/icon.png" --out "$iconset/icon_128x128.png" >/dev/null 2>&1 || true
+        sips -z 256 256   "$ROOT_DIR/assets/icon.png" --out "$iconset/icon_128x128@2x.png" >/dev/null 2>&1 || true
+        sips -z 256 256   "$ROOT_DIR/assets/icon.png" --out "$iconset/icon_256x256.png" >/dev/null 2>&1 || true
+        sips -z 512 512   "$ROOT_DIR/assets/icon.png" --out "$iconset/icon_256x256@2x.png" >/dev/null 2>&1 || true
+        iconutil -c icns "$iconset" -o "$app_dir/Contents/Resources/icon.icns" >/dev/null 2>&1 || true
+        rm -rf "$iconset"
+    elif [ -f "$ROOT_DIR/assets/icon.png" ]; then
+        cp "$ROOT_DIR/assets/icon.png" "$app_dir/Contents/Resources/icon.png"
+    fi
+
+    cat > "$app_dir/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>TownCrier</string>
+    <key>CFBundleDisplayName</key>
+    <string>TownCrier</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.github.mrpoundsign.towncrier</string>
+    <key>CFBundleVersion</key>
+    <string>${VERSION}</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${VERSION}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>TownCrier</string>
+    <key>CFBundleIconFile</key>
+    <string>icon.icns</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+</dict>
+</plist>
+EOF
+
+    if command -v codesign &>/dev/null; then
+        codesign --force --deep --sign - "$app_dir" 2>/dev/null || true
+    fi
+
     [ -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" ] && cp "$ROOT_DIR/THIRDPARTY_NOTICES.md" "$staging/"
     [ -f "$ROOT_DIR/LICENSE" ] && cp "$ROOT_DIR/LICENSE" "$staging/"
     [ -f "$ROOT_DIR/FyneApp.toml" ] && cp "$ROOT_DIR/FyneApp.toml" "$staging/"

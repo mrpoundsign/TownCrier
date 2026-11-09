@@ -111,7 +111,9 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 	initMode := config.NormalizeTTSOutputMode(cfgClone.TTS.OutputMode)
 	trSvc := translate.NewService()
 	if loc := strings.TrimSpace(configStore.Location()); loc != "" {
-		trSvc.SetDiskCachePath(filepath.Join(filepath.Dir(loc), "cache", "translations.json"))
+		cacheDir := filepath.Join(filepath.Dir(loc), "cache")
+		trSvc.SetDiskCachePath(filepath.Join(cacheDir, "translations.json"))
+		router.PronounCache().SetDiskCachePath(filepath.Join(cacheDir, "pronouns.json"))
 	}
 	s := &Session{
 		cfg:             cfgClone,
@@ -130,6 +132,17 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		lastSpeakActive: cfgClone.TTS.Enabled && initMode == config.TTSModeAlwaysOn,
 		alertCache:      audio.NewAlertSoundCache(),
 	}
+	router.SetVoicePoolProvider(func(c *config.Config) []string {
+		if eng := s.Engine(); eng != nil {
+			if voices := eng.Voices(); len(voices) > 0 {
+				return voices
+			}
+		}
+		if c != nil {
+			return tts.VoiceIDsForModels(c.TTS.EffectiveEnabledModels())
+		}
+		return nil
+	})
 
 	s.twitchConnector = twitch.NewConnector(
 		func(event *chat.Event) {

@@ -452,8 +452,27 @@ const (
 	IgnoreMentionsRepliesAndLeading = "replies_and_leading"
 	IgnoreMentionsAll               = "all"
 
+	UnknownGenderBalanced        = "balanced"
+	UnknownGenderPreferFeminine  = "prefer_feminine"
+	UnknownGenderPreferMasculine = "prefer_masculine"
+	UnknownGenderDefaultVoice    = "default_voice"
+
 	DefaultCoalesceConsecutiveSeconds = 20
 )
+
+// NormalizeUnknownGenderPolicy returns a canonical UnknownGenderPolicy ("balanced", "prefer_feminine", "prefer_masculine", or "default_voice").
+func NormalizeUnknownGenderPolicy(policy string) string {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case UnknownGenderPreferFeminine, "feminine", "female", "f":
+		return UnknownGenderPreferFeminine
+	case UnknownGenderPreferMasculine, "masculine", "male", "m":
+		return UnknownGenderPreferMasculine
+	case UnknownGenderDefaultVoice, "default":
+		return UnknownGenderDefaultVoice
+	default:
+		return UnknownGenderBalanced
+	}
+}
 
 // NormalizeIgnoreMentionsMode returns a canonical IgnoreMentionsMode ("off", "replies_and_leading", or "all").
 func NormalizeIgnoreMentionsMode(mode string) string {
@@ -477,6 +496,9 @@ type GlobalChatRules struct {
 	IgnoreMentionsMode         string  `json:"ignore_mentions_mode,omitempty"`
 	AllowBroadcasterMentions   bool    `json:"allow_broadcaster_mentions,omitempty"`
 	PlayAlertOnIgnoredMention  bool    `json:"play_alert_on_ignored_mention,omitempty"`
+	HashChatterVoices          bool    `json:"hash_chatter_voices,omitempty"`
+	SmartGenderVoices          bool    `json:"smart_gender_voices,omitempty"`
+	UnknownGenderPolicy        string  `json:"unknown_gender_policy,omitempty"`
 	DefaultVoice               string  `json:"default_voice"`
 	DefaultSpeed               float32 `json:"default_speed"`
 }
@@ -853,6 +875,9 @@ func DefaultConfig() *Config {
 			DeduplicateEmotes:          true,
 			MaxDuplicateWords:          2,
 			SpeakPlatformName:          false,
+			HashChatterVoices:          false,
+			SmartGenderVoices:          true,
+			UnknownGenderPolicy:        UnknownGenderBalanced,
 			DefaultVoice:               "supertonic:f1",
 			DefaultSpeed:               1.0,
 		},
