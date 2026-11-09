@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/pkg/chat"
 	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
 
@@ -510,3 +511,151 @@ func SynthesizeAndPlayPreview(
 		})
 	}()
 }
+
+// FormatPermittedVoicesSummary returns a human-readable summary of how many voices in the active model families are permitted for auto-assignment.
+func FormatPermittedVoicesSummary(enabledModels []string, disabledVoices []string) string {
+	all := tts.VoiceIDsForModels(enabledModels)
+	if len(all) == 0 {
+		all = tts.VoiceIDsForModels([]string{tts.ModelSupertonic})
+	}
+	permitted := chat.FilterPermittedVoices(all, disabledVoices)
+	fem, masc, _ := chat.SplitVoicePoolByGender(permitted)
+	if len(permitted) == len(all) {
+		return fmt.Sprintf("All %d voices permitted (%dF / %dM)", len(all), len(fem), len(masc))
+	}
+	return fmt.Sprintf("%d of %d voices permitted (%dF / %dM)", len(permitted), len(all), len(fem), len(masc))
+}
+
+// ShowPermittedVoicesDialog opens a modal dialog allowing the user to check/uncheck which voices are permitted for automatic chatter voice assignment.
+func ShowPermittedVoicesDialog(
+	w fyne.Window,
+	session *app.Session,
+	enabledModels []string,
+	initialDisabled []string,
+	onSave func(disabledVoices []string),
+	onStatus func(msg string),
+) {
+	groups := BuildVoiceGroupsForModels(enabledModels, "")
+	disabledSet := make(map[string]bool, len(initialDisabled))
+	for _, d := range initialDisabled {
+		if k := chat.CanonicalVoicePoolKey(d); k != "" {
+			disabledSet[k] = true
+		}
+	}
+
+	type checkItem struct {
+		voiceID string
+		check   *widget.Check
+	}
+	var items []checkItem
+	var syncingChecks bool
+
+	summaryLbl := widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	updateSummary := func() {
+		var curDisabled []string
+		allIDs := make([]string, 0, len(items))
+		for _, it := range items {
+			allIDs = append(allIDs, it.voiceID)
+			if !it.check.Checked {
+				curDisabled = append(curDisabled, it.voiceID)
+			}
+		}
+		permitted := chat.FilterPermittedVoices(allIDs, curDisabled)
+		fem, masc, _ := chat.SplitVoicePoolByGender(permitted)
+		summaryLbl.SetText(fmt.Sprintf("Permitted: %d of %d voices (%d Feminine, %d Masculine)", len(permitted), len(allIDs), len(fem), len(masc)))
+	}
+
+	listBox := container.NewVBox()
+	for _, grp := range groups {
+		hdr := widget.NewLabelWithStyle(grp.ShortName, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+		listBox.Add(hdr)
+
+		for _, vo := range grp.Voices {
+			vid := vo.ID
+			key := chat.CanonicalVoicePoolKey(vid)
+			genderTag := "Neutral"
+			switch chat.ClassifyVoiceGender(vid) {
+			case chat.GenderFeminine:
+				genderTag = "Feminine"
+			case chat.GenderMasculine:
+				genderTag = "Masculine"
+			}
+
+			ck := widget.NewCheck(fmt.Sprintf("%s  [%s]", vo.Label, genderTag), func(_ bool) {
+				if syncingChecks {
+					return
+				}
+				updateSummary()
+			})
+			ck.SetChecked(!disabledSet[key])
+			items = append(items, checkItem{voiceID: vid, check: ck})
+
+			var prevBtn *widget.Button
+			prevBtn = widget.NewButtonWithIcon("", theme.MediaPlayIcon(), func() {
+				SynthesizeAndPlayPreview(session, defaultPreviewSampleText, vid, 1.0, prevBtn, onStatus)
+			})
+			row := container.NewBorder(nil, nil, nil, prevBtn, ck)
+			listBox.Add(row)
+		}
+		listBox.Add(widget.NewSeparator())
+	}
+
+	updateSummary()
+
+	selectAllBtn := widget.NewButton("Select All", func() {
+		syncingChecks = true
+		for _, it := range items {
+			it.check.SetChecked(true)
+		}
+		syncingChecks = false
+		updateSummary()
+	})
+	deselectAllBtn := widget.NewButton("Deselect All", func() {
+		syncingChecks = true
+		for _, it := range items {
+			it.check.SetChecked(false)
+		}
+		syncingChecks = false
+		updateSummary()
+	})
+
+	topBar := container.NewBorder(
+		nil,
+		nil,
+		nil,
+		container.NewHBox(selectAllBtn, deselectAllBtn),
+		summaryLbl,
+	)
+
+	scroll := container.NewVScroll(listBox)
+	scroll.SetMinSize(fyne.NewSize(520, 360))
+
+	desc := widget.NewLabel("Uncheck any voices you want to reserve (e.g. for your own alerts or VIPs) so they are never picked automatically for random chatters:")
+	desc.Wrapping = fyne.TextWrapWord
+
+	content := container.NewBorder(
+		container.NewVBox(desc, topBar, widget.NewSeparator()),
+		nil,
+		nil,
+		nil,
+		scroll,
+	)
+
+	dlg := dialog.NewCustomConfirm("Permitted Chatter Voices", "Save", "Cancel", content, func(confirmed bool) {
+		if !confirmed {
+			return
+		}
+		var disabled []string
+		for _, it := range items {
+			if !it.check.Checked {
+				disabled = append(disabled, it.voiceID)
+			}
+		}
+		if onSave != nil {
+			onSave(disabled)
+		}
+	}, w)
+	dlg.Resize(fyne.NewSize(580, 500))
+	dlg.Show()
+}
+

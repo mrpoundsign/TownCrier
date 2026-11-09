@@ -195,3 +195,82 @@ func TestRouterSmartGenderDoesNotMutateViewers(t *testing.T) {
 		t.Fatalf("expected cfg.Viewers to remain empty (never polluted by auto-hashing), got %d entries", len(cfg.Viewers))
 	}
 }
+
+func TestFilterPermittedVoices(t *testing.T) {
+	pool := []string{"supertonic:f1", "supertonic:f2", "supertonic:m1", "af_bella"}
+
+	got := FilterPermittedVoices(pool, []string{"supertonic:f1", "kokoro:af_bella"})
+	if len(got) != 2 || got[0] != "supertonic:f2" || got[1] != "supertonic:m1" {
+		t.Fatalf("FilterPermittedVoices unexpected result: %v", got)
+	}
+
+	empty := FilterPermittedVoices(pool, pool)
+	if len(empty) != 0 {
+		t.Fatalf("expected empty pool when all voices disabled, got %v", empty)
+	}
+}
+
+func TestRouterPermittedVoicesAndPlatformOverrides(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.TTS.EnabledModels = []string{"supertonic"}
+	cfg.GlobalChatRules.DefaultVoice = "supertonic:m5"
+	cfg.GlobalChatRules.HashChatterVoices = true
+	cfg.GlobalChatRules.SmartGenderVoices = true
+	// Disable all voices except supertonic:f3 and supertonic:m2
+	cfg.GlobalChatRules.DisabledChatterVoices = []string{
+		"supertonic:f1", "supertonic:f2", "supertonic:f4", "supertonic:f5",
+		"supertonic:m1", "supertonic:m3", "supertonic:m4", "supertonic:m5",
+	}
+
+	r := NewRouter()
+
+	evFem := &Event{
+		Platform:    "twitch",
+		Kind:        EventKindMessage,
+		UserID:      "2001",
+		UserName:    "queensarah",
+		DisplayName: "QueenSarah",
+		Text:        "hi",
+	}
+	resFem := r.Resolve(evFem, cfg)
+	if resFem.VoiceID != "supertonic:f3" {
+		t.Fatalf("expected only permitted feminine voice supertonic:f3, got %q", resFem.VoiceID)
+	}
+
+	evMasc := &Event{
+		Platform:    "twitch",
+		Kind:        EventKindMessage,
+		UserID:      "2002",
+		UserName:    "mrpoundsign",
+		DisplayName: "MrPoundSign",
+		Text:        "hello",
+	}
+	resMasc := r.Resolve(evMasc, cfg)
+	if resMasc.VoiceID != "supertonic:m2" {
+		t.Fatalf("expected only permitted masculine voice supertonic:m2, got %q", resMasc.VoiceID)
+	}
+
+	// Override Twitch to disable auto-assign chatter voices on Twitch only
+	p := cfg.Platforms["twitch"]
+	p.Overrides.HashChatterVoicesMode = config.OverrideModeOff
+	cfg.Platforms["twitch"] = p
+
+	resDisabled := r.Resolve(evFem, cfg)
+	if resDisabled.VoiceID != "supertonic:m5" {
+		t.Fatalf("expected platform override disabling hash voices to use default voice supertonic:m5, got %q", resDisabled.VoiceID)
+	}
+
+	// YouTube still inherits global HashChatterVoices = true
+	evYT := &Event{
+		Platform:    "youtube",
+		Kind:        EventKindMessage,
+		UserID:      "2001",
+		UserName:    "queensarah",
+		DisplayName: "QueenSarah",
+		Text:        "hi from youtube",
+	}
+	resYT := r.Resolve(evYT, cfg)
+	if resYT.VoiceID != "supertonic:f3" {
+		t.Fatalf("expected youtube to inherit global hash voices and pick supertonic:f3, got %q", resYT.VoiceID)
+	}
+}

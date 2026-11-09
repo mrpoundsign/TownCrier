@@ -111,6 +111,37 @@ func ClassifyVoiceGender(voiceID string) VoiceGender {
 	return GenderUnknown
 }
 
+// CanonicalVoicePoolKey normalizes a voice ID for pool inclusion/exclusion comparison.
+func CanonicalVoicePoolKey(voiceID string) string {
+	id := strings.ToLower(strings.TrimSpace(voiceID))
+	id = strings.TrimPrefix(id, "kokoro:")
+	return id
+}
+
+// FilterPermittedVoices returns the subset of availableVoices not present in disabledVoices.
+func FilterPermittedVoices(availableVoices, disabledVoices []string) []string {
+	if len(disabledVoices) == 0 || len(availableVoices) == 0 {
+		return availableVoices
+	}
+	disabled := make(map[string]bool, len(disabledVoices))
+	for _, d := range disabledVoices {
+		if k := CanonicalVoicePoolKey(d); k != "" {
+			disabled[k] = true
+		}
+	}
+	if len(disabled) == 0 {
+		return availableVoices
+	}
+	out := make([]string, 0, len(availableVoices))
+	for _, v := range availableVoices {
+		k := CanonicalVoicePoolKey(v)
+		if k != "" && !disabled[k] {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // SplitVoicePoolByGender partitions a slice of voice IDs into feminine, masculine, and all non-empty voices.
 func SplitVoicePoolByGender(voices []string) (feminine, masculine, all []string) {
 	for _, v := range voices {

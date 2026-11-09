@@ -497,11 +497,12 @@ type GlobalChatRules struct {
 	IgnoreMentionsMode         string  `json:"ignore_mentions_mode,omitempty"`
 	AllowBroadcasterMentions   bool    `json:"allow_broadcaster_mentions,omitempty"`
 	PlayAlertOnIgnoredMention  bool    `json:"play_alert_on_ignored_mention,omitempty"`
-	HashChatterVoices          bool    `json:"hash_chatter_voices,omitempty"`
-	SmartGenderVoices          bool    `json:"smart_gender_voices,omitempty"`
-	UnknownGenderPolicy        string  `json:"unknown_gender_policy,omitempty"`
-	DefaultVoice               string  `json:"default_voice"`
-	DefaultSpeed               float32 `json:"default_speed"`
+	HashChatterVoices          bool     `json:"hash_chatter_voices,omitempty"`
+	SmartGenderVoices          bool     `json:"smart_gender_voices,omitempty"`
+	UnknownGenderPolicy        string   `json:"unknown_gender_policy,omitempty"`
+	DisabledChatterVoices      []string `json:"disabled_chatter_voices,omitempty"`
+	DefaultVoice               string   `json:"default_voice"`
+	DefaultSpeed               float32  `json:"default_speed"`
 }
 
 const (
@@ -618,6 +619,8 @@ type PlatformOverrides struct {
 	IgnoreMentionsOverride        string  `json:"ignore_mentions_override,omitempty"`
 	AllowBroadcasterMentionsMode  string  `json:"allow_broadcaster_mentions_mode,omitempty"`
 	PlayAlertOnIgnoredMentionMode string  `json:"play_alert_on_ignored_mention_mode,omitempty"`
+	HashChatterVoicesMode         string  `json:"hash_chatter_voices_mode,omitempty"`
+	SmartGenderVoicesMode         string  `json:"smart_gender_voices_mode,omitempty"`
 	TranslateMode                 string  `json:"translate_mode,omitempty"`
 	VoiceOverrideMode             string  `json:"voice_override_mode,omitempty"`
 	SpeakNames                    bool    `json:"speak_names"`
@@ -630,6 +633,8 @@ type PlatformOverrides struct {
 	IgnoreMentionsMode            string  `json:"ignore_mentions_mode,omitempty"`
 	AllowBroadcasterMentions      bool    `json:"allow_broadcaster_mentions,omitempty"`
 	PlayAlertOnIgnoredMention     bool    `json:"play_alert_on_ignored_mention,omitempty"`
+	HashChatterVoices             bool    `json:"hash_chatter_voices,omitempty"`
+	SmartGenderVoices             bool    `json:"smart_gender_voices,omitempty"`
 	DefaultVoice                  string  `json:"default_voice"`
 	DefaultSpeed                  float32 `json:"default_speed"`
 }
@@ -1418,6 +1423,42 @@ func (c *Config) EffectiveMentionRules(platform string) (mode string, allowBroad
 	return mode, allowBroadcaster, playAlert
 }
 
+// EffectiveChatterVoiceRules reports whether automatic deterministic chatter voice assignment and
+// smart gender detection are enabled for a platform, taking per-platform overrides into account.
+func (c *Config) EffectiveChatterVoiceRules(platform string) (hashVoices bool, smartGender bool) {
+	if c == nil {
+		return false, true
+	}
+	hashVoices = c.GlobalChatRules.HashChatterVoices
+	smartGender = c.GlobalChatRules.SmartGenderVoices
+
+	if p, ok := c.Platforms[platform]; ok {
+		ov := p.Overrides
+		switch NormalizeBoolOverrideMode(ov.HashChatterVoicesMode) {
+		case OverrideModeOn:
+			hashVoices = true
+		case OverrideModeOff:
+			hashVoices = false
+		default:
+			if ov.OverrideRules {
+				hashVoices = ov.HashChatterVoices
+			}
+		}
+
+		switch NormalizeBoolOverrideMode(ov.SmartGenderVoicesMode) {
+		case OverrideModeOn:
+			smartGender = true
+		case OverrideModeOff:
+			smartGender = false
+		default:
+			if ov.OverrideRules {
+				smartGender = ov.SmartGenderVoices
+			}
+		}
+	}
+	return hashVoices, smartGender
+}
+
 // EffectiveTranslationEnabled reports whether foreign chat translation is enabled for a platform,
 // taking per-platform TranslateMode ("global", "on", "off") into account.
 func (c *Config) EffectiveTranslationEnabled(platform string) bool {
@@ -1442,6 +1483,7 @@ func (c *Config) Clone() *Config {
 	}
 	clone := *c
 	clone.TTS.EnabledModels = slices.Clone(c.TTS.EnabledModels)
+	clone.GlobalChatRules.DisabledChatterVoices = slices.Clone(c.GlobalChatRules.DisabledChatterVoices)
 	clone.Safety.BlockedWords = slices.Clone(c.Safety.BlockedWords)
 	clone.Bots.CustomBots = slices.Clone(c.Bots.CustomBots)
 	clone.Logging.LiveLogs = slices.Clone(c.Logging.LiveLogs)

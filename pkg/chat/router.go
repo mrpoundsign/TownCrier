@@ -233,18 +233,20 @@ func (r *Router) ResolveWithOptions(event *Event, cfg *config.Config, commitStat
 	if voiceID == "" {
 		voiceID = event.VoiceOverride
 	}
-	if voiceID == "" && event.Kind == EventKindMessage && cfg.GlobalChatRules.HashChatterVoices {
+	hashVoices, smartGender := cfg.EffectiveChatterVoiceRules(event.Platform)
+	if voiceID == "" && event.Kind == EventKindMessage && hashVoices {
 		handle := strings.TrimSpace(event.UserName)
 		if handle == "" {
 			handle = strings.TrimSpace(event.UserID)
 		}
+		permittedPool := FilterPermittedVoices(r.availableVoices(cfg), cfg.GlobalChatRules.DisabledChatterVoices)
 		voiceID = SelectSmartChatterVoice(
 			event.Platform,
 			handle,
 			event.DisplayName,
-			r.availableVoices(cfg),
+			permittedPool,
 			effectiveDefaultVoice,
-			cfg.GlobalChatRules.SmartGenderVoices,
+			smartGender,
 			cfg.GlobalChatRules.UnknownGenderPolicy,
 			r.PronounCache(),
 		)

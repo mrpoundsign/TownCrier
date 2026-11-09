@@ -30,6 +30,10 @@ const (
 	boolOffAlertMention    = "Off (No Alert Sound)"
 	boolOnTranslateChat    = "On (Translate Foreign Chat)"
 	boolOffTranslateChat   = "Off (Don't Translate)"
+	boolOnHashVoices       = "On (Auto-Assign Voices)"
+	boolOffHashVoices      = "Off (Use Default Voice)"
+	boolOnSmartGender      = "On (Smart Gender)"
+	boolOffSmartGender     = "Off (Any Gender)"
 )
 
 // PlatformOverridesControl manages the per-setting global/override pulldowns for a streaming platform tab.
@@ -46,6 +50,8 @@ type PlatformOverridesControl struct {
 	DupWordsSelect                *widget.Select
 	PlatformNameSelect            *widget.Select
 	TranslateSelect               *widget.Select
+	HashVoicesSelect              *widget.Select
+	SmartGenderSelect             *widget.Select
 	MentionsModeSelect            *widget.Select
 	AllowBroadcasterSelect        *widget.Select
 	PlayAlertIgnoredMentionSelect *widget.Select
@@ -262,6 +268,37 @@ func (c *PlatformOverridesControl) build() {
 		})
 	})
 
+	c.HashVoicesSelect = widget.NewSelect(nil, func(selected string) {
+		if c.syncing {
+			return
+		}
+		mode, bVal := parseSelectedBoolMode(selected, boolOnHashVoices)
+		c.updateConfig(func(cfg *config.Config) {
+			p := cfg.Platforms[c.PlatformKey]
+			p.Overrides.HashChatterVoicesMode = mode
+			if mode != config.OverrideModeGlobal {
+				p.Overrides.HashChatterVoices = bVal
+			}
+			cfg.Platforms[c.PlatformKey] = p
+		})
+		c.syncChatterVoiceSubControls()
+	})
+
+	c.SmartGenderSelect = widget.NewSelect(nil, func(selected string) {
+		if c.syncing {
+			return
+		}
+		mode, bVal := parseSelectedBoolMode(selected, boolOnSmartGender)
+		c.updateConfig(func(cfg *config.Config) {
+			p := cfg.Platforms[c.PlatformKey]
+			p.Overrides.SmartGenderVoicesMode = mode
+			if mode != config.OverrideModeGlobal {
+				p.Overrides.SmartGenderVoices = bVal
+			}
+			cfg.Platforms[c.PlatformKey] = p
+		})
+	})
+
 	c.AllowBroadcasterSelect = widget.NewSelect(nil, func(selected string) {
 		if c.syncing {
 			return
@@ -395,6 +432,9 @@ func (c *PlatformOverridesControl) build() {
 		makeRow("Speak Platform Name Prefix:", c.PlatformNameSelect),
 		makeRow("Translate Foreign Chat:", c.TranslateSelect),
 		widget.NewSeparator(),
+		makeRow("Auto-Assign Chatter Voices:", c.HashVoicesSelect),
+		makeRow("Smart Gender Detection:", c.SmartGenderSelect),
+		widget.NewSeparator(),
 		makeRow("@ Mentions & Replies:", c.MentionsModeSelect),
 		makeRow("Allow Broadcaster @ Mentions:", c.AllowBroadcasterSelect),
 		makeRow("Alert Sound on Ignored Mention:", c.PlayAlertIgnoredMentionSelect),
@@ -407,6 +447,19 @@ func (c *PlatformOverridesControl) build() {
 		"Choose Global to inherit global settings or set an explicit override for "+c.PlatformTitle,
 		cardContent,
 	)
+}
+
+func (c *PlatformOverridesControl) syncChatterVoiceSubControls() {
+	if c.SmartGenderSelect == nil {
+		return
+	}
+	cfg := c.currentConfig()
+	effHash, _ := cfg.EffectiveChatterVoiceRules(c.PlatformKey)
+	if effHash {
+		c.SmartGenderSelect.Enable()
+	} else {
+		c.SmartGenderSelect.Disable()
+	}
 }
 
 func (c *PlatformOverridesControl) syncCoalesceSubControl() {
@@ -521,6 +574,16 @@ func (c *PlatformOverridesControl) Refresh() {
 	c.TranslateSelect.Options = boolOptionsForGlobal(cfg.Translation.Enabled, boolOnTranslateChat, boolOffTranslateChat)
 	c.TranslateSelect.SetSelected(selectedBoolOption(ov.TranslateMode, false, false, cfg.Translation.Enabled, boolOnTranslateChat, boolOffTranslateChat))
 	c.TranslateSelect.Refresh()
+
+	// 5c. Auto-Assign Chatter Voices & Smart Gender Detection
+	c.HashVoicesSelect.Options = boolOptionsForGlobal(g.HashChatterVoices, boolOnHashVoices, boolOffHashVoices)
+	c.HashVoicesSelect.SetSelected(selectedBoolOption(ov.HashChatterVoicesMode, ov.OverrideRules, ov.HashChatterVoices, g.HashChatterVoices, boolOnHashVoices, boolOffHashVoices))
+	c.HashVoicesSelect.Refresh()
+
+	c.SmartGenderSelect.Options = boolOptionsForGlobal(g.SmartGenderVoices, boolOnSmartGender, boolOffSmartGender)
+	c.SmartGenderSelect.SetSelected(selectedBoolOption(ov.SmartGenderVoicesMode, ov.OverrideRules, ov.SmartGenderVoices, g.SmartGenderVoices, boolOnSmartGender, boolOffSmartGender))
+	c.SmartGenderSelect.Refresh()
+	c.syncChatterVoiceSubControls()
 
 	// 6. @ Mentions & Replies
 	globalMentionsOpt := fmt.Sprintf("Global (%s)", IgnoreMentionsModeToOption(g.IgnoreMentionsMode))

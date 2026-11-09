@@ -166,6 +166,8 @@ type SettingsView struct {
 	rulesHashVoicesCheck              *widget.Check
 	rulesSmartGenderCheck             *widget.Check
 	rulesUnknownGenderSelect          *widget.Select
+	rulesPermittedVoicesLabel         *widget.Label
+	rulesPermittedVoicesBtn           *widget.Button
 	hotkeyCtrlCheck      *widget.Check
 	hotkeyShiftCheck     *widget.Check
 	hotkeyAltCheck       *widget.Check
@@ -395,6 +397,9 @@ func (v *SettingsView) RefreshVoices() {
 			}
 			v.globalVoiceField.SetVoiceAndSpeed(defVoice, defSpeed)
 		}
+		if v.rulesPermittedVoicesLabel != nil {
+			v.rulesPermittedVoicesLabel.SetText(FormatPermittedVoicesSummary(cfg.TTS.EffectiveEnabledModels(), cfg.GlobalChatRules.DisabledChatterVoices))
+		}
 		v.refreshPlatformOverrides()
 	})
 }
@@ -586,6 +591,16 @@ func (v *SettingsView) SyncFromConfig() {
 			v.rulesUnknownGenderSelect.Enable()
 		} else {
 			v.rulesUnknownGenderSelect.Disable()
+		}
+	}
+	if v.rulesPermittedVoicesLabel != nil {
+		v.rulesPermittedVoicesLabel.SetText(FormatPermittedVoicesSummary(v.cfg.TTS.EffectiveEnabledModels(), v.cfg.GlobalChatRules.DisabledChatterVoices))
+	}
+	if v.rulesPermittedVoicesBtn != nil {
+		if v.cfg.GlobalChatRules.HashChatterVoices {
+			v.rulesPermittedVoicesBtn.Enable()
+		} else {
+			v.rulesPermittedVoicesBtn.Disable()
 		}
 	}
 	if v.defaultBadWordsCheck != nil {
@@ -2691,6 +2706,35 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		unknownGenderSelect,
 	)
 
+	permittedVoicesLabel := widget.NewLabel(FormatPermittedVoicesSummary(v.cfg.TTS.EffectiveEnabledModels(), v.cfg.GlobalChatRules.DisabledChatterVoices))
+	v.rulesPermittedVoicesLabel = permittedVoicesLabel
+
+	permittedVoicesBtn := widget.NewButtonWithIcon("Select Voices...", theme.ListIcon(), func() {
+		cfg := v.currentConfig()
+		ShowPermittedVoicesDialog(
+			v.window,
+			v.session,
+			cfg.TTS.EffectiveEnabledModels(),
+			cfg.GlobalChatRules.DisabledChatterVoices,
+			func(disabledVoices []string) {
+				v.updateConfig(func(c *config.Config) {
+					c.GlobalChatRules.DisabledChatterVoices = slices.Clone(disabledVoices)
+				})
+				cfgNow := v.currentConfig()
+				permittedVoicesLabel.SetText(FormatPermittedVoicesSummary(cfgNow.TTS.EffectiveEnabledModels(), cfgNow.GlobalChatRules.DisabledChatterVoices))
+				v.setStatus("Permitted auto-assign voices updated.")
+			},
+			v.setStatus,
+		)
+	})
+	v.rulesPermittedVoicesBtn = permittedVoicesBtn
+
+	permittedVoicesRow := container.NewHBox(
+		widget.NewLabel("Permitted Auto-Assign Voices:"),
+		permittedVoicesLabel,
+		permittedVoicesBtn,
+	)
+
 	smartGenderCheck := widget.NewCheck("Smart Gender Detection (Chat Pronouns + Username Analysis)", func(b bool) {
 		if v.cfg.GlobalChatRules.HashChatterVoices && b {
 			unknownGenderSelect.Enable()
@@ -2700,6 +2744,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.SmartGenderVoices = b
 		})
+		v.refreshPlatformOverrides()
 	})
 	smartGenderCheck.SetChecked(v.cfg.GlobalChatRules.SmartGenderVoices)
 	v.rulesSmartGenderCheck = smartGenderCheck
@@ -2707,6 +2752,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 	hashVoicesCheck := widget.NewCheck("Assign Unique Voices to Chatters Automatically (Deterministic Hash — Never Pollutes Viewers List)", func(b bool) {
 		if b {
 			smartGenderCheck.Enable()
+			permittedVoicesBtn.Enable()
 			if smartGenderCheck.Checked {
 				unknownGenderSelect.Enable()
 			} else {
@@ -2715,10 +2761,12 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		} else {
 			smartGenderCheck.Disable()
 			unknownGenderSelect.Disable()
+			permittedVoicesBtn.Disable()
 		}
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.HashChatterVoices = b
 		})
+		v.refreshPlatformOverrides()
 	})
 	hashVoicesCheck.SetChecked(v.cfg.GlobalChatRules.HashChatterVoices)
 	v.rulesHashVoicesCheck = hashVoicesCheck
@@ -2726,6 +2774,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 	if !v.cfg.GlobalChatRules.HashChatterVoices {
 		smartGenderCheck.Disable()
 		unknownGenderSelect.Disable()
+		permittedVoicesBtn.Disable()
 	} else if !v.cfg.GlobalChatRules.SmartGenderVoices {
 		unknownGenderSelect.Disable()
 	}
@@ -2742,6 +2791,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		hashVoicesCheck,
 		smartGenderCheck,
 		unknownGenderRow,
+		permittedVoicesRow,
 		widget.NewSeparator(),
 		mentionsModeRow,
 		allowBroadcasterCheck,
