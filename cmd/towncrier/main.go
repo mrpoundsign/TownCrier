@@ -220,6 +220,40 @@ func run() error {
 		}
 
 		var initTTSAndLaunch func()
+		skipModelAndRetry := func(failedFam string) func() {
+			return func() {
+				modelDir := tts.DefaultModelDir()
+				var remaining []string
+				for _, m := range cfg.TTS.EffectiveEnabledModels() {
+					if m == failedFam {
+						continue
+					}
+					if (failedFam == tts.ModelKokoro || failedFam == tts.ModelKokoroIntl) &&
+						(m == tts.ModelKokoro || m == tts.ModelKokoroIntl) {
+						continue
+					}
+					if tts.IsModelFamilyInstalled(modelDir, m, cfg.TTS.UseGPU) {
+						remaining = append(remaining, m)
+					}
+				}
+				if len(remaining) == 0 {
+					for _, spec := range tts.AllModelFamilies {
+						if tts.IsModelFamilyInstalled(modelDir, spec.ID, cfg.TTS.UseGPU) {
+							remaining = append(remaining, spec.ID)
+							break
+						}
+					}
+				}
+				if len(remaining) > 0 {
+					cfg.TTS.EnabledModels = remaining
+				} else {
+					cfg.TTS.Enabled = false
+				}
+				_ = configStore.Save(cfg)
+				initTTSAndLaunch()
+			}
+		}
+
 		initTTSAndLaunch = func() {
 			defer logging.RecoverAndExit("tts-init")
 
@@ -241,9 +275,10 @@ func run() error {
 							if dlErr != nil {
 								log.Printf("Error: failed to download Kokoro TTS models: %v", dlErr)
 								tracker.ShowFatalError(
-									"Failed to download required TTS models. Check your internet connection.",
+									"Failed to download Kokoro-82M models. You can retry, skip to launch with installed voices, or quit.",
 									"Download failed ("+dlErr.Error()+")",
 									initTTSAndLaunch,
+									skipModelAndRetry(fam),
 									quitApp,
 								)
 								return
@@ -262,9 +297,10 @@ func run() error {
 						if dlErr != nil {
 							log.Printf("Error: failed to download %s TTS models: %v", fam, dlErr)
 							tracker.ShowFatalError(
-								"Failed to download "+spec.ShortName+" TTS models. Check your internet connection.",
+								"Failed to download "+spec.ShortName+" TTS models. You can retry, skip to launch, or quit.",
 								"Download failed ("+dlErr.Error()+")",
 								initTTSAndLaunch,
+								skipModelAndRetry(fam),
 								quitApp,
 							)
 							return
@@ -287,9 +323,13 @@ func run() error {
 				if engErr != nil {
 					log.Printf("Error: failed to initialize TTS engine: %v", engErr)
 					tracker.ShowFatalError(
-						"Failed to initialize neural TTS engine.",
+						"Failed to initialize neural TTS engine. You can retry, skip to launch, or quit.",
 						"Init error: "+engErr.Error(),
 						initTTSAndLaunch,
+						func() {
+							cfg.TTS.Enabled = false
+							initTTSAndLaunch()
+						},
 						quitApp,
 					)
 					return

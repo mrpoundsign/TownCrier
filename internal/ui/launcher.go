@@ -22,12 +22,14 @@ type LaunchStateTracker struct {
 	downloadProg *widget.ProgressBar
 	actionBox    *fyne.Container
 	retryBtn     *widget.Button
+	skipBtn      *widget.Button
 	quitBtn      *widget.Button
 
 	mu            sync.Mutex
 	lastUpdate    time.Time
 	downloadModel string
 	onRetryFn     func()
+	onSkipFn      func()
 	onQuitFn      func()
 }
 
@@ -71,6 +73,22 @@ func NewLaunchWindow(a fyne.App) (*LaunchStateTracker, fyne.Window) {
 	})
 	tracker.retryBtn.Importance = widget.HighImportance
 
+	tracker.skipBtn = widget.NewButtonWithIcon("Skip & Launch App", theme.MediaSkipNextIcon(), func() {
+		tracker.mu.Lock()
+		skip := tracker.onSkipFn
+		tracker.mu.Unlock()
+		if skip != nil {
+			fyne.Do(func() {
+				tracker.actionBox.Hide()
+				tracker.downloadProg.Hide()
+				tracker.progress.Show()
+				tracker.progress.Start()
+				tracker.stepTTS.SetText("⏳ Skipping failed model & launching app...")
+			})
+			go skip()
+		}
+	})
+
 	tracker.quitBtn = widget.NewButtonWithIcon("Quit", theme.CancelIcon(), func() {
 		tracker.mu.Lock()
 		quit := tracker.onQuitFn
@@ -80,7 +98,7 @@ func NewLaunchWindow(a fyne.App) (*LaunchStateTracker, fyne.Window) {
 		}
 	})
 
-	tracker.actionBox = container.NewCenter(container.NewHBox(tracker.retryBtn, tracker.quitBtn))
+	tracker.actionBox = container.NewCenter(container.NewHBox(tracker.retryBtn, tracker.skipBtn, tracker.quitBtn))
 	tracker.actionBox.Hide()
 
 	content := container.NewVBox(
@@ -181,10 +199,11 @@ func (t *LaunchStateTracker) SetDownloadProgress(current, total int64) {
 	})
 }
 
-// ShowFatalError halts startup on the launch window and presents Retry / Quit buttons.
-func (t *LaunchStateTracker) ShowFatalError(statusMsg string, ttsDetail string, onRetry func(), onQuit func()) {
+// ShowFatalError halts startup on the launch window and presents Retry / Skip / Quit buttons.
+func (t *LaunchStateTracker) ShowFatalError(statusMsg string, ttsDetail string, onRetry func(), onSkip func(), onQuit func()) {
 	t.mu.Lock()
 	t.onRetryFn = onRetry
+	t.onSkipFn = onSkip
 	t.onQuitFn = onQuit
 	t.mu.Unlock()
 
@@ -192,6 +211,11 @@ func (t *LaunchStateTracker) ShowFatalError(statusMsg string, ttsDetail string, 
 		t.progress.Stop()
 		t.progress.Hide()
 		t.downloadProg.Hide()
+		if onSkip != nil {
+			t.skipBtn.Show()
+		} else {
+			t.skipBtn.Hide()
+		}
 		t.statusLabel.SetText(statusMsg)
 		t.stepTTS.SetText("❌ Neural TTS: " + ttsDetail)
 		t.actionBox.Show()

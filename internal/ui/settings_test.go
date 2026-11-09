@@ -159,7 +159,7 @@ func TestLaunchWindowProgressAndError(t *testing.T) {
 	}
 
 	quitCalled := false
-	tracker.ShowFatalError("Network error", "Connection refused", nil, func() {
+	tracker.ShowFatalError("Network error", "Connection refused", nil, nil, func() {
 		quitCalled = true
 	})
 	if !tracker.actionBox.Visible() {
