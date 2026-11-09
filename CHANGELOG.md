@@ -1,17 +1,30 @@
 # Changelog
 
-## v0.0.9 — 2026-11-08
+## v0.0.9 — 2026-11-09
 
 ### Added
 - **Automatic Foreign Chat Language Detection, Cascading Translation & `文A` Toggle (#119)**:
   - Added multi-provider foreign chat translation (`MyMemory`, `Google Cloud Translation`, `DeepL`, `LibreTranslate`, and `Local LLM / Ollama`) with automatic source language detection, configurable priority failover / round-robin load balancing, exponential backoff, and two-tier sentence caching (LRU memory + SQLite).
   - Added optional pre-speech translation indicator chime and inline `文A` original/translated text toggle in the Dashboard and Event Logs.
+- **Coalesce Consecutive Spoken Messages from the Same Viewer (#122)**:
+  - Added configurable **Coalesce Consecutive Messages** window (`Off`, `15s`, `30s`, `60s`, `90s`, `2m`, `5m`, default `45s`) globally and per platform so follow-up messages from the same uninterrupted speaker omit repeating `"<user> says"` while resetting automatically on intervening speakers, stream alerts, moderation events, or Panic Mute.
 - **Guided Replacement Voice Assignment Wizard (#44)**:
   - Added an interactive **Reassign Voices to Disable Model Pack** wizard modal when unchecking an in-use TTS model pack or switching to a Performance Preset that disables an in-use pack, supporting quick bulk reassignment, voice previewing, per-item voice selection, and clearing custom overrides to inherit the Global Default Voice.
 - **Portable `.zip` Backup Export, Selective Import & Schema Snapshots (#129)**:
   - Added unified `.zip` backup export (`towncrier-backup-YYYY-MM-DD-HHMMSS-v<version>.zip`) packaging scrubbed configuration (`config-backup.json`), WAL-checkpointed SQLite Event Log database (`events.db`), and optional application logs (`towncrier.log`).
   - Added `.zip` and `.json` backup import supporting Selective Merge (per-section toggles), Full Restore (with local PC audio device, hardware preset, and file path preservation), and in-place `events.db` restoration.
   - Added automatic schema-versioned snapshots (`config.YYYY-MM-DD-HHMMSS-v<schema>.json` and `events.YYYY-MM-DD-HHMMSS-v<schema>.db`) and startup schema regression detection for safe downgrades.
+- **Documentation & Privacy Disclosures**:
+  - Added comprehensive Features & Configuration Guide (`docs/features.html`), sticky left sidebar navigation across the documentation site, and updated Privacy Policy disclosures covering optional translation providers and local backups.
+
+### Changed & Optimized
+- **Event Log Scrolling, `Config.Clone` & UI Hot-Path Optimizations (#130)**:
+  - Replaced JSON marshal/unmarshal round-tripping in `(*Config).Clone()` with a native deep copy (`slices.Clone` / `maps.Clone`) and added zero-allocation `Session.ChatScale()`, eliminating 87% of UI thread CPU time when scrolling the Event Logs.
+  - Cached row geometry and `MinSize` on `*logTableLayout` and skipped redundant `Move`/`Resize` passes in `panelWidthClampLayout` during scroll ticks.
+  - Added thread-safe in-memory read caching to `secrets.KeyringStore` to avoid repeated OS Credential Manager syscalls when rendering log moderation icons.
+  - Debounced master volume slider config persistence and avoided re-synchronizing platform connectors on volume adjustments.
+  - Eliminated redundant synchronous SQLite queries when switching to the Settings or Logs tabs, and deferred `DashboardView` activity feed widget rebuilds while the Dashboard tab is inactive.
+  - Added `-pprof` and `-cpuprofile` CLI flags to `cmd/towncrier` for runtime performance profiling.
 
 ---
 
