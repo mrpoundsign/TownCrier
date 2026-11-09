@@ -154,6 +154,7 @@ type SettingsView struct {
 	activeReplacementWizard *VoiceReplacementWizard
 	deviceRefreshBtn        *widget.Button
 	rulesNamesCheck                  *widget.Check
+	rulesNaturalizeCheck             *widget.Check
 	rulesCoalesceSelect              *widget.Select
 	rulesEmotesCheck                 *widget.Check
 	rulesDedupeCheck                 *widget.Check
@@ -525,6 +526,9 @@ func (v *SettingsView) SyncFromConfig() {
 	}
 	if v.rulesNamesCheck != nil {
 		v.rulesNamesCheck.SetChecked(v.cfg.GlobalChatRules.SpeakNames)
+	}
+	if v.rulesNaturalizeCheck != nil {
+		v.rulesNaturalizeCheck.SetChecked(v.cfg.GlobalChatRules.NaturalizeNames)
 	}
 	if v.rulesCoalesceSelect != nil {
 		v.rulesCoalesceSelect.SetSelected(CoalesceSecondsToOption(v.cfg.GlobalChatRules.CoalesceConsecutiveSeconds))
@@ -2580,6 +2584,15 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 	checkNames.SetChecked(v.cfg.GlobalChatRules.SpeakNames)
 	v.rulesNamesCheck = checkNames
 
+	checkNaturalize := widget.NewCheck("Naturalize Usernames (split CamelCase/snake_case, strip wrappers & trailing numbers)", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.NaturalizeNames = b
+		})
+		v.refreshPlatformOverrides()
+	})
+	checkNaturalize.SetChecked(v.cfg.GlobalChatRules.NaturalizeNames)
+	v.rulesNaturalizeCheck = checkNaturalize
+
 	checkEmotes := widget.NewCheck("Speak Emotes & Emojis (unchecked = strip emotes & emojis)", func(b bool) {
 		v.updateConfig(func(c *config.Config) {
 			c.GlobalChatRules.SpeakEmotes = b
@@ -2719,6 +2732,7 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 
 	cardContent := container.NewVBox(
 		checkNames,
+		checkNaturalize,
 		coalesceRow,
 		checkEmotes,
 		checkDedupe,

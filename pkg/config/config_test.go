@@ -619,3 +619,34 @@ func TestEffectiveCoalesceSecondsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestEffectiveNaturalizeNames(t *testing.T) {
+	cfg := DefaultConfig()
+	if !cfg.EffectiveNaturalizeNames("twitch") {
+		t.Fatal("expected EffectiveNaturalizeNames('twitch')=true by default")
+	}
+
+	// Global off
+	cfg.GlobalChatRules.NaturalizeNames = false
+	if cfg.EffectiveNaturalizeNames("twitch") {
+		t.Fatal("expected EffectiveNaturalizeNames('twitch')=false when global is false")
+	}
+
+	// Platform override On
+	pTw := cfg.Platforms["twitch"]
+	pTw.Overrides.NaturalizeNamesMode = OverrideModeOn
+	cfg.Platforms["twitch"] = pTw
+	if !cfg.EffectiveNaturalizeNames("twitch") {
+		t.Fatal("expected EffectiveNaturalizeNames('twitch')=true when overridden to On")
+	}
+
+	// Platform override Off when global is On
+	cfg.GlobalChatRules.NaturalizeNames = true
+	pYt := cfg.Platforms["youtube"]
+	pYt.Overrides.NaturalizeNamesMode = OverrideModeOff
+	cfg.Platforms["youtube"] = pYt
+	if cfg.EffectiveNaturalizeNames("youtube") {
+		t.Fatal("expected EffectiveNaturalizeNames('youtube')=false when overridden to Off")
+	}
+}
+
+

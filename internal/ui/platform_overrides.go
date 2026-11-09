@@ -14,20 +14,22 @@ import (
 )
 
 const (
-	boolOnSpeakNames      = "On (Speak Names)"
-	boolOffSpeakNames     = "Off (Don't Speak Names)"
-	boolOnSpeakEmotes     = "On (Speak Emotes)"
-	boolOffSpeakEmotes    = "Off (Strip Emotes)"
-	boolOnDedupeEmotes    = "On (Once per Sentence)"
-	boolOffDedupeEmotes   = "Off (Allow Repeats)"
-	boolOnPlatformPrefix  = "On (Speak Platform)"
-	boolOffPlatformPrefix = "Off (Don't Speak Platform)"
-	boolOnAllowBcaster    = "On (Read Broadcaster @)"
-	boolOffAllowBcaster   = "Off (Ignore Broadcaster @)"
-	boolOnAlertMention    = "On (Play Alert Sound)"
-	boolOffAlertMention   = "Off (No Alert Sound)"
-	boolOnTranslateChat   = "On (Translate Foreign Chat)"
-	boolOffTranslateChat  = "Off (Don't Translate)"
+	boolOnSpeakNames       = "On (Speak Names)"
+	boolOffSpeakNames      = "Off (Don't Speak Names)"
+	boolOnNaturalizeNames  = "On (Naturalize Handles)"
+	boolOffNaturalizeNames = "Off (Raw Handles)"
+	boolOnSpeakEmotes      = "On (Speak Emotes)"
+	boolOffSpeakEmotes     = "Off (Strip Emotes)"
+	boolOnDedupeEmotes     = "On (Once per Sentence)"
+	boolOffDedupeEmotes    = "Off (Allow Repeats)"
+	boolOnPlatformPrefix   = "On (Speak Platform)"
+	boolOffPlatformPrefix  = "Off (Don't Speak Platform)"
+	boolOnAllowBcaster     = "On (Read Broadcaster @)"
+	boolOffAllowBcaster    = "Off (Ignore Broadcaster @)"
+	boolOnAlertMention     = "On (Play Alert Sound)"
+	boolOffAlertMention    = "Off (No Alert Sound)"
+	boolOnTranslateChat    = "On (Translate Foreign Chat)"
+	boolOffTranslateChat   = "Off (Don't Translate)"
 )
 
 // PlatformOverridesControl manages the per-setting global/override pulldowns for a streaming platform tab.
@@ -37,6 +39,7 @@ type PlatformOverridesControl struct {
 	Card          *widget.Card
 
 	NamesSelect                   *widget.Select
+	NaturalizeSelect              *widget.Select
 	CoalesceSelect                *widget.Select
 	EmotesSelect                  *widget.Select
 	DedupeSelect                  *widget.Select
@@ -141,6 +144,21 @@ func (c *PlatformOverridesControl) build() {
 			cfg.Platforms[c.PlatformKey] = p
 		})
 		c.syncCoalesceSubControl()
+	})
+
+	c.NaturalizeSelect = widget.NewSelect(nil, func(selected string) {
+		if c.syncing {
+			return
+		}
+		mode, bVal := parseSelectedBoolMode(selected, boolOnNaturalizeNames)
+		c.updateConfig(func(cfg *config.Config) {
+			p := cfg.Platforms[c.PlatformKey]
+			p.Overrides.NaturalizeNamesMode = mode
+			if mode != config.OverrideModeGlobal {
+				p.Overrides.NaturalizeNames = bVal
+			}
+			cfg.Platforms[c.PlatformKey] = p
+		})
 	})
 
 	c.CoalesceSelect = widget.NewSelect(nil, func(selected string) {
@@ -369,6 +387,7 @@ func (c *PlatformOverridesControl) build() {
 
 	cardContent := container.NewVBox(
 		makeRow("Speak Chatter Names:", c.NamesSelect),
+		makeRow("Naturalize Usernames:", c.NaturalizeSelect),
 		makeRow("Coalesce Consecutive Speaker:", c.CoalesceSelect),
 		makeRow("Speak Emotes & Emojis:", c.EmotesSelect),
 		makeRow("Deduplicate Emotes & Emojis:", c.DedupeSelect),
@@ -432,6 +451,11 @@ func (c *PlatformOverridesControl) Refresh() {
 	c.NamesSelect.Options = boolOptionsForGlobal(g.SpeakNames, boolOnSpeakNames, boolOffSpeakNames)
 	c.NamesSelect.SetSelected(selectedBoolOption(ov.SpeakNamesMode, ov.OverrideRules, ov.SpeakNames, g.SpeakNames, boolOnSpeakNames, boolOffSpeakNames))
 	c.NamesSelect.Refresh()
+
+	// 1a. Naturalize Usernames
+	c.NaturalizeSelect.Options = boolOptionsForGlobal(g.NaturalizeNames, boolOnNaturalizeNames, boolOffNaturalizeNames)
+	c.NaturalizeSelect.SetSelected(selectedBoolOption(ov.NaturalizeNamesMode, ov.OverrideRules, ov.NaturalizeNames, g.NaturalizeNames, boolOnNaturalizeNames, boolOffNaturalizeNames))
+	c.NaturalizeSelect.Refresh()
 
 	// 1b. Coalesce Consecutive Speaker
 	globalCoalesceOpt := fmt.Sprintf("Global (%s)", CoalesceSecondsToOption(g.CoalesceConsecutiveSeconds))

@@ -488,6 +488,7 @@ func NormalizeIgnoreMentionsMode(mode string) string {
 
 type GlobalChatRules struct {
 	SpeakNames                 bool    `json:"speak_names"`
+	NaturalizeNames            bool    `json:"naturalize_names"`
 	CoalesceConsecutiveSeconds int     `json:"coalesce_consecutive_seconds,omitempty"`
 	SpeakEmotes                bool    `json:"speak_emotes"`
 	DeduplicateEmotes          bool    `json:"deduplicate_emotes"`
@@ -608,6 +609,7 @@ func NormalizeVoiceOverrideMode(mode string) string {
 type PlatformOverrides struct {
 	OverrideRules                 bool    `json:"override_rules,omitempty"`
 	SpeakNamesMode                string  `json:"speak_names_mode,omitempty"`
+	NaturalizeNamesMode           string  `json:"naturalize_names_mode,omitempty"`
 	CoalesceConsecutiveMode       string  `json:"coalesce_consecutive_mode,omitempty"`
 	SpeakEmotesMode               string  `json:"speak_emotes_mode,omitempty"`
 	DeduplicateEmotesMode         string  `json:"deduplicate_emotes_mode,omitempty"`
@@ -619,6 +621,7 @@ type PlatformOverrides struct {
 	TranslateMode                 string  `json:"translate_mode,omitempty"`
 	VoiceOverrideMode             string  `json:"voice_override_mode,omitempty"`
 	SpeakNames                    bool    `json:"speak_names"`
+	NaturalizeNames               bool    `json:"naturalize_names"`
 	CoalesceConsecutiveSeconds    int     `json:"coalesce_consecutive_seconds,omitempty"`
 	SpeakEmotes                   bool    `json:"speak_emotes"`
 	DeduplicateEmotes             bool    `json:"deduplicate_emotes"`
@@ -870,6 +873,7 @@ func DefaultConfig() *Config {
 		},
 		GlobalChatRules: GlobalChatRules{
 			SpeakNames:                 true,
+			NaturalizeNames:            true,
 			CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
 			SpeakEmotes:                false,
 			DeduplicateEmotes:          true,
@@ -976,6 +980,7 @@ func DefaultConfig() *Config {
 				Overrides: PlatformOverrides{
 					OverrideRules:              false,
 					SpeakNames:                 true,
+					NaturalizeNames:            true,
 					CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
 					SpeakEmotes:                false,
 					DeduplicateEmotes:          true,
@@ -1059,6 +1064,7 @@ func DefaultConfig() *Config {
 				Overrides: PlatformOverrides{
 					OverrideRules:              false,
 					SpeakNames:                 true,
+					NaturalizeNames:            true,
 					CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
 					SpeakEmotes:                false,
 					DeduplicateEmotes:          true,
@@ -1125,6 +1131,7 @@ func DefaultConfig() *Config {
 				Overrides: PlatformOverrides{
 					OverrideRules:              false,
 					SpeakNames:                 true,
+					NaturalizeNames:            true,
 					CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
 					SpeakEmotes:                false,
 					DeduplicateEmotes:          true,
@@ -1196,6 +1203,7 @@ func DefaultConfig() *Config {
 				Overrides: PlatformOverrides{
 					OverrideRules:              false,
 					SpeakNames:                 true,
+					NaturalizeNames:            true,
 					CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
 					SpeakEmotes:                false,
 					DeduplicateEmotes:          true,
@@ -1301,6 +1309,29 @@ func (c *Config) EffectiveChatRules(platform string) (speakNames, speakEmotes, d
 	}
 
 	return speakNames, speakEmotes, deduplicateEmotes, maxDuplicateWords, speakPlatformName, voice, speed
+}
+
+// EffectiveNaturalizeNames reports whether automatic username naturalization is enabled for a platform,
+// taking per-setting platform overrides into account.
+func (c *Config) EffectiveNaturalizeNames(platform string) bool {
+	if c == nil {
+		return true
+	}
+	val := c.GlobalChatRules.NaturalizeNames
+	if p, ok := c.Platforms[platform]; ok {
+		ov := p.Overrides
+		switch NormalizeBoolOverrideMode(ov.NaturalizeNamesMode) {
+		case OverrideModeOn:
+			val = true
+		case OverrideModeOff:
+			val = false
+		default:
+			if ov.OverrideRules {
+				val = ov.NaturalizeNames
+			}
+		}
+	}
+	return val
 }
 
 // EffectiveCoalesceSeconds returns the effective consecutive-speaker coalescing window in seconds
@@ -1747,6 +1778,9 @@ func migrate(cfg *Config) error {
 			if p.Overrides.OverrideRules {
 				if p.Overrides.SpeakNamesMode == "" {
 					p.Overrides.SpeakNamesMode = BoolToOverrideMode(p.Overrides.SpeakNames)
+				}
+				if p.Overrides.NaturalizeNamesMode == "" {
+					p.Overrides.NaturalizeNamesMode = BoolToOverrideMode(p.Overrides.NaturalizeNames)
 				}
 				if p.Overrides.CoalesceConsecutiveMode == "" && p.Overrides.CoalesceConsecutiveSeconds != DefaultCoalesceConsecutiveSeconds {
 					p.Overrides.CoalesceConsecutiveMode = CoalesceSecondsToOverrideMode(p.Overrides.CoalesceConsecutiveSeconds)

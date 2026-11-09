@@ -561,13 +561,13 @@ func TestSessionStreamEventsAndRedemptionFilter(t *testing.T) {
 	if rOther, ok := byID["ev-redemp-other"]; !ok || rOther.Outcome != eventlog.OutcomeDroppedDisabled || rOther.RawText != "Redeemed Hydrate!" {
 		t.Errorf("unexpected filtered redemption log entry: %+v", rOther)
 	}
-	if rMatch, ok := byID["ev-redemp-match"]; !ok || !rMatch.PassedFilters || rMatch.Outcome != eventlog.OutcomeQueued || rMatch.SpokenText != "Viewer2 redeemed TTS Message: Hello world" {
+	if rMatch, ok := byID["ev-redemp-match"]; !ok || !rMatch.PassedFilters || rMatch.Outcome != eventlog.OutcomeQueued || rMatch.SpokenText != "Viewer 2 redeemed TTS Message: Hello world" {
 		t.Errorf("unexpected matched redemption log entry: %+v", rMatch)
 	}
 	if gLow, ok := byID["ev-kick-gift-low"]; !ok || gLow.Outcome != eventlog.OutcomeDroppedThreshold {
 		t.Errorf("unexpected low kick gift log entry: %+v", gLow)
 	}
-	if gHigh, ok := byID["ev-kick-gift-high"]; !ok || !gHigh.PassedFilters || gHigh.SpokenText != "KickUser2 sent 200 Sub Bomb: Hype!" {
+	if gHigh, ok := byID["ev-kick-gift-high"]; !ok || !gHigh.PassedFilters || gHigh.SpokenText != "Kick User 2 sent 200 Sub Bomb: Hype!" {
 		t.Errorf("unexpected high kick gift log entry: %+v", gHigh)
 	}
 }
@@ -1155,7 +1155,7 @@ func TestSessionWatchStreakAndExtendedEventFormatting(t *testing.T) {
 		t.Errorf("unexpected kick-giftsub-multi entry: %+v", kg)
 	}
 	ytg := byID["yt-gift-100"]
-	if !ytg.PassedFilters || ytg.RawText != "Sent 100 (2 Jewels) :100:" || ytg.SpokenText != "IgorB-x8u sent 100!" {
+	if !ytg.PassedFilters || ytg.RawText != "Sent 100 (2 Jewels) :100:" || ytg.SpokenText != "Igor B sent 100!" {
 		t.Errorf("unexpected yt-gift-100 entry: RawText=%q SpokenText=%q Entry=%+v", ytg.RawText, ytg.SpokenText, ytg)
 	}
 	if res.Summary.TotalJewels != 2 {

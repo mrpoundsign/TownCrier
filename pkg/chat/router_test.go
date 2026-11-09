@@ -128,7 +128,7 @@ func TestRouterTextFormatting(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.GlobalChatRules.SpeakNames = true
 
-	// Standard message with speak_names = true
+	// Standard message with speak_names = true (naturalize_names = true by default)
 	event := &Event{
 		Platform:    "twitch",
 		UserName:    "bob",
@@ -138,9 +138,18 @@ func TestRouterTextFormatting(t *testing.T) {
 	}
 
 	res := router.Resolve(event, cfg)
-	if res.Text != "BobTheStreamer says: hello world" {
-		t.Errorf("expected 'BobTheStreamer says: hello world', got %q", res.Text)
+	if res.Text != "Bob The Streamer says: hello world" {
+		t.Errorf("expected 'Bob The Streamer says: hello world', got %q", res.Text)
 	}
+
+	cfg.GlobalChatRules.NaturalizeNames = false
+	router.ResetSpeaker()
+	res = router.Resolve(event, cfg)
+	if res.Text != "BobTheStreamer says: hello world" {
+		t.Errorf("expected 'BobTheStreamer says: hello world' when NaturalizeNames is false, got %q", res.Text)
+	}
+	cfg.GlobalChatRules.NaturalizeNames = true
+	router.ResetSpeaker()
 
 	// Nickname override in viewers
 	cfg.Viewers["twitch:bob_id"] = config.ViewerConfig{

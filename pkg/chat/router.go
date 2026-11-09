@@ -127,17 +127,21 @@ func resolveSpokenName(event *Event, cfg *config.Config) string {
 	var viewerNickname string
 	if cfg != nil && len(cfg.Viewers) > 0 {
 		if v, ok := config.LookupViewer(cfg.Viewers, event.Platform, event.UserID, event.UserName); ok {
-			viewerNickname = v.Nickname
+			viewerNickname = strings.TrimSpace(v.Nickname)
 		}
 	}
-	spokenName := viewerNickname
-	if spokenName == "" {
-		spokenName = event.DisplayName
+	if viewerNickname != "" {
+		return strings.TrimLeft(viewerNickname, "@")
 	}
+	spokenName := event.DisplayName
 	if spokenName == "" {
 		spokenName = event.UserName
 	}
-	return strings.TrimLeft(strings.TrimSpace(spokenName), "@")
+	spokenName = strings.TrimLeft(strings.TrimSpace(spokenName), "@")
+	if spokenName != "" && cfg != nil && cfg.EffectiveNaturalizeNames(event.Platform) {
+		spokenName = NaturalizeUsername(spokenName)
+	}
+	return spokenName
 }
 
 func (r *Router) recordSpokenLocked(event *Event, speakNames bool, spokenName string, now time.Time) {
