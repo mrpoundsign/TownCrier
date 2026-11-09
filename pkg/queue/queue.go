@@ -40,6 +40,7 @@ type Queue struct {
 	player                audio.Player
 	engine                tts.Engine
 	cfgFn                 func() *config.Config
+	micGateFn             func() bool
 	translationChimeCache *audio.AlertSoundCache
 
 	currentItem         *Item
@@ -83,6 +84,60 @@ func NewQueue(player audio.Player, engine tts.Engine, cfgFn func() *config.Confi
 	go q.dispatcherLoop()
 
 	return q
+}
+
+// SetMicGateFunc registers an optional predicate that returns true when the streamer's
+// microphone VAD gate is actively holding speech in "pause" mode.
+func (q *Queue) SetMicGateFunc(fn func() bool) {
+	q.mu.Lock()
+	q.micGateFn = fn
+	q.cond.Broadcast()
+	q.mu.Unlock()
+}
+
+// NotifyMicGateChanged wakes the queue dispatcher when the microphone VAD gate state changes.
+func (q *Queue) NotifyMicGateChanged() {
+	q.mu.Lock()
+	q.cond.Broadcast()
+	q.mu.Unlock()
+}
+
+func (q *Queue) isMicGated() bool {
+	q.mu.Lock()
+	fn := q.micGateFn
+	q.mu.Unlock()
+	if fn == nil {
+		return false
+	}
+	return fn()
+}
+
+func (q *Queue) waitWhileMicGated(player audio.Player) bool {
+	if !q.isMicGated() {
+		return false
+	}
+	for player != nil && player.IsPlaying() {
+		q.mu.Lock()
+		aborted := q.currentAborted || q.closed
+		q.mu.Unlock()
+		if aborted {
+			return true
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for !q.currentAborted && !q.closed {
+		fn := q.micGateFn
+		q.mu.Unlock()
+		gated := fn != nil && fn()
+		q.mu.Lock()
+		if !gated || q.currentAborted || q.closed {
+			break
+		}
+		q.cond.Wait()
+	}
+	return q.currentAborted || q.closed
 }
 
 // Enqueue adds an item to the appropriate priority tier (0 for paid/events, 1 for chat).
@@ -516,6 +571,7 @@ func (q *Queue) abortWithReasonLocked(outcome, detail string) {
 	if q.player != nil {
 		q.player.Stop()
 	}
+	q.cond.Broadcast()
 	select {
 	case q.stopPlaybackCh <- struct{}{}:
 	default:
@@ -551,6 +607,20 @@ func (q *Queue) popNext() (*Item, int, bool) {
 		if q.paused {
 			q.cond.Wait()
 			continue
+		}
+
+		if (len(q.eventsQueue) > 0 || len(q.chatQueue) > 0) && q.micGateFn != nil {
+			fn := q.micGateFn
+			q.mu.Unlock()
+			gated := fn()
+			q.mu.Lock()
+			if q.closed {
+				return nil, 0, false
+			}
+			if gated {
+				q.cond.Wait()
+				continue
+			}
 		}
 
 		// 1. Pop from Events / Paid tier (Tier 0) - NEVER dropped for staleness
@@ -758,6 +828,9 @@ func (q *Queue) processItem(item *Item, depth int) {
 			if !startedPlaying {
 				preBuffer = append(preBuffer, samples...)
 				if len(preBuffer) >= minPreBufferSamples {
+					if q.waitWhileMicGated(player) {
+						return false
+					}
 					startedPlaying = true
 					log.Printf("[Queue] Playing pre-buffered clauses 1..%d (%d samples at %d Hz)...", chunkCount, len(preBuffer), preBufferSR)
 					if playErr := player.Play(preBuffer, preBufferSR); playErr != nil {
@@ -768,6 +841,10 @@ func (q *Queue) processItem(item *Item, depth int) {
 					preBuffer = nil
 				}
 				return true
+			}
+
+			if q.waitWhileMicGated(player) {
+				return false
 			}
 
 			log.Printf("[Queue] Playing clause %d (%d samples at %d Hz)...", chunkCount, len(samples), sampleRate)
@@ -788,10 +865,7 @@ func (q *Queue) processItem(item *Item, depth int) {
 			return
 		}
 		if !startedPlaying && len(preBuffer) > 0 && player != nil {
-			q.mu.Lock()
-			aborted := q.currentAborted || q.closed
-			q.mu.Unlock()
-			if !aborted {
+			if !q.waitWhileMicGated(player) {
 				log.Printf("[Queue] Playing audio (%d samples at %d Hz)...", len(preBuffer), preBufferSR)
 				if playErr := player.Play(preBuffer, preBufferSR); playErr != nil {
 					log.Printf("[Queue] Player.Play failed: %v", playErr)
@@ -834,6 +908,10 @@ func (q *Queue) processItem(item *Item, depth int) {
 				combined = append(combined, samples...)
 				samples = combined
 			}
+		}
+
+		if q.waitWhileMicGated(player) {
+			return
 		}
 
 		log.Printf("[Queue] Playing audio (%d samples at %d Hz)...", len(samples), sampleRate)

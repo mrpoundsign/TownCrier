@@ -79,6 +79,8 @@ type Session struct {
 	idleWg          sync.WaitGroup
 	alertCache      *audio.AlertSoundCache
 	lastAlertAt     time.Time
+	micMonitor      *audio.CaptureMonitor
+	onMicLevel      func(levelDB float32, active bool)
 
 	streamMu        sync.Mutex
 	livePlatforms   map[string]string
@@ -132,6 +134,17 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		lastSpeakActive: cfgClone.TTS.Enabled && initMode == config.TTSModeAlwaysOn,
 		alertCache:      audio.NewAlertSoundCache(),
 	}
+	initThresh := cfgClone.Audio.MicThresholdDB
+	if initThresh == 0 {
+		initThresh = config.DefaultMicThresholdDB
+	}
+	initRelMs := cfgClone.Audio.MicReleaseMs
+	if initRelMs <= 0 {
+		initRelMs = config.DefaultMicReleaseMs
+	}
+	s.micMonitor = audio.NewCaptureMonitor(initThresh, time.Duration(initRelMs)*time.Millisecond)
+	s.micMonitor.SetOnActiveChange(s.handleMicGateActiveChange)
+	s.micMonitor.SetOnLevelUpdate(s.handleMicGateLevelUpdate)
 	router.SetVoicePoolProvider(func(c *config.Config) []string {
 		if eng := s.Engine(); eng != nil {
 			if voices := eng.Voices(); len(voices) > 0 {
@@ -241,6 +254,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 	})
 
 	s.queue = queue.NewQueue(nil, nil, s.Config)
+	s.queue.SetMicGateFunc(s.IsMicGatePausing)
 	s.queue.SetOnItemOutcome(func(item *queue.Item, spoken bool, outcome string, detail string) {
 		if item == nil {
 			return
@@ -336,6 +350,7 @@ func (s *Session) Start() error {
 	}
 	s.startIdleMonitor()
 	s.EvaluateIdleState()
+	s.syncMicMonitor(cfg)
 	s.syncWSServer(cfg)
 	syncConnectors(cfg, tw, yt, tt, kk)
 	return nil
@@ -351,6 +366,7 @@ func (s *Session) Stop() error {
 
 	s.running = false
 	q := s.queue
+	micMon := s.micMonitor
 	tw := s.twitchConnector
 	yt := s.youtubeConnector
 	tt := s.tiktokConnector
@@ -358,6 +374,10 @@ func (s *Session) Stop() error {
 	s.mu.Unlock()
 
 	s.stopIdleMonitor()
+	if micMon != nil {
+		micMon.Stop()
+	}
+	s.applyMicDucking()
 	if s.wsServer != nil {
 		_ = s.wsServer.Stop()
 	}
@@ -392,6 +412,8 @@ func (s *Session) Close() error {
 	s.onKickStatus = nil
 	s.onTTSModeState = nil
 	s.onVolumeChanged = nil
+	s.onMicLevel = nil
+	micMon := s.micMonitor
 	tw := s.twitchConnector
 	yt := s.youtubeConnector
 	tt := s.tiktokConnector
@@ -401,6 +423,10 @@ func (s *Session) Close() error {
 	s.mu.Unlock()
 
 	s.stopIdleMonitor()
+	if micMon != nil {
+		micMon.Stop()
+	}
+	s.applyMicDucking()
 	if wsSrv != nil {
 		_ = wsSrv.Stop()
 	}
@@ -497,6 +523,7 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 	if !newCfg.TTS.Enabled && s.router != nil {
 		s.router.ResetSpeaker()
 	}
+	s.syncMicMonitor(cfgSnap)
 	s.EvaluateIdleState()
 	return nil
 }
@@ -936,10 +963,117 @@ func (s *Session) SetOnEventDispatched(fn func(event *chat.Event, voiceID string
 // SetPlayer attaches or updates the audio playback device.
 func (s *Session) SetPlayer(p audio.Player) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.player = p
 	if s.queue != nil {
 		s.queue.SetPlayer(p)
+	}
+	s.mu.Unlock()
+	s.applyMicDucking()
+}
+
+// MicMonitor returns the session's microphone VAD/RMS capture monitor.
+func (s *Session) MicMonitor() *audio.CaptureMonitor {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.micMonitor
+}
+
+// SetOnMicLevel registers a callback invoked on capture buffers with the current dBFS level and gate state.
+func (s *Session) SetOnMicLevel(fn func(levelDB float32, active bool)) {
+	s.mu.Lock()
+	s.onMicLevel = fn
+	s.mu.Unlock()
+}
+
+// IsMicGatePausing reports whether the microphone VAD gate is configured for "pause" mode and currently active.
+func (s *Session) IsMicGatePausing() bool {
+	s.mu.RLock()
+	mode := config.MicGateModeOff
+	if s.cfg != nil {
+		mode = config.NormalizeMicGateMode(s.cfg.Audio.MicGateMode)
+	}
+	mon := s.micMonitor
+	s.mu.RUnlock()
+	return mode == config.MicGateModePause && mon != nil && mon.IsActive()
+}
+
+func (s *Session) syncMicMonitor(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	s.mu.RLock()
+	mon := s.micMonitor
+	running := s.running
+	s.mu.RUnlock()
+	if mon == nil {
+		return
+	}
+	thresh := cfg.Audio.MicThresholdDB
+	if thresh == 0 {
+		thresh = config.DefaultMicThresholdDB
+	}
+	relMs := cfg.Audio.MicReleaseMs
+	if relMs <= 0 {
+		relMs = config.DefaultMicReleaseMs
+	}
+	mon.SetParameters(thresh, time.Duration(relMs)*time.Millisecond)
+
+	mode := config.NormalizeMicGateMode(cfg.Audio.MicGateMode)
+	if running && cfg.TTS.Enabled && (mode == config.MicGateModeDuck || mode == config.MicGateModePause) {
+		if err := mon.Start(cfg.Audio.MicDeviceID); err != nil {
+			log.Printf("[Session] Failed to start microphone capture monitor: %v", err)
+		}
+	} else {
+		mon.Stop()
+	}
+
+	s.applyMicDucking()
+	if s.queue != nil {
+		s.queue.NotifyMicGateChanged()
+	}
+}
+
+func (s *Session) applyMicDucking() {
+	s.mu.RLock()
+	p := s.player
+	mon := s.micMonitor
+	mode := config.MicGateModeOff
+	duckLevel := config.DefaultMicDuckLevel
+	if s.cfg != nil {
+		mode = config.NormalizeMicGateMode(s.cfg.Audio.MicGateMode)
+		if s.cfg.Audio.MicDuckLevel > 0 && s.cfg.Audio.MicDuckLevel <= 1.0 {
+			duckLevel = s.cfg.Audio.MicDuckLevel
+		}
+	}
+	s.mu.RUnlock()
+
+	dp, ok := p.(audio.DuckablePlayer)
+	if !ok {
+		return
+	}
+	if mode == config.MicGateModeDuck && mon != nil && mon.IsActive() {
+		dp.SetDuckMultiplier(duckLevel)
+	} else {
+		dp.SetDuckMultiplier(1.0)
+	}
+}
+
+func (s *Session) handleMicGateActiveChange(_ bool) {
+	s.applyMicDucking()
+	s.mu.RLock()
+	q := s.queue
+	s.mu.RUnlock()
+	if q != nil {
+		q.NotifyMicGateChanged()
+	}
+}
+
+func (s *Session) handleMicGateLevelUpdate(levelDB float32, active bool) {
+	s.mu.RLock()
+	fn := s.onMicLevel
+	s.mu.RUnlock()
+	if fn != nil {
+		fn(levelDB, active)
 	}
 }
 

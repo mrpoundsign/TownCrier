@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
+	"github.com/mrpoundsign/TownCrier/pkg/audio"
 	"github.com/mrpoundsign/TownCrier/pkg/chat"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 	"github.com/mrpoundsign/TownCrier/pkg/queue"
@@ -1586,7 +1587,80 @@ func TestSessionCoalesceConsecutiveViewerMessages(t *testing.T) {
 	}
 }
 
+type mockDuckPlayer struct {
+	mu       sync.Mutex
+	duckMult float32
+}
 
+func (m *mockDuckPlayer) Play(_ []float32, _ int) error                                    { return nil }
+func (m *mockDuckPlayer) PlayWithOptions(_ []float32, _ int, _ audio.PlayOptions) error    { return nil }
+func (m *mockDuckPlayer) Stop()                                                            {}
+func (m *mockDuckPlayer) PanicStop()                                                       {}
+func (m *mockDuckPlayer) ResetPanic()                                                      {}
+func (m *mockDuckPlayer) SwitchDevice(_ string) error                                      { return nil }
+func (m *mockDuckPlayer) SetVolume(_ float32)                                              {}
+func (m *mockDuckPlayer) Volume() float32                                                  { return 1.0 }
+func (m *mockDuckPlayer) IsPlaying() bool                                                  { return false }
+func (m *mockDuckPlayer) Close() error                                                     { return nil }
+func (m *mockDuckPlayer) SetFallbackListener(_ func(reason string))                        {}
+func (m *mockDuckPlayer) SetDuckMultiplier(mult float32) {
+	m.mu.Lock()
+	m.duckMult = mult
+	m.mu.Unlock()
+}
+func (m *mockDuckPlayer) DuckMultiplier() float32 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.duckMult
+}
 
+func TestSessionMicGateDuckAndPauseCoordination(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Audio.MicGateMode = config.MicGateModeDuck
+	cfg.Audio.MicThresholdDB = -30.0
+	cfg.Audio.MicDuckLevel = 0.25
+	cfg.Audio.MicReleaseMs = 400
 
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = session.Close() }()
+
+	dp := &mockDuckPlayer{duckMult: 1.0}
+	session.SetPlayer(dp)
+	if err := session.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if dp.DuckMultiplier() != 1.0 {
+		t.Fatalf("expected initial duck multiplier 1.0, got %v", dp.DuckMultiplier())
+	}
+
+	t0 := time.Now()
+	loud := []float32{0.4, -0.4, 0.4, -0.4}
+	quiet := []float32{0.0, 0.0, 0.0, 0.0}
+
+	// Streamer speaks -> player ducks to 0.25
+	session.MicMonitor().ProcessSamples(loud, t0)
+	if dp.DuckMultiplier() != 0.25 {
+		t.Fatalf("expected duck multiplier 0.25 while speaking, got %v", dp.DuckMultiplier())
+	}
+
+	// Silence after 500ms (>= 400ms release) -> player restores to 1.0
+	session.MicMonitor().ProcessSamples(quiet, t0.Add(500*time.Millisecond))
+	if dp.DuckMultiplier() != 1.0 {
+		t.Fatalf("expected duck multiplier 1.0 after release hold, got %v", dp.DuckMultiplier())
+	}
+
+	// Switch to Pause mode -> IsMicGatePausing reflects mic activity
+	_ = session.UpdateConfig(func(c *config.Config) {
+		c.Audio.MicGateMode = config.MicGateModePause
+	})
+	session.MicMonitor().ProcessSamples(loud, t0.Add(600*time.Millisecond))
+	if !session.IsMicGatePausing() {
+		t.Fatal("expected IsMicGatePausing()=true while speaking in pause mode")
+	}
+	session.MicMonitor().ProcessSamples(quiet, t0.Add(1200*time.Millisecond))
+	if session.IsMicGatePausing() {
+		t.Fatal("expected IsMicGatePausing()=false after release hold in pause mode")
+	}
+}
 

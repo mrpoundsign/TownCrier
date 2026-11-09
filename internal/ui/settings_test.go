@@ -973,6 +973,64 @@ func TestSettingsView_CoalesceConsecutiveSpeakerControls(t *testing.T) {
 	}
 }
 
+func TestSettingsView_MicGateControls(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	w := appObj.NewWindow("TestMicGateControls")
+
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
+
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.modelDir = t.TempDir()
+	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
+		return []audio.DeviceInfo{{ID: "spk1", Name: "Mock Speakers", IsDefault: true}}, nil
+	})
+	view.SetCaptureDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
+		return []audio.DeviceInfo{{ID: "mic1", Name: "Shure MV7", IsDefault: true}}, nil
+	})
+
+	_ = view.Build()
+
+	if view.micGateModeSelect == nil || view.micDeviceSelect == nil {
+		t.Fatal("expected micGateModeSelect and micDeviceSelect to be initialized")
+	}
+	if !view.micDeviceSelect.Disabled() || !view.micDuckSlider.Disabled() {
+		t.Fatal("expected mic controls to be disabled when MicGateMode is Off")
+	}
+
+	// Switch to Duck mode
+	view.micGateModeSelect.SetSelected(FormatMicGateModeLabel(config.MicGateModeDuck))
+	if sess.Config().Audio.MicGateMode != config.MicGateModeDuck {
+		t.Fatalf("expected MicGateMode=%q, got %q", config.MicGateModeDuck, sess.Config().Audio.MicGateMode)
+	}
+	if view.micDeviceSelect.Disabled() || view.micDuckSlider.Disabled() {
+		t.Fatal("expected micDeviceSelect and micDuckSlider to be enabled in Duck mode")
+	}
+
+	// Select capture device and adjust sliders
+	view.micDeviceSelect.SetSelected("Shure MV7")
+	if sess.Config().Audio.MicDeviceID != "mic1" || sess.Config().Audio.MicDeviceName != "Shure MV7" {
+		t.Fatalf("unexpected MicDevice config: id=%q name=%q", sess.Config().Audio.MicDeviceID, sess.Config().Audio.MicDeviceName)
+	}
+
+	view.micDuckSlider.SetValue(35)
+	if sess.Config().Audio.MicDuckLevel != 0.35 {
+		t.Fatalf("expected MicDuckLevel=0.35, got %v", sess.Config().Audio.MicDuckLevel)
+	}
+
+	// Switch to Pause mode -> duck slider disabled, device & threshold enabled
+	view.micGateModeSelect.SetSelected(FormatMicGateModeLabel(config.MicGateModePause))
+	if sess.Config().Audio.MicGateMode != config.MicGateModePause {
+		t.Fatalf("expected MicGateMode=%q, got %q", config.MicGateModePause, sess.Config().Audio.MicGateMode)
+	}
+	if !view.micDuckSlider.Disabled() {
+		t.Fatal("expected micDuckSlider to be disabled in Pause mode")
+	}
+}
+
 
 
 

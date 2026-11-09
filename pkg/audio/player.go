@@ -38,6 +38,13 @@ type Player interface {
 	SetFallbackListener(fn func(reason string))
 }
 
+// DuckablePlayer is an optional extension of Player that supports real-time volume ducking
+// (e.g., attenuating TTS gain while the streamer's microphone VAD gate is active).
+type DuckablePlayer interface {
+	SetDuckMultiplier(mult float32)
+	DuckMultiplier() float32
+}
+
 // DevicePlayer implements Player using miniaudio via malgo.
 type DevicePlayer struct {
 	ctx          *malgo.AllocatedContext
@@ -51,6 +58,8 @@ type DevicePlayer struct {
 	aborted      atomic.Bool
 	closed       bool
 	volumeBits   atomic.Uint32
+	duckSet      atomic.Bool
+	duckBits     atomic.Uint32
 	fallbackFunc func(reason string)
 }
 
@@ -180,7 +189,7 @@ func (p *DevicePlayer) onAudioCallback(pOutput, pInput []byte, frameCount uint32
 		return
 	}
 
-	vol := p.Volume()
+	vol := p.Volume() * p.DuckMultiplier()
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -333,6 +342,25 @@ func (p *DevicePlayer) SetVolume(vol float32) {
 // Volume returns current output volume (0.0 to 1.0).
 func (p *DevicePlayer) Volume() float32 {
 	return math.Float32frombits(p.volumeBits.Load())
+}
+
+// SetDuckMultiplier sets the real-time ducking attenuation multiplier, clamped between 0.0 and 1.0.
+func (p *DevicePlayer) SetDuckMultiplier(mult float32) {
+	if mult < 0.0 {
+		mult = 0.0
+	} else if mult > 1.0 {
+		mult = 1.0
+	}
+	p.duckBits.Store(math.Float32bits(mult))
+	p.duckSet.Store(true)
+}
+
+// DuckMultiplier returns the current ducking attenuation multiplier (defaults to 1.0 when unset).
+func (p *DevicePlayer) DuckMultiplier() float32 {
+	if !p.duckSet.Load() {
+		return 1.0
+	}
+	return math.Float32frombits(p.duckBits.Load())
 }
 
 // IsPlaying returns true if audio is actively being played from the buffer.

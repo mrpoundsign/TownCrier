@@ -483,4 +483,44 @@ func TestQueueFlushPendingForActivity(t *testing.T) {
 	}
 }
 
+func TestQueueMicGateHoldsDispatchWhileSpeaking(t *testing.T) {
+	player := &mockPlayer{}
+	engine := &mockEngine{}
+	cfg := config.DefaultConfig()
+
+	q := NewQueue(player, engine, func() *config.Config { return cfg })
+	defer q.Close()
+
+	var gated atomic.Bool
+	gated.Store(true)
+	q.SetMicGateFunc(gated.Load)
+
+	started := make(chan string, 1)
+	q.SetOnItemStarted(func(item *Item) {
+		started <- item.ID
+	})
+
+	_ = q.Enqueue(&Item{ID: "gated-msg-1", Text: "hold until streamer finishes talking", Priority: 1})
+
+	// While gated is true, item must not start
+	select {
+	case id := <-started:
+		t.Fatalf("expected item to be held while mic gate is active, but %q started", id)
+	case <-time.After(60 * time.Millisecond):
+	}
+
+	// Release mic gate -> item starts immediately
+	gated.Store(false)
+	q.NotifyMicGateChanged()
+
+	select {
+	case id := <-started:
+		if id != "gated-msg-1" {
+			t.Fatalf("expected gated-msg-1, got %q", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for item to start after mic gate released")
+	}
+}
+
 

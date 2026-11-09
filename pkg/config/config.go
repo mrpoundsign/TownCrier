@@ -344,10 +344,38 @@ func DefaultLiveLogPresets() []LiveLogPreset {
 	}
 }
 
+const (
+	MicGateModeOff   = "off"
+	MicGateModeDuck  = "duck"
+	MicGateModePause = "pause"
+
+	DefaultMicThresholdDB float32 = -35.0
+	DefaultMicDuckLevel   float32 = 0.20
+	DefaultMicReleaseMs   int     = 600
+)
+
+// NormalizeMicGateMode returns a canonical MicGateMode ("off", "duck", or "pause").
+func NormalizeMicGateMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case MicGateModeDuck, "duck_volume", "attenuate":
+		return MicGateModeDuck
+	case MicGateModePause, "pause_speech", "hold":
+		return MicGateModePause
+	default:
+		return MicGateModeOff
+	}
+}
+
 type AudioConfig struct {
-	DeviceID   string  `json:"device_id"`
-	DeviceName string  `json:"device_name"`
-	Volume     float32 `json:"volume"` // 0.0 to 1.0
+	DeviceID       string  `json:"device_id"`
+	DeviceName     string  `json:"device_name"`
+	Volume         float32 `json:"volume"`                     // 0.0 to 1.0
+	MicGateMode    string  `json:"mic_gate_mode,omitempty"`    // "off", "duck", "pause"
+	MicDeviceID    string  `json:"mic_device_id,omitempty"`    // capture device ID hex (empty = system default)
+	MicDeviceName  string  `json:"mic_device_name,omitempty"`  // capture device display name
+	MicThresholdDB float32 `json:"mic_threshold_db,omitempty"` // RMS activation threshold in dBFS (default -35.0)
+	MicDuckLevel   float32 `json:"mic_duck_level,omitempty"`   // ducked volume multiplier 0.05..0.80 (default 0.20)
+	MicReleaseMs   int     `json:"mic_release_ms,omitempty"`   // release hold delay in ms (default 600)
 }
 
 // TTS operational output modes while the TTS engine remains warm in memory.
@@ -815,9 +843,15 @@ func DefaultConfig() *Config {
 			CheckOnStartup: true,
 		},
 		Audio: AudioConfig{
-			DeviceID:   "",
-			DeviceName: "",
-			Volume:     1.0,
+			DeviceID:       "",
+			DeviceName:     "",
+			Volume:         1.0,
+			MicGateMode:    MicGateModeOff,
+			MicDeviceID:    "",
+			MicDeviceName:  "",
+			MicThresholdDB: DefaultMicThresholdDB,
+			MicDuckLevel:   DefaultMicDuckLevel,
+			MicReleaseMs:   DefaultMicReleaseMs,
 		},
 		TTS: TTSConfig{
 			Enabled:               true,
@@ -1712,6 +1746,16 @@ func migrate(cfg *Config) error {
 	cfg.TTS.OutputMode = NormalizeTTSOutputMode(cfg.TTS.OutputMode)
 	if cfg.TTS.IdleTimeoutSeconds <= 0 {
 		cfg.TTS.IdleTimeoutSeconds = DefaultIdleTimeoutSeconds
+	}
+	cfg.Audio.MicGateMode = NormalizeMicGateMode(cfg.Audio.MicGateMode)
+	if cfg.Audio.MicThresholdDB == 0 || cfg.Audio.MicThresholdDB < -58.0 || cfg.Audio.MicThresholdDB > -5.0 {
+		cfg.Audio.MicThresholdDB = DefaultMicThresholdDB
+	}
+	if cfg.Audio.MicDuckLevel <= 0 || cfg.Audio.MicDuckLevel > 1.0 {
+		cfg.Audio.MicDuckLevel = DefaultMicDuckLevel
+	}
+	if cfg.Audio.MicReleaseMs <= 0 {
+		cfg.Audio.MicReleaseMs = DefaultMicReleaseMs
 	}
 	if cfg.TTS.AlertCooldownMs <= 0 {
 		cfg.TTS.AlertCooldownMs = DefaultAlertCooldownMs

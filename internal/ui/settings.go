@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"slices"
 	"strconv"
@@ -41,6 +42,7 @@ type SettingsView struct {
 	mu                sync.Mutex
 	reloadSeq         uint64
 	deviceEnum        func() ([]audio.DeviceInfo, error)
+	captureDeviceEnum func() ([]audio.DeviceInfo, error)
 	statusLabel       *widget.Label
 	onStatus                  func(msg string)
 	onHotkeyChanged           func(hotkey string) error
@@ -71,6 +73,18 @@ type SettingsView struct {
 	modelStatus       *widget.Label
 	deviceSelect      *widget.Select
 	deviceMap         map[string]string // device name -> hex ID
+	micGateModeSelect *widget.Select
+	micDeviceSelect   *widget.Select
+	micDeviceRefreshBtn *widget.Button
+	micDeviceMap      map[string]string // capture device name -> hex ID
+	micThresholdSlider *widget.Slider
+	micThresholdLabel  *widget.Label
+	micDuckSlider      *widget.Slider
+	micDuckLabel       *widget.Label
+	micReleaseSlider   *widget.Slider
+	micReleaseLabel    *widget.Label
+	micLevelBar        *widget.ProgressBar
+	micGateStatusLabel *widget.Label
 	uiScaleSelect     *widget.Select
 	globalVoiceField  *VoiceSpeedField
 	syncTTSControls   func()
@@ -214,6 +228,8 @@ func NewSettingsView(w fyne.Window, cfg *config.Config, player audio.Player, eng
 		modelDir:           tts.DefaultModelDir(),
 		deviceMap:          make(map[string]string),
 		deviceEnum:         audio.EnumeratePlaybackDevices,
+		micDeviceMap:       make(map[string]string),
+		captureDeviceEnum:  audio.EnumerateCaptureDevices,
 		prevModels:         slices.Clone(cfg.TTS.EffectiveEnabledModels()),
 		prevPreset:         cfg.TTS.Preset,
 		prevUseGPU:         cfg.TTS.UseGPU,
@@ -247,9 +263,17 @@ func (v *SettingsView) SetDeviceEnumerator(fn func() ([]audio.DeviceInfo, error)
 	v.deviceEnum = fn
 }
 
+// SetCaptureDeviceEnumerator overrides the microphone capture device enumeration function (useful for tests or mocking).
+func (v *SettingsView) SetCaptureDeviceEnumerator(fn func() ([]audio.DeviceInfo, error)) {
+	v.captureDeviceEnum = fn
+}
+
 // SetSession attaches the application session to coordinate engine reloads.
 func (v *SettingsView) SetSession(s *app.Session) {
 	v.session = s
+	if s != nil {
+		s.SetOnMicLevel(v.SyncMicLevel)
+	}
 }
 
 // SetStatusHandler registers a callback invoked when configuration or audio status updates.
@@ -526,6 +550,7 @@ func (v *SettingsView) SyncFromConfig() {
 	if v.uiScaleSelect != nil {
 		v.uiScaleSelect.SetSelected(FormatUIScaleLabel(v.cfg.UIScale))
 	}
+	v.syncMicGateControlsFromConfig()
 	if v.globalVoiceField != nil {
 		v.globalVoiceField.SetVoiceAndSpeed(v.cfg.GlobalChatRules.DefaultVoice, v.cfg.GlobalChatRules.DefaultSpeed)
 	}
@@ -1499,11 +1524,308 @@ func (v *SettingsView) buildAudioCard() *widget.Card {
 
 	deviceRow := container.NewBorder(nil, nil, widget.NewLabel("Output Device:"), refreshBtn, v.deviceSelect)
 
+	// --- Microphone VAD Gate & Ducking Controls ---
+	v.micGateModeSelect = widget.NewSelect(MicGateModeOptions, func(selected string) {
+		if v.initializing {
+			return
+		}
+		mode := ParseMicGateModeLabel(selected)
+		v.updateConfig(func(c *config.Config) {
+			c.Audio.MicGateMode = mode
+		})
+		v.syncMicGateEnablement(mode)
+		v.updateMicGateStatusText(audio.MinCaptureDBFS, false)
+		v.setStatus("Microphone VAD Gate mode set to: " + selected)
+	})
+	v.micGateModeSelect.SetSelected(FormatMicGateModeLabel(v.cfg.Audio.MicGateMode))
+
+	v.micDeviceSelect = widget.NewSelect([]string{"Default Microphone"}, func(selected string) {
+		if v.initializing {
+			return
+		}
+		v.mu.Lock()
+		devHex := v.micDeviceMap[selected]
+		v.mu.Unlock()
+
+		v.updateConfig(func(c *config.Config) {
+			c.Audio.MicDeviceName = selected
+			c.Audio.MicDeviceID = devHex
+		})
+		v.setStatus("Active microphone input: " + selected)
+	})
+	v.refreshCaptureDeviceList()
+
+	micRefreshBtn := widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() {
+		v.refreshCaptureDeviceList()
+		v.setStatus("Microphone input list refreshed.")
+	})
+	v.micDeviceRefreshBtn = micRefreshBtn
+
+	initThresh := v.cfg.Audio.MicThresholdDB
+	if initThresh == 0 {
+		initThresh = config.DefaultMicThresholdDB
+	}
+	v.micThresholdLabel = widget.NewLabel(fmt.Sprintf("%.0f dB", initThresh))
+	v.micThresholdSlider = widget.NewSlider(-55, -10)
+	v.micThresholdSlider.Step = 1
+	v.micThresholdSlider.SetValue(float64(initThresh))
+	v.micThresholdSlider.OnChanged = func(val float64) {
+		v.micThresholdLabel.SetText(fmt.Sprintf("%.0f dB", val))
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.Audio.MicThresholdDB = float32(val)
+		})
+	}
+
+	initDuckPct := int(math.Round(float64(v.cfg.Audio.MicDuckLevel) * 100))
+	if initDuckPct <= 0 || initDuckPct > 100 {
+		initDuckPct = 20
+	}
+	v.micDuckLabel = widget.NewLabel(fmt.Sprintf("%d%%", initDuckPct))
+	v.micDuckSlider = widget.NewSlider(5, 80)
+	v.micDuckSlider.Step = 5
+	v.micDuckSlider.SetValue(float64(initDuckPct))
+	v.micDuckSlider.OnChanged = func(val float64) {
+		pct := int(math.Round(val))
+		v.micDuckLabel.SetText(fmt.Sprintf("%d%%", pct))
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.Audio.MicDuckLevel = float32(pct) / 100.0
+		})
+	}
+
+	initRelMs := v.cfg.Audio.MicReleaseMs
+	if initRelMs <= 0 {
+		initRelMs = config.DefaultMicReleaseMs
+	}
+	v.micReleaseLabel = widget.NewLabel(fmt.Sprintf("%d ms", initRelMs))
+	v.micReleaseSlider = widget.NewSlider(100, 2000)
+	v.micReleaseSlider.Step = 50
+	v.micReleaseSlider.SetValue(float64(initRelMs))
+	v.micReleaseSlider.OnChanged = func(val float64) {
+		ms := int(math.Round(val))
+		v.micReleaseLabel.SetText(fmt.Sprintf("%d ms", ms))
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.Audio.MicReleaseMs = ms
+		})
+	}
+
+	v.micLevelBar = widget.NewProgressBar()
+	v.micLevelBar.Min = 0.0
+	v.micLevelBar.Max = 1.0
+	v.micLevelBar.SetValue(0.0)
+	v.micLevelBar.TextFormatter = func() string { return "" }
+
+	v.micGateStatusLabel = widget.NewLabel("")
+	v.updateMicGateStatusText(audio.MinCaptureDBFS, false)
+	v.syncMicGateEnablement(v.cfg.Audio.MicGateMode)
+
+	micModeRow := container.NewBorder(nil, nil, widget.NewLabel("Mic VAD Gate Mode:"), nil, v.micGateModeSelect)
+	micDeviceRow := container.NewBorder(nil, nil, widget.NewLabel("Microphone Input:"), micRefreshBtn, v.micDeviceSelect)
+	micThreshRow := container.NewBorder(nil, nil, widget.NewLabel("Voice Threshold:"), v.micThresholdLabel, v.micThresholdSlider)
+	micDuckRow := container.NewBorder(nil, nil, widget.NewLabel("Ducked TTS Volume:"), v.micDuckLabel, v.micDuckSlider)
+	micReleaseRow := container.NewBorder(nil, nil, widget.NewLabel("Release Hold Delay:"), v.micReleaseLabel, v.micReleaseSlider)
+	micMeterRow := container.NewBorder(nil, nil, widget.NewLabel("Live Mic Level:"), v.micGateStatusLabel, v.micLevelBar)
+
 	cardContent := container.NewVBox(
 		deviceRow,
+		widget.NewSeparator(),
+		widget.NewLabelWithStyle("Microphone Voice Activity Gate & Ducking", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		micModeRow,
+		micDeviceRow,
+		micThreshRow,
+		micDuckRow,
+		micReleaseRow,
+		micMeterRow,
 	)
 
-	return widget.NewCard("Audio Output Device", "Select WASAPI playback device for OBS routing", cardContent)
+	return widget.NewCard("Audio Output & Microphone Gate", "Select WASAPI playback device for OBS routing and configure streamer mic ducking/pausing", cardContent)
+}
+
+// MicGateModeOptions lists the display labels for Microphone VAD Gate modes.
+var MicGateModeOptions = []string{
+	"Off (Disabled)",
+	"Duck TTS Volume While Speaking",
+	"Pause Speech Between Clauses While Speaking",
+}
+
+// FormatMicGateModeLabel converts a canonical MicGateMode string into its UI dropdown label.
+func FormatMicGateModeLabel(mode string) string {
+	switch config.NormalizeMicGateMode(mode) {
+	case config.MicGateModeDuck:
+		return "Duck TTS Volume While Speaking"
+	case config.MicGateModePause:
+		return "Pause Speech Between Clauses While Speaking"
+	default:
+		return "Off (Disabled)"
+	}
+}
+
+// ParseMicGateModeLabel converts a UI dropdown label into a canonical MicGateMode string.
+func ParseMicGateModeLabel(label string) string {
+	switch label {
+	case "Duck TTS Volume While Speaking":
+		return config.MicGateModeDuck
+	case "Pause Speech Between Clauses While Speaking":
+		return config.MicGateModePause
+	default:
+		return config.MicGateModeOff
+	}
+}
+
+func (v *SettingsView) syncMicGateEnablement(mode string) {
+	norm := config.NormalizeMicGateMode(mode)
+	activeMode := norm == config.MicGateModeDuck || norm == config.MicGateModePause
+	if v.micDeviceSelect != nil {
+		if activeMode {
+			v.micDeviceSelect.Enable()
+		} else {
+			v.micDeviceSelect.Disable()
+		}
+	}
+	if v.micThresholdSlider != nil {
+		if activeMode {
+			v.micThresholdSlider.Enable()
+		} else {
+			v.micThresholdSlider.Disable()
+		}
+	}
+	if v.micDuckSlider != nil {
+		if norm == config.MicGateModeDuck {
+			v.micDuckSlider.Enable()
+		} else {
+			v.micDuckSlider.Disable()
+		}
+	}
+	if v.micReleaseSlider != nil {
+		if activeMode {
+			v.micReleaseSlider.Enable()
+		} else {
+			v.micReleaseSlider.Disable()
+		}
+	}
+}
+
+func (v *SettingsView) syncMicGateControlsFromConfig() {
+	if v.micGateModeSelect != nil {
+		v.micGateModeSelect.SetSelected(FormatMicGateModeLabel(v.cfg.Audio.MicGateMode))
+	}
+	if v.micThresholdSlider != nil {
+		th := v.cfg.Audio.MicThresholdDB
+		if th == 0 {
+			th = config.DefaultMicThresholdDB
+		}
+		v.micThresholdSlider.SetValue(float64(th))
+		if v.micThresholdLabel != nil {
+			v.micThresholdLabel.SetText(fmt.Sprintf("%.0f dB", th))
+		}
+	}
+	if v.micDuckSlider != nil {
+		pct := int(math.Round(float64(v.cfg.Audio.MicDuckLevel) * 100))
+		if pct <= 0 || pct > 100 {
+			pct = 20
+		}
+		v.micDuckSlider.SetValue(float64(pct))
+		if v.micDuckLabel != nil {
+			v.micDuckLabel.SetText(fmt.Sprintf("%d%%", pct))
+		}
+	}
+	if v.micReleaseSlider != nil {
+		ms := v.cfg.Audio.MicReleaseMs
+		if ms <= 0 {
+			ms = config.DefaultMicReleaseMs
+		}
+		v.micReleaseSlider.SetValue(float64(ms))
+		if v.micReleaseLabel != nil {
+			v.micReleaseLabel.SetText(fmt.Sprintf("%d ms", ms))
+		}
+	}
+	v.syncMicGateEnablement(v.cfg.Audio.MicGateMode)
+	v.updateMicGateStatusText(audio.MinCaptureDBFS, false)
+}
+
+func (v *SettingsView) updateMicGateStatusText(levelDB float32, active bool) {
+	if v.micGateStatusLabel == nil {
+		return
+	}
+	mode := config.NormalizeMicGateMode(v.cfg.Audio.MicGateMode)
+	if mode == config.MicGateModeOff {
+		v.micGateStatusLabel.SetText("Gate Off")
+		return
+	}
+	if active {
+		if mode == config.MicGateModeDuck {
+			v.micGateStatusLabel.SetText(fmt.Sprintf("%.0f dB • Ducking", levelDB))
+		} else {
+			v.micGateStatusLabel.SetText(fmt.Sprintf("%.0f dB • Holding Speech", levelDB))
+		}
+		return
+	}
+	v.micGateStatusLabel.SetText(fmt.Sprintf("%.0f dB • Open", levelDB))
+}
+
+// SyncMicLevel updates the live microphone input level bar and gate status label on the Fyne UI thread.
+func (v *SettingsView) SyncMicLevel(levelDB float32, active bool) {
+	fyne.Do(func() {
+		if v.micLevelBar != nil {
+			norm := (float64(levelDB) - float64(audio.MinCaptureDBFS)) / (0.0 - float64(audio.MinCaptureDBFS))
+			if norm < 0.0 {
+				norm = 0.0
+			} else if norm > 1.0 {
+				norm = 1.0
+			}
+			v.micLevelBar.SetValue(norm)
+		}
+		v.updateMicGateStatusText(levelDB, active)
+	})
+}
+
+func (v *SettingsView) refreshCaptureDeviceList() {
+	v.mu.Lock()
+	enumFn := v.captureDeviceEnum
+	if enumFn == nil {
+		enumFn = audio.EnumerateCaptureDevices
+	}
+	v.mu.Unlock()
+
+	devices, err := enumFn()
+
+	options := []string{"Default Microphone"}
+	newMap := make(map[string]string)
+	newMap["Default Microphone"] = ""
+
+	if err == nil {
+		for _, dev := range devices {
+			options = append(options, dev.Name)
+			newMap[dev.Name] = dev.ID
+		}
+	}
+
+	v.mu.Lock()
+	v.micDeviceMap = newMap
+	targetName := v.cfg.Audio.MicDeviceName
+	v.mu.Unlock()
+
+	if v.micDeviceSelect != nil {
+		v.micDeviceSelect.Options = options
+		selected := "Default Microphone"
+		if targetName != "" {
+			for _, opt := range options {
+				if opt == targetName {
+					selected = opt
+					break
+				}
+			}
+		}
+		v.micDeviceSelect.SetSelected(selected)
+	}
 }
 
 func (v *SettingsView) refreshDeviceList() {

@@ -156,3 +156,78 @@ func TestSynthesizeEarcon(t *testing.T) {
 		}
 	}
 }
+
+func TestCaptureMonitorRMSAndReleaseHysteresis(t *testing.T) {
+	// 1. Silence produces MinCaptureDBFS (-60.0 dBFS)
+	if db := ComputeRMSdBFS(make([]float32, 160)); db != MinCaptureDBFS {
+		t.Fatalf("expected silence dBFS %v, got %v", MinCaptureDBFS, db)
+	}
+
+	// 2. Full-scale DC/square wave of 0.5 amplitude -> 20*log10(0.5) ≈ -6.02 dBFS
+	loudSamples := make([]float32, 160)
+	for i := range loudSamples {
+		loudSamples[i] = 0.5
+	}
+	loudDB := ComputeRMSdBFS(loudSamples)
+	if loudDB < -6.5 || loudDB > -5.5 {
+		t.Fatalf("expected loudDB ≈ -6.02 dBFS, got %v", loudDB)
+	}
+
+	// 3. Hysteresis gate with -35 dB threshold and 600ms release hold
+	mon := NewCaptureMonitor(-35.0, 600*time.Millisecond)
+	var transitions []bool
+	mon.SetOnActiveChange(func(active bool) {
+		transitions = append(transitions, active)
+	})
+
+	t0 := time.Now()
+	quietSamples := make([]float32, 160)
+
+	// Initial quiet frame -> inactive
+	_, active := mon.ProcessSamples(quietSamples, t0)
+	if active || mon.IsActive() {
+		t.Fatal("expected monitor to remain inactive on quiet frame")
+	}
+
+	// Speaking frame -> immediately active
+	_, active = mon.ProcessSamples(loudSamples, t0.Add(20*time.Millisecond))
+	if !active || !mon.IsActive() {
+		t.Fatal("expected monitor to activate immediately when RMS >= threshold")
+	}
+
+	// Quiet frame 300ms later (< 600ms release hold) -> still held active
+	_, active = mon.ProcessSamples(quietSamples, t0.Add(320*time.Millisecond))
+	if !active || !mon.IsActive() {
+		t.Fatal("expected monitor to remain held active during 600ms release window")
+	}
+
+	// Quiet frame 650ms after speech stopped (>= 600ms release hold) -> released to inactive
+	_, active = mon.ProcessSamples(quietSamples, t0.Add(670*time.Millisecond))
+	if active || mon.IsActive() {
+		t.Fatal("expected monitor to release to inactive after 600ms of silence")
+	}
+
+	if len(transitions) != 2 || !transitions[0] || transitions[1] {
+		t.Fatalf("expected transitions [true, false], got %v", transitions)
+	}
+
+	// 4. Verify DevicePlayer ducking attenuation in onAudioCallback
+	p := &DevicePlayer{}
+	p.SetVolume(1.0)
+	p.SetDuckMultiplier(0.20)
+	if p.DuckMultiplier() != 0.20 {
+		t.Fatalf("expected DuckMultiplier 0.20, got %v", p.DuckMultiplier())
+	}
+	if err := p.Play([]float32{1.0, 1.0, 1.0, 1.0}, 24000); err != nil {
+		t.Fatalf("Play failed: %v", err)
+	}
+	frameCount := 4
+	buf := make([]byte, frameCount*4)
+	p.onAudioCallback(buf, nil, uint32(frameCount))
+	outSamples := unsafe.Slice((*float32)(unsafe.Pointer(&buf[0])), frameCount)
+	for i, s := range outSamples {
+		if s < 0.199 || s > 0.201 {
+			t.Fatalf("sample[%d]: expected 0.20 ducked output, got %f", i, s)
+		}
+	}
+}
