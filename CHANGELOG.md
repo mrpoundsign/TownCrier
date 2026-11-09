@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.0.9 — 2026-11-08
+
+### Added
+- **Automatic Foreign Chat Language Detection, Cascading Translation & `文A` Toggle (#119)**:
+  - Added multi-provider foreign chat translation (`MyMemory`, `Google Cloud Translation`, `DeepL`, `LibreTranslate`, and `Local LLM / Ollama`) with automatic source language detection, configurable priority failover / round-robin load balancing, exponential backoff, and two-tier sentence caching (LRU memory + SQLite).
+  - Added optional pre-speech translation indicator chime and inline `文A` original/translated text toggle in the Dashboard and Event Logs.
+- **Guided Replacement Voice Assignment Wizard (#44)**:
+  - Added an interactive **Reassign Voices to Disable Model Pack** wizard modal when unchecking an in-use TTS model pack or switching to a Performance Preset that disables an in-use pack, supporting quick bulk reassignment, voice previewing, per-item voice selection, and clearing custom overrides to inherit the Global Default Voice.
+- **Portable `.zip` Backup Export, Selective Import & Schema Snapshots (#129)**:
+  - Added unified `.zip` backup export (`towncrier-backup-YYYY-MM-DD-HHMMSS-v<version>.zip`) packaging scrubbed configuration (`config-backup.json`), WAL-checkpointed SQLite Event Log database (`events.db`), and optional application logs (`towncrier.log`).
+  - Added `.zip` and `.json` backup import supporting Selective Merge (per-section toggles), Full Restore (with local PC audio device, hardware preset, and file path preservation), and in-place `events.db` restoration.
+  - Added automatic schema-versioned snapshots (`config.YYYY-MM-DD-HHMMSS-v<schema>.json` and `events.YYYY-MM-DD-HHMMSS-v<schema>.db`) and startup schema regression detection for safe downgrades.
+
+---
+
 ## v0.0.8 — 2026-11-06
 
 ### Added
