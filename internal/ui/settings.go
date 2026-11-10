@@ -165,6 +165,10 @@ type SettingsView struct {
 	threadsSlider        *widget.Slider
 	idleSelect              *widget.Select
 	modelChecks             map[string]*widget.Check
+	modelUpdateStatuses     map[string]tts.ModelUpdateStatus
+	modelUpdatesStatusLbl   *widget.Label
+	checkModelUpdatesBtn    *widget.Button
+	updateModelsBtn         *widget.Button
 	activeReplacementWizard *VoiceReplacementWizard
 	deviceRefreshBtn        *widget.Button
 	rulesNamesCheck                  *widget.Check
@@ -266,6 +270,13 @@ func (v *SettingsView) SetDeviceEnumerator(fn func() ([]audio.DeviceInfo, error)
 // SetCaptureDeviceEnumerator overrides the microphone capture device enumeration function (useful for tests or mocking).
 func (v *SettingsView) SetCaptureDeviceEnumerator(fn func() ([]audio.DeviceInfo, error)) {
 	v.captureDeviceEnum = fn
+}
+
+// SetModelDir overrides the base TTS model directory (useful for tests or custom model paths).
+func (v *SettingsView) SetModelDir(dir string) {
+	v.mu.Lock()
+	v.modelDir = dir
+	v.mu.Unlock()
 }
 
 // SetSession attaches the application session to coordinate engine reloads.
@@ -2086,18 +2097,77 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	v.modelChecks = modelChecks
 	modelPackRows := container.NewVBox()
 
+	v.modelUpdateStatuses = tts.InspectAllLocalModelStatuses(v.modelDir, v.currentConfig().TTS.UseGPU)
+	v.modelUpdatesStatusLbl = widget.NewLabel("")
+	v.modelUpdatesStatusLbl.Wrapping = fyne.TextWrapWord
+
 	formatPackCheckLabel := func(spec tts.ModelFamilySpec) string {
 		cfg := v.currentConfig()
+		v.mu.Lock()
+		st, hasSt := v.modelUpdateStatuses[spec.ID]
+		v.mu.Unlock()
+		if !hasSt {
+			st = tts.InspectLocalModelStatus(v.modelDir, spec.ID, cfg.TTS.UseGPU)
+		}
+
 		status := fmt.Sprintf("Downloads ~%d MB on enable", spec.DownloadSizeMB)
-		if spec.ID == tts.ModelKokoroIntl && tts.IsModelFamilyInstalled(v.modelDir, tts.ModelKokoro, cfg.TTS.UseGPU) {
+		switch {
+		case st.UpdateAvailable && spec.ID == tts.ModelKokoroIntl:
+			status = "⬆ Update Available (Shares Kokoro)"
+		case st.UpdateAvailable:
+			status = fmt.Sprintf("⬆ Update Available (~%d MB)", spec.DownloadSizeMB)
+		case spec.ID == tts.ModelKokoroIntl && tts.IsModelFamilyInstalled(v.modelDir, tts.ModelKokoro, cfg.TTS.UseGPU):
 			status = "Installed (Shares Kokoro)"
-		} else if tts.IsModelFamilyInstalled(v.modelDir, spec.ID, cfg.TTS.UseGPU) {
+		case tts.IsModelFamilyInstalled(v.modelDir, spec.ID, cfg.TTS.UseGPU):
 			status = "Installed"
 		}
 		return fmt.Sprintf("%s [%s]", spec.Name, status)
 	}
 
+	syncModelUpdateControls := func() {
+		v.mu.Lock()
+		outdated := tts.OutdatedModelFamilies(v.modelUpdateStatuses)
+		v.mu.Unlock()
+		if v.updateModelsBtn != nil {
+			if len(outdated) > 0 {
+				v.updateModelsBtn.SetText(fmt.Sprintf("Update Voice Models (%d)", len(outdated)))
+				v.updateModelsBtn.Enable()
+			} else {
+				v.updateModelsBtn.SetText("Update Voice Models")
+				v.updateModelsBtn.Disable()
+			}
+		}
+		if v.modelUpdatesStatusLbl != nil && v.modelUpdatesStatusLbl.Text == "" && len(outdated) > 0 {
+			names := make([]string, 0, len(outdated))
+			for _, id := range outdated {
+				if spec, ok := tts.ModelSpecByID(id); ok {
+					names = append(names, spec.ShortName)
+				} else {
+					names = append(names, id)
+				}
+			}
+			v.modelUpdatesStatusLbl.SetText(fmt.Sprintf("⬆ %d voice model update(s) available: %s", len(outdated), strings.Join(names, ", ")))
+		}
+	}
+
 	refreshPackLabels := func() {
+		cfg := v.currentConfig()
+		localSt := tts.InspectAllLocalModelStatuses(v.modelDir, cfg.TTS.UseGPU)
+		v.mu.Lock()
+		if v.modelUpdateStatuses == nil {
+			v.modelUpdateStatuses = localSt
+		} else {
+			for k, lst := range localSt {
+				if prev, ok := v.modelUpdateStatuses[k]; ok && prev.UpdateAvailable && lst.Installed {
+					// Preserve remote-detected update flag until updated
+					v.modelUpdateStatuses[k] = prev
+				} else {
+					v.modelUpdateStatuses[k] = lst
+				}
+			}
+		}
+		v.mu.Unlock()
+
 		for _, spec := range tts.AllModelFamilies {
 			if chk, ok := modelChecks[spec.ID]; ok {
 				chk.SetText(formatPackCheckLabel(spec))
@@ -2107,7 +2177,75 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		if v.modelStatus != nil {
 			v.modelStatus.SetText(v.formatModelStatusText())
 		}
+		syncModelUpdateControls()
 	}
+
+	v.checkModelUpdatesBtn = widget.NewButtonWithIcon("Check for Voice Updates", theme.ViewRefreshIcon(), func() {
+		cfg := v.currentConfig()
+		v.checkModelUpdatesBtn.Disable()
+		v.modelUpdatesStatusLbl.SetText("Checking GitHub Releases for voice model updates...")
+		v.setStatus("Checking for updated neural TTS voice models...")
+
+		runCheck := func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			statuses, err := tts.CheckModelUpdates(ctx, v.modelDir, cfg.TTS.UseGPU)
+			applyResult := func() {
+				v.checkModelUpdatesBtn.Enable()
+				v.mu.Lock()
+				v.modelUpdateStatuses = statuses
+				v.mu.Unlock()
+				outdated := tts.OutdatedModelFamilies(statuses)
+				if err != nil && len(outdated) == 0 {
+					msg := fmt.Sprintf("⚠️ Could not check remote voice updates: %v", err)
+					v.modelUpdatesStatusLbl.SetText(msg)
+					v.setStatus(msg)
+					refreshPackLabels()
+					return
+				}
+				if len(outdated) > 0 {
+					names := make([]string, 0, len(outdated))
+					for _, id := range outdated {
+						if spec, ok := tts.ModelSpecByID(id); ok {
+							names = append(names, spec.ShortName)
+						} else {
+							names = append(names, id)
+						}
+					}
+					msg := fmt.Sprintf("⬆ %d voice model update(s) available: %s", len(outdated), strings.Join(names, ", "))
+					v.modelUpdatesStatusLbl.SetText(msg)
+					v.setStatus(msg)
+				} else {
+					msg := "✓ All installed voice model packs are up to date."
+					v.modelUpdatesStatusLbl.SetText(msg)
+					v.setStatus(msg)
+				}
+				refreshPackLabels()
+			}
+			if testing.Testing() {
+				applyResult()
+			} else {
+				fyne.Do(applyResult)
+			}
+		}
+		if testing.Testing() {
+			runCheck()
+		} else {
+			go runCheck()
+		}
+	})
+
+	v.updateModelsBtn = widget.NewButtonWithIcon("Update Voice Models", theme.DownloadIcon(), func() {
+		v.mu.Lock()
+		outdated := tts.OutdatedModelFamilies(v.modelUpdateStatuses)
+		v.mu.Unlock()
+		if len(outdated) == 0 {
+			return
+		}
+		v.updateOutdatedModels(outdated, refreshPackLabels)
+	})
+	v.updateModelsBtn.Importance = widget.HighImportance
+	syncModelUpdateControls()
 
 	syncWidgetsFromConfig := func() {
 		cfg := v.currentConfig()
@@ -2458,6 +2596,11 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		idleSelect,
 	)
 
+	modelUpdatesActionRow := container.NewHBox(
+		v.checkModelUpdatesBtn,
+		v.updateModelsBtn,
+	)
+
 	cardContent := container.NewVBox(
 		v.modelStatus,
 		presetRow,
@@ -2467,6 +2610,8 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("Enabled Voice Model Packs (Multiple Allowed • Downloaded on Demand):", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		modelPackRows,
+		modelUpdatesActionRow,
+		v.modelUpdatesStatusLbl,
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("CPU & Memory Tuning:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		threadsRow,
@@ -2720,6 +2865,161 @@ func (v *SettingsView) reloadTTSEngine(onDoneUI func()) {
 			}
 		})
 	}()
+}
+
+func (v *SettingsView) updateOutdatedModels(outdated []string, onDoneUI func()) {
+	if len(outdated) == 0 {
+		return
+	}
+
+	v.mu.Lock()
+	v.reloadSeq++
+	mySeq := v.reloadSeq
+	enabledModels := v.cfg.TTS.EffectiveEnabledModels()
+	useGPU := v.cfg.TTS.UseGPU
+	threads := v.cfg.TTS.NumThreads
+	if threads <= 0 {
+		threads = 4
+	}
+	maxClause := v.cfg.TTS.MaxClauseWords
+	if maxClause <= 0 {
+		maxClause = tts.DefaultMaxClauseWords
+	}
+	idleMin := v.cfg.TTS.IdleUnloadMinutes
+	v.mu.Unlock()
+
+	cancelCtx, cancelFn := context.WithCancel(context.Background())
+
+	var modal *ModelDownloadModal
+	if !testing.Testing() && v.window != nil {
+		firstSpec, _ := tts.ModelSpecByID(outdated[0])
+		modal = NewModelDownloadModal(v.window, firstSpec.ShortName, firstSpec.DownloadSizeMB, func() {
+			cancelFn()
+		})
+	}
+
+	runUpdate := func() {
+		defer cancelFn()
+
+		// 1. Detach and close the existing engine FIRST so open ONNX files can be replaced on Windows
+		v.mu.Lock()
+		if v.reloadSeq != mySeq {
+			v.mu.Unlock()
+			if modal != nil {
+				modal.Dismiss()
+			}
+			return
+		}
+		oldEng := v.engine
+		v.engine = nil
+		v.mu.Unlock()
+
+		if v.session != nil {
+			v.session.SetEngine(nil)
+		}
+		if oldEng != nil {
+			_ = oldEng.Close()
+		}
+		tts.ReclaimOSMemory()
+
+		// 2. Force-download and replace each outdated model pack
+		for idx, fam := range outdated {
+			v.mu.Lock()
+			canceled := v.reloadSeq != mySeq
+			v.mu.Unlock()
+			if canceled || cancelCtx.Err() != nil {
+				if modal != nil {
+					modal.Dismiss()
+				}
+				return
+			}
+
+			spec, _ := tts.ModelSpecByID(fam)
+			if modal != nil {
+				modal.SetStep(idx+1, len(outdated), spec.ShortName, spec.DownloadSizeMB)
+			}
+
+			onProg := func(cur, tot int64) {
+				if modal != nil {
+					modal.UpdateProgress(cur, tot)
+				} else if tot > 0 {
+					v.setStatus(fmt.Sprintf("Updating %s (%d%%)...", spec.ShortName, cur*100/tot))
+				}
+			}
+
+			v.setStatus(fmt.Sprintf("Updating %s (~%d MB)...", spec.ShortName, spec.DownloadSizeMB))
+			if dlErr := tts.ForceUpdateModelFamilyWithContext(cancelCtx, v.modelDir, fam, useGPU, onProg); dlErr != nil {
+				if modal != nil {
+					modal.Dismiss()
+				}
+				msg := fmt.Sprintf("⚠️ Failed to update %s: %v", spec.ShortName, dlErr)
+				v.setStatus(msg)
+				finishErrUI := func() {
+					if v.modelUpdatesStatusLbl != nil {
+						v.modelUpdatesStatusLbl.SetText(msg)
+					}
+					if onDoneUI != nil {
+						onDoneUI()
+					}
+				}
+				if testing.Testing() {
+					finishErrUI()
+				} else {
+					fyne.Do(finishErrUI)
+				}
+				return
+			}
+		}
+
+		if modal != nil {
+			modal.Dismiss()
+		}
+
+		v.mu.Lock()
+		v.modelUpdateStatuses = tts.InspectAllLocalModelStatuses(v.modelDir, useGPU)
+		v.mu.Unlock()
+
+		var eng tts.Engine
+		var engErr error
+		if !testing.Testing() {
+			v.setStatus("Reloading neural TTS engine(s)...")
+			eng, engErr = tts.NewMultiEngine(v.modelDir, enabledModels, threads, useGPU, maxClause, idleMin)
+		}
+
+		finishUI := func() {
+			v.mu.Lock()
+			if engErr == nil && eng != nil {
+				v.engine = eng
+			}
+			v.mu.Unlock()
+
+			if v.session != nil && eng != nil {
+				v.session.SetEngine(eng)
+			}
+			if v.modelUpdatesStatusLbl != nil {
+				v.modelUpdatesStatusLbl.SetText("✓ Voice model packs updated to latest release!")
+			}
+			if onDoneUI != nil {
+				onDoneUI()
+			}
+			v.RefreshVoices()
+			if v.onModelsChanged != nil {
+				v.onModelsChanged()
+			}
+			v.setStatus("✓ Voice model packs updated!")
+		}
+		if testing.Testing() {
+			finishUI()
+		} else {
+			fyne.Do(finishUI)
+		}
+	}
+
+	if testing.Testing() {
+		runUpdate()
+	} else {
+		go runUpdate()
+	}
 }
 
 var DuplicateWordsOptions = []string{"Off (Unlimited)", "1", "2 (Default)", "3"}

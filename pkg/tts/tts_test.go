@@ -633,5 +633,58 @@ func TestMigrateModelsDir(t *testing.T) {
 	}
 }
 
+func TestCheckModelUpdatesAndForceUpdate(t *testing.T) {
+	baseTmp := t.TempDir()
+	kokoroDir := filepath.Join(baseTmp, "kokoro-en")
+	superDir := filepath.Join(baseTmp, "supertonic-en")
+	_ = os.MkdirAll(kokoroDir, 0755)
+	_ = os.MkdirAll(superDir, 0755)
 
+	// Populate Supertonic files on disk
+	for _, f := range []string{
+		"duration_predictor.int8.onnx",
+		"text_encoder.int8.onnx",
+		"vector_estimator.int8.onnx",
+		"vocoder.int8.onnx",
+		"tts.json",
+		"unicode_indexer.bin",
+		"voice.bin",
+	} {
+		_ = os.WriteFile(filepath.Join(superDir, f), []byte("old-weights"), 0600)
+	}
+	recordModelManifestHash(superDir, "sherpa-onnx-supertonic-tts-int8-2026-03-06.tar.bz2", "aaaa1111")
+
+	// Offline check: manifest matches expected archive name -> no update
+	localSt := InspectLocalModelStatus(kokoroDir, ModelSupertonic, false)
+	if !localSt.Installed || localSt.UpdateAvailable {
+		t.Fatalf("expected Supertonic installed with no local update, got %+v", localSt)
+	}
+
+	// Mock GitHub Releases API returning a new upstream SHA-256 digest ("bbbb2222")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"assets":[{"name":"sherpa-onnx-supertonic-tts-int8-2026-03-06.tar.bz2","digest":"sha256:bbbb2222","size":84692981}]}`))
+	}))
+	defer srv.Close()
+
+	origAPI := TTSModelsReleaseAPIURL
+	TTSModelsReleaseAPIURL = srv.URL
+	defer func() { TTSModelsReleaseAPIURL = origAPI }()
+
+	statuses, err := CheckModelUpdates(context.Background(), kokoroDir, false)
+	if err != nil {
+		t.Fatalf("CheckModelUpdates failed: %v", err)
+	}
+	st := statuses[ModelSupertonic]
+	if !st.Installed || !st.UpdateAvailable {
+		t.Fatalf("expected Supertonic UpdateAvailable=true when remote digest differs, got %+v", st)
+	}
+	if st.LocalDigest != "aaaa1111" || st.RemoteDigest != "bbbb2222" {
+		t.Errorf("unexpected digests: local=%q remote=%q", st.LocalDigest, st.RemoteDigest)
+	}
+	outdated := OutdatedModelFamilies(statuses)
+	if len(outdated) != 1 || outdated[0] != ModelSupertonic {
+		t.Fatalf("expected OutdatedModelFamilies=[supertonic], got %v", outdated)
+	}
+}
 

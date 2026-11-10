@@ -55,6 +55,9 @@ var (
 	PiperArchiveSHA256       = ""
 	PiperArchiveSize   int64 = 36406088
 
+	// TTSModelsReleaseAPIURL is the GitHub Releases API endpoint for upstream sherpa-onnx TTS model assets.
+	TTSModelsReleaseAPIURL = "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/tags/tts-models"
+
 	manifestMu sync.Mutex
 )
 
@@ -280,8 +283,15 @@ func DownloadKokoroModelForMode(destDir string, useGPU bool, onProgress Download
 
 // DownloadKokoroModelForModeWithContext downloads Kokoro archives with context cancellation support.
 // It ensures both the FP32 GPU model and INT8 CPU fallback model are installed in a unified download.
-func DownloadKokoroModelForModeWithContext(parentCtx context.Context, destDir string, _ bool, onProgress DownloadProgressFunc) error {
+func DownloadKokoroModelForModeWithContext(parentCtx context.Context, destDir string, useGPU bool, onProgress DownloadProgressFunc) error {
 	if IsModelInstalled(destDir) {
+		return nil
+	}
+	return downloadKokoroModelWithContext(parentCtx, destDir, useGPU, false, onProgress)
+}
+
+func downloadKokoroModelWithContext(parentCtx context.Context, destDir string, _ bool, force bool, onProgress DownloadProgressFunc) error {
+	if !force && IsModelInstalled(destDir) {
 		return nil
 	}
 
@@ -296,9 +306,9 @@ func DownloadKokoroModelForModeWithContext(parentCtx context.Context, destDir st
 		}
 	}
 
-	sharedPresent := hasKokoroSharedAssets(destDir)
-	needFP32 := !fileExists(filepath.Join(destDir, "model.onnx")) || !sharedPresent
-	needINT8 := !fileExists(filepath.Join(destDir, "model.int8.onnx")) || !sharedPresent
+	sharedPresent := !force && hasKokoroSharedAssets(destDir)
+	needFP32 := force || !fileExists(filepath.Join(destDir, "model.onnx")) || !sharedPresent
+	needINT8 := force || !fileExists(filepath.Join(destDir, "model.int8.onnx")) || !sharedPresent
 
 	var tasks []archiveTask
 	var totalBytes int64
@@ -531,6 +541,58 @@ func recordModelManifestHash(destDir, archiveName, sha256Hex string) {
 	}
 }
 
+// ReadModelManifest loads the recorded .manifest.json from a model family directory.
+func ReadModelManifest(dir string) (*ModelManifest, error) {
+	if dir == "" {
+		return nil, errors.New("empty model directory")
+	}
+	manifestMu.Lock()
+	defer manifestMu.Unlock()
+
+	manifestPath := filepath.Join(dir, ".manifest.json")
+	data, err := os.ReadFile(manifestPath) // #nosec G304 -- model directory path is managed by application configuration
+	if err != nil {
+		return nil, err
+	}
+	var m ModelManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+type githubReleaseAsset struct {
+	Name   string `json:"name"`
+	Digest string `json:"digest"`
+	Size   int64  `json:"size"`
+}
+
+func fetchGitHubReleaseAssets(ctx context.Context) ([]githubReleaseAsset, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, TTSModelsReleaseAPIURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub release API returned HTTP %d", resp.StatusCode)
+	}
+	var release struct {
+		Assets []githubReleaseAsset `json:"assets"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&release); err != nil {
+		return nil, err
+	}
+	for i := range release.Assets {
+		release.Assets[i].Digest = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(release.Assets[i].Digest)), "sha256:")
+	}
+	return release.Assets, nil
+}
+
 // fetchGitHubReleaseAssetDigest queries GitHub's official release metadata for k2-fsa/sherpa-onnx
 // to retrieve the live server-computed SHA-256 digest for an asset on the tts-models release tag.
 func fetchGitHubReleaseAssetDigest(ctx context.Context, archiveURL string) string {
@@ -542,31 +604,13 @@ func fetchGitHubReleaseAssetDigest(ctx context.Context, archiveURL string) strin
 	if assetName == "" || assetName == "." || assetName == "/" {
 		return ""
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/tags/tts-models", nil)
+	assets, err := fetchGitHubReleaseAssets(ctx)
 	if err != nil {
 		return ""
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return ""
-	}
-	var release struct {
-		Assets []struct {
-			Name   string `json:"name"`
-			Digest string `json:"digest"`
-		} `json:"assets"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&release); err != nil {
-		return ""
-	}
-	for _, a := range release.Assets {
+	for _, a := range assets {
 		if a.Name == assetName {
-			return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(a.Digest)), "sha256:")
+			return a.Digest
 		}
 	}
 	return ""
@@ -649,48 +693,88 @@ func DownloadModelFamily(kokoroDir string, family string, useGPU bool, onProgres
 
 // DownloadModelFamilyWithContext downloads and extracts the archive with context cancellation support.
 func DownloadModelFamilyWithContext(ctx context.Context, kokoroDir string, family string, useGPU bool, onProgress DownloadProgressFunc) error {
-	fam := strings.ToLower(strings.TrimSpace(family))
-	dir := ModelFamilyDir(kokoroDir, fam)
-	if fam == "" || fam == ModelKokoro || fam == ModelKokoroIntl {
-		return DownloadKokoroModelForModeWithContext(ctx, dir, useGPU, onProgress)
-	}
-	if IsModelFamilyInstalled(kokoroDir, fam, useGPU) {
-		return nil
-	}
+	return downloadModelFamilyWithContext(ctx, kokoroDir, family, useGPU, false, onProgress)
+}
 
-	var task archiveTask
+// ForceUpdateModelFamily downloads and extracts the latest archive(s) for the requested model family,
+// overwriting any existing installation on disk.
+func ForceUpdateModelFamily(kokoroDir string, family string, useGPU bool, onProgress DownloadProgressFunc) error {
+	return ForceUpdateModelFamilyWithContext(context.Background(), kokoroDir, family, useGPU, onProgress)
+}
+
+// ForceUpdateModelFamilyWithContext downloads and extracts the latest archive(s) for the requested model family
+// with context cancellation support, overwriting any existing installation on disk.
+func ForceUpdateModelFamilyWithContext(ctx context.Context, kokoroDir string, family string, useGPU bool, onProgress DownloadProgressFunc) error {
+	return downloadModelFamilyWithContext(ctx, kokoroDir, family, useGPU, true, onProgress)
+}
+
+func familyExpectedArchives(family string) ([]archiveTask, error) {
+	fam := strings.ToLower(strings.TrimSpace(family))
 	switch fam {
+	case "", ModelKokoro, ModelKokoroIntl:
+		return []archiveTask{
+			{
+				name:           "fp32",
+				url:            KokoroFP32ArchiveURL,
+				expectedSHA256: KokoroFP32ArchiveSHA256,
+				expectedSize:   KokoroFP32ArchiveSize,
+			},
+			{
+				name:           "int8",
+				url:            KokoroINT8ArchiveURL,
+				expectedSHA256: KokoroINT8ArchiveSHA256,
+				expectedSize:   KokoroINT8ArchiveSize,
+				onlyFile:       "model.int8.onnx",
+			},
+		}, nil
 	case ModelSupertonic:
-		task = archiveTask{
+		return []archiveTask{{
 			name:           ModelSupertonic,
 			url:            SupertonicArchiveURL,
 			expectedSHA256: SupertonicArchiveSHA256,
 			expectedSize:   SupertonicArchiveSize,
-		}
+		}}, nil
 	case ModelKittenMini:
-		task = archiveTask{
+		return []archiveTask{{
 			name:           ModelKittenMini,
 			url:            KittenMiniArchiveURL,
 			expectedSHA256: KittenMiniArchiveSHA256,
 			expectedSize:   KittenMiniArchiveSize,
-		}
+		}}, nil
 	case ModelKittenNano:
-		task = archiveTask{
+		return []archiveTask{{
 			name:           ModelKittenNano,
 			url:            KittenNanoArchiveURL,
 			expectedSHA256: KittenNanoArchiveSHA256,
 			expectedSize:   KittenNanoArchiveSize,
-		}
+		}}, nil
 	case ModelPiper:
-		task = archiveTask{
+		return []archiveTask{{
 			name:           ModelPiper,
 			url:            PiperArchiveURL,
 			expectedSHA256: PiperArchiveSHA256,
 			expectedSize:   PiperArchiveSize,
-		}
+		}}, nil
 	default:
+		return nil, fmt.Errorf("unsupported model family: %s", family)
+	}
+}
+
+func downloadModelFamilyWithContext(ctx context.Context, kokoroDir string, family string, useGPU bool, force bool, onProgress DownloadProgressFunc) error {
+	fam := strings.ToLower(strings.TrimSpace(family))
+	dir := ModelFamilyDir(kokoroDir, fam)
+	if fam == "" || fam == ModelKokoro || fam == ModelKokoroIntl {
+		return downloadKokoroModelWithContext(ctx, dir, useGPU, force, onProgress)
+	}
+	if !force && IsModelFamilyInstalled(kokoroDir, fam, useGPU) {
+		return nil
+	}
+
+	tasks, err := familyExpectedArchives(fam)
+	if err != nil || len(tasks) == 0 {
 		return fmt.Errorf("unsupported model family: %s", family)
 	}
+	task := tasks[0]
 
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create model directory %s: %w", dir, err)
@@ -703,7 +787,7 @@ func DownloadModelFamilyWithContext(ctx context.Context, kokoroDir string, famil
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	err := downloadAndExtractTarBz2(ctx, task, dir, &totalAtomic, func(delta int64) {
+	err = downloadAndExtractTarBz2(ctx, task, dir, &totalAtomic, func(delta int64) {
 		cur := downloadedBytes.Add(delta)
 		tot := max(cur, totalAtomic.Load())
 		if onProgress != nil {
@@ -719,5 +803,192 @@ func DownloadModelFamilyWithContext(ctx context.Context, kokoroDir string, famil
 	return nil
 }
 
+// ModelUpdateStatus describes the installation and update state of a voice model family.
+type ModelUpdateStatus struct {
+	Family          string
+	Installed       bool
+	UpdateAvailable bool
+	Reason          string
+	InstalledAt     string
+	LocalDigest     string
+	RemoteDigest    string
+}
 
+// InspectLocalModelStatus performs an instant offline check of the installed files and .manifest.json
+// for a model family to detect legacy versions (e.g. Kokoro v0.19), partial installs, or archive version changes.
+func InspectLocalModelStatus(kokoroDir string, family string, useGPU bool) ModelUpdateStatus {
+	fam := strings.ToLower(strings.TrimSpace(family))
+	if fam == "" {
+		fam = ModelKokoro
+	}
+	dir := ModelFamilyDir(kokoroDir, fam)
+	installed := IsModelFamilyInstalled(kokoroDir, fam, useGPU)
+
+	if !installed && (fam == ModelKokoro || fam == ModelKokoroIntl) {
+		if isLegacyKokoroV019Dir(dir) {
+			return ModelUpdateStatus{
+				Family:          fam,
+				Installed:       true,
+				UpdateAvailable: true,
+				Reason:          "Legacy Kokoro v0.19 installed (v1.0 update available)",
+			}
+		}
+		if IsCPUModelInstalled(dir) || IsGPUModelInstalled(dir) {
+			return ModelUpdateStatus{
+				Family:          fam,
+				Installed:       true,
+				UpdateAvailable: true,
+				Reason:          "Incomplete CPU/GPU Kokoro model pack",
+			}
+		}
+	}
+
+	if !installed {
+		return ModelUpdateStatus{Family: fam, Installed: false}
+	}
+
+	status := ModelUpdateStatus{
+		Family:    fam,
+		Installed: true,
+	}
+
+	manifest, err := ReadModelManifest(dir)
+	if err != nil || manifest == nil || len(manifest.Archives) == 0 {
+		return status
+	}
+	status.InstalledAt = manifest.InstalledAt
+
+	tasks, err := familyExpectedArchives(fam)
+	if err != nil {
+		return status
+	}
+	for _, t := range tasks {
+		archiveName := path.Base(t.url)
+		localHash, ok := manifest.Archives[archiveName]
+		if !ok || localHash == "" {
+			status.UpdateAvailable = true
+			status.Reason = fmt.Sprintf("Newer archive version configured (%s)", archiveName)
+			return status
+		}
+		if status.LocalDigest == "" {
+			status.LocalDigest = localHash
+		}
+		if t.expectedSHA256 != "" && !strings.EqualFold(localHash, t.expectedSHA256) {
+			status.UpdateAvailable = true
+			status.RemoteDigest = strings.ToLower(t.expectedSHA256)
+			status.Reason = "Updated checksum for " + archiveName
+			return status
+		}
+	}
+	return status
+}
+
+// InspectAllLocalModelStatuses returns the offline ModelUpdateStatus for every supported model family.
+func InspectAllLocalModelStatuses(kokoroDir string, useGPU bool) map[string]ModelUpdateStatus {
+	out := make(map[string]ModelUpdateStatus, len(AllModelFamilies))
+	for _, spec := range AllModelFamilies {
+		out[spec.ID] = InspectLocalModelStatus(kokoroDir, spec.ID, useGPU)
+	}
+	return out
+}
+
+// CheckModelUpdates queries the upstream GitHub Releases API (k2-fsa/sherpa-onnx tts-models)
+// and compares remote archive SHA-256 digests against local .manifest.json records for all installed model packs.
+func CheckModelUpdates(ctx context.Context, kokoroDir string, useGPU bool) (map[string]ModelUpdateStatus, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	statuses := InspectAllLocalModelStatuses(kokoroDir, useGPU)
+
+	assets, err := fetchGitHubReleaseAssets(ctx)
+	if err != nil {
+		return statuses, err
+	}
+	remoteByName := make(map[string]githubReleaseAsset, len(assets))
+	for _, a := range assets {
+		remoteByName[a.Name] = a
+	}
+
+	for _, spec := range AllModelFamilies {
+		st := statuses[spec.ID]
+		if !st.Installed || st.UpdateAvailable {
+			continue
+		}
+		dir := ModelFamilyDir(kokoroDir, spec.ID)
+		manifest, _ := ReadModelManifest(dir)
+		tasks, err := familyExpectedArchives(spec.ID)
+		if err != nil {
+			continue
+		}
+
+		for _, t := range tasks {
+			archiveName := path.Base(t.url)
+			remoteAsset, foundRemote := remoteByName[archiveName]
+			remoteDigest := strings.ToLower(t.expectedSHA256)
+			if foundRemote && remoteAsset.Digest != "" {
+				remoteDigest = remoteAsset.Digest
+			}
+
+			var localDigest string
+			if manifest != nil && manifest.Archives != nil {
+				localDigest = strings.ToLower(strings.TrimSpace(manifest.Archives[archiveName]))
+			}
+			if st.LocalDigest == "" && localDigest != "" {
+				st.LocalDigest = localDigest
+			}
+			if st.RemoteDigest == "" && remoteDigest != "" {
+				st.RemoteDigest = remoteDigest
+			}
+
+			if localDigest == "" {
+				st.UpdateAvailable = true
+				st.Reason = "Installed before version tracking (update available to verify latest weights)"
+				break
+			}
+			if remoteDigest != "" && !strings.EqualFold(localDigest, remoteDigest) {
+				st.UpdateAvailable = true
+				st.RemoteDigest = remoteDigest
+				st.Reason = fmt.Sprintf("Upstream model weights updated (%s)", archiveName)
+				break
+			}
+		}
+		statuses[spec.ID] = st
+	}
+
+	// Keep KokoroIntl update status synchronized with Kokoro since they share the same model directory
+	if kokoroSt, ok := statuses[ModelKokoro]; ok {
+		if intlSt, okIntl := statuses[ModelKokoroIntl]; okIntl && intlSt.Installed {
+			intlSt.UpdateAvailable = kokoroSt.UpdateAvailable
+			intlSt.Reason = kokoroSt.Reason
+			intlSt.LocalDigest = kokoroSt.LocalDigest
+			intlSt.RemoteDigest = kokoroSt.RemoteDigest
+			statuses[ModelKokoroIntl] = intlSt
+		}
+	}
+
+	return statuses, nil
+}
+
+// OutdatedModelFamilies returns the deduplicated list of model family IDs in display order
+// that have UpdateAvailable == true (collapsing ModelKokoroIntl into ModelKokoro since they share weights).
+func OutdatedModelFamilies(statuses map[string]ModelUpdateStatus) []string {
+	var out []string
+	seenKokoro := false
+	for _, spec := range AllModelFamilies {
+		st, ok := statuses[spec.ID]
+		if !ok || !st.UpdateAvailable {
+			continue
+		}
+		if spec.ID == ModelKokoro || spec.ID == ModelKokoroIntl {
+			if seenKokoro {
+				continue
+			}
+			seenKokoro = true
+			out = append(out, ModelKokoro)
+			continue
+		}
+		out = append(out, spec.ID)
+	}
+	return out
+}
 

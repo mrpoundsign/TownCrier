@@ -1031,7 +1031,37 @@ func TestSettingsView_MicGateControls(t *testing.T) {
 	}
 }
 
+func TestSettingsView_VoiceModelUpdateDetection(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	w := a.NewWindow("Test Voice Model Updates")
 
+	cfg := config.DefaultConfig()
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
 
+	baseTmp := t.TempDir()
+	kokoroDir := baseTmp + "/kokoro-en"
+	// Create a legacy Kokoro v0.19 voices.bin (~5.75MB without lexicon) so local update detection triggers
+	_ = os.MkdirAll(kokoroDir, 0755)
+	_ = os.WriteFile(kokoroDir+"/voices.bin", make([]byte, 5750784), 0600)
 
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.SetModelDir(kokoroDir)
+	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) { return nil, nil })
+	view.SetCaptureDeviceEnumerator(func() ([]audio.DeviceInfo, error) { return nil, nil })
+
+	_ = view.Build()
+
+	if view.checkModelUpdatesBtn == nil || view.updateModelsBtn == nil {
+		t.Fatal("expected checkModelUpdatesBtn and updateModelsBtn to be initialized")
+	}
+	if view.updateModelsBtn.Disabled() {
+		t.Fatal("expected updateModelsBtn to be enabled when legacy Kokoro v0.19 model is detected")
+	}
+	if !strings.Contains(view.modelChecks[tts.ModelKokoro].Text, "Update Available") {
+		t.Fatalf("expected Kokoro check label to indicate Update Available, got %q", view.modelChecks[tts.ModelKokoro].Text)
+	}
+}
 
