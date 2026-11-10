@@ -1,7 +1,6 @@
 package audio
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -102,15 +101,19 @@ func (p *DevicePlayer) initDevice(deviceIDHex string, isFallback bool) error {
 
 	if deviceIDHex != "" && !isFallback {
 		// Attempt to match device ID from enumeration
+		matched := false
 		devices, err := p.ctx.Devices(malgo.Playback)
 		if err == nil {
 			for _, dev := range devices {
-				devHex := hex.EncodeToString(dev.ID[:])
-				if stringsEqualOrContains(devHex, deviceIDHex) {
+				if MatchDeviceID(dev.ID, deviceIDHex) {
 					deviceConfig.Playback.DeviceID = dev.ID.Pointer()
+					matched = true
 					break
 				}
 			}
+		}
+		if !matched {
+			p.notifyFallback("Requested audio device not found; fell back to default device")
 		}
 	}
 
@@ -146,10 +149,6 @@ func (p *DevicePlayer) initDevice(deviceIDHex string, isFallback bool) error {
 
 	p.device = device
 	return nil
-}
-
-func stringsEqualOrContains(s1, s2 string) bool {
-	return s1 == s2 || (len(s1) > 0 && len(s2) > 0 && (len(s1) >= len(s2) && s1[:len(s2)] == s2))
 }
 
 func (p *DevicePlayer) notifyFallback(reason string) {
@@ -388,6 +387,7 @@ func (p *DevicePlayer) SwitchDevice(targetDeviceIDHex string) error {
 	}
 
 	if p.device != nil {
+		_ = p.device.Stop()
 		p.device.Uninit()
 		p.device = nil
 	}

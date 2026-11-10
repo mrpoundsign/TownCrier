@@ -1,11 +1,15 @@
 package audio
 
 import (
+	"encoding/hex"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
+
+	"github.com/gen2brain/malgo"
 )
 
 func TestPlayerVolume(t *testing.T) {
@@ -231,3 +235,49 @@ func TestCaptureMonitorRMSAndReleaseHysteresis(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatAndMatchDeviceID(t *testing.T) {
+	var devA, devB malgo.DeviceID
+	copy(devA[:], "{0.0.0.00000000}.{11111111-2222-3333-4444-555555555555}")
+	copy(devB[:], "{0.0.0.00000000}.{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}")
+
+	canonicalA := FormatDeviceID(devA)
+	fullHexA := hex.EncodeToString(devA[:])
+	// Simulate legacy fmt.Sprintf("%x", devA) double-hex encoding
+	legacyDoubleHexA := fmt.Sprintf("%x", devA)
+
+	if canonicalA == legacyDoubleHexA {
+		t.Fatalf("expected FormatDeviceID (%q) to differ from double-hex fmt.Sprintf(%q)", canonicalA, legacyDoubleHexA)
+	}
+
+	// 1. Canonical trimmed single-hex matches devA and not devB
+	if !MatchDeviceID(devA, canonicalA) {
+		t.Fatalf("expected MatchDeviceID to match canonical ID %q", canonicalA)
+	}
+	if MatchDeviceID(devB, canonicalA) {
+		t.Fatalf("expected devB not to match devA canonical ID")
+	}
+
+	// 2. Full 256-byte single-hex matches devA
+	if !MatchDeviceID(devA, fullHexA) {
+		t.Fatalf("expected MatchDeviceID to match full 256-byte hex ID")
+	}
+
+	// 3. Legacy double-hex ID from older config.json matches devA and not devB
+	if !MatchDeviceID(devA, legacyDoubleHexA) {
+		t.Fatalf("expected MatchDeviceID to match legacy double-hex ID %q", legacyDoubleHexA)
+	}
+	if MatchDeviceID(devB, legacyDoubleHexA) {
+		t.Fatalf("expected devB not to match devA legacy double-hex ID")
+	}
+
+	// 4. Short prefix of another device must NOT false-positive match if non-zero bytes follow
+	var devShort, devLong malgo.DeviceID
+	devShort[0] = 0x01
+	devLong[0] = 0x01
+	devLong[1] = 0x02
+	if MatchDeviceID(devLong, FormatDeviceID(devShort)) {
+		t.Fatalf("expected devLong (0102...) not to match devShort (01)")
+	}
+}
+

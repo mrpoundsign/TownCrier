@@ -1,7 +1,6 @@
 package audio
 
 import (
-	"encoding/hex"
 	"fmt"
 	"math"
 	"sync"
@@ -255,8 +254,7 @@ func (m *CaptureMonitor) initCaptureDeviceLocked(deviceIDHex string, isFallback 
 		devices, err := m.ctx.Devices(malgo.Capture)
 		if err == nil {
 			for _, dev := range devices {
-				devHex := hex.EncodeToString(dev.ID[:])
-				if stringsEqualOrContains(devHex, deviceIDHex) {
+				if MatchDeviceID(dev.ID, deviceIDHex) {
 					deviceConfig.Capture.DeviceID = dev.ID.Pointer()
 					break
 				}

@@ -1822,6 +1822,7 @@ func (v *SettingsView) refreshCaptureDeviceList() {
 	v.mu.Lock()
 	v.micDeviceMap = newMap
 	targetName := v.cfg.Audio.MicDeviceName
+	targetID := v.cfg.Audio.MicDeviceID
 	v.mu.Unlock()
 
 	if v.micDeviceSelect != nil {
@@ -1831,6 +1832,14 @@ func (v *SettingsView) refreshCaptureDeviceList() {
 			for _, opt := range options {
 				if opt == targetName {
 					selected = opt
+					break
+				}
+			}
+		}
+		if selected == "Default Microphone" && targetID != "" && err == nil {
+			for _, dev := range devices {
+				if audio.MatchHexDeviceIDStrings(dev.ID, targetID) {
+					selected = dev.Name
 					break
 				}
 			}
@@ -1863,6 +1872,7 @@ func (v *SettingsView) refreshDeviceList() {
 	v.mu.Lock()
 	v.deviceMap = newMap
 	targetName := v.cfg.Audio.DeviceName
+	targetID := v.cfg.Audio.DeviceID
 	v.mu.Unlock()
 
 	if v.deviceSelect != nil {
@@ -1872,6 +1882,14 @@ func (v *SettingsView) refreshDeviceList() {
 			for _, opt := range options {
 				if opt == targetName {
 					selected = opt
+					break
+				}
+			}
+		}
+		if selected == "Default Audio Device" && targetID != "" && err == nil {
+			for _, dev := range devices {
+				if audio.MatchHexDeviceIDStrings(dev.ID, targetID) {
+					selected = dev.Name
 					break
 				}
 			}
