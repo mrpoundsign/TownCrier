@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.0.11 — 2026-11-09
+
+### Added
+- **Microphone Voice Activity (VAD) Gate & Audio Ducking (#124)**:
+  - Added a low-latency WASAPI/miniaudio microphone capture monitor (`pkg/audio/capture.go`) with real-time RMS level metering, threshold detection (`-60 dB` to `0 dB`, default `-35 dB`), and configurable hold release delay (`100ms` to `2000ms`, default `400ms`).
+  - Added two streamer speech priority modes in **Settings → Audio Output → Microphone Priority (Duck / Pause While Speaking)**:
+    - **Duck TTS Volume**: Smoothly attenuates TTS output volume to a configurable ducking level (`5%`–`80%`, default `20%`) using click-free exponential per-sample smoothing (`pkg/audio/player.go`) whenever the streamer speaks into their microphone.
+    - **Pause TTS Queue**: Holds new TTS messages from starting while the streamer is actively speaking (and pauses active playback buffer output) until the hold timer expires.
+  - Added a live microphone dB meter and **🎙️ Speaking — Gating TTS** status indicator in the Settings tab.
+- **Automatic Username Naturalizer (#121)**:
+  - Added `chat.NaturalizeUsername` (`pkg/chat/filter.go`) to convert screen-name syntax into natural, human-sounding speech before TTS synthesis: strips decorative wrapper borders (`xX_ShadowWolf_Xx` → `Shadow Wolf`), splits `snake_case`, `kebab-case`, and `dot.separated` handles, splits `CamelCase` and acronym boundaries (`DarkKnight`, `TVGuy`), strips clan tags (`[CLAN]`, `{VIP}`), and drops trailing 3+ digit discriminators (`Wolf1998` → `Wolf`, `Alex_9821` → `Alex`) while preserving meaningful numbers (`Agent007`, `Player1`, `Wolf2`) and custom Pronunciation Dictionary overrides.
+  - Added global and per-service **Naturalize Usernames** checkboxes (`speak_natural_names`, enabled by default).
+- **Permitted Chatter Voices Selector & Per-Service Auto-Gender Overrides**:
+  - Added an interactive **Permitted Auto-Assign Voices** checklist (`AllowedChatterVoices`) with **All**, **None**, **♀ Feminine**, and **♂ Masculine** quick-filter buttons, search filtering, and inline **🔊** voice preview buttons so streamers can curate the exact pool of voices used for deterministic chatter assignment.
+  - Added per-service **Smart Gender Voice Matching** override controls on all platform tabs (Twitch, YouTube, Kick, and TikTok).
+- **Voice Model Update Detection & 1-Click Updating in TTS Settings**:
+  - Added `CheckInstalledModelsWithUpdates` (`pkg/tts/model_manager.go`) comparing installed `<modelDir>/.manifest.json` archive SHA-256 digests against the latest upstream GitHub Release digests (`k2-fsa/sherpa-onnx@tts-models`).
+  - Added an **🔄 Update Available** status badge and **🔄 Check for Model Updates / ⬇ Install Model Updates** button in **Settings → TTS Engine & Model Management** to download, verify, extract, and hot-reload updated voice model packs in-place.
+
+### Fixed
+- **WASAPI Audio Output & Microphone Capture Device Routing**:
+  - Fixed a device ID matching bug (`pkg/audio/device.go`) where `malgo.DeviceID` (which implements `fmt.Stringer` returning hex) was double-hex-encoded by `fmt.Sprintf("%x", dev.ID)` during device enumeration while `DevicePlayer` and `CaptureMonitor` compared against single-hex `hex.EncodeToString(dev.ID[:])`, causing selected non-default output/capture devices to silently fall back to the OS default device. Includes full backwards-compatible matching for existing saved `config.json` device IDs.
+
+---
+
 ## v0.0.10 — 2026-11-09
 
 ### Added
