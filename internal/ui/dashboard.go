@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"net/url"
 	"slices"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/pkg/chat"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/platform"
 	"github.com/mrpoundsign/TownCrier/pkg/queue"
 	"github.com/mrpoundsign/TownCrier/pkg/translate"
 	"github.com/mrpoundsign/TownCrier/pkg/tts"
@@ -25,6 +27,7 @@ type ActivityEntry struct {
 	Timestamp      time.Time
 	Platform       string
 	UserName       string
+	UserID         string
 	Text           string
 	Emotes         []chat.EmoteSpan
 	TranslatedText string
@@ -160,6 +163,7 @@ func NewDashboardView(w fyne.Window, session *app.Session) *DashboardView {
 			Timestamp:      ts,
 			Platform:       ev.Platform,
 			UserName:       name,
+			UserID:         ev.UserID,
 			Text:           ev.Text,
 			Emotes:         ev.EmoteSpans,
 			TranslatedText: ev.TranslatedText,
@@ -409,9 +413,33 @@ func (v *DashboardView) refreshFeedLocked() {
 
 func (v *DashboardView) buildActivityRow(idx int, entry ActivityEntry) fyne.CanvasObject {
 	timeStr := entry.Timestamp.Format("15:04:05")
-	meta := fmt.Sprintf("[%s] %s (%s)", timeStr, entry.UserName, entry.Platform)
+	timeLabel := widget.NewLabelWithStyle("["+timeStr+"]", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
+	platLabel := widget.NewLabelWithStyle("("+entry.Platform+")", fyne.TextAlignLeading, fyne.TextStyle{})
 
-	nameLabel := widget.NewLabelWithStyle(meta, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	profURL := platform.ProfileURL(entry.Platform, entry.UserName, entry.UserID)
+	var nameObj fyne.CanvasObject
+	if profURL != "" {
+		tip := fmt.Sprintf("Open @%s profile in browser: %s", entry.UserName, profURL)
+		onTap := func() {
+			if u, err := url.Parse(profURL); err == nil {
+				if appInst := fyne.CurrentApp(); appInst != nil {
+					_ = appInst.OpenURL(u)
+				}
+			}
+		}
+		userLabel := &hoverCellLabel{
+			tooltip: tip,
+			onTap:   onTap,
+		}
+		userLabel.Text = entry.UserName
+		userLabel.TextStyle = fyne.TextStyle{Bold: true}
+		userLabel.Truncation = fyne.TextTruncateEllipsis
+		userLabel.ExtendBaseWidget(userLabel)
+		nameObj = userLabel
+	} else {
+		nameObj = widget.NewLabelWithStyle(entry.UserName, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	}
+	nameBox := container.NewHBox(timeLabel, nameObj, platLabel)
 	var msgContent fyne.CanvasObject
 
 	switch {
@@ -477,7 +505,7 @@ func (v *DashboardView) buildActivityRow(idx int, entry ActivityEntry) fyne.Canv
 		})
 	}
 
-	topRow := container.NewBorder(nil, nil, nameLabel, rightCol)
+	topRow := container.NewBorder(nil, nil, nameBox, rightCol)
 	return container.NewVBox(topRow, msgContent, widget.NewSeparator())
 }
 

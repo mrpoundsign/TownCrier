@@ -1664,3 +1664,80 @@ func TestSessionMicGateDuckAndPauseCoordination(t *testing.T) {
 	}
 }
 
+func TestSessionCopypastaAndASCIIArtSuppression(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.DefaultConfig()
+	cfg.Platforms["twitch"] = config.PlatformConfig{
+		Enabled:     true,
+		AccountName: "streamer",
+		ReadRules: config.ReadRules{
+			AllChat: true,
+		},
+	}
+
+	sqlStore, err := eventlog.NewSQLiteBackend(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend: %v", err)
+	}
+	defer func() { _ = sqlStore.Close() }()
+
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{
+		ChatRetentionDays:  30,
+		EventRetentionDays: 90,
+	}, sqlStore)
+	defer func() { _ = logMgr.Close() }()
+
+	session := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	session.SetEventLogger(logMgr)
+	defer func() { _ = session.Close() }()
+	session.Queue().Pause()
+
+	now := time.Now().UTC()
+	pasta := "I saw the streamer at the grocery store yesterday and he told me to subscribe!"
+
+	// 1. First occurrence of copypasta is queued
+	_ = session.DispatchEvent(&chat.Event{
+		ID:        "cp-1",
+		Platform:  "twitch",
+		Kind:      chat.EventKindMessage,
+		UserID:    "u1",
+		UserName:  "chatter1",
+		Text:      pasta,
+		Timestamp: now,
+	})
+
+	// 2. Second occurrence from another user 5s later is suppressed as duplicate copypasta
+	_ = session.DispatchEvent(&chat.Event{
+		ID:        "cp-2",
+		Platform:  "twitch",
+		Kind:      chat.EventKindMessage,
+		UserID:    "u2",
+		UserName:  "chatter2",
+		Text:      pasta + "!!!",
+		Timestamp: now.Add(5 * time.Second),
+	})
+
+	// 3. Pure Braille ASCII art is sanitized to empty and dropped
+	_ = session.DispatchEvent(&chat.Event{
+		ID:        "braille-1",
+		Platform:  "twitch",
+		Kind:      chat.EventKindMessage,
+		UserID:    "u3",
+		UserName:  "chatter3",
+		Text:      "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿",
+		Timestamp: now.Add(6 * time.Second),
+	})
+
+	if session.Queue().Depth() != 1 {
+		t.Fatalf("expected only 1 message in speech queue, got %d", session.Queue().Depth())
+	}
+
+	res, err := logMgr.Query(ctx, eventlog.QueryFilter{})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(res.Entries) != 3 {
+		t.Fatalf("expected 3 logged entries in eventlog, got %d", len(res.Entries))
+	}
+}
+

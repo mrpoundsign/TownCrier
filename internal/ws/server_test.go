@@ -1,8 +1,13 @@
 package ws
 
 import (
+	"bufio"
 	"bytes"
+	"context"
+	"encoding/json"
+	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +17,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 	"github.com/mrpoundsign/TownCrier/internal/ws/controlv1"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 )
@@ -25,6 +31,9 @@ type mockController struct {
 	volume      float32
 	spoken      []SpeakRequest
 	queueActs   []controlv1.QueueAction
+	overlaySubs []func(OverlayStreamEvent)
+	customCSS   string
+	styleJSON   string
 }
 
 func newMockController() *mockController {
@@ -111,6 +120,77 @@ func (m *mockController) AdjustVolume(volume *float32, delta *float32) error {
 	if delta != nil {
 		m.volume += *delta
 	}
+	return nil
+}
+
+func (m *mockController) QueryOverlayChat(_ context.Context, presetID string, limit int) (*ChatOverlaySnapshot, error) {
+	if presetID == "" {
+		presetID = "latest-session"
+	}
+	return &ChatOverlaySnapshot{
+		Preset: config.LiveLogPreset{
+			ID:          presetID,
+			Name:        "Mock Preset",
+			ShowSummary: true,
+		},
+		Scale: 125,
+		Entries: []eventlog.Entry{
+			{
+				ID:          "ev-1",
+				Platform:    "twitch",
+				UserName:    "alice",
+				DisplayName: "Alice",
+				RawText:     "Hello OBS overlay!",
+				Outcome:     eventlog.OutcomeSpoken,
+				Spoken:      true,
+			},
+		},
+		Summary: eventlog.QuerySummary{
+			TotalSubs: 3,
+		},
+	}, nil
+}
+
+func (m *mockController) SubscribeOverlayChat(_ string, fn func(OverlayStreamEvent)) func() {
+	m.mu.Lock()
+	m.overlaySubs = append(m.overlaySubs, fn)
+	idx := len(m.overlaySubs) - 1
+	m.mu.Unlock()
+	return func() {
+		m.mu.Lock()
+		if idx >= 0 && idx < len(m.overlaySubs) {
+			m.overlaySubs[idx] = nil
+		}
+		m.mu.Unlock()
+	}
+}
+
+func (m *mockController) emitOverlayEvent(ev OverlayStreamEvent) {
+	m.mu.Lock()
+	subs := slices.Clone(m.overlaySubs)
+	m.mu.Unlock()
+	for _, fn := range subs {
+		if fn != nil {
+			fn(ev)
+		}
+	}
+}
+
+func (m *mockController) GetOverlayStyle() OverlayStyleConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return OverlayStyleConfig{
+		CustomCSS:   m.customCSS,
+		StyleJSON:   m.styleJSON,
+		TTSPosition: "bottom",
+	}
+}
+
+func (m *mockController) SaveOverlayStyle(customCSS, styleJSON string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.customCSS = customCSS
+	m.styleJSON = styleJSON
 	return nil
 }
 
@@ -281,5 +361,195 @@ func TestServerHTTPRESTAndAuth(t *testing.T) {
 	_ = resVol.Body.Close()
 	if snap := ctrl.SnapshotState(); snap.GetVolume() < 0.74 || snap.GetVolume() > 0.76 {
 		t.Fatalf("expected volume ~0.75, got %f", snap.GetVolume())
+	}
+}
+
+func TestServerOverlayEndpointsAndFeatureGating(t *testing.T) {
+	ctrl := newMockController()
+	srv := NewServer(ctrl)
+	// Enable only TTS Overlay initially (Control API false, Chat Overlay false)
+	srv.SetFeatures(false, true, false)
+
+	if err := srv.Start("127.0.0.1", 0, ""); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer func() { _ = srv.Stop() }()
+
+	baseURL := "http://" + srv.Addr()
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	// 1. /overlay/tts is enabled -> 200 OK
+	resTTS, err := client.Get(baseURL + "/overlay/tts")
+	if err != nil {
+		t.Fatalf("GET /overlay/tts failed: %v", err)
+	}
+	bodyTTS, _ := io.ReadAll(resTTS.Body)
+	_ = resTTS.Body.Close()
+	if resTTS.StatusCode != http.StatusOK || !strings.Contains(string(bodyTTS), "TownCrier — Now Speaking Overlay") {
+		t.Fatalf("unexpected /overlay/tts response: status=%d", resTTS.StatusCode)
+	}
+
+	// 2. /overlay/chat and /api/overlay/chat are disabled -> 404 NotFound
+	resChatDisabled, err := client.Get(baseURL + "/overlay/chat")
+	if err != nil {
+		t.Fatalf("GET /overlay/chat failed: %v", err)
+	}
+	_ = resChatDisabled.Body.Close()
+	if resChatDisabled.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for disabled /overlay/chat, got %d", resChatDisabled.StatusCode)
+	}
+
+	// 3. Control API /api/status is disabled -> 403 Forbidden
+	resCtrlDisabled, err := client.Get(baseURL + "/api/status")
+	if err != nil {
+		t.Fatalf("GET /api/status failed: %v", err)
+	}
+	_ = resCtrlDisabled.Body.Close()
+	if resCtrlDisabled.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for disabled /api/status, got %d", resCtrlDisabled.StatusCode)
+	}
+
+	// 4. WebSocket /ws is allowed in read-only mode when TTSOverlayEnabled is true, but rejects mutating commands
+	wsConn, err := websocket.Dial("ws://"+srv.Addr()+"/ws", "", baseURL)
+	if err != nil {
+		t.Fatalf("websocket.Dial failed when TTSOverlayEnabled=true: %v", err)
+	}
+	defer func() { _ = wsConn.Close() }()
+
+	var initFrame wsFrame
+	if err := rawFrameCodec.Receive(wsConn, &initFrame); err != nil {
+		t.Fatalf("Receive initial frame failed: %v", err)
+	}
+	speakJSON := `{"request_id":"ro-1","action":"speak","text":"Should be rejected"}`
+	if err := rawFrameCodec.Send(wsConn, wsFrame{data: []byte(speakJSON), binary: false}); err != nil {
+		t.Fatalf("Send JSON speak failed: %v", err)
+	}
+	var roResp wsFrame
+	if err := rawFrameCodec.Receive(wsConn, &roResp); err != nil {
+		t.Fatalf("Receive read-only error response failed: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(string(roResp.data)), "external control api is disabled") {
+		t.Fatalf("expected read-only rejection message, got %s", string(roResp.data))
+	}
+
+	// 5. Enable Chat Overlay -> /overlay/chat, /api/overlay/chat, and /api/overlay/stream work
+	srv.SetFeatures(false, true, true)
+
+	resChatHTML, err := client.Get(baseURL + "/overlay/chat")
+	if err != nil {
+		t.Fatalf("GET /overlay/chat failed: %v", err)
+	}
+	bodyChatHTML, _ := io.ReadAll(resChatHTML.Body)
+	_ = resChatHTML.Body.Close()
+	if resChatHTML.StatusCode != http.StatusOK || !strings.Contains(string(bodyChatHTML), "TownCrier — Live Chat Overlay") {
+		t.Fatalf("unexpected /overlay/chat response: status=%d", resChatHTML.StatusCode)
+	}
+
+	resSnap, err := client.Get(baseURL + "/api/overlay/chat?preset=twitch-alerts")
+	if err != nil {
+		t.Fatalf("GET /api/overlay/chat failed: %v", err)
+	}
+	var snap ChatOverlaySnapshot
+	if err := json.NewDecoder(resSnap.Body).Decode(&snap); err != nil {
+		_ = resSnap.Body.Close()
+		t.Fatalf("decode ChatOverlaySnapshot failed: %v", err)
+	}
+	_ = resSnap.Body.Close()
+	if snap.Preset.ID != "twitch-alerts" || len(snap.Entries) != 1 || snap.Entries[0].RawText != "Hello OBS overlay!" {
+		t.Fatalf("unexpected ChatOverlaySnapshot: %+v", snap)
+	}
+
+	// Verify ?summary=0 and ?summary=1 overrides
+	resSnapNoSum, err := client.Get(baseURL + "/api/overlay/chat?preset=twitch-alerts&summary=0")
+	if err != nil {
+		t.Fatalf("GET /api/overlay/chat?summary=0 failed: %v", err)
+	}
+	var snapNoSum ChatOverlaySnapshot
+	_ = json.NewDecoder(resSnapNoSum.Body).Decode(&snapNoSum)
+	_ = resSnapNoSum.Body.Close()
+	if snapNoSum.ShowSummary || snapNoSum.Preset.ShowSummary {
+		t.Fatalf("expected ShowSummary=false with ?summary=0, got %+v", snapNoSum)
+	}
+
+	resSnapWithSum, err := client.Get(baseURL + "/api/overlay/chat?preset=twitch-alerts&summary=1")
+	if err != nil {
+		t.Fatalf("GET /api/overlay/chat?summary=1 failed: %v", err)
+	}
+	var snapWithSum ChatOverlaySnapshot
+	_ = json.NewDecoder(resSnapWithSum.Body).Decode(&snapWithSum)
+	_ = resSnapWithSum.Body.Close()
+	if !snapWithSum.ShowSummary || !snapWithSum.Preset.ShowSummary {
+		t.Fatalf("expected ShowSummary=true with ?summary=1, got %+v", snapWithSum)
+	}
+
+	// 6. Test SSE /api/overlay/stream
+	sseCtx, sseCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer sseCancel()
+	sseReq, _ := http.NewRequestWithContext(sseCtx, http.MethodGet, baseURL+"/api/overlay/stream?preset=latest-session", nil)
+	sseResp, err := http.DefaultClient.Do(sseReq)
+	if err != nil {
+		t.Fatalf("GET /api/overlay/stream failed: %v", err)
+	}
+	defer func() { _ = sseResp.Body.Close() }()
+
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		ctrl.emitOverlayEvent(OverlayStreamEvent{
+			Kind: "append",
+			Entry: &eventlog.Entry{
+				ID:       "ev-sse-1",
+				Platform: "youtube",
+				UserName: "bob",
+				RawText:  "Live via SSE!",
+			},
+		})
+	}()
+
+	scanner := bufio.NewScanner(sseResp.Body)
+	var gotData string
+	for scanner.Scan() {
+		line := scanner.Text()
+		if after, ok := strings.CutPrefix(line, "data: "); ok {
+			gotData = after
+			break
+		}
+	}
+	if !strings.Contains(gotData, "Live via SSE!") {
+		t.Fatalf("expected SSE data containing 'Live via SSE!', got %q", gotData)
+	}
+
+	// 7. Test /overlay/designer and /api/overlay/style
+	resDesigner, err := client.Get(baseURL + "/overlay/designer")
+	if err != nil {
+		t.Fatalf("GET /overlay/designer failed: %v", err)
+	}
+	bodyDesigner, _ := io.ReadAll(resDesigner.Body)
+	_ = resDesigner.Body.Close()
+	if resDesigner.StatusCode != http.StatusOK || !strings.Contains(string(bodyDesigner), "OBS Overlay Style Designer") {
+		t.Fatalf("unexpected /overlay/designer response: status=%d", resDesigner.StatusCode)
+	}
+
+	savePayload := `{"custom_css":".plat-badge{display:none!important;}","style_json":"{\"showPlatBadge\":false}"}`
+	resSaveStyle, err := client.Post(baseURL+"/api/overlay/style", "application/json", bytes.NewBufferString(savePayload))
+	if err != nil {
+		t.Fatalf("POST /api/overlay/style failed: %v", err)
+	}
+	_ = resSaveStyle.Body.Close()
+	if resSaveStyle.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from POST /api/overlay/style, got %d", resSaveStyle.StatusCode)
+	}
+
+	resGetStyle, err := client.Get(baseURL + "/api/overlay/style")
+	if err != nil {
+		t.Fatalf("GET /api/overlay/style failed: %v", err)
+	}
+	var gotStyle OverlayStyleConfig
+	if err := json.NewDecoder(resGetStyle.Body).Decode(&gotStyle); err != nil {
+		_ = resGetStyle.Body.Close()
+		t.Fatalf("decode OverlayStyleConfig failed: %v", err)
+	}
+	_ = resGetStyle.Body.Close()
+	if gotStyle.CustomCSS != ".plat-badge{display:none!important;}" {
+		t.Fatalf("unexpected CustomCSS after save: %q", gotStyle.CustomCSS)
 	}
 }

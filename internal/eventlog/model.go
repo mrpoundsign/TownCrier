@@ -2,10 +2,12 @@ package eventlog
 
 import (
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/mrpoundsign/TownCrier/pkg/chat"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
 )
 
 // EventOutcome represents the pipeline or speech queue fate of an inbound stream event.
@@ -293,4 +295,189 @@ type QueryResult struct {
 	Entries    []Entry      `json:"entries"`
 	TotalCount int          `json:"total_count"`
 	Summary    QuerySummary `json:"summary"`
+}
+
+// FilterFromPreset converts a saved config.LiveLogPreset into a QueryFilter.
+func FilterFromPreset(preset config.LiveLogPreset, sessionID int64, excludedUsers []string, limit int) QueryFilter {
+	platClean := strings.ToLower(strings.TrimSpace(preset.Platform))
+	switch platClean {
+	case "", "all", "all platforms":
+		platClean = ""
+	}
+
+	kindFilter := ""
+	switch strings.ToLower(strings.TrimSpace(preset.EventType)) {
+	case "chat messages only", "chat":
+		kindFilter = "chat"
+	case "stream alerts & paid only", "alerts":
+		kindFilter = "alerts"
+	case "follows", "follow":
+		kindFilter = "follow"
+	case "subs & giftsubs", "sub":
+		kindFilter = "sub"
+	case "cheers / super chats / gifts", "cheer":
+		kindFilter = "cheer"
+	case "raids", "raid":
+		kindFilter = "raid"
+	case "channel point redemptions", "redemption":
+		kindFilter = "redemption"
+	case "moderation actions", "moderation":
+		kindFilter = "moderation"
+	}
+
+	mode := FilterOutcomeAll
+	switch strings.ToLower(strings.TrimSpace(preset.Outcome)) {
+	case "spoken only", "spoken_only":
+		mode = FilterOutcomeSpokenOnly
+	case "passed filters (spoken + queued)", "passed_filters":
+		mode = FilterOutcomePassedFilters
+	case "dropped in queue (stale / panic / skipped)", "dropped_queue":
+		mode = FilterOutcomeDroppedQueue
+	case "filtered out (bots / rules / thresholds)", "filtered_out":
+		mode = FilterOutcomeFilteredOut
+	case "moderation actions", "moderation":
+		mode = FilterOutcomeModeration
+	}
+
+	sid := sessionID
+	if strings.EqualFold(strings.TrimSpace(preset.SessionMode), "all") {
+		sid = 0
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	var ex []string
+	if preset.HideBots {
+		ex = slices.Clone(excludedUsers)
+	}
+
+	return QueryFilter{
+		SessionID:     sid,
+		Platform:      platClean,
+		KindFilter:    kindFilter,
+		UserQuery:     strings.TrimSpace(preset.UserQuery),
+		TextQuery:     strings.TrimSpace(preset.TextQuery),
+		OutcomeMode:   mode,
+		HideBots:      preset.HideBots,
+		ExcludedUsers: ex,
+		Limit:         limit,
+	}
+}
+
+// EntryMatchesFilter evaluates whether an in-memory Entry satisfies a QueryFilter.
+func EntryMatchesFilter(e Entry, f QueryFilter) bool {
+	if len(f.SessionIDs) > 0 {
+		if !slices.Contains(f.SessionIDs, e.SessionID) {
+			return false
+		}
+	} else if f.SessionID > 0 && e.SessionID != f.SessionID {
+		return false
+	}
+	if f.From != nil && !f.From.IsZero() && e.CreatedAt.Before(*f.From) {
+		return false
+	}
+	if f.To != nil && !f.To.IsZero() && e.CreatedAt.After(*f.To) {
+		return false
+	}
+	if f.Platform != "" && f.Platform != "all" && !strings.EqualFold(e.Platform, f.Platform) {
+		return false
+	}
+	if f.Channel != "" && !strings.EqualFold(f.Channel, "all") && !strings.EqualFold(e.Channel, f.Channel) {
+		return false
+	}
+	kindLower := strings.ToLower(strings.TrimSpace(e.Kind))
+	switch strings.ToLower(strings.TrimSpace(f.KindFilter)) {
+	case "", "all":
+	case "chat", "message":
+		if kindLower != "message" {
+			return false
+		}
+	case "alerts":
+		if kindLower == "message" || kindLower == "moderation" || kindLower == "" {
+			return false
+		}
+	case "follow":
+		if kindLower != "follow" {
+			return false
+		}
+	case "sub":
+		switch kindLower {
+		case "sub", "resub", "gift_sub", "gift_redemption", "sub_upgrade", "membership", "gift_membership":
+		default:
+			return false
+		}
+	case "cheer":
+		switch kindLower {
+		case "cheer", "bits_badge_tier", "gift", "superchat", "supersticker", "super_chat", "super_sticker", "charity_donation":
+		default:
+			return false
+		}
+	case "raid":
+		if kindLower != "raid" {
+			return false
+		}
+	case "redemption":
+		if kindLower != "redemption" {
+			return false
+		}
+	case "moderation":
+		if kindLower != "moderation" {
+			return false
+		}
+	default:
+		if !strings.EqualFold(kindLower, strings.TrimSpace(f.KindFilter)) {
+			return false
+		}
+	}
+	if f.HideBots && f.Outcome != OutcomeDroppedBot {
+		if e.Outcome == OutcomeDroppedBot {
+			return false
+		}
+		for _, r := range e.Roles {
+			if strings.EqualFold(strings.TrimSpace(r), "bot") {
+				return false
+			}
+		}
+		uName := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(e.UserName), "@"))
+		uID := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(e.UserID), "@"))
+		for _, ex := range f.ExcludedUsers {
+			exClean := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(ex), "@"))
+			if exClean != "" && (exClean == uName || (uID != "" && exClean == uID)) {
+				return false
+			}
+		}
+	}
+	if f.UserQuery != "" {
+		uq := strings.ToLower(f.UserQuery)
+		if !strings.Contains(strings.ToLower(e.UserID), uq) &&
+			!strings.Contains(strings.ToLower(e.UserName), uq) &&
+			!strings.Contains(strings.ToLower(e.DisplayName), uq) {
+			return false
+		}
+	}
+	if f.TextQuery != "" {
+		tq := strings.ToLower(f.TextQuery)
+		if !strings.Contains(strings.ToLower(e.RawText), tq) &&
+			!strings.Contains(strings.ToLower(e.TranslatedText), tq) &&
+			!strings.Contains(strings.ToLower(e.SpokenText), tq) &&
+			!strings.Contains(strings.ToLower(e.ItemName), tq) &&
+			!strings.Contains(strings.ToLower(e.RewardTitle), tq) &&
+			!strings.Contains(strings.ToLower(e.Recipient), tq) {
+			return false
+		}
+	}
+	switch f.OutcomeMode {
+	case FilterOutcomeSpokenOnly:
+		return e.Spoken
+	case FilterOutcomePassedFilters:
+		return e.PassedFilters
+	case FilterOutcomeDroppedQueue:
+		return e.PassedFilters && !e.Spoken && e.Outcome != OutcomeQueued
+	case FilterOutcomeFilteredOut:
+		return !e.PassedFilters && e.Outcome != OutcomeModerationEvent
+	case FilterOutcomeModeration:
+		return e.Outcome == OutcomeModerationEvent || e.Outcome == OutcomeDroppedModeration
+	}
+	return true
 }

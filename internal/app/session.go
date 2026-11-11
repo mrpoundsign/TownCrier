@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -50,6 +51,7 @@ type Session struct {
 	queue      *queue.Queue
 	router     *chat.Router
 	sanitizer  *chat.Sanitizer
+	copypasta  *chat.CopypastaFilter
 	bots       *bots.Matcher
 	translator *translate.Service
 	eventLog   *eventlog.Manager
@@ -85,6 +87,7 @@ type Session struct {
 	streamMu        sync.Mutex
 	livePlatforms   map[string]string
 	activeSessionID int64
+	startedAt       time.Time
 	configStore     config.Store
 
 	heldMu        sync.Mutex
@@ -123,12 +126,14 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		configStore:     configStore,
 		router:          router,
 		sanitizer:       sanitizer,
+		copypasta:       chat.NewCopypastaFilter(),
 		bots:            matcher,
 		translator:      trSvc,
 		twitchOAuth:     twitch.NewOAuthManager("", store),
 		youtubeOAuth:    youtube.NewOAuthManager("", "", store),
 		kickOAuth:       kick.NewOAuthManager("", "", store),
 		livePlatforms:   make(map[string]string),
+		startedAt:       time.Now().UTC(),
 		idleProvider:    SystemIdleDuration,
 		lastOutputMode:  initMode,
 		lastSpeakActive: cfgClone.TTS.Enabled && initMode == config.TTSModeAlwaysOn,
@@ -282,6 +287,8 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 	})
 
 	s.wsServer = ws.NewServer(s)
+	initCtrlOn, initTTSOverlayOn, initChatOverlayOn, _ := cfgClone.EffectiveWebSocketFeatures()
+	s.wsServer.SetFeatures(initCtrlOn, initTTSOverlayOn, initChatOverlayOn)
 	s.queue.AddOnItemStarted(func(item *queue.Item) {
 		if item == nil {
 			return
@@ -1564,7 +1571,10 @@ func (s *Session) syncWSServer(cfg *config.Config) {
 	if s.wsServer == nil || cfg == nil {
 		return
 	}
-	if !cfg.WebSocket.Enabled {
+	controlOn, ttsOverlayOn, chatOverlayOn, anyOn := cfg.EffectiveWebSocketFeatures()
+	s.wsServer.SetFeatures(controlOn, ttsOverlayOn, chatOverlayOn)
+	s.wsServer.SetAuthToken(cfg.WebSocket.AuthToken)
+	if !anyOn {
 		if s.wsServer.IsRunning() {
 			_ = s.wsServer.Stop()
 		}
@@ -1582,6 +1592,7 @@ func (s *Session) syncWSServer(cfg *config.Config) {
 	wantAddr := fmt.Sprintf("%s:%d", host, port)
 	if s.wsServer.IsRunning() {
 		if s.wsServer.Addr() == wantAddr {
+			s.wsServer.BroadcastOverlayReload()
 			return
 		}
 		_ = s.wsServer.Stop()
@@ -1589,6 +1600,201 @@ func (s *Session) syncWSServer(cfg *config.Config) {
 	if err := s.wsServer.Start(host, port, cfg.WebSocket.AuthToken); err != nil {
 		log.Printf("[Session] Warning: failed to start WebSocket control server on %s: %v", wantAddr, err)
 	}
+}
+
+// OverlayURL constructs an HTTP URL pointing to the local WebSocket/Overlay server for OBS Browser Sources,
+// automatically appending any configured AuthToken and optional query parameters.
+func (s *Session) OverlayURL(path string, query map[string]string) string {
+	cfg := s.Config()
+	host := config.DefaultWebSocketHost
+	port := config.DefaultWebSocketPort
+	var token string
+	if cfg != nil {
+		if h := strings.TrimSpace(cfg.WebSocket.Host); h != "" && h != "0.0.0.0" {
+			host = h
+		}
+		if cfg.WebSocket.Port > 0 && cfg.WebSocket.Port <= 65535 {
+			port = cfg.WebSocket.Port
+		}
+		token = strings.TrimSpace(cfg.WebSocket.AuthToken)
+	}
+	if s.wsServer != nil && s.wsServer.IsRunning() {
+		if addr := s.wsServer.Addr(); addr != "" {
+			if after, ok := strings.CutPrefix(addr, "0.0.0.0:"); ok {
+				addr = "127.0.0.1:" + after
+			}
+			u := &url.URL{
+				Scheme: "http",
+				Host:   addr,
+				Path:   path,
+			}
+			vals := url.Values{}
+			for k, v := range query {
+				if strings.TrimSpace(v) != "" {
+					vals.Set(k, v)
+				}
+			}
+			if token != "" {
+				vals.Set("token", token)
+			}
+			u.RawQuery = vals.Encode()
+			return u.String()
+		}
+	}
+	u := &url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%d", host, port),
+		Path:   path,
+	}
+	vals := url.Values{}
+	for k, v := range query {
+		if strings.TrimSpace(v) != "" {
+			vals.Set(k, v)
+		}
+	}
+	if token != "" {
+		vals.Set("token", token)
+	}
+	u.RawQuery = vals.Encode()
+	return u.String()
+}
+
+func (s *Session) resolveOverlayPresetAndFilter(_ context.Context, presetID string, limit int) (config.LiveLogPreset, bool, eventlog.QueryFilter) {
+	cfg := s.Config()
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+	explicitPreset := strings.TrimSpace(presetID)
+	targetPresetID := explicitPreset
+	if targetPresetID == "" {
+		targetPresetID = strings.TrimSpace(cfg.WebSocket.ChatOverlayPresetID)
+	}
+	preset := cfg.ResolveLiveLogPreset(targetPresetID)
+	showSummary := cfg.WebSocket.ChatOverlayShowSummary
+	if explicitPreset != "" && !strings.EqualFold(explicitPreset, strings.TrimSpace(cfg.WebSocket.ChatOverlayPresetID)) {
+		showSummary = preset.ShowSummary
+	}
+
+	var sessionID int64
+	var fromTime *time.Time
+	if !strings.EqualFold(strings.TrimSpace(preset.SessionMode), "all") {
+		sessionID = s.ActiveSessionID()
+		if sessionID <= 0 && !s.startedAt.IsZero() {
+			t := s.startedAt
+			fromTime = &t
+		}
+	}
+	var excluded []string
+	if preset.HideBots {
+		excluded = bots.ExcludedUserNames(cfg)
+	}
+	filter := eventlog.FilterFromPreset(preset, sessionID, excluded, limit)
+	if fromTime != nil {
+		filter.From = fromTime
+	}
+	return preset, showSummary, filter
+}
+
+// QueryOverlayChat implements ws.OverlayProvider, returning the initial filtered entries and summary for an OBS Chat Overlay.
+func (s *Session) QueryOverlayChat(ctx context.Context, presetID string, limit int) (*ws.ChatOverlaySnapshot, error) {
+	cfg := s.Config()
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+	preset, showSummary, filter := s.resolveOverlayPresetAndFilter(ctx, presetID, limit)
+	preset.ShowSummary = showSummary
+	scale := cfg.Logging.ChatScale
+	if preset.ChatScale > 0 {
+		scale = preset.ChatScale
+	}
+	if scale < 50 {
+		scale = 100
+	} else if scale > 300 {
+		scale = 300
+	}
+
+	snap := &ws.ChatOverlaySnapshot{
+		Preset:      preset,
+		ShowSummary: showSummary,
+		Scale:       scale,
+		CustomCSS:   cfg.WebSocket.OverlayCustomCSS,
+		Entries:     []eventlog.Entry{},
+	}
+	elog := s.EventLogger()
+	if elog == nil {
+		return snap, nil
+	}
+	res, err := elog.Query(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	if res != nil {
+		if res.Entries != nil {
+			snap.Entries = res.Entries
+		}
+		snap.Summary = res.Summary
+	}
+	return snap, nil
+}
+
+// GetOverlayStyle implements ws.OverlayStyleProvider, returning the saved OBS overlay style & custom CSS.
+func (s *Session) GetOverlayStyle() ws.OverlayStyleConfig {
+	cfg := s.Config()
+	if cfg == nil {
+		return ws.OverlayStyleConfig{TTSPosition: "bottom"}
+	}
+	pos := strings.ToLower(strings.TrimSpace(cfg.WebSocket.TTSOverlayPosition))
+	if pos != "top" {
+		pos = "bottom"
+	}
+	return ws.OverlayStyleConfig{
+		CustomCSS:   cfg.WebSocket.OverlayCustomCSS,
+		StyleJSON:   cfg.WebSocket.OverlayStyleJSON,
+		TTSPosition: pos,
+	}
+}
+
+// SaveOverlayStyle implements ws.OverlayStyleProvider, persisting custom CSS and visual designer state to config.json.
+func (s *Session) SaveOverlayStyle(customCSS, styleJSON string) error {
+	return s.UpdateConfig(func(c *config.Config) {
+		c.WebSocket.OverlayCustomCSS = customCSS
+		c.WebSocket.OverlayStyleJSON = styleJSON
+	})
+}
+
+// SubscribeOverlayChat implements ws.OverlayProvider, streaming real-time filtered chat and outcome updates to an OBS Chat Overlay.
+func (s *Session) SubscribeOverlayChat(presetID string, fn func(ws.OverlayStreamEvent)) func() {
+	elog := s.EventLogger()
+	if elog == nil || fn == nil {
+		return func() {}
+	}
+	return elog.Subscribe(func(ev eventlog.LiveUpdate) {
+		_, _, filter := s.resolveOverlayPresetAndFilter(context.Background(), presetID, 100)
+		switch ev.Kind {
+		case eventlog.LiveUpdateAppend:
+			if ev.Entry == nil {
+				return
+			}
+			if filter.SessionID > 0 && ev.Entry.SessionID > filter.SessionID {
+				filter.SessionID = ev.Entry.SessionID
+			}
+			if !eventlog.EntryMatchesFilter(*ev.Entry, filter) {
+				return
+			}
+			cp := ev.Entry.Clone()
+			fn(ws.OverlayStreamEvent{
+				Kind:  string(eventlog.LiveUpdateAppend),
+				Entry: cp,
+			})
+		case eventlog.LiveUpdateOutcome:
+			upd := ev.Update
+			fn(ws.OverlayStreamEvent{
+				Kind:    string(eventlog.LiveUpdateOutcome),
+				EventID: ev.EventID,
+				Update:  &upd,
+			})
+		}
+	})
 }
 
 // SnapshotState implements ws.Controller, returning the current StateSnapshot for WebSocket/HTTP clients.
@@ -2490,6 +2696,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	// 3. Text & Emote Sanitizer on raw message text
 	// Emote offsets are relative to event.Text before chatter name prefixing.
 	_, speakEmotes, deduplicateEmotes, maxDuplicateWords, _, _, _ := cfg.EffectiveChatRules(event.Platform)
+	stripZalgo, stripASCIIArt, copypastaWindowSec := cfg.EffectiveAntiSpamRules(event.Platform)
 	blockedWords := chat.EffectiveBlockedWords(cfg.Safety.BlockDefaultBadWords, cfg.Safety.BlockedWords)
 	if event.Text != "" {
 		spansForSanitize := event.EmoteSpans
@@ -2503,12 +2710,21 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 			DeduplicateEmotes: deduplicateEmotes,
 			MaxDuplicateWords: maxDuplicateWords,
 			BlockedWords:      blockedWords,
+			StripZalgo:        stripZalgo,
+			StripASCIIArt:     stripASCIIArt,
 		})
 		event.EmoteSpans = nil // already applied to event.Text
 		if event.Text == "" && event.Kind == chat.EventKindMessage {
 			log.Printf("[Session] Chat message sanitized to empty text: user=%q", event.UserName)
 			s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Sanitized to empty text (emotes or blocked words)"))
 			return nil
+		}
+		if event.Kind == chat.EventKindMessage && !event.IsPaidOrEvent() && copypastaWindowSec > 0 && s.copypasta != nil {
+			if s.copypasta.IsDuplicate(event.Platform, event.Text, time.Duration(copypastaWindowSec)*time.Second, event.Timestamp) {
+				log.Printf("[Session] Duplicate copypasta suppressed: user=%q text=%q", event.UserName, event.Text)
+				s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Duplicate copypasta suppressed"))
+				return nil
+			}
 		}
 	}
 

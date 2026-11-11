@@ -141,13 +141,19 @@ func (v *LogsView) refreshLiveLogCards() {
 	presets := v.effectiveLiveLogPresets()
 	v.liveLogsCardsBox.Objects = nil
 
+	var loggingOn = true
+	if v.session != nil && v.session.Config() != nil {
+		cfg := v.session.Config()
+		loggingOn = cfg.Logging.Enabled
+	}
+
 	for _, preset := range presets {
 		p := preset
 		openBtn := widget.NewButtonWithIcon("⧉ Open Window", theme.VisibilityIcon(), func() {
 			v.OpenLiveLogWindow(p)
 		})
 		openBtn.Importance = widget.HighImportance
-		if v.session != nil && !v.session.Config().Logging.Enabled {
+		if !loggingOn {
 			openBtn.Disable()
 		}
 
@@ -208,6 +214,9 @@ func (v *LogsView) saveLiveLogPreset(p config.LiveLogPreset) {
 	}
 
 	v.refreshLiveLogCards()
+	if v.onLiveLogsChanged != nil {
+		v.onLiveLogsChanged()
+	}
 	v.setStatus(fmt.Sprintf("✓ Saved Live Log '%s'.", p.Name))
 }
 
@@ -233,6 +242,9 @@ func (v *LogsView) deleteLiveLogPreset(id string) {
 	}
 
 	v.refreshLiveLogCards()
+	if v.onLiveLogsChanged != nil {
+		v.onLiveLogsChanged()
+	}
 	v.setStatus("✓ Removed Live Log card.")
 }
 

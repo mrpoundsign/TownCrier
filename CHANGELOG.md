@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.0.12 — 2026-11-10
+
+### Added
+- **OBS Browser Source Overlays & Visual Style Designer (#123)**:
+  - Added `GET /overlay/tts` ("Now Speaking" Caption Overlay) with transparent Obsidian Slate styling, platform badges, voice tags, animated audio equalizer bars, and live position switching (`Bottom` / `Top`).
+  - Added `GET /overlay/chat` (Filtered Live Chat & Alerts Overlay) powered by Server-Sent Events (`GET /api/overlay/stream`) and initial snapshot hydration (`GET /api/overlay/chat`), supporting live selection of any saved Live Log preset, optional Events Summary bar, and primary translated text with `🌐` original foreign text subtitle.
+  - Added an interactive **Visual Overlay Style Designer** (`GET /overlay/designer`) with color pickers, opacity sliders, element visibility toggles (platform tags, platform-colored usernames, TTS status icons `🗣️`/`⏳`, original foreign text line `🌐`, voice badge, card borders), font scale, and corner radius — auto-saving directly to `config.json` and live-refreshing open OBS Browser Sources on the fly.
+  - Added granular local web server feature toggles (`TTSOverlayEnabled`, `ChatOverlayEnabled`, and `Enabled` for External Control API & Elgato Stream Deck) so the local HTTP/WS server only runs when at least one feature is enabled and enforces strict route-level access control.
+- **Anti-Spam & Chat Hygiene Filters (#126)**:
+  - Added **Strip Zalgo & Excessive Combining Marks** (`strip_zalgo`) to remove stacked Unicode combining diacritics while preserving normal accented characters.
+  - Added **Strip Braille & ASCII Art Spam** (`strip_ascii_art`) to strip Braille blank/dot art (`U+2800`–`U+28FF`), box-drawing/block art (`U+2500`–`U+259F`), and repeated symbol art before TTS synthesis.
+  - Added **Multi-User Copypasta Deduplication** (`deduplicate_copypasta_window_seconds`: `Off`, `15s`, `30s`, `45s`, `60s`, `90s`, `2m`, `5m`, default `30s`) to suppress identical normalized chat messages repeated across multiple chatters while never dropping paid or alert events.
+- **Clickable Chatter Profile Links**:
+  - Made chatter usernames clickable with hover underlines across the Dashboard and Event Logs to open the viewer's Twitch, YouTube, Kick, or TikTok channel profile in the browser.
+
+### Changed
+- **Settings Tab Reorganization**:
+  - Reorganized **Settings** into clearer sub-tabs: moved **Global Default Voice**, **TTS Output Mode & Auto-AFK**, and **Audio Output & Microphone Priority** into **TTS & Hardware**, and created a dedicated **OBS Overlays & External Control** card on **General**.
+
+---
+
 ## v0.0.11 — 2026-11-09
 
 ### Added

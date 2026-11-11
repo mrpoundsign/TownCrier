@@ -429,6 +429,16 @@ func (mw *MainWindow) initViews() {
 			mw.chatLogsTab.ApplyChatScale()
 		}
 	})
+	mw.settingsTab.SetOverlayChangedHandler(func() {
+		if mw.chatLogsTab != nil {
+			mw.chatLogsTab.refreshLiveLogCards()
+		}
+	})
+	mw.chatLogsTab.SetOnLiveLogsChanged(func() {
+		if mw.settingsTab != nil {
+			mw.settingsTab.RefreshChatOverlayPresets()
+		}
+	})
 	mw.settingsTab.SetModelsChangedHandler(func() {
 		if mw.settingsTab != nil {
 			mw.settingsTab.RefreshVoices()

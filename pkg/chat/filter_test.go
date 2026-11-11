@@ -3,6 +3,7 @@ package chat
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSanitizeEmotes(t *testing.T) {
@@ -272,6 +273,96 @@ func TestSanitizeEmoteAndEmojiDeduplication(t *testing.T) {
 	gotMixed := s.Sanitize("Kappa 😂 Kappa 😂", mixedSpans, true, nil)
 	if gotMixed != "Kappa 😂" {
 		t.Errorf("expected 'Kappa 😂', got %q", gotMixed)
+	}
+}
+
+func TestSanitizeZalgoAndInternationalText(t *testing.T) {
+	s := NewSanitizer(300)
+
+	// 1. Stacked Zalgo combining marks should be capped at 2 per base rune, and orphaned leading marks removed
+	zalgoInput := "\u0300\u0301H\u0300\u0301\u0302\u0303\u0304\u0305e\u0310\u0311\u0312\u0313\u0314llo"
+	gotZalgo := s.SanitizeWithOptions(zalgoInput, SanitizeOptions{
+		StripZalgo: true,
+	})
+	expectedZalgo := "H\u0300\u0301e\u0310\u0311llo"
+	if gotZalgo != expectedZalgo {
+		t.Errorf("expected %q, got %q", expectedZalgo, gotZalgo)
+	}
+
+	// 2. Legitimate accented international text (NFD Vietnamese with 2 combining marks, Spanish, French) is preserved
+	intlInput := "Ti\u0065\u0302\u0301ng Vi\u0065\u0323\u0302t, Café, Español, Über"
+	gotIntl := s.SanitizeWithOptions(intlInput, SanitizeOptions{
+		StripZalgo:    true,
+		StripASCIIArt: true,
+	})
+	if gotIntl != intlInput {
+		t.Errorf("expected international text %q to be preserved, got %q", intlInput, gotIntl)
+	}
+}
+
+func TestSanitizeBrailleAndASCIIArt(t *testing.T) {
+	s := NewSanitizer(300)
+
+	// 1. Pure Braille art flood -> stripped to empty
+	brailleArt := "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"
+	if got := s.Sanitize(brailleArt, nil, false, nil); got != "" {
+		t.Errorf("expected empty string for Braille art, got %q", got)
+	}
+
+	// 2. Box-drawing and block-element frame around text -> frame stripped, text kept
+	boxArt := "┌──────────┐ █ Hello stream █ └──────────┘"
+	if got := s.Sanitize(boxArt, nil, false, nil); got != "Hello stream" {
+		t.Errorf("expected 'Hello stream', got %q", got)
+	}
+
+	// 3. High-density ASCII symbol flood -> suppressed to empty
+	symbolFlood := `/\_/\_/\_/\_/\_/\_/\_/\_/\_/\`
+	if got := s.Sanitize(symbolFlood, nil, false, nil); got != "" {
+		t.Errorf("expected empty string for symbol flood, got %q", got)
+	}
+
+	// 4. Normal short punctuation or kaomoji with words should be preserved when under symbol density or length threshold
+	normalChat := "Wait really?! That was awesome!"
+	if got := s.Sanitize(normalChat, nil, false, nil); got != "Wait really?! That was awesome!" {
+		t.Errorf("expected normal chat to be preserved, got %q", got)
+	}
+}
+
+func TestCopypastaFilter(t *testing.T) {
+	f := NewCopypastaFilter()
+	baseTime := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	window := 30 * time.Second
+
+	// 1. Short normal chat reactions (< 4 words and < 20 runes) are never flagged as copypasta
+	for i := range 5 {
+		if f.IsDuplicate("twitch", "GGs!", window, baseTime.Add(time.Duration(i)*time.Second)) {
+			t.Fatalf("short reaction 'GGs!' should never be flagged as copypasta (iteration %d)", i)
+		}
+		if f.IsDuplicate("twitch", "let's go", window, baseTime.Add(time.Duration(i)*time.Second)) {
+			t.Fatalf("short reaction 'let's go' should never be flagged as copypasta (iteration %d)", i)
+		}
+	}
+
+	// 2. Multi-user copypasta paragraph: first occurrence allowed, subsequent within window suppressed
+	pasta := "I saw the streamer at the grocery store yesterday and he told me to subscribe!"
+	if f.IsDuplicate("twitch", pasta, window, baseTime) {
+		t.Fatalf("first occurrence of copypasta should not be flagged as duplicate")
+	}
+
+	// Variation with different casing and extra exclamation marks within 10s -> duplicate!
+	pastaVariant := "i SAW the streamer at the grocery store yesterday, and he told me to SUBSCRIBE!!!"
+	if !f.IsDuplicate("twitch", pastaVariant, window, baseTime.Add(10*time.Second)) {
+		t.Fatalf("second occurrence of copypasta within window should be flagged as duplicate")
+	}
+
+	// Different platform scope is independent
+	if f.IsDuplicate("youtube", pasta, window, baseTime.Add(12*time.Second)) {
+		t.Fatalf("first occurrence on a different scope should not be flagged as duplicate")
+	}
+
+	// 3. After window expires (> 30s after last seen), message is allowed again
+	if f.IsDuplicate("twitch", pasta, window, baseTime.Add(45*time.Second)) {
+		t.Fatalf("occurrence after sliding window expiration should not be flagged as duplicate")
 	}
 }
 

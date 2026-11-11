@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -34,6 +35,10 @@ const (
 	boolOffHashVoices      = "Off (Use Default Voice)"
 	boolOnSmartGender      = "On (Smart Gender)"
 	boolOffSmartGender     = "Off (Any Gender)"
+	boolOnStripZalgo       = "On (Strip Zalgo Marks)"
+	boolOffStripZalgo      = "Off (Allow Zalgo Marks)"
+	boolOnStripASCIIArt    = "On (Strip Braille/ASCII Art)"
+	boolOffStripASCIIArt   = "Off (Allow Braille/ASCII Art)"
 )
 
 // PlatformOverridesControl manages the per-setting global/override pulldowns for a streaming platform tab.
@@ -48,6 +53,9 @@ type PlatformOverridesControl struct {
 	EmotesSelect                  *widget.Select
 	DedupeSelect                  *widget.Select
 	DupWordsSelect                *widget.Select
+	StripZalgoSelect              *widget.Select
+	StripASCIIArtSelect           *widget.Select
+	CopypastaSelect               *widget.Select
 	PlatformNameSelect            *widget.Select
 	TranslateSelect               *widget.Select
 	HashVoicesSelect              *widget.Select
@@ -241,6 +249,54 @@ func (c *PlatformOverridesControl) build() {
 		})
 	})
 
+	c.StripZalgoSelect = widget.NewSelect(nil, func(selected string) {
+		if c.syncing {
+			return
+		}
+		mode, _ := parseSelectedBoolMode(selected, boolOnStripZalgo)
+		c.updateConfig(func(cfg *config.Config) {
+			p := cfg.Platforms[c.PlatformKey]
+			p.Overrides.StripZalgoMode = mode
+			cfg.Platforms[c.PlatformKey] = p
+		})
+	})
+
+	c.StripASCIIArtSelect = widget.NewSelect(nil, func(selected string) {
+		if c.syncing {
+			return
+		}
+		mode, _ := parseSelectedBoolMode(selected, boolOnStripASCIIArt)
+		c.updateConfig(func(cfg *config.Config) {
+			p := cfg.Platforms[c.PlatformKey]
+			p.Overrides.StripASCIIArtMode = mode
+			cfg.Platforms[c.PlatformKey] = p
+		})
+	})
+
+	c.CopypastaSelect = widget.NewSelect(nil, func(selected string) {
+		if c.syncing {
+			return
+		}
+		if strings.HasPrefix(selected, "Global (") {
+			c.updateConfig(func(cfg *config.Config) {
+				p := cfg.Platforms[c.PlatformKey]
+				p.Overrides.DeduplicateCopypastaMode = config.OverrideModeGlobal
+				cfg.Platforms[c.PlatformKey] = p
+			})
+			return
+		}
+		val := OptionToCopypastaSeconds(selected)
+		mode := config.OverrideModeOff
+		if val > 0 {
+			mode = strconv.Itoa(val)
+		}
+		c.updateConfig(func(cfg *config.Config) {
+			p := cfg.Platforms[c.PlatformKey]
+			p.Overrides.DeduplicateCopypastaMode = mode
+			cfg.Platforms[c.PlatformKey] = p
+		})
+	})
+
 	c.PlatformNameSelect = widget.NewSelect(nil, func(selected string) {
 		if c.syncing {
 			return
@@ -429,6 +485,9 @@ func (c *PlatformOverridesControl) build() {
 		makeRow("Speak Emotes & Emojis:", c.EmotesSelect),
 		makeRow("Deduplicate Emotes & Emojis:", c.DedupeSelect),
 		makeRow("Max Consecutive Duplicate Words:", c.DupWordsSelect),
+		makeRow("Strip Zalgo Combining Marks:", c.StripZalgoSelect),
+		makeRow("Strip Braille & ASCII Art:", c.StripASCIIArtSelect),
+		makeRow("Suppress Copypasta Waves:", c.CopypastaSelect),
 		makeRow("Speak Platform Name Prefix:", c.PlatformNameSelect),
 		makeRow("Translate Foreign Chat:", c.TranslateSelect),
 		widget.NewSeparator(),
@@ -564,6 +623,34 @@ func (c *PlatformOverridesControl) Refresh() {
 		c.DupWordsSelect.SetSelected(DuplicateWordsToOption(OptionToDuplicateWords(dupMode)))
 	}
 	c.DupWordsSelect.Refresh()
+
+	// 4a. Strip Zalgo Combining Marks
+	c.StripZalgoSelect.Options = boolOptionsForGlobal(g.StripZalgo, boolOnStripZalgo, boolOffStripZalgo)
+	c.StripZalgoSelect.SetSelected(selectedBoolOption(ov.StripZalgoMode, false, false, g.StripZalgo, boolOnStripZalgo, boolOffStripZalgo))
+	c.StripZalgoSelect.Refresh()
+
+	// 4b. Strip Braille & ASCII Art
+	c.StripASCIIArtSelect.Options = boolOptionsForGlobal(g.StripASCIIArt, boolOnStripASCIIArt, boolOffStripASCIIArt)
+	c.StripASCIIArtSelect.SetSelected(selectedBoolOption(ov.StripASCIIArtMode, false, false, g.StripASCIIArt, boolOnStripASCIIArt, boolOffStripASCIIArt))
+	c.StripASCIIArtSelect.Refresh()
+
+	// 4c. Suppress Copypasta Waves
+	globalCopypastaOpt := fmt.Sprintf("Global (%s)", CopypastaSecondsToOption(g.DeduplicateCopypastaWindowSeconds))
+	copypastaOpts := make([]string, 0, 1+len(CopypastaWindowOptions))
+	copypastaOpts = append(copypastaOpts, globalCopypastaOpt)
+	copypastaOpts = append(copypastaOpts, CopypastaWindowOptions...)
+	c.CopypastaSelect.Options = copypastaOpts
+
+	cpMode := config.NormalizeCoalesceOverrideMode(ov.DeduplicateCopypastaMode)
+	switch cpMode {
+	case config.OverrideModeOff:
+		c.CopypastaSelect.SetSelected("Off (Allow All)")
+	case config.OverrideModeGlobal:
+		c.CopypastaSelect.SetSelected(globalCopypastaOpt)
+	default:
+		c.CopypastaSelect.SetSelected(CopypastaSecondsToOption(OptionToCopypastaSeconds(cpMode)))
+	}
+	c.CopypastaSelect.Refresh()
 
 	// 5. Speak Platform Name Prefix
 	c.PlatformNameSelect.Options = boolOptionsForGlobal(g.SpeakPlatformName, boolOnPlatformPrefix, boolOffPlatformPrefix)

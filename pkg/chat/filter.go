@@ -45,6 +45,8 @@ type SanitizeOptions struct {
 	DeduplicateEmotes bool
 	MaxDuplicateWords int
 	BlockedWords      []string
+	StripZalgo        bool
+	StripASCIIArt     bool
 }
 
 // SanitizeWithOptions applies emote handling, duplicate word collapsing, spam protection, and safety filtering.
@@ -73,6 +75,16 @@ func (s *Sanitizer) SanitizeWithOptions(text string, opts SanitizeOptions) strin
 			}
 		}
 		cleaned = deduplicateEmotesAndEmojisPerSentence(cleaned, knownEmotes)
+	}
+
+	// 1b. Zalgo combining mark stack stripping
+	if opts.StripZalgo {
+		cleaned = stripZalgoMarks(cleaned)
+	}
+
+	// 1c. Braille, box-drawing, block-element, and ASCII symbol art stripping
+	if opts.StripASCIIArt {
+		cleaned = stripASCIIArt(cleaned)
 	}
 
 	// 2. URL replacement
@@ -105,7 +117,7 @@ func (s *Sanitizer) SanitizeWithOptions(text string, opts SanitizeOptions) strin
 }
 
 // Sanitize applies emote handling, URL replacement, spam collapsing, word blocklist, and length clamping
-// with default anti-spam rules (deduplicate emotes enabled, max duplicate words = 2).
+// with default anti-spam rules (deduplicate emotes enabled, max duplicate words = 2, Zalgo & ASCII art stripping enabled).
 func (s *Sanitizer) Sanitize(text string, emoteSpans []EmoteSpan, speakEmotes bool, blockedWords []string) string {
 	return s.SanitizeWithOptions(text, SanitizeOptions{
 		EmoteSpans:        emoteSpans,
@@ -113,6 +125,8 @@ func (s *Sanitizer) Sanitize(text string, emoteSpans []EmoteSpan, speakEmotes bo
 		DeduplicateEmotes: true,
 		MaxDuplicateWords: 2,
 		BlockedWords:      blockedWords,
+		StripZalgo:        true,
+		StripASCIIArt:     true,
 	})
 }
 
@@ -350,4 +364,87 @@ func getSentencePunctuation(w string) string {
 		}
 	}
 	return ""
+}
+
+// isEmojiVariationOrKeycap returns true for emoji variation selectors (FE0E, FE0F) and combining enclosing keycap (20E3).
+func isEmojiVariationOrKeycap(r rune) bool {
+	return r == 0xFE0E || r == 0xFE0F || r == 0x20E3
+}
+
+// stripZalgoMarks removes orphaned combining marks and caps consecutive Unicode non-spacing/enclosing
+// combining marks (unicode.Mn, unicode.Me) at 2 per base rune so legitimate accented international text
+// (e.g., Vietnamese, French, Spanish, German) is preserved while stacked Zalgo towers are stripped.
+func stripZalgoMarks(text string) string {
+	var b strings.Builder
+	b.Grow(len(text))
+
+	hasBase := false
+	combiningCount := 0
+
+	for _, r := range text {
+		if !isEmojiVariationOrKeycap(r) && (unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r)) {
+			if !hasBase {
+				continue
+			}
+			combiningCount++
+			if combiningCount > 2 {
+				continue
+			}
+			b.WriteRune(r)
+			continue
+		}
+
+		if unicode.IsSpace(r) {
+			hasBase = false
+			combiningCount = 0
+		} else {
+			hasBase = true
+			combiningCount = 0
+		}
+		b.WriteRune(r)
+	}
+
+	return b.String()
+}
+
+// isUnicodeArtRune returns true if r belongs to Braille Patterns (U+2800..U+28FF),
+// Box Drawing (U+2500..U+257F), Block Elements (U+2580..U+259F), or Geometric Shapes (U+25A0..U+25FF).
+func isUnicodeArtRune(r rune) bool {
+	return (r >= 0x2800 && r <= 0x28FF) || (r >= 0x2500 && r <= 0x25FF)
+}
+
+// stripASCIIArt removes Braille/box-drawing/block-element art characters and suppresses high-density
+// ASCII symbol/punctuation floods (messages with >= 12 non-whitespace non-emoji runes where > 75% are symbols/punctuation).
+func stripASCIIArt(text string) string {
+	var b strings.Builder
+	b.Grow(len(text))
+
+	for _, r := range text {
+		if isUnicodeArtRune(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+
+	cleaned := b.String()
+
+	// Evaluate symbol density on non-emoji text so pure emoji strings (when SpeakEmotes=true) are not treated as ASCII art
+	withoutEmojis := stripEmojis(cleaned)
+	nonSpace := 0
+	symbolOrPunct := 0
+	for _, r := range withoutEmojis {
+		if unicode.IsSpace(r) {
+			continue
+		}
+		nonSpace++
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && !unicode.Is(unicode.Mn, r) && !unicode.Is(unicode.Mc, r) {
+			symbolOrPunct++
+		}
+	}
+
+	if nonSpace >= 12 && float64(symbolOrPunct)/float64(nonSpace) > 0.75 {
+		return ""
+	}
+
+	return cleaned
 }
