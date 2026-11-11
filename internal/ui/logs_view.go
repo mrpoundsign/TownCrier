@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 	"github.com/mrpoundsign/TownCrier/pkg/bots"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/platform"
 	"github.com/mrpoundsign/TownCrier/pkg/translate"
 )
 
@@ -2266,8 +2268,25 @@ func (v *LogsView) buildLogRowWithRef(rowIdx int, e eventlog.Entry) (fyne.Canvas
 		userTip += " • Tier: " + e.SubTier
 	}
 
+	uName := e.UserName
+	if uName == "" {
+		uName = e.DisplayName
+	}
+	profURL := platform.ProfileURL(e.Platform, uName, e.UserID)
+	var onUserTap func()
+	if profURL != "" {
+		userTip += " • Click to open profile in browser: " + profURL
+		onUserTap = func() {
+			if u, err := url.Parse(profURL); err == nil {
+				if appInst := fyne.CurrentApp(); appInst != nil {
+					_ = appInst.OpenURL(u)
+				}
+			}
+		}
+	}
+
 	roleIcons := v.userRoleIcons(e)
-	userNameLabel := v.newHoverCellLabel(displayName, userTip, fyne.TextStyle{Bold: true})
+	userNameLabel := v.newClickableHoverCellLabel(displayName, userTip, fyne.TextStyle{Bold: true}, onUserTap)
 	var userCell fyne.CanvasObject
 	if len(roleIcons) > 0 {
 		iconBox := container.NewHBox(roleIcons...)
