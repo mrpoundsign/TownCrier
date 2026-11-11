@@ -20,7 +20,7 @@ import (
 var payloadFS embed.FS
 
 var (
-	AppVersion = "0.0.11"
+	AppVersion = "0.0.12"
 
 	// Overridable in unit tests to guarantee strict test isolation inside os.TempDir().
 	streamDeckPluginsDirOverride string
