@@ -584,21 +584,31 @@ func (r *hoverIconRenderer) Refresh() {
 
 // hoverCellLabel is a single-line truncated table cell label that displays a tooltip on mouse hover
 // without expanding its minimum width to the full un-truncated text length.
+// When onTap is non-nil, it displays a pointer cursor, underlines on hover, and executes onTap on click.
 type hoverCellLabel struct {
 	widget.Label
 	tooltip string
 	onHover func(obj fyne.CanvasObject, tip string, hovered bool)
+	onTap   func()
+	hovered bool
 }
 
 var (
-	_ fyne.Widget       = (*hoverCellLabel)(nil)
-	_ desktop.Hoverable = (*hoverCellLabel)(nil)
+	_ fyne.Widget        = (*hoverCellLabel)(nil)
+	_ desktop.Hoverable  = (*hoverCellLabel)(nil)
+	_ desktop.Cursorable = (*hoverCellLabel)(nil)
+	_ fyne.Tappable      = (*hoverCellLabel)(nil)
 )
 
 func (v *LogsView) newHoverCellLabel(text, tooltip string, style fyne.TextStyle) *hoverCellLabel {
+	return v.newClickableHoverCellLabel(text, tooltip, style, nil)
+}
+
+func (v *LogsView) newClickableHoverCellLabel(text, tooltip string, style fyne.TextStyle, onTap func()) *hoverCellLabel {
 	l := &hoverCellLabel{
 		tooltip: tooltip,
 		onHover: v.showTooltipForObject,
+		onTap:   onTap,
 	}
 	l.Text = text
 	l.TextStyle = style
@@ -624,17 +634,40 @@ func (l *hoverCellLabel) MinSize() fyne.Size {
 	return fyne.NewSize(24, ms.Height)
 }
 
+func (l *hoverCellLabel) Cursor() desktop.Cursor {
+	if l.onTap != nil {
+		return desktop.PointerCursor
+	}
+	return desktop.DefaultCursor
+}
+
+func (l *hoverCellLabel) Tapped(*fyne.PointEvent) {
+	if l.onTap != nil {
+		l.onTap()
+	}
+}
+
 func (l *hoverCellLabel) MouseIn(*desktop.MouseEvent) {
+	l.hovered = true
 	if l.onHover != nil && l.tooltip != "" {
 		l.onHover(l, l.tooltip, true)
+	}
+	if l.onTap != nil {
+		l.TextStyle = fyne.TextStyle{Bold: true, Underline: true}
+		l.Refresh()
 	}
 }
 
 func (l *hoverCellLabel) MouseMoved(*desktop.MouseEvent) {}
 
 func (l *hoverCellLabel) MouseOut() {
+	l.hovered = false
 	if l.onHover != nil {
 		l.onHover(l, "", false)
+	}
+	if l.onTap != nil {
+		l.TextStyle = fyne.TextStyle{Bold: true, Underline: false}
+		l.Refresh()
 	}
 }
 
