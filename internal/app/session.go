@@ -50,6 +50,7 @@ type Session struct {
 	queue      *queue.Queue
 	router     *chat.Router
 	sanitizer  *chat.Sanitizer
+	copypasta  *chat.CopypastaFilter
 	bots       *bots.Matcher
 	translator *translate.Service
 	eventLog   *eventlog.Manager
@@ -123,6 +124,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		configStore:     configStore,
 		router:          router,
 		sanitizer:       sanitizer,
+		copypasta:       chat.NewCopypastaFilter(),
 		bots:            matcher,
 		translator:      trSvc,
 		twitchOAuth:     twitch.NewOAuthManager("", store),
@@ -2490,6 +2492,7 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	// 3. Text & Emote Sanitizer on raw message text
 	// Emote offsets are relative to event.Text before chatter name prefixing.
 	_, speakEmotes, deduplicateEmotes, maxDuplicateWords, _, _, _ := cfg.EffectiveChatRules(event.Platform)
+	stripZalgo, stripASCIIArt, copypastaWindowSec := cfg.EffectiveAntiSpamRules(event.Platform)
 	blockedWords := chat.EffectiveBlockedWords(cfg.Safety.BlockDefaultBadWords, cfg.Safety.BlockedWords)
 	if event.Text != "" {
 		spansForSanitize := event.EmoteSpans
@@ -2503,12 +2506,21 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 			DeduplicateEmotes: deduplicateEmotes,
 			MaxDuplicateWords: maxDuplicateWords,
 			BlockedWords:      blockedWords,
+			StripZalgo:        stripZalgo,
+			StripASCIIArt:     stripASCIIArt,
 		})
 		event.EmoteSpans = nil // already applied to event.Text
 		if event.Text == "" && event.Kind == chat.EventKindMessage {
 			log.Printf("[Session] Chat message sanitized to empty text: user=%q", event.UserName)
 			s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Sanitized to empty text (emotes or blocked words)"))
 			return nil
+		}
+		if event.Kind == chat.EventKindMessage && !event.IsPaidOrEvent() && copypastaWindowSec > 0 && s.copypasta != nil {
+			if s.copypasta.IsDuplicate(event.Platform, event.Text, time.Duration(copypastaWindowSec)*time.Second, event.Timestamp) {
+				log.Printf("[Session] Duplicate copypasta suppressed: user=%q text=%q", event.UserName, event.Text)
+				s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedSanitized, "Duplicate copypasta suppressed"))
+				return nil
+			}
 		}
 	}
 

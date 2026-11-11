@@ -649,4 +649,38 @@ func TestEffectiveNaturalizeNames(t *testing.T) {
 	}
 }
 
+func TestEffectiveAntiSpamRulesAndOverrides(t *testing.T) {
+	store := NewMemoryStore(nil)
+	cfg, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	zalgo, ascii, windowSec := cfg.EffectiveAntiSpamRules("twitch")
+	if !zalgo || !ascii || windowSec != DefaultCopypastaWindowSeconds {
+		t.Fatalf("expected default (true, true, %d), got (%v, %v, %d)", DefaultCopypastaWindowSeconds, zalgo, ascii, windowSec)
+	}
+
+	// Override Twitch: disable Zalgo & Copypasta, keep ASCII Art
+	pTw := cfg.Platforms["twitch"]
+	pTw.Overrides.StripZalgoMode = OverrideModeOff
+	pTw.Overrides.DeduplicateCopypastaMode = OverrideModeOff
+	cfg.Platforms["twitch"] = pTw
+
+	zalgo, ascii, windowSec = cfg.EffectiveAntiSpamRules("twitch")
+	if zalgo || !ascii || windowSec != 0 {
+		t.Fatalf("expected twitch override (false, true, 0), got (%v, %v, %d)", zalgo, ascii, windowSec)
+	}
+
+	// Override YouTube to 60s window
+	pYt := cfg.Platforms["youtube"]
+	pYt.Overrides.DeduplicateCopypastaMode = "60"
+	cfg.Platforms["youtube"] = pYt
+
+	_, _, ytWin := cfg.EffectiveAntiSpamRules("youtube")
+	if ytWin != 60 {
+		t.Fatalf("expected youtube override window 60, got %d", ytWin)
+	}
+}
+
 

@@ -175,9 +175,12 @@ type SettingsView struct {
 	rulesNaturalizeCheck             *widget.Check
 	rulesCoalesceSelect              *widget.Select
 	rulesEmotesCheck                 *widget.Check
-	rulesDedupeCheck                 *widget.Check
-	rulesDupWordsSelect              *widget.Select
-	rulesPlatformCheck               *widget.Check
+	rulesDedupeCheck                  *widget.Check
+	rulesDupWordsSelect               *widget.Select
+	rulesStripZalgoCheck              *widget.Check
+	rulesStripASCIIArtCheck           *widget.Check
+	rulesCopypastaSelect              *widget.Select
+	rulesPlatformCheck                *widget.Check
 	rulesMentionsModeSelect           *widget.Select
 	rulesAllowBroadcasterCheck        *widget.Check
 	rulesPlayAlertIgnoredMentionCheck *widget.Check
@@ -587,6 +590,15 @@ func (v *SettingsView) SyncFromConfig() {
 	}
 	if v.rulesDupWordsSelect != nil {
 		v.rulesDupWordsSelect.SetSelected(DuplicateWordsToOption(v.cfg.GlobalChatRules.MaxDuplicateWords))
+	}
+	if v.rulesStripZalgoCheck != nil {
+		v.rulesStripZalgoCheck.SetChecked(v.cfg.GlobalChatRules.StripZalgo)
+	}
+	if v.rulesStripASCIIArtCheck != nil {
+		v.rulesStripASCIIArtCheck.SetChecked(v.cfg.GlobalChatRules.StripASCIIArt)
+	}
+	if v.rulesCopypastaSelect != nil {
+		v.rulesCopypastaSelect.SetSelected(CopypastaSecondsToOption(v.cfg.GlobalChatRules.DeduplicateCopypastaWindowSeconds))
 	}
 	if v.rulesPlatformCheck != nil {
 		v.rulesPlatformCheck.SetChecked(v.cfg.GlobalChatRules.SpeakPlatformName)
@@ -3133,6 +3145,50 @@ func OptionToCoalesceSeconds(opt string) int {
 	}
 }
 
+var CopypastaWindowOptions = []string{
+	"Off (Allow All)",
+	"15 seconds",
+	"30 seconds (Default)",
+	"60 seconds",
+}
+
+func CopypastaSecondsToOption(val int) string {
+	switch val {
+	case -1:
+		return "Off (Allow All)"
+	case 15:
+		return "15 seconds"
+	case 30, 0:
+		return "30 seconds (Default)"
+	case 60:
+		return "60 seconds"
+	default:
+		if val < 0 {
+			return "Off (Allow All)"
+		}
+		return fmt.Sprintf("%d seconds", val)
+	}
+}
+
+func OptionToCopypastaSeconds(opt string) int {
+	switch opt {
+	case "Off (Allow All)", "off", "-1":
+		return -1
+	case "15 seconds", "15":
+		return 15
+	case "30 seconds (Default)", "30":
+		return 30
+	case "60 seconds", "60":
+		return 60
+	default:
+		var n int
+		if _, err := fmt.Sscanf(opt, "%d", &n); err == nil && n > 0 {
+			return n
+		}
+		return config.DefaultCopypastaWindowSeconds
+	}
+}
+
 const (
 	IgnoreMentionsOptionOff               = "Read All Mentions & Replies"
 	IgnoreMentionsOptionRepliesAndLeading = "Ignore Replies & Starting @ Mentions"
@@ -3278,6 +3334,38 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 	dupWordsRow := container.NewHBox(
 		widget.NewLabel("Max Consecutive Duplicate Words:"),
 		dupWordsSelect,
+	)
+
+	checkStripZalgo := widget.NewCheck("Strip Zalgo Combining Marks (cap stacked diacritics at 2 per character)", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.StripZalgo = b
+		})
+		v.refreshPlatformOverrides()
+	})
+	checkStripZalgo.SetChecked(v.cfg.GlobalChatRules.StripZalgo)
+	v.rulesStripZalgoCheck = checkStripZalgo
+
+	checkStripASCIIArt := widget.NewCheck("Strip Braille, Box-Drawing & ASCII Symbol Art Floods", func(b bool) {
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.StripASCIIArt = b
+		})
+		v.refreshPlatformOverrides()
+	})
+	checkStripASCIIArt.SetChecked(v.cfg.GlobalChatRules.StripASCIIArt)
+	v.rulesStripASCIIArtCheck = checkStripASCIIArt
+
+	copypastaSelect := widget.NewSelect(CopypastaWindowOptions, func(s string) {
+		val := OptionToCopypastaSeconds(s)
+		v.updateConfig(func(c *config.Config) {
+			c.GlobalChatRules.DeduplicateCopypastaWindowSeconds = val
+		})
+		v.refreshPlatformOverrides()
+	})
+	copypastaSelect.SetSelected(CopypastaSecondsToOption(v.cfg.GlobalChatRules.DeduplicateCopypastaWindowSeconds))
+	v.rulesCopypastaSelect = copypastaSelect
+	copypastaRow := container.NewHBox(
+		widget.NewLabel("Suppress Multi-User Copypasta Waves:"),
+		copypastaSelect,
 	)
 
 	checkPlatform := widget.NewCheck("Speak Platform Name Prefix (e.g. '[Twitch]')", func(b bool) {
@@ -3426,6 +3514,9 @@ func (v *SettingsView) buildRulesCard() *widget.Card {
 		checkEmotes,
 		checkDedupe,
 		dupWordsRow,
+		checkStripZalgo,
+		checkStripASCIIArt,
+		copypastaRow,
 		checkPlatform,
 		widget.NewSeparator(),
 		hashVoicesCheck,

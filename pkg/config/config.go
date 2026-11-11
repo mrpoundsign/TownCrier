@@ -486,6 +486,7 @@ const (
 	UnknownGenderDefaultVoice    = "default_voice"
 
 	DefaultCoalesceConsecutiveSeconds = 20
+	DefaultCopypastaWindowSeconds     = 30
 )
 
 // NormalizeUnknownGenderPolicy returns a canonical UnknownGenderPolicy ("balanced", "prefer_feminine", "prefer_masculine", or "default_voice").
@@ -515,22 +516,25 @@ func NormalizeIgnoreMentionsMode(mode string) string {
 }
 
 type GlobalChatRules struct {
-	SpeakNames                 bool    `json:"speak_names"`
-	NaturalizeNames            bool    `json:"naturalize_names"`
-	CoalesceConsecutiveSeconds int     `json:"coalesce_consecutive_seconds,omitempty"`
-	SpeakEmotes                bool    `json:"speak_emotes"`
-	DeduplicateEmotes          bool    `json:"deduplicate_emotes"`
-	MaxDuplicateWords          int     `json:"max_duplicate_words"`
-	SpeakPlatformName          bool    `json:"speak_platform_name"`
-	IgnoreMentionsMode         string  `json:"ignore_mentions_mode,omitempty"`
-	AllowBroadcasterMentions   bool    `json:"allow_broadcaster_mentions,omitempty"`
-	PlayAlertOnIgnoredMention  bool    `json:"play_alert_on_ignored_mention,omitempty"`
-	HashChatterVoices          bool     `json:"hash_chatter_voices,omitempty"`
-	SmartGenderVoices          bool     `json:"smart_gender_voices,omitempty"`
-	UnknownGenderPolicy        string   `json:"unknown_gender_policy,omitempty"`
-	DisabledChatterVoices      []string `json:"disabled_chatter_voices,omitempty"`
-	DefaultVoice               string   `json:"default_voice"`
-	DefaultSpeed               float32  `json:"default_speed"`
+	SpeakNames                        bool     `json:"speak_names"`
+	NaturalizeNames                   bool     `json:"naturalize_names"`
+	CoalesceConsecutiveSeconds        int      `json:"coalesce_consecutive_seconds,omitempty"`
+	SpeakEmotes                       bool     `json:"speak_emotes"`
+	DeduplicateEmotes                 bool     `json:"deduplicate_emotes"`
+	MaxDuplicateWords                 int      `json:"max_duplicate_words"`
+	StripZalgo                        bool     `json:"strip_zalgo"`
+	StripASCIIArt                     bool     `json:"strip_ascii_art"`
+	DeduplicateCopypastaWindowSeconds int      `json:"deduplicate_copypasta_window_seconds,omitempty"`
+	SpeakPlatformName                 bool     `json:"speak_platform_name"`
+	IgnoreMentionsMode                string   `json:"ignore_mentions_mode,omitempty"`
+	AllowBroadcasterMentions          bool     `json:"allow_broadcaster_mentions,omitempty"`
+	PlayAlertOnIgnoredMention         bool     `json:"play_alert_on_ignored_mention,omitempty"`
+	HashChatterVoices                 bool     `json:"hash_chatter_voices,omitempty"`
+	SmartGenderVoices                 bool     `json:"smart_gender_voices,omitempty"`
+	UnknownGenderPolicy               string   `json:"unknown_gender_policy,omitempty"`
+	DisabledChatterVoices             []string `json:"disabled_chatter_voices,omitempty"`
+	DefaultVoice                      string   `json:"default_voice"`
+	DefaultSpeed                      float32  `json:"default_speed"`
 }
 
 const (
@@ -643,6 +647,9 @@ type PlatformOverrides struct {
 	SpeakEmotesMode               string  `json:"speak_emotes_mode,omitempty"`
 	DeduplicateEmotesMode         string  `json:"deduplicate_emotes_mode,omitempty"`
 	MaxDuplicateWordsMode         string  `json:"max_duplicate_words_mode,omitempty"`
+	StripZalgoMode                string  `json:"strip_zalgo_mode,omitempty"`
+	StripASCIIArtMode             string  `json:"strip_ascii_art_mode,omitempty"`
+	DeduplicateCopypastaMode      string  `json:"deduplicate_copypasta_mode,omitempty"`
 	SpeakPlatformNameMode         string  `json:"speak_platform_name_mode,omitempty"`
 	IgnoreMentionsOverride        string  `json:"ignore_mentions_override,omitempty"`
 	AllowBroadcasterMentionsMode  string  `json:"allow_broadcaster_mentions_mode,omitempty"`
@@ -911,18 +918,21 @@ func DefaultConfig() *Config {
 			MinConfidence:        DefaultTranslationMinConfidence,
 		},
 		GlobalChatRules: GlobalChatRules{
-			SpeakNames:                 true,
-			NaturalizeNames:            true,
-			CoalesceConsecutiveSeconds: DefaultCoalesceConsecutiveSeconds,
-			SpeakEmotes:                false,
-			DeduplicateEmotes:          true,
-			MaxDuplicateWords:          2,
-			SpeakPlatformName:          false,
-			HashChatterVoices:          false,
-			SmartGenderVoices:          true,
-			UnknownGenderPolicy:        UnknownGenderBalanced,
-			DefaultVoice:               "supertonic:f1",
-			DefaultSpeed:               1.0,
+			SpeakNames:                        true,
+			NaturalizeNames:                   true,
+			CoalesceConsecutiveSeconds:        DefaultCoalesceConsecutiveSeconds,
+			SpeakEmotes:                       false,
+			DeduplicateEmotes:                 true,
+			MaxDuplicateWords:                 2,
+			StripZalgo:                        true,
+			StripASCIIArt:                     true,
+			DeduplicateCopypastaWindowSeconds: DefaultCopypastaWindowSeconds,
+			SpeakPlatformName:                 false,
+			HashChatterVoices:                 false,
+			SmartGenderVoices:                 true,
+			UnknownGenderPolicy:               UnknownGenderBalanced,
+			DefaultVoice:                      "supertonic:f1",
+			DefaultSpeed:                      1.0,
 		},
 		Viewers: make(map[string]ViewerConfig),
 		Platforms: map[string]PlatformConfig{
@@ -1510,6 +1520,54 @@ func (c *Config) EffectiveTranslationEnabled(platform string) bool {
 	return c.Translation.Enabled
 }
 
+// EffectiveAntiSpamRules returns the effective Zalgo stripping, Braille/ASCII art stripping, and
+// sliding-window copypasta deduplication window in seconds (or 0 when disabled) for a platform,
+// taking per-platform override modes into account.
+func (c *Config) EffectiveAntiSpamRules(platform string) (stripZalgo, stripASCIIArt bool, copypastaWindowSeconds int) {
+	if c == nil {
+		return true, true, DefaultCopypastaWindowSeconds
+	}
+	stripZalgo = c.GlobalChatRules.StripZalgo
+	stripASCIIArt = c.GlobalChatRules.StripASCIIArt
+	copypastaWindowSeconds = c.GlobalChatRules.DeduplicateCopypastaWindowSeconds
+	if copypastaWindowSeconds == 0 {
+		copypastaWindowSeconds = DefaultCopypastaWindowSeconds
+	}
+
+	if p, ok := c.Platforms[platform]; ok {
+		ov := p.Overrides
+		switch NormalizeBoolOverrideMode(ov.StripZalgoMode) {
+		case OverrideModeOn:
+			stripZalgo = true
+		case OverrideModeOff:
+			stripZalgo = false
+		}
+
+		switch NormalizeBoolOverrideMode(ov.StripASCIIArtMode) {
+		case OverrideModeOn:
+			stripASCIIArt = true
+		case OverrideModeOff:
+			stripASCIIArt = false
+		}
+
+		switch mode := NormalizeCoalesceOverrideMode(ov.DeduplicateCopypastaMode); mode {
+		case OverrideModeOff:
+			copypastaWindowSeconds = -1
+		case OverrideModeGlobal:
+			// inherit global
+		default:
+			if n, err := strconv.Atoi(mode); err == nil {
+				copypastaWindowSeconds = n
+			}
+		}
+	}
+
+	if copypastaWindowSeconds < 0 {
+		copypastaWindowSeconds = 0
+	}
+	return stripZalgo, stripASCIIArt, copypastaWindowSeconds
+}
+
 // Clone creates a deep copy of the Config without JSON serialization overhead.
 func (c *Config) Clone() *Config {
 	if c == nil {
@@ -1906,6 +1964,9 @@ func migrate(cfg *Config) error {
 	}
 	if cfg.GlobalChatRules.CoalesceConsecutiveSeconds == 0 {
 		cfg.GlobalChatRules.CoalesceConsecutiveSeconds = DefaultCoalesceConsecutiveSeconds
+	}
+	if cfg.GlobalChatRules.DeduplicateCopypastaWindowSeconds == 0 {
+		cfg.GlobalChatRules.DeduplicateCopypastaWindowSeconds = DefaultCopypastaWindowSeconds
 	}
 	cfg.GlobalChatRules.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(cfg.GlobalChatRules.IgnoreMentionsMode)
 	NormalizeTranslationProviders(&cfg.Translation)
