@@ -107,7 +107,19 @@ type SettingsView struct {
 	alertClearBtn        *widget.Button
 	alertTestBtn         *widget.Button
 	wsControlCard         *widget.Card
+	wsTTSOverlayCheck     *widget.Check
+	wsTTSOverlaySection   *fyne.Container
+	wsTTSOverlayPosSelect *widget.Select
+	wsCopyTTSOverlayBtn   *widget.Button
+	wsChatOverlayCheck        *widget.Check
+	wsChatOverlaySection      *fyne.Container
+	wsChatOverlayPresetSelect *widget.Select
+	wsChatOverlaySummaryCheck *widget.Check
+	wsChatOverlayPresetMap    map[string]string
+	wsCopyChatOverlayBtn      *widget.Button
 	wsEnabledCheck        *widget.Check
+	wsControlSection      *fyne.Container
+	wsNetSection          *fyne.Container
 	wsHostEntry           *ScrollPassEntry
 	wsPortEntry           *ScrollPassEntry
 	wsTokenEntry          *ScrollPassEntry
@@ -115,7 +127,9 @@ type SettingsView struct {
 	streamDeckInstallBtn  *widget.Button
 	streamDeckStatusLabel *widget.Label
 	streamDeckPluginsDir  string
-	generalBox           *fyne.Container
+	onOverlayChanged      func()
+	generalBox            *fyne.Container
+	ttsBox                *fyne.Container
 	enableTTSCheck            *widget.Check
 	enableLogCheck            *widget.Check
 	enableTranslationCheck    *widget.Check
@@ -263,6 +277,11 @@ func (v *SettingsView) SetChatScaleChangedHandler(fn func(pct int)) {
 	if v.logsView != nil {
 		v.logsView.SetOnChatScaleChanged(fn)
 	}
+}
+
+// SetOverlayChangedHandler registers a callback invoked when OBS overlay settings or network endpoints change.
+func (v *SettingsView) SetOverlayChangedHandler(fn func()) {
+	v.onOverlayChanged = fn
 }
 
 // SetDeviceEnumerator overrides the audio device enumeration function (useful for tests or mocking).
@@ -490,6 +509,9 @@ func (v *SettingsView) SyncTTSState(enabled bool) {
 		if v.generalBox != nil {
 			v.generalBox.Refresh()
 		}
+		if v.ttsBox != nil {
+			v.ttsBox.Refresh()
+		}
 		v.SyncPlatformTabVisibility()
 	})
 }
@@ -679,6 +701,23 @@ func (v *SettingsView) SyncFromConfig() {
 	if v.alertSoundEntry != nil {
 		v.alertSoundEntry.SetText(v.cfg.TTS.AlertSoundPath)
 	}
+	if v.wsTTSOverlayCheck != nil {
+		v.wsTTSOverlayCheck.SetChecked(v.cfg.WebSocket.TTSOverlayEnabled)
+	}
+	if v.wsTTSOverlayPosSelect != nil {
+		if strings.EqualFold(strings.TrimSpace(v.cfg.WebSocket.TTSOverlayPosition), "top") {
+			v.wsTTSOverlayPosSelect.SetSelected("Top")
+		} else {
+			v.wsTTSOverlayPosSelect.SetSelected("Bottom")
+		}
+	}
+	if v.wsChatOverlayCheck != nil {
+		v.wsChatOverlayCheck.SetChecked(v.cfg.WebSocket.ChatOverlayEnabled)
+	}
+	if v.wsChatOverlaySummaryCheck != nil {
+		v.wsChatOverlaySummaryCheck.SetChecked(v.cfg.WebSocket.ChatOverlayShowSummary)
+	}
+	v.RefreshChatOverlayPresets()
 	if v.wsEnabledCheck != nil {
 		v.wsEnabledCheck.SetChecked(v.cfg.WebSocket.Enabled)
 	}
@@ -789,20 +828,21 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 
 	v.generalBox = container.NewVBox(
 		v.featuresCard,
-		v.ttsOutputModeCard,
-		v.wsControlCard,
 		servicesCard,
-		v.globalVoiceCard,
-		v.audioCard,
-		botsCard,
+		v.wsControlCard,
 		displayCard,
 		backupCard,
 	)
 
-	generalTabContent := newPanelVScroll(v.generalBox)
-	ttsTabContent := newPanelVScroll(container.NewVBox(
+	v.ttsBox = container.NewVBox(
+		v.globalVoiceCard,
+		v.ttsOutputModeCard,
+		v.audioCard,
 		ttsCard,
-	))
+	)
+
+	generalTabContent := newPanelVScroll(v.generalBox)
+	ttsTabContent := newPanelVScroll(v.ttsBox)
 	v.logsView = NewLogsView(v.window, v.session)
 	v.logsView.SetStatusHandler(v.setStatus)
 	v.logsView.SetOnAssignVoice(v.onAssignVoice)
@@ -810,6 +850,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 
 	rulesTabContent := newPanelVScroll(container.NewVBox(
 		rulesCard,
+		botsCard,
 		safetyCard,
 	))
 
@@ -817,8 +858,8 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		v.logsView.BuildRetentionCard(),
 	))
 
-	v.generalTabItem = container.NewTabItemWithIcon("General & Audio", theme.VolumeUpIcon(), generalTabContent)
-	v.ttsTabItem = container.NewTabItemWithIcon("TTS & Hardware", theme.ComputerIcon(), ttsTabContent)
+	v.generalTabItem = container.NewTabItemWithIcon("General", theme.SettingsIcon(), generalTabContent)
+	v.ttsTabItem = container.NewTabItemWithIcon("TTS & Hardware", theme.VolumeUpIcon(), ttsTabContent)
 	v.translationTabItem = container.NewTabItemWithIcon("Translation", resLogTranslated, v.buildTranslationTab())
 	v.rulesTabItem = container.NewTabItemWithIcon("Rules & Safety", theme.ConfirmIcon(), rulesTabContent)
 	v.logsTabItem = container.NewTabItemWithIcon("Event Logs", theme.DocumentIcon(), logsTabContent)
@@ -877,6 +918,9 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 		}
 		if v.generalBox != nil {
 			v.generalBox.Refresh()
+		}
+		if v.ttsBox != nil {
+			v.ttsBox.Refresh()
 		}
 		v.SyncPlatformTabVisibility()
 		if v.onTTSChanged != nil {
@@ -1172,15 +1216,105 @@ func (v *SettingsView) buildTTSOutputModeCard() *widget.Card {
 	return widget.NewCard("TTS Output Mode & Auto-AFK", "Control when chat is spoken aloud vs. alerted with a chime while at your computer", cardContent)
 }
 
+func (v *SettingsView) overlayURL(path string, query map[string]string) string {
+	if v.session != nil {
+		return v.session.OverlayURL(path, query)
+	}
+	cfg := v.currentConfig()
+	host := config.DefaultWebSocketHost
+	port := config.DefaultWebSocketPort
+	var token string
+	if cfg != nil {
+		if h := strings.TrimSpace(cfg.WebSocket.Host); h != "" && h != "0.0.0.0" {
+			host = h
+		}
+		if cfg.WebSocket.Port > 0 && cfg.WebSocket.Port <= 65535 {
+			port = cfg.WebSocket.Port
+		}
+		token = strings.TrimSpace(cfg.WebSocket.AuthToken)
+	}
+	u := &url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%d", host, port),
+		Path:   path,
+	}
+	vals := url.Values{}
+	for k, val := range query {
+		if strings.TrimSpace(val) != "" {
+			vals.Set(k, val)
+		}
+	}
+	if token != "" {
+		vals.Set("token", token)
+	}
+	u.RawQuery = vals.Encode()
+	return u.String()
+}
+
 func (v *SettingsView) refreshWSStatusLabel() {
+	cfg := v.currentConfig()
+	var controlOn, ttsOverlayOn, chatOverlayOn, anyOn bool
+	if cfg != nil {
+		controlOn = cfg.WebSocket.Enabled
+		ttsOverlayOn = cfg.WebSocket.TTSOverlayEnabled
+		chatOverlayOn = cfg.WebSocket.ChatOverlayEnabled
+		anyOn = cfg.WebSocket.AnyEnabled()
+	}
+
+	if v.wsTTSOverlaySection != nil {
+		if ttsOverlayOn {
+			v.wsTTSOverlaySection.Show()
+		} else {
+			v.wsTTSOverlaySection.Hide()
+		}
+	}
+	if v.wsChatOverlaySection != nil {
+		if chatOverlayOn {
+			v.wsChatOverlaySection.Show()
+		} else {
+			v.wsChatOverlaySection.Hide()
+		}
+	}
+	if v.wsControlSection != nil {
+		if controlOn {
+			v.wsControlSection.Show()
+		} else {
+			v.wsControlSection.Hide()
+		}
+	}
+	if v.wsNetSection != nil {
+		if anyOn {
+			v.wsNetSection.Show()
+		} else {
+			v.wsNetSection.Hide()
+		}
+	}
+	if v.wsControlCard != nil {
+		v.wsControlCard.Refresh()
+	}
+	if v.generalBox != nil {
+		v.generalBox.Refresh()
+	}
+
 	if v.wsStatusLabel == nil {
 		return
 	}
-	cfg := v.currentConfig()
-	if cfg == nil || !cfg.WebSocket.Enabled {
-		v.wsStatusLabel.SetText("⚪ Control Server Disabled")
+	if !anyOn {
+		v.wsStatusLabel.SetText("⚪ Local Web Server Stopped (enable a feature above to start)")
 		return
 	}
+	var activeFeatures []string
+	if ttsOverlayOn {
+		activeFeatures = append(activeFeatures, "Now-Speaking Overlay")
+	}
+	if chatOverlayOn {
+		activeFeatures = append(activeFeatures, "Chat Overlay")
+	}
+	if controlOn {
+		activeFeatures = append(activeFeatures, "Control API / Stream Deck")
+	}
+	featSummary := strings.Join(activeFeatures, ", ")
+
 	host := strings.TrimSpace(cfg.WebSocket.Host)
 	if host == "" {
 		host = config.DefaultWebSocketHost
@@ -1192,10 +1326,71 @@ func (v *SettingsView) refreshWSStatusLabel() {
 	if v.session != nil && v.session.WSServer() != nil && v.session.WSServer().IsRunning() {
 		addr := v.session.WSServer().Addr()
 		clients := v.session.WSServer().ClientCount()
-		v.wsStatusLabel.SetText(fmt.Sprintf("🟢 Listening on ws://%s/ws & http://%s/api/* (%d connected clients)", addr, addr, clients))
+		v.wsStatusLabel.SetText(fmt.Sprintf("🟢 Listening on http://%s [%s] (%d WS clients)", addr, featSummary, clients))
 		return
 	}
-	v.wsStatusLabel.SetText(fmt.Sprintf("🟢 Configured for ws://%s:%d/ws & http://%s:%d/api/*", host, port, host, port))
+	v.wsStatusLabel.SetText(fmt.Sprintf("🟢 Configured for http://%s:%d [%s]", host, port, featSummary))
+}
+
+// RefreshChatOverlayPresets reloads the saved Live Log presets dropdown in the OBS Chat Overlay settings section.
+func (v *SettingsView) RefreshChatOverlayPresets() {
+	if v.wsChatOverlayPresetSelect == nil {
+		return
+	}
+	cfg := v.currentConfig()
+	var presets []config.LiveLogPreset
+	if cfg != nil && len(cfg.Logging.LiveLogs) > 0 {
+		presets = cfg.Logging.LiveLogs
+	} else {
+		presets = config.DefaultLiveLogPresets()
+	}
+
+	nameCounts := make(map[string]int, len(presets))
+	for _, p := range presets {
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			name = "Live Log"
+		}
+		nameCounts[name]++
+	}
+
+	options := make([]string, 0, len(presets))
+	labelMap := make(map[string]string, len(presets))
+	selectedLabel := ""
+	targetID := ""
+	if cfg != nil {
+		targetID = strings.TrimSpace(cfg.WebSocket.ChatOverlayPresetID)
+	}
+
+	for i, p := range presets {
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			name = fmt.Sprintf("Live Log %d", i+1)
+		}
+		label := name
+		if nameCounts[name] > 1 {
+			label = fmt.Sprintf("%s (%s)", name, p.ID)
+		}
+		options = append(options, label)
+		labelMap[label] = p.ID
+		if targetID != "" && (strings.EqualFold(p.ID, targetID) || strings.EqualFold(p.Name, targetID)) {
+			selectedLabel = label
+		}
+	}
+	if selectedLabel == "" && len(options) > 0 {
+		selectedLabel = options[0]
+	}
+
+	v.mu.Lock()
+	v.wsChatOverlayPresetMap = labelMap
+	v.mu.Unlock()
+
+	prevInit := v.initializing
+	v.initializing = true
+	v.wsChatOverlayPresetSelect.Options = options
+	v.wsChatOverlayPresetSelect.SetSelected(selectedLabel)
+	v.initializing = prevInit
+	v.wsChatOverlayPresetSelect.Refresh()
 }
 
 func (v *SettingsView) buildWSControlCard() *widget.Card {
@@ -1203,7 +1398,173 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 
 	v.wsStatusLabel = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
-	v.wsEnabledCheck = widget.NewCheck("Enable Local WebSocket & HTTP Control Server (Stream Deck, Streamer.bot, TouchPortal)", func(checked bool) {
+	// 1. OBS "Now Speaking" Caption Overlay toggle + section
+	v.wsTTSOverlayCheck = widget.NewCheck("Enable OBS 'Now Speaking' Caption Overlay (/overlay/tts)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.WebSocket.TTSOverlayEnabled = checked
+		})
+		v.refreshWSStatusLabel()
+		if v.onOverlayChanged != nil {
+			v.onOverlayChanged()
+		}
+		if checked {
+			v.setStatus("✓ OBS 'Now Speaking' Caption Overlay enabled.")
+		} else {
+			v.setStatus("OBS 'Now Speaking' Caption Overlay disabled.")
+		}
+	})
+	v.wsTTSOverlayCheck.SetChecked(cfg.WebSocket.TTSOverlayEnabled)
+
+	v.wsTTSOverlayPosSelect = widget.NewSelect([]string{"Bottom", "Top"}, func(selected string) {
+		if v.initializing {
+			return
+		}
+		pos := "bottom"
+		if strings.EqualFold(strings.TrimSpace(selected), "Top") {
+			pos = "top"
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.WebSocket.TTSOverlayPosition = pos
+		})
+		v.setStatus("✓ OBS Now-Speaking Overlay position set to: " + selected)
+	})
+	if strings.EqualFold(strings.TrimSpace(cfg.WebSocket.TTSOverlayPosition), "top") {
+		v.wsTTSOverlayPosSelect.SetSelected("Top")
+	} else {
+		v.wsTTSOverlayPosSelect.SetSelected("Bottom")
+	}
+
+	openOverlayDesigner := func() {
+		targetURL := v.overlayURL("/overlay/designer", nil)
+		if parsed, err := url.Parse(targetURL); err == nil && fyne.CurrentApp() != nil {
+			_ = fyne.CurrentApp().OpenURL(parsed)
+		}
+		if app := fyne.CurrentApp(); app != nil && app.Clipboard() != nil {
+			app.Clipboard().SetContent(targetURL)
+		}
+		v.setStatus("🎨 Opened OBS Overlay Style Designer: " + targetURL)
+	}
+
+	v.wsCopyTTSOverlayBtn = widget.NewButtonWithIcon("📋 Copy Now-Speaking Overlay URL", theme.ContentCopyIcon(), func() {
+		targetURL := v.overlayURL("/overlay/tts", nil)
+		if app := fyne.CurrentApp(); app != nil && app.Clipboard() != nil {
+			app.Clipboard().SetContent(targetURL)
+		}
+		v.setStatus("✓ Copied OBS Now-Speaking Overlay URL: " + targetURL)
+	})
+	v.wsCopyTTSOverlayBtn.Importance = widget.HighImportance
+
+	ttsDesignerBtn := widget.NewButtonWithIcon("🎨 Customize Style", theme.ColorPaletteIcon(), openOverlayDesigner)
+
+	ttsOverlayInfo := widget.NewLabelWithStyle(
+		"Add a Browser Source in OBS (recommended: 800×200) and paste this URL. Position and style changes live-update open OBS views automatically.",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	ttsOverlayInfo.Wrapping = fyne.TextWrapWord
+
+	ttsOverlayControlsRow := container.NewHBox(
+		v.wsCopyTTSOverlayBtn,
+		widget.NewLabel("Position:"),
+		v.wsTTSOverlayPosSelect,
+		ttsDesignerBtn,
+	)
+	v.wsTTSOverlaySection = container.NewVBox(
+		ttsOverlayControlsRow,
+		ttsOverlayInfo,
+	)
+
+	// 2. OBS Live Chat & Alerts Overlay toggle + section
+	v.wsChatOverlayCheck = widget.NewCheck("Enable OBS Live Chat & Alerts Overlay (/overlay/chat)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.WebSocket.ChatOverlayEnabled = checked
+		})
+		v.refreshWSStatusLabel()
+		if v.logsView != nil {
+			v.logsView.refreshLiveLogCards()
+		}
+		if v.onOverlayChanged != nil {
+			v.onOverlayChanged()
+		}
+		if checked {
+			v.setStatus("✓ OBS Live Chat & Alerts Overlay enabled.")
+		} else {
+			v.setStatus("OBS Live Chat & Alerts Overlay disabled.")
+		}
+	})
+	v.wsChatOverlayCheck.SetChecked(cfg.WebSocket.ChatOverlayEnabled)
+
+	v.wsChatOverlayPresetSelect = widget.NewSelect(nil, func(selected string) {
+		if v.initializing {
+			return
+		}
+		v.mu.Lock()
+		presetID := v.wsChatOverlayPresetMap[selected]
+		v.mu.Unlock()
+		if presetID == "" {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.WebSocket.ChatOverlayPresetID = presetID
+		})
+		v.setStatus("✓ OBS Chat Overlay Live Log set to: " + selected)
+	})
+	v.RefreshChatOverlayPresets()
+
+	v.wsChatOverlaySummaryCheck = widget.NewCheck("Show Events Summary", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.WebSocket.ChatOverlayShowSummary = checked
+		})
+		if checked {
+			v.setStatus("✓ OBS Chat Overlay Events Summary enabled.")
+		} else {
+			v.setStatus("OBS Chat Overlay Events Summary disabled.")
+		}
+	})
+	v.wsChatOverlaySummaryCheck.SetChecked(cfg.WebSocket.ChatOverlayShowSummary)
+
+	v.wsCopyChatOverlayBtn = widget.NewButtonWithIcon("📋 Copy Chat Overlay URL", theme.ContentCopyIcon(), func() {
+		targetURL := v.overlayURL("/overlay/chat", nil)
+		if app := fyne.CurrentApp(); app != nil && app.Clipboard() != nil {
+			app.Clipboard().SetContent(targetURL)
+		}
+		v.setStatus("✓ Copied OBS Chat Overlay URL: " + targetURL)
+	})
+	v.wsCopyChatOverlayBtn.Importance = widget.HighImportance
+
+	chatDesignerBtn := widget.NewButtonWithIcon("🎨 Customize Style", theme.ColorPaletteIcon(), openOverlayDesigner)
+
+	chatOverlayInfo := widget.NewLabelWithStyle(
+		"Add a Browser Source in OBS (recommended: 450×700) and paste this URL. Changing the Live Log, Events Summary, or Style Designer live-updates open OBS views automatically.",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	chatOverlayInfo.Wrapping = fyne.TextWrapWord
+
+	chatOverlayControlsRow := container.NewHBox(
+		widget.NewLabel("Live Log:"),
+		v.wsChatOverlayPresetSelect,
+		v.wsChatOverlaySummaryCheck,
+		v.wsCopyChatOverlayBtn,
+		chatDesignerBtn,
+	)
+
+	v.wsChatOverlaySection = container.NewVBox(
+		chatOverlayControlsRow,
+		chatOverlayInfo,
+	)
+
+	// 3. External Control API & Elgato Stream Deck toggle + section
+	v.wsEnabledCheck = widget.NewCheck("Enable External Control API & Elgato Stream Deck (/ws, /api/*)", func(checked bool) {
 		if v.initializing {
 			return
 		}
@@ -1211,10 +1572,13 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 			c.WebSocket.Enabled = checked
 		})
 		v.refreshWSStatusLabel()
+		if v.onOverlayChanged != nil {
+			v.onOverlayChanged()
+		}
 		if checked {
-			v.setStatus("✓ Local WebSocket & HTTP Control Server enabled.")
+			v.setStatus("✓ External Control API & Stream Deck Server enabled.")
 		} else {
-			v.setStatus("Local WebSocket & HTTP Control Server disabled.")
+			v.setStatus("External Control API & Stream Deck Server disabled.")
 		}
 	})
 	v.wsEnabledCheck.SetChecked(cfg.WebSocket.Enabled)
@@ -1261,7 +1625,13 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 			c.WebSocket.AuthToken = newToken
 		})
 		v.refreshWSStatusLabel()
-		v.setStatus(fmt.Sprintf("✓ Control Server settings updated (%s:%d).", newHost, newPort))
+		if v.logsView != nil {
+			v.logsView.refreshLiveLogCards()
+		}
+		if v.onOverlayChanged != nil {
+			v.onOverlayChanged()
+		}
+		v.setStatus(fmt.Sprintf("✓ Local Web Server network settings updated (%s:%d).", newHost, newPort))
 	})
 
 	netRow := container.NewGridWithColumns(3,
@@ -1271,7 +1641,12 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 	)
 	tokenRow := container.NewBorder(nil, nil, widget.NewLabel("Auth Token:"), nil, tokenEntry)
 
-	v.refreshWSStatusLabel()
+	v.wsNetSection = container.NewVBox(
+		widget.NewSeparator(),
+		v.wsStatusLabel,
+		netRow,
+		tokenRow,
+	)
 
 	infoLabel := widget.NewLabelWithStyle(
 		"Supports binary Protocol Buffers (proto/control/v1/control.proto) and JSON over WebSocket (/ws), plus HTTP REST webhooks (/api/status, /api/speak, /api/mode, /api/panic, /api/queue, /api/volume).",
@@ -1350,17 +1725,24 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 
 	sdRow := container.NewBorder(nil, nil, v.streamDeckInstallBtn, nil, v.streamDeckStatusLabel)
 
-	cardContent := container.NewVBox(
-		v.wsEnabledCheck,
-		v.wsStatusLabel,
-		netRow,
-		tokenRow,
+	v.wsControlSection = container.NewVBox(
 		infoLabel,
-		widget.NewSeparator(),
 		sdRow,
 	)
 
-	return widget.NewCard("WebSocket & HTTP Control API", "External automation, Elgato Stream Deck, and webhook integration", cardContent)
+	v.refreshWSStatusLabel()
+
+	cardContent := container.NewVBox(
+		v.wsTTSOverlayCheck,
+		v.wsTTSOverlaySection,
+		v.wsChatOverlayCheck,
+		v.wsChatOverlaySection,
+		v.wsEnabledCheck,
+		v.wsControlSection,
+		v.wsNetSection,
+	)
+
+	return widget.NewCard("OBS Overlays & External Control", "OBS Browser Source overlays, Elgato Stream Deck, and WebSocket/HTTP API", cardContent)
 }
 
 func (v *SettingsView) buildServicesCard() *widget.Card {

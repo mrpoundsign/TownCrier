@@ -130,26 +130,111 @@ func (c *wsClient) sendEnvelopeFormatted(env *controlv1.ServerEnvelope, useBinar
 	})
 }
 
-// Server provides a dual-mode (binary Protobuf + JSON text) WebSocket server and HTTP REST API.
+// Server provides a dual-mode (binary Protobuf + JSON text) WebSocket server, HTTP REST API,
+// and OBS Browser Source overlay endpoints.
 type Server struct {
-	mu        sync.RWMutex
-	ctrl      Controller
-	host      string
-	port      int
-	authToken string
-	listener  net.Listener
-	httpSrv   *http.Server
-	clients   map[*wsClient]struct{}
+	mu                 sync.RWMutex
+	ctrl               Controller
+	host               string
+	port               int
+	authToken          string
+	controlEnabled     bool
+	ttsOverlayEnabled  bool
+	chatOverlayEnabled bool
+	listener           net.Listener
+	httpSrv            *http.Server
+	clients            map[*wsClient]struct{}
+
+	overlaySubsMu sync.Mutex
+	overlaySubs   map[uint64]chan OverlayStreamEvent
+	overlaySubSeq uint64
 }
 
 // NewServer creates a new WebSocket & HTTP control server bound to the given Controller.
 func NewServer(ctrl Controller) *Server {
 	return &Server{
-		ctrl:    ctrl,
-		host:    config.DefaultWebSocketHost,
-		port:    config.DefaultWebSocketPort,
-		clients: make(map[*wsClient]struct{}),
+		ctrl:               ctrl,
+		host:               config.DefaultWebSocketHost,
+		port:               config.DefaultWebSocketPort,
+		controlEnabled:     true,
+		ttsOverlayEnabled:  true,
+		chatOverlayEnabled: true,
+		clients:            make(map[*wsClient]struct{}),
+		overlaySubs:        make(map[uint64]chan OverlayStreamEvent),
 	}
+}
+
+func (s *Server) addOverlayStreamChan(ch chan OverlayStreamEvent) uint64 {
+	s.overlaySubsMu.Lock()
+	defer s.overlaySubsMu.Unlock()
+	if s.overlaySubs == nil {
+		s.overlaySubs = make(map[uint64]chan OverlayStreamEvent)
+	}
+	s.overlaySubSeq++
+	id := s.overlaySubSeq
+	s.overlaySubs[id] = ch
+	return id
+}
+
+func (s *Server) removeOverlayStreamChan(id uint64) {
+	s.overlaySubsMu.Lock()
+	defer s.overlaySubsMu.Unlock()
+	delete(s.overlaySubs, id)
+}
+
+// BroadcastOverlayReload notifies all connected /api/overlay/stream SSE clients and /ws clients to reload their snapshot and style.
+func (s *Server) BroadcastOverlayReload() {
+	s.overlaySubsMu.Lock()
+	ev := OverlayStreamEvent{Kind: "reload"}
+	for _, ch := range s.overlaySubs {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+	s.overlaySubsMu.Unlock()
+	s.BroadcastState()
+}
+
+// SetFeatures dynamically updates which HTTP/WebSocket routes are enabled without restarting the listener.
+func (s *Server) SetFeatures(controlEnabled, ttsOverlayEnabled, chatOverlayEnabled bool) {
+	s.mu.Lock()
+	s.controlEnabled = controlEnabled
+	s.ttsOverlayEnabled = ttsOverlayEnabled
+	s.chatOverlayEnabled = chatOverlayEnabled
+	s.mu.Unlock()
+}
+
+// Features returns the currently enabled route groups (control API, TTS overlay, and Chat overlay).
+func (s *Server) Features() (controlEnabled, ttsOverlayEnabled, chatOverlayEnabled bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.controlEnabled, s.ttsOverlayEnabled, s.chatOverlayEnabled
+}
+
+// SetAuthToken updates the shared bearer/query authentication token at runtime.
+func (s *Server) SetAuthToken(token string) {
+	s.mu.Lock()
+	s.authToken = strings.TrimSpace(token)
+	s.mu.Unlock()
+}
+
+func (s *Server) isControlEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.controlEnabled
+}
+
+func (s *Server) isTTSOverlayEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ttsOverlayEnabled
+}
+
+func (s *Server) isChatOverlayEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.chatOverlayEnabled
 }
 
 // Start begins listening on host:port (use port 0 for an ephemeral OS port in tests).
@@ -186,13 +271,30 @@ func (s *Server) Start(host string, port int, authToken string) error {
 		},
 		Handler: s.handleWebSocket,
 	}
-	mux.Handle("/ws", s.withCORSAndAuth(wsServer))
-	mux.Handle("/api/status", s.withCORSAndAuth(http.HandlerFunc(s.handleHTTPStatus)))
-	mux.Handle("/api/speak", s.withCORSAndAuth(http.HandlerFunc(s.handleHTTPSpeak)))
-	mux.Handle("/api/mode", s.withCORSAndAuth(http.HandlerFunc(s.handleHTTPMode)))
-	mux.Handle("/api/panic", s.withCORSAndAuth(http.HandlerFunc(s.handleHTTPPanic)))
-	mux.Handle("/api/queue", s.withCORSAndAuth(http.HandlerFunc(s.handleHTTPQueue)))
-	mux.Handle("/api/volume", s.withCORSAndAuth(http.HandlerFunc(s.handleHTTPVolume)))
+	mux.Handle("/ws", s.withCORSAndAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.isControlEnabled() && !s.isTTSOverlayEnabled() {
+			s.writeHTTPEnvelope(w, r, http.StatusForbidden, &controlv1.ServerEnvelope{
+				Ok:    false,
+				Error: "websocket endpoint is disabled in TownCrier settings",
+			})
+			return
+		}
+		wsServer.ServeHTTP(w, r)
+	})))
+	mux.Handle("/api/status", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPStatus))))
+	mux.Handle("/api/speak", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPSpeak))))
+	mux.Handle("/api/mode", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPMode))))
+	mux.Handle("/api/panic", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPPanic))))
+	mux.Handle("/api/queue", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPQueue))))
+	mux.Handle("/api/volume", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPVolume))))
+
+	// OBS Browser Source Overlay endpoints
+	mux.Handle("/overlay/tts", s.withCORSAndAuth(http.HandlerFunc(s.handleOverlayTTS)))
+	mux.Handle("/overlay/chat", s.withCORSAndAuth(http.HandlerFunc(s.handleOverlayChat)))
+	mux.Handle("/overlay/designer", s.withCORSAndAuth(http.HandlerFunc(s.handleOverlayDesigner)))
+	mux.Handle("/api/overlay/chat", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlayChat)))
+	mux.Handle("/api/overlay/stream", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlayStream)))
+	mux.Handle("/api/overlay/style", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlayStyle)))
 
 	srv := &http.Server{
 		Handler:           mux,
@@ -350,6 +452,19 @@ func (s *Server) withCORSAndAuth(next http.Handler) http.Handler {
 			s.writeHTTPEnvelope(w, r, http.StatusUnauthorized, &controlv1.ServerEnvelope{
 				Ok:    false,
 				Error: "unauthorized: invalid or missing auth token",
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) withControlRequired(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.isControlEnabled() {
+			s.writeHTTPEnvelope(w, r, http.StatusForbidden, &controlv1.ServerEnvelope{
+				Ok:    false,
+				Error: "external control API is disabled in TownCrier settings",
 			})
 			return
 		}
@@ -558,6 +673,17 @@ func (s *Server) executeCommand(cmdEnv *controlv1.ClientEnvelope) (*controlv1.Se
 		err     error
 		mutated bool
 	)
+
+	if _, isGetState := cmdEnv.GetCommand().(*controlv1.ClientEnvelope_GetState); !isGetState && !s.isControlEnabled() {
+		return &controlv1.ServerEnvelope{
+			RequestId: cmdEnv.GetRequestId(),
+			Ok:        false,
+			Error:     "external control API is disabled in TownCrier settings",
+			Payload: &controlv1.ServerEnvelope_State{
+				State: s.ctrl.SnapshotState(),
+			},
+		}, false
+	}
 
 	switch c := cmdEnv.GetCommand().(type) {
 	case *controlv1.ClientEnvelope_GetState:

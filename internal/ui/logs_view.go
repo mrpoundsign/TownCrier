@@ -173,6 +173,7 @@ type LogsView struct {
 	onStatus           func(msg string)
 	onAssignVoice      func(platform, username string)
 	onChatScaleChanged func(pct int)
+	onLiveLogsChanged  func()
 }
 
 type cachedLogRow struct {
@@ -294,6 +295,11 @@ func (v *LogsView) SetOnChatScaleChanged(fn func(pct int)) {
 	v.onChatScaleChanged = fn
 }
 
+// SetOnLiveLogsChanged sets the callback invoked whenever saved Live Log presets are added, edited, or deleted.
+func (v *LogsView) SetOnLiveLogsChanged(fn func()) {
+	v.onLiveLogsChanged = fn
+}
+
 func (v *LogsView) defaultChatScalePct() int {
 	if v.session != nil {
 		return NormalizeChatScale(v.session.ChatScale())
@@ -371,6 +377,7 @@ func (v *LogsView) SyncFromConfig() {
 			v.chatScaleCustomBox.Hide()
 		}
 	}
+	v.refreshLiveLogCards()
 }
 
 func (v *LogsView) setStatus(msg string) {
@@ -1930,119 +1937,7 @@ func (v *LogsView) subscribeLiveTail() {
 }
 
 func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
-	if len(f.SessionIDs) > 0 {
-		if !slices.Contains(f.SessionIDs, e.SessionID) {
-			return false
-		}
-	} else if f.SessionID > 0 && e.SessionID != f.SessionID {
-		return false
-	}
-	if f.From != nil && !f.From.IsZero() && e.CreatedAt.Before(*f.From) {
-		return false
-	}
-	if f.To != nil && !f.To.IsZero() && e.CreatedAt.After(*f.To) {
-		return false
-	}
-	if f.Platform != "" && f.Platform != "all" && !strings.EqualFold(e.Platform, f.Platform) {
-		return false
-	}
-	if f.Channel != "" && !strings.EqualFold(f.Channel, "all") && !strings.EqualFold(e.Channel, f.Channel) {
-		return false
-	}
-	kindLower := strings.ToLower(strings.TrimSpace(e.Kind))
-	switch strings.ToLower(strings.TrimSpace(f.KindFilter)) {
-	case "", "all":
-	case "chat", "message":
-		if kindLower != "message" {
-			return false
-		}
-	case "alerts":
-		if kindLower == "message" || kindLower == "moderation" || kindLower == "" {
-			return false
-		}
-	case "follow":
-		if kindLower != "follow" {
-			return false
-		}
-	case "sub":
-		switch kindLower {
-		case "sub", "resub", "gift_sub", "gift_redemption", "sub_upgrade", "membership", "gift_membership":
-		default:
-			return false
-		}
-	case "cheer":
-		switch kindLower {
-		case "cheer", "bits_badge_tier", "gift", "superchat", "supersticker", "super_chat", "super_sticker", "charity_donation":
-		default:
-			return false
-		}
-	case "raid":
-		if kindLower != "raid" {
-			return false
-		}
-	case "redemption":
-		if kindLower != "redemption" {
-			return false
-		}
-	case "moderation":
-		if kindLower != "moderation" {
-			return false
-		}
-	default:
-		if !strings.EqualFold(kindLower, strings.TrimSpace(f.KindFilter)) {
-			return false
-		}
-	}
-	if f.HideBots && f.Outcome != eventlog.OutcomeDroppedBot {
-		if e.Outcome == eventlog.OutcomeDroppedBot {
-			return false
-		}
-		for _, r := range e.Roles {
-			if strings.EqualFold(strings.TrimSpace(r), "bot") {
-				return false
-			}
-		}
-		uName := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(e.UserName), "@"))
-		uID := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(e.UserID), "@"))
-		for _, ex := range f.ExcludedUsers {
-			exClean := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(ex), "@"))
-			if exClean != "" && (exClean == uName || (uID != "" && exClean == uID)) {
-				return false
-			}
-		}
-	}
-	if f.UserQuery != "" {
-		uq := strings.ToLower(f.UserQuery)
-		if !strings.Contains(strings.ToLower(e.UserID), uq) &&
-			!strings.Contains(strings.ToLower(e.UserName), uq) &&
-			!strings.Contains(strings.ToLower(e.DisplayName), uq) {
-			return false
-		}
-	}
-	if f.TextQuery != "" {
-		tq := strings.ToLower(f.TextQuery)
-		if !strings.Contains(strings.ToLower(e.RawText), tq) &&
-			!strings.Contains(strings.ToLower(e.TranslatedText), tq) &&
-			!strings.Contains(strings.ToLower(e.SpokenText), tq) &&
-			!strings.Contains(strings.ToLower(e.ItemName), tq) &&
-			!strings.Contains(strings.ToLower(e.RewardTitle), tq) &&
-			!strings.Contains(strings.ToLower(e.Recipient), tq) {
-			return false
-		}
-	}
-	switch f.OutcomeMode {
-	case eventlog.FilterOutcomeSpokenOnly:
-		return e.Spoken
-	case eventlog.FilterOutcomePassedFilters:
-		return e.PassedFilters
-	case eventlog.FilterOutcomeDroppedQueue:
-		return e.PassedFilters && !e.Spoken && e.Outcome != eventlog.OutcomeQueued
-	case eventlog.FilterOutcomeFilteredOut:
-		return !e.PassedFilters && e.Outcome != eventlog.OutcomeModerationEvent
-	case eventlog.FilterOutcomeModeration:
-		return e.Outcome == eventlog.OutcomeModerationEvent || e.Outcome == eventlog.OutcomeDroppedModeration
-	}
-	return true
+	return eventlog.EntryMatchesFilter(e, f)
 }
 
 func (v *LogsView) renderEntries() {

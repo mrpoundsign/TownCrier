@@ -1065,3 +1065,86 @@ func TestSettingsView_VoiceModelUpdateDetection(t *testing.T) {
 	}
 }
 
+func TestSettingsView_GranularWebServerAndOverlayToggles(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	w := a.NewWindow("Test Granular Web Server Toggles")
+
+	cfg := config.DefaultConfig()
+	cfg.WebSocket.Port = 0
+	// Ensure no connectors start when sess.Start() is called
+	for k, p := range cfg.Platforms {
+		p.Enabled = false
+		cfg.Platforms[k] = p
+	}
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
+	if err := sess.Start(); err != nil {
+		t.Fatalf("sess.Start failed: %v", err)
+	}
+
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) { return nil, nil })
+	view.SetCaptureDeviceEnumerator(func() ([]audio.DeviceInfo, error) { return nil, nil })
+	_ = view.Build()
+
+	// 1. All 3 toggles are off by default -> server is stopped, all sections hidden
+	if sess.WSServer().IsRunning() {
+		t.Fatal("expected WSServer not to be running when all 3 toggles are off")
+	}
+	if view.wsTTSOverlaySection.Visible() || view.wsChatOverlaySection.Visible() || view.wsControlSection.Visible() || view.wsNetSection.Visible() {
+		t.Fatal("expected all overlay/control/network sections to be hidden when all 3 toggles are off")
+	}
+
+	// 2. Enable TTS Overlay -> server starts, only wsTTSOverlaySection and wsNetSection are visible
+	view.wsTTSOverlayCheck.SetChecked(true)
+	if !sess.WSServer().IsRunning() {
+		t.Fatal("expected WSServer to start when wsTTSOverlayCheck is checked")
+	}
+	if !view.wsTTSOverlaySection.Visible() || !view.wsNetSection.Visible() {
+		t.Fatal("expected wsTTSOverlaySection and wsNetSection to be visible when TTS Overlay is enabled")
+	}
+	if view.wsChatOverlaySection.Visible() || view.wsControlSection.Visible() {
+		t.Fatal("expected wsChatOverlaySection and wsControlSection to remain hidden")
+	}
+
+	// 3. Enable Chat Overlay -> wsChatOverlaySection becomes visible too
+	view.wsChatOverlayCheck.SetChecked(true)
+	if !view.wsChatOverlaySection.Visible() {
+		t.Fatal("expected wsChatOverlaySection to be visible when Chat Overlay is enabled")
+	}
+	if view.wsChatOverlaySummaryCheck == nil || view.wsChatOverlaySummaryCheck.Checked {
+		t.Fatal("expected wsChatOverlaySummaryCheck to default to unchecked (false)")
+	}
+	if view.wsChatOverlayPresetSelect == nil || len(view.wsChatOverlayPresetSelect.Options) < 2 {
+		t.Fatalf("expected wsChatOverlayPresetSelect to contain saved presets, got %v", view.wsChatOverlayPresetSelect)
+	}
+	view.wsChatOverlayPresetSelect.SetSelected("All Events")
+	if sess.Config().WebSocket.ChatOverlayPresetID != "default-all-events" {
+		t.Fatalf("expected ChatOverlayPresetID='default-all-events', got %q", sess.Config().WebSocket.ChatOverlayPresetID)
+	}
+	view.wsChatOverlaySummaryCheck.SetChecked(true)
+	if !sess.Config().WebSocket.ChatOverlayShowSummary {
+		t.Fatal("expected ChatOverlayShowSummary to be true after checking wsChatOverlaySummaryCheck")
+	}
+
+	// 4. Enable Control API -> wsControlSection becomes visible too
+	view.wsEnabledCheck.SetChecked(true)
+	if !view.wsControlSection.Visible() {
+		t.Fatal("expected wsControlSection to be visible when Control API is enabled")
+	}
+
+	// 5. Turn all 3 off -> server stops and all sections hide
+	view.wsTTSOverlayCheck.SetChecked(false)
+	view.wsChatOverlayCheck.SetChecked(false)
+	view.wsEnabledCheck.SetChecked(false)
+	if sess.WSServer().IsRunning() {
+		t.Fatal("expected WSServer to stop when all 3 toggles are unchecked")
+	}
+	if view.wsTTSOverlaySection.Visible() || view.wsChatOverlaySection.Visible() || view.wsControlSection.Visible() || view.wsNetSection.Visible() {
+		t.Fatal("expected all sections to be hidden when all 3 toggles are unchecked")
+	}
+}
+
+

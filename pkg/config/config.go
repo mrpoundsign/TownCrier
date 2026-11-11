@@ -284,12 +284,61 @@ const (
 	DefaultWebSocketPort = 8765
 )
 
-// WebSocketConfig configures the local dual-mode (Protobuf + JSON) WebSocket and HTTP REST control server.
+// WebSocketConfig configures the local dual-mode (Protobuf + JSON) WebSocket, HTTP REST control server,
+// and OBS Browser Source overlay endpoints.
 type WebSocketConfig struct {
-	Enabled   bool   `json:"enabled"`
-	Host      string `json:"host"`
-	Port      int    `json:"port"`
-	AuthToken string `json:"auth_token,omitempty"`
+	Enabled                bool   `json:"enabled"`                             // External Control API & Elgato Stream Deck (/ws, /api/*)
+	TTSOverlayEnabled      bool   `json:"tts_overlay_enabled,omitempty"`       // OBS "Now Speaking" Caption Overlay (/overlay/tts)
+	TTSOverlayPosition     string `json:"tts_overlay_position,omitempty"`      // "bottom" (default) or "top"
+	ChatOverlayEnabled     bool   `json:"chat_overlay_enabled,omitempty"`      // OBS Live Chat & Alerts Overlay (/overlay/chat)
+	ChatOverlayPresetID    string `json:"chat_overlay_preset_id,omitempty"`    // Selected LiveLogPreset ID for /overlay/chat
+	ChatOverlayShowSummary bool   `json:"chat_overlay_show_summary,omitempty"` // Whether /overlay/chat displays the Events Summary banner
+	OverlayCustomCSS       string `json:"overlay_custom_css,omitempty"`        // Custom CSS applied to OBS overlays
+	OverlayStyleJSON       string `json:"overlay_style_json,omitempty"`        // Visual style designer state JSON
+	Host                   string `json:"host"`
+	Port                   int    `json:"port"`
+	AuthToken              string `json:"auth_token,omitempty"`
+}
+
+// AnyEnabled reports whether any local HTTP/WebSocket feature (Control API, TTS Overlay, or Chat Overlay) is enabled.
+func (w WebSocketConfig) AnyEnabled() bool {
+	return w.Enabled || w.TTSOverlayEnabled || w.ChatOverlayEnabled
+}
+
+// EffectiveWebSocketFeatures returns the active feature states for the local HTTP/WebSocket server,
+// gating TTS Overlay on TTS.Enabled and Chat Overlay on Logging.Enabled.
+func (c *Config) EffectiveWebSocketFeatures() (controlEnabled, ttsOverlayEnabled, chatOverlayEnabled, anyEnabled bool) {
+	if c == nil {
+		return false, false, false, false
+	}
+	controlEnabled = c.WebSocket.Enabled
+	ttsOverlayEnabled = c.WebSocket.TTSOverlayEnabled && c.TTS.Enabled
+	chatOverlayEnabled = c.WebSocket.ChatOverlayEnabled && c.Logging.Enabled
+	anyEnabled = controlEnabled || ttsOverlayEnabled || chatOverlayEnabled
+	return controlEnabled, ttsOverlayEnabled, chatOverlayEnabled, anyEnabled
+}
+
+// ResolveLiveLogPreset finds a saved LiveLogPreset by ID (or case-insensitive name),
+// falling back to the first configured preset or DefaultLiveLogPresets()[0].
+func (c *Config) ResolveLiveLogPreset(presetID string) LiveLogPreset {
+	var presets []LiveLogPreset
+	if c != nil && len(c.Logging.LiveLogs) > 0 {
+		presets = c.Logging.LiveLogs
+	} else {
+		presets = DefaultLiveLogPresets()
+	}
+	target := strings.TrimSpace(presetID)
+	if target != "" {
+		for _, p := range presets {
+			if strings.EqualFold(strings.TrimSpace(p.ID), target) || strings.EqualFold(strings.TrimSpace(p.Name), target) {
+				return p
+			}
+		}
+	}
+	if len(presets) > 0 {
+		return presets[0]
+	}
+	return DefaultLiveLogPresets()[0]
 }
 
 type LoggingConfig struct {
