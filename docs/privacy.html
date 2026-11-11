@@ -71,7 +71,7 @@
         <main>
           <div class="page-title-banner">
             <h1>Privacy Policy</h1>
-            <p>Effective Date: October 24, 2026 &bull; Last Updated: November 9, 2026</p>
+            <p>Effective Date: October 24, 2026 &bull; Last Updated: November 11, 2026</p>
           </div>
 
           <div class="card">
@@ -80,7 +80,7 @@
             </p>
             <div class="callout">
               <p>
-                <strong>Note on Third-Party Services (As of November 9, 2026):</strong> TownCrier is an independent open-source application and is not affiliated with Google, YouTube, Twitch, TikTok, EulerStream, Kick, Translated S.r.l. (MyMemory), DeepL, LibreTranslate, Hugging Face, or GitHub. Any summaries of third-party service behavior or policies in this document are provided for convenience <strong>as of November 9, 2026</strong>. Because external providers may change their practices at any time without notice to us, we strongly encourage you to review each provider's current official Privacy Policy linked below before enabling those integrations.
+                <strong>Note on Third-Party Services (As of November 11, 2026):</strong> TownCrier is an independent open-source application and is not affiliated with Google, YouTube, Twitch, TikTok, EulerStream, Kick, Translated S.r.l. (MyMemory), DeepL, LibreTranslate, Hugging Face, or GitHub. Any summaries of third-party service behavior or policies in this document are provided for convenience <strong>as of November 11, 2026</strong>. Because external providers may change their practices at any time without notice to us, we strongly encourage you to review each provider's current official Privacy Policy linked below before enabling those integrations.
               </p>
             </div>
           </div>
@@ -134,10 +134,21 @@
               <li>Accessed or viewed by the TownCrier developers or any third party.</li>
             </ul>
 
-            <h3>Storage &amp; Security of Google Credentials</h3>
+            <h3>Data Protection Mechanisms &amp; Security of Sensitive Data</h3>
             <p>
-              OAuth 2.0 access and refresh tokens returned by Google are stored solely on your local device using your operating system's native credential manager (Windows Credential Manager via the OS keyring API, or secure memory fallback on Linux). Tokens are never uploaded to any remote host and are never included in exported configuration backups.
+              TownCrier implements rigorous security controls to safeguard sensitive user data and credentials:
             </p>
+            <ul>
+              <li>
+                <strong>Encryption in Transit:</strong> All communication and data transferred between TownCrier and Google APIs (<code>accounts.google.com</code>, <code>oauth2.googleapis.com</code>, and <code>www.googleapis.com/youtube/v3</code>) is protected and encrypted in transit using industry-standard <strong>HTTPS / TLS 1.2+</strong>. OAuth 2.0 authorization requests additionally enforce <strong>PKCE (<code>S256</code> SHA-256 code challenge)</strong> to protect against authorization code interception.
+              </li>
+              <li>
+                <strong>Encryption at Rest:</strong> Sensitive credentials—including Google OAuth 2.0 access tokens and refresh tokens—are stored solely on your local computer and <strong>encrypted at rest</strong> using your operating system's native cryptographic credential vault (<strong>Windows Credential Manager</strong>, encrypted via the <strong>Windows Data Protection API (DPAPI) / AES-256</strong>, or the OS keyring / protected process memory on Linux). Tokens are never stored in plaintext configuration files, are never transmitted to any external server, and are automatically scrubbed from exported <code>.zip</code> configuration backups.
+              </li>
+              <li>
+                <strong>Access Controls &amp; Local Data Safeguards:</strong> All Google user data accessed via the <code>youtube.force-ssl</code> scope (channel profile metadata, active broadcast IDs, and live chat messages) is processed strictly within local application memory and user-scoped local OS directories (<code>%LOCALAPPDATA%\com.github.mrpoundsign.towncrier\</code> on Windows or <code>~/.local/share/towncrier/</code> on Linux) protected by operating system user-account access controls. Because TownCrier operates with zero external servers or cloud databases, neither the TownCrier developers nor any third party can access, view, or intercept your stored tokens or Google user data.
+              </li>
+            </ul>
 
             <h3>Limited Use Disclosure</h3>
             <p>
@@ -155,7 +166,7 @@
           <section id="streaming-platforms" class="card">
             <h2>3. Twitch, TikTok Live &amp; Kick Integrations</h2>
             <p>
-              When you enable a streaming platform tab in TownCrier, your computer connects directly to that platform's endpoints. Summaries below reflect how these integrations operate <strong>as of November 9, 2026</strong>; please consult each service's official privacy policy for their current data practices:
+              When you enable a streaming platform tab in TownCrier, your computer connects directly to that platform's endpoints. Summaries below reflect how these integrations operate <strong>as of November 11, 2026</strong>; please consult each service's official privacy policy for their current data practices:
             </p>
 
             <h3>Twitch</h3>
@@ -168,7 +179,7 @@
             <h3>TikTok Live &amp; EulerStream Signing</h3>
             <ul>
               <li><strong>What TownCrier Sends &amp; Receives:</strong> TownCrier connects to public TikTok Live rooms (<code>tiktok.com</code>) without requiring a TikTok account or login credentials, reading public chat, follows, shares, subscriptions, and gift events, and downloading public gift/badge icons from TikTok's CDN.</li>
-              <li><strong>EulerStream WebCast Signature Service (As of November 9, 2026):</strong> After verifying that a channel is live, the open-source TikTok Live client library transmits the target channel's public room ID (and your optional EulerStream API key, if configured) to <code>tiktok.eulerstream.com</code> to obtain a WebCast connection signature. No personal viewer or streamer login credentials are sent by TownCrier.</li>
+              <li><strong>EulerStream WebCast Signature Service (As of November 11, 2026):</strong> After verifying that a channel is live, the open-source TikTok Live client library transmits the target channel's public room ID (and your optional EulerStream API key, if configured) to <code>tiktok.eulerstream.com</code> to obtain a WebCast connection signature. No personal viewer or streamer login credentials are sent by TownCrier.</li>
               <li><strong>Official Policies:</strong> Review the <a href="https://www.tiktok.com/legal/page/row/privacy-policy/en" target="_blank" rel="noopener noreferrer">TikTok Privacy Policy</a> and <a href="https://www.eulerstream.com/privacy" target="_blank" rel="noopener noreferrer">EulerStream Privacy Policy</a>.</li>
             </ul>
 
@@ -190,10 +201,10 @@
               <li><strong>Local Caching &amp; Key Storage:</strong> Translation API keys are stored in your local OS keyring (and scrubbed from exported backups). Frequently translated sentences are cached locally on your disk in <code>cache/translations.json</code>.</li>
             </ul>
             <p>
-              Provider-specific notes (<strong>as of November 9, 2026</strong>—please check each provider's current privacy policy directly before use):
+              Provider-specific notes (<strong>as of November 11, 2026</strong>—please check each provider's current privacy policy directly before use):
             </p>
             <ul>
-              <li><strong>MyMemory (Translated S.r.l.):</strong> Sends sentence text to <code>api.mymemory.translated.net</code> (and your optional email address in the <code>de</code> parameter if you configure the 10x free quota). As of November 9, 2026, free/anonymous MyMemory translations contribute to MyMemory's public translation memory archive. Review the <a href="https://mymemory.translated.net/doc/usagelimits.php" target="_blank" rel="noopener noreferrer">MyMemory Terms</a> and <a href="https://translated.com/privacy-policy" target="_blank" rel="noopener noreferrer">Translated S.r.l. Privacy Policy</a>.</li>
+              <li><strong>MyMemory (Translated S.r.l.):</strong> Sends sentence text to <code>api.mymemory.translated.net</code> (and your optional email address in the <code>de</code> parameter if you configure the 10x free quota). As of November 11, 2026, free/anonymous MyMemory translations contribute to MyMemory's public translation memory archive. Review the <a href="https://mymemory.translated.net/doc/usagelimits.php" target="_blank" rel="noopener noreferrer">MyMemory Terms</a> and <a href="https://translated.com/privacy-policy" target="_blank" rel="noopener noreferrer">Translated S.r.l. Privacy Policy</a>.</li>
               <li><strong>Google Cloud Translation API (Basic v2):</strong> Sends sentence text directly to <code>translation.googleapis.com</code> authenticated with your own Google Cloud API key. Review the <a href="https://cloud.google.com/terms/cloud-privacy-notice" target="_blank" rel="noopener noreferrer">Google Cloud Privacy Notice</a> and <a href="https://cloud.google.com/translate/data-usage" target="_blank" rel="noopener noreferrer">Cloud Translation Data Usage FAQ</a>.</li>
               <li><strong>DeepL API (Free / Pro):</strong> Sends sentence text directly to <code>api-free.deepl.com</code> or <code>api.deepl.com</code> authenticated with your own DeepL API key. Review the <a href="https://www.deepl.com/pro-data-security" target="_blank" rel="noopener noreferrer">DeepL Pro Data Security &amp; Privacy Policy</a>.</li>
               <li><strong>LibreTranslate &amp; Local LLMs (Ollama / OpenAI-Compatible):</strong> When pointed at <code>http://localhost:5000</code> (LibreTranslate Docker) or <code>http://localhost:11434</code> (local Ollama), translation runs 100% offline on your own machine. If you configure a remote endpoint URL, requests are governed by the operator of that endpoint.</li>
