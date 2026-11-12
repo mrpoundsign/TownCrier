@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.0.13 — 2026-11-11
+## v0.0.13 — 2026-11-12
 
 ### Fixed
 - **YouTube Live Chat Moderation**:
