@@ -436,3 +436,23 @@ func TestConnectorPrivateStreamDataAPIFallback(t *testing.T) {
 		t.Errorf("expected CheckLive() == true for private stream with OAuth, got isLive=%v err=%v", isLive, err)
 	}
 }
+
+func TestNormalizeDataAPIMessageID(t *testing.T) {
+	liveChatID := "Cg0KC3dVcGFCM2E3ZFVvKicKGFVDRFhMT1YzUzBHVHdtRDhWOEdQNnc5URILd1VwYUIzYTdkVW8"
+	innerTubeLCC := "LCC.EhwKGkNPT1ZxS3pPOTVjREZkTVNyUVlkbTRNd0pn"
+	innerTubeRaw := "ChwKGkNPT1ZxS3pPOTVjREZkTVNyUVlkbTRNd0pn"
+
+	got1 := NormalizeDataAPIMessageID(innerTubeLCC, liveChatID)
+	got2 := NormalizeDataAPIMessageID(innerTubeRaw, liveChatID)
+	if got1 == innerTubeLCC {
+		t.Fatalf("expected InnerTube short ID %q to be upgraded with liveChatID", innerTubeLCC)
+	}
+	if got1 != got2 {
+		t.Fatalf("expected %q and %q to normalize to identical Data API ID, got %q vs %q", innerTubeLCC, innerTubeRaw, got1, got2)
+	}
+
+	// Already-upgraded Data API IDs (starting with Field 1 tag 0x0a) must be preserved unchanged.
+	if again := NormalizeDataAPIMessageID(got1, liveChatID); again != got1 {
+		t.Fatalf("expected idempotent normalization on full ID, got %q want %q", again, got1)
+	}
+}
