@@ -428,11 +428,12 @@ func (v *DashboardView) buildActivityRow(idx int, entry ActivityEntry) fyne.Canv
 			}
 		}
 		userLabel := &hoverCellLabel{
-			tooltip: tip,
-			onTap:   onTap,
+			tooltip:   tip,
+			onTap:     onTap,
+			baseStyle: fyne.TextStyle{Bold: true},
 		}
 		userLabel.Text = entry.UserName
-		userLabel.TextStyle = fyne.TextStyle{Bold: true}
+		userLabel.TextStyle = userLabel.baseStyle
 		userLabel.Truncation = fyne.TextTruncateEllipsis
 		userLabel.ExtendBaseWidget(userLabel)
 		nameObj = userLabel

@@ -587,10 +587,11 @@ func (r *hoverIconRenderer) Refresh() {
 // When onTap is non-nil, it displays a pointer cursor, underlines on hover, and executes onTap on click.
 type hoverCellLabel struct {
 	widget.Label
-	tooltip string
-	onHover func(obj fyne.CanvasObject, tip string, hovered bool)
-	onTap   func()
-	hovered bool
+	tooltip   string
+	onHover   func(obj fyne.CanvasObject, tip string, hovered bool)
+	onTap     func()
+	hovered   bool
+	baseStyle fyne.TextStyle
 }
 
 var (
@@ -606,9 +607,10 @@ func (v *LogsView) newHoverCellLabel(text, tooltip string, style fyne.TextStyle)
 
 func (v *LogsView) newClickableHoverCellLabel(text, tooltip string, style fyne.TextStyle, onTap func()) *hoverCellLabel {
 	l := &hoverCellLabel{
-		tooltip: tooltip,
-		onHover: v.showTooltipForObject,
-		onTap:   onTap,
+		tooltip:   tooltip,
+		onHover:   v.showTooltipForObject,
+		onTap:     onTap,
+		baseStyle: style,
 	}
 	l.Text = text
 	l.TextStyle = style
@@ -619,11 +621,12 @@ func (v *LogsView) newClickableHoverCellLabel(text, tooltip string, style fyne.T
 
 func (v *LogsView) newTimeCellLabel(text, tooltip string) *hoverCellLabel {
 	l := &hoverCellLabel{
-		tooltip: tooltip,
-		onHover: v.showTooltipForObject,
+		tooltip:   tooltip,
+		onHover:   v.showTooltipForObject,
+		baseStyle: fyne.TextStyle{Monospace: true},
 	}
 	l.Text = text
-	l.TextStyle = fyne.TextStyle{Monospace: true}
+	l.TextStyle = l.baseStyle
 	l.Truncation = fyne.TextTruncateOff
 	l.ExtendBaseWidget(l)
 	return l
@@ -653,7 +656,9 @@ func (l *hoverCellLabel) MouseIn(*desktop.MouseEvent) {
 		l.onHover(l, l.tooltip, true)
 	}
 	if l.onTap != nil {
-		l.TextStyle = fyne.TextStyle{Bold: true, Underline: true}
+		s := l.baseStyle
+		s.Underline = true
+		l.TextStyle = s
 		l.Refresh()
 	}
 }
@@ -666,7 +671,7 @@ func (l *hoverCellLabel) MouseOut() {
 		l.onHover(l, "", false)
 	}
 	if l.onTap != nil {
-		l.TextStyle = fyne.TextStyle{Bold: true, Underline: false}
+		l.TextStyle = l.baseStyle
 		l.Refresh()
 	}
 }

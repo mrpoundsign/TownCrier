@@ -4799,6 +4799,9 @@ func (v *SettingsView) showTranslationTooltip(obj fyne.CanvasObject, tip string,
 	if !hovered || tip == "" {
 		if v.translationTooltipBubble != nil {
 			v.translationTooltipBubble.Hide()
+			if v.window != nil && v.window.Canvas() != nil {
+				v.window.Canvas().Refresh(v.translationTooltipBubble)
+			}
 		}
 		return
 	}
@@ -4839,6 +4842,9 @@ func (v *SettingsView) showTranslationTooltip(obj fyne.CanvasObject, tip string,
 	v.translationTooltipBubble.Move(fyne.NewPos(x, y))
 	v.translationTooltipBubble.Show()
 	v.translationTooltipBubble.Refresh()
+	if v.window != nil && v.window.Canvas() != nil {
+		v.window.Canvas().Refresh(v.translationTooltipBubble)
+	}
 }
 
 // FormatTestTranslationOutput formats the multi-line test result showing input, per-sentence cache/API resolution, and final output.

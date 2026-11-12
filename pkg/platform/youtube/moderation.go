@@ -3,6 +3,8 @@ package youtube
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,27 +56,161 @@ func (c *Connector) DeleteChatMessage(ctx context.Context, messageID string) err
 		return err
 	}
 
-	endpoint := fmt.Sprintf("%s/liveChat/messages?id=%s", apiBase, url.QueryEscape(msgID))
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	targetID := msgID
+	if isInnerTubeShortMessageID(msgID) {
+		if liveChatID, lErr := c.resolveLiveChatID(ctx, httpClient, apiBase, token); lErr == nil && liveChatID != "" {
+			if fullID := NormalizeDataAPIMessageID(msgID, liveChatID); fullID != "" {
+				targetID = fullID
+			}
+		}
+	}
+
+	status, bodyStr, err := c.doDeleteChatMessage(ctx, httpClient, apiBase, token, targetID)
 	if err != nil {
 		return err
+	}
+	if status == http.StatusNoContent || status == http.StatusOK {
+		return nil
+	}
+
+	// If targetID was upgraded from an InnerTube short ID and returned 400/404,
+	// invalidate any stale cached liveChatID, re-resolve once, or fall back to raw msgID.
+	if targetID != msgID && (status == http.StatusNotFound || status == http.StatusBadRequest) {
+		c.clearCachedLiveChatID()
+		if liveChatID, lErr := c.resolveLiveChatID(ctx, httpClient, apiBase, token); lErr == nil && liveChatID != "" {
+			if retryID := NormalizeDataAPIMessageID(msgID, liveChatID); retryID != "" && retryID != targetID {
+				if rStatus, rBody, rErr := c.doDeleteChatMessage(ctx, httpClient, apiBase, token, retryID); rErr == nil {
+					if rStatus == http.StatusNoContent || rStatus == http.StatusOK {
+						return nil
+					}
+					status, bodyStr = rStatus, rBody
+				}
+			}
+		}
+		if fStatus, _, fErr := c.doDeleteChatMessage(ctx, httpClient, apiBase, token, msgID); fErr == nil && (fStatus == http.StatusNoContent || fStatus == http.StatusOK) {
+			return nil
+		}
+	}
+
+	if status == http.StatusUnauthorized {
+		c.handleUnauthorized(ctx)
+	}
+	return fmt.Errorf("youtube delete message HTTP %d: %s", status, bodyStr)
+}
+
+func (c *Connector) doDeleteChatMessage(ctx context.Context, httpClient *http.Client, apiBase, token, id string) (int, string, error) {
+	endpoint := fmt.Sprintf("%s/liveChat/messages?id=%s", apiBase, url.QueryEscape(id))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return 0, "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return err
+		return 0, "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusUnauthorized {
-			c.handleUnauthorized(ctx)
-		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("youtube delete message HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+		return resp.StatusCode, "", nil
 	}
-	return nil
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return resp.StatusCode, strings.TrimSpace(string(body)), nil
+}
+
+func (c *Connector) clearCachedLiveChatID() {
+	c.mu.Lock()
+	c.activeLiveChatID = ""
+	c.mu.Unlock()
+}
+
+// isInnerTubeShortMessageID reports whether msgID is an InnerTube-sourced liveChatMessage ID
+// that omits Protobuf Field 1 (live_chat_id) and only carries Field 2 (item_key, tag 0x12)
+// or a raw inner item_key (tag 0x0a without LCC. prefix).
+func isInnerTubeShortMessageID(msgID string) bool {
+	trimmed := strings.TrimSpace(msgID)
+	hasLCC := strings.HasPrefix(trimmed, "LCC.")
+	b64Part := strings.TrimPrefix(trimmed, "LCC.")
+	raw, ok := decodeYouTubeBase64(b64Part)
+	if !ok || len(raw) < 4 {
+		return false
+	}
+	// InnerTube LCC.EhwKGk... starts with Field 2 (0x12) followed by nested Field 1 (0x0a).
+	if raw[0] == 0x12 && raw[2] == 0x0a {
+		return true
+	}
+	// Raw InnerTube ChwKGk... without "LCC." prefix starts with 0x0a <len> 0x0a <len>.
+	if !hasLCC && raw[0] == 0x0a && raw[2] == 0x0a && int(raw[1])+2 == len(raw) {
+		return true
+	}
+	return false
+}
+
+// NormalizeDataAPIMessageID upgrades an InnerTube liveChatMessage ID (e.g. "LCC.EhwKGk..." or "ChwKGk...")
+// into a full YouTube Data API v3 liveChatMessage ID ("LCC.Cjg...EhwKGk...") by prepending Protobuf Field 1
+// (the decoded liveChatID bytes) ahead of Field 2 (the chat item key). If msgID is already a full Data API ID
+// or cannot be decoded as an InnerTube protobuf ID, msgID is returned unchanged.
+func NormalizeDataAPIMessageID(msgID, liveChatID string) string {
+	trimmedMsg := strings.TrimSpace(msgID)
+	trimmedChat := strings.TrimSpace(liveChatID)
+	if trimmedMsg == "" || trimmedChat == "" {
+		return trimmedMsg
+	}
+
+	hasLCC := strings.HasPrefix(trimmedMsg, "LCC.")
+	b64Part := strings.TrimPrefix(trimmedMsg, "LCC.")
+	msgBytes, ok := decodeYouTubeBase64(b64Part)
+	if !ok || len(msgBytes) < 4 {
+		return trimmedMsg
+	}
+
+	// If raw ChwKGk... (no LCC. prefix, outer tag 0x0a), convert outer tag to Field 2 (0x12).
+	if !hasLCC && msgBytes[0] == 0x0a && msgBytes[2] == 0x0a && int(msgBytes[1])+2 == len(msgBytes) {
+		cloned := make([]byte, len(msgBytes))
+		copy(cloned, msgBytes)
+		cloned[0] = 0x12
+		msgBytes = cloned
+	}
+
+	// Only prepend Field 1 (live_chat_id) if msgBytes starts at Field 2 (0x12).
+	if msgBytes[0] != 0x12 {
+		return trimmedMsg
+	}
+
+	chatBytes, ok := decodeYouTubeBase64(trimmedChat)
+	if !ok || len(chatBytes) == 0 {
+		return trimmedMsg
+	}
+
+	var lenBuf [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(lenBuf[:], uint64(len(chatBytes)))
+
+	full := make([]byte, 0, 1+n+len(chatBytes)+len(msgBytes))
+	full = append(full, 0x0a) // Field 1 (live_chat_id), wire type 2 (length-delimited)
+	full = append(full, lenBuf[:n]...)
+	full = append(full, chatBytes...)
+	full = append(full, msgBytes...)
+
+	return "LCC." + base64.RawURLEncoding.EncodeToString(full)
+}
+
+func decodeYouTubeBase64(s string) ([]byte, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, false
+	}
+	for _, enc := range []*base64.Encoding{
+		base64.RawURLEncoding,
+		base64.URLEncoding,
+		base64.RawStdEncoding,
+		base64.StdEncoding,
+	} {
+		if b, err := enc.DecodeString(s); err == nil && len(b) > 0 {
+			return b, true
+		}
+	}
+	return nil, false
 }
 
 type youtubeLiveChatBanRequest struct {
@@ -147,6 +283,9 @@ func (c *Connector) BanOrTimeoutUser(ctx context.Context, targetChannelID string
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		if resp.StatusCode == http.StatusNotFound {
+			c.clearCachedLiveChatID()
+		}
 		if resp.StatusCode == http.StatusUnauthorized {
 			c.handleUnauthorized(ctx)
 		}
@@ -411,6 +550,9 @@ func (c *Connector) fetchDataAPILiveChatPage(ctx context.Context, liveChatID, pa
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusNotFound {
+			c.clearCachedLiveChatID()
+		}
 		if resp.StatusCode == http.StatusUnauthorized {
 			c.handleUnauthorized(ctx)
 		}

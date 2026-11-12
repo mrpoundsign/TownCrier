@@ -413,6 +413,9 @@ func (v *LogsView) showTooltipForObject(obj fyne.CanvasObject, tip string, hover
 	if !hovered || tip == "" {
 		if v.tooltipBubble != nil {
 			v.tooltipBubble.Hide()
+			if v.window != nil && v.window.Canvas() != nil {
+				v.window.Canvas().Refresh(v.tooltipBubble)
+			}
 		}
 		if v.hoverInfoLabel != nil {
 			v.hoverInfoLabel.SetText("")
@@ -457,6 +460,9 @@ func (v *LogsView) showTooltipForObject(obj fyne.CanvasObject, tip string, hover
 	v.tooltipBubble.Move(fyne.NewPos(x, y))
 	v.tooltipBubble.Show()
 	v.tooltipBubble.Refresh()
+	if v.window != nil && v.window.Canvas() != nil {
+		v.window.Canvas().Refresh(v.tooltipBubble)
+	}
 }
 
 // Close unsubscribes any active Live Tail listener, closes any open pop-out windows, and cancels any pending search timer or query.
@@ -2181,7 +2187,7 @@ func (v *LogsView) buildLogRowWithRef(rowIdx int, e eventlog.Entry) (fyne.Canvas
 	}
 
 	roleIcons := v.userRoleIcons(e)
-	userNameLabel := v.newClickableHoverCellLabel(displayName, userTip, fyne.TextStyle{Bold: true}, onUserTap)
+	userNameLabel := v.newClickableHoverCellLabel(displayName, userTip, fyne.TextStyle{}, onUserTap)
 	var userCell fyne.CanvasObject
 	if len(roleIcons) > 0 {
 		iconBox := container.NewHBox(roleIcons...)

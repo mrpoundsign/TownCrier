@@ -22,13 +22,14 @@ func TestHoverCellLabelClickable(t *testing.T) {
 	tooltip := "User tooltip • Click to open profile in browser: https://www.twitch.tv/coolstreamer"
 
 	label := &hoverCellLabel{
-		tooltip: tooltip,
+		tooltip:   tooltip,
 		onTap: func() {
 			tapped = true
 		},
+		baseStyle: fyne.TextStyle{Bold: true},
 	}
 	label.Text = "coolstreamer"
-	label.TextStyle = fyne.TextStyle{Bold: true}
+	label.TextStyle = label.baseStyle
 	label.Truncation = fyne.TextTruncateEllipsis
 	label.ExtendBaseWidget(label)
 
@@ -51,6 +52,9 @@ func TestHoverCellLabelClickable(t *testing.T) {
 	if !label.TextStyle.Underline {
 		t.Fatalf("expected TextStyle.Underline=true when hovered with onTap")
 	}
+	if !label.TextStyle.Bold {
+		t.Fatalf("expected TextStyle.Bold=true (preserved from baseStyle)")
+	}
 
 	label.MouseOut()
 	if label.hovered {
@@ -58,6 +62,35 @@ func TestHoverCellLabelClickable(t *testing.T) {
 	}
 	if label.TextStyle.Underline {
 		t.Fatalf("expected TextStyle.Underline=false after MouseOut")
+	}
+	if !label.TextStyle.Bold {
+		t.Fatalf("expected TextStyle.Bold=true after MouseOut (restored to baseStyle)")
+	}
+
+	// Verify unbold label does not get stuck bold after hover
+	unboldLabel := &hoverCellLabel{
+		tooltip:   "Unbold tip",
+		onTap:     func() {},
+		baseStyle: fyne.TextStyle{},
+	}
+	unboldLabel.Text = "normaluser"
+	unboldLabel.TextStyle = unboldLabel.baseStyle
+	unboldLabel.Truncation = fyne.TextTruncateEllipsis
+	unboldLabel.ExtendBaseWidget(unboldLabel)
+
+	unboldLabel.MouseIn(&desktop.MouseEvent{})
+	if !unboldLabel.TextStyle.Underline {
+		t.Fatalf("expected unboldLabel.TextStyle.Underline=true on hover")
+	}
+	if unboldLabel.TextStyle.Bold {
+		t.Fatalf("expected unboldLabel.TextStyle.Bold=false on hover (not forced bold)")
+	}
+	unboldLabel.MouseOut()
+	if unboldLabel.TextStyle.Underline {
+		t.Fatalf("expected unboldLabel.TextStyle.Underline=false after MouseOut")
+	}
+	if unboldLabel.TextStyle.Bold {
+		t.Fatalf("expected unboldLabel.TextStyle.Bold=false after MouseOut (not stuck bold)")
 	}
 
 	// Non-clickable label should return DefaultCursor
@@ -112,6 +145,21 @@ func TestLogsViewUserCellClickableProfile(t *testing.T) {
 	}
 	if userLbl.Text != "streamer_alice" {
 		t.Fatalf("expected Text='streamer_alice', got %q", userLbl.Text)
+	}
+	if userLbl.TextStyle.Bold {
+		t.Fatalf("expected initial userLbl.TextStyle.Bold=false")
+	}
+
+	userLbl.MouseIn(&desktop.MouseEvent{})
+	if !userLbl.TextStyle.Underline {
+		t.Fatalf("expected userLbl.TextStyle.Underline=true on hover")
+	}
+	userLbl.MouseOut()
+	if userLbl.TextStyle.Underline {
+		t.Fatalf("expected userLbl.TextStyle.Underline=false after MouseOut")
+	}
+	if userLbl.TextStyle.Bold {
+		t.Fatalf("expected userLbl.TextStyle.Bold=false after MouseOut (not stuck bold)")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -219,18 +220,21 @@ func (s *Session) ModerateDeleteMessage(ctx context.Context, entry eventlog.Entr
 	case "twitch":
 		if s.twitchConnector != nil && s.twitchOAuth != nil && s.twitchOAuth.HasToken() {
 			if err := s.twitchConnector.DeleteChatMessage(ctx, msgID); err != nil {
+				log.Printf("[Moderation] Twitch delete message failed (id=%s, user=%s): %v", msgID, entry.UserName, err)
 				return err
 			}
 		}
 	case "youtube":
 		if s.youtubeConnector != nil && s.youtubeOAuth != nil && s.youtubeOAuth.HasToken() {
 			if err := s.youtubeConnector.DeleteChatMessage(ctx, msgID); err != nil {
+				log.Printf("[Moderation] YouTube delete message failed (id=%s, user=%s): %v", msgID, entry.UserName, err)
 				return err
 			}
 		}
 	case "kick":
 		if s.kickConnector != nil && s.kickOAuth != nil && s.kickOAuth.HasToken() {
 			if err := s.kickConnector.DeleteChatMessage(ctx, msgID); err != nil {
+				log.Printf("[Moderation] Kick delete message failed (id=%s, user=%s): %v", msgID, entry.UserName, err)
 				return err
 			}
 		}
@@ -259,18 +263,21 @@ func (s *Session) ModerateTimeoutUser(ctx context.Context, entry eventlog.Entry,
 	case "twitch":
 		if s.twitchConnector != nil && s.twitchOAuth != nil && s.twitchOAuth.HasToken() {
 			if err := s.twitchConnector.BanOrTimeoutUser(ctx, entry.UserID, entry.UserName, durationSec, reason); err != nil {
+				log.Printf("[Moderation] Twitch timeout failed (user=%s, id=%s): %v", entry.UserName, entry.UserID, err)
 				return err
 			}
 		}
 	case "youtube":
 		if s.youtubeConnector != nil && s.youtubeOAuth != nil && s.youtubeOAuth.HasToken() {
 			if err := s.youtubeConnector.BanOrTimeoutUser(ctx, entry.UserID, durationSec); err != nil {
+				log.Printf("[Moderation] YouTube timeout failed (user=%s, id=%s): %v", entry.UserName, entry.UserID, err)
 				return err
 			}
 		}
 	case "kick":
 		if s.kickConnector != nil && s.kickOAuth != nil && s.kickOAuth.HasToken() {
 			if err := s.kickConnector.BanOrTimeoutUser(ctx, entry.UserID, durationSec, reason); err != nil {
+				log.Printf("[Moderation] Kick timeout failed (user=%s, id=%s): %v", entry.UserName, entry.UserID, err)
 				return err
 			}
 		}
@@ -294,18 +301,21 @@ func (s *Session) ModerateBanUser(ctx context.Context, entry eventlog.Entry, rea
 	case "twitch":
 		if s.twitchConnector != nil && s.twitchOAuth != nil && s.twitchOAuth.HasToken() {
 			if err := s.twitchConnector.BanOrTimeoutUser(ctx, entry.UserID, entry.UserName, 0, reason); err != nil {
+				log.Printf("[Moderation] Twitch ban failed (user=%s, id=%s): %v", entry.UserName, entry.UserID, err)
 				return err
 			}
 		}
 	case "youtube":
 		if s.youtubeConnector != nil && s.youtubeOAuth != nil && s.youtubeOAuth.HasToken() {
 			if err := s.youtubeConnector.BanOrTimeoutUser(ctx, entry.UserID, 0); err != nil {
+				log.Printf("[Moderation] YouTube ban failed (user=%s, id=%s): %v", entry.UserName, entry.UserID, err)
 				return err
 			}
 		}
 	case "kick":
 		if s.kickConnector != nil && s.kickOAuth != nil && s.kickOAuth.HasToken() {
 			if err := s.kickConnector.BanOrTimeoutUser(ctx, entry.UserID, 0, reason); err != nil {
+				log.Printf("[Moderation] Kick ban failed (user=%s, id=%s): %v", entry.UserName, entry.UserID, err)
 				return err
 			}
 		}
