@@ -6,6 +6,10 @@
 - **YouTube Live Chat Moderation**:
   - Automatically normalize InnerTube short chat message IDs (`LCC.EhwKGk...` / `ChwKGk...`) into full YouTube Data API v3 message IDs (`LCC.Cjg...EhwKGk...`) when calling `DELETE /liveChat/messages`, allowing the Event Log "Delete Message" action to work seamlessly on Public and Unlisted livestreams.
   - Automatically invalidate stale cached `liveChatId` references on HTTP 404 responses during live chat moderation requests.
+- **Live Log Pop-Out Tooltips & Chatter Name Hover Styling**:
+  - Fixed an issue where floating mouseover tooltips in secondary/pop-out Live Log windows would not render until a chatter name was moused over, caused by Fyne skipping initial canvas caching for hidden container elements.
+  - Fixed chatter name hover styling in the Event Log and Activity Feed so names preserve their base text style, underline on hover with pointer cursor, and revert cleanly to normal weight rather than getting permanently stuck bold.
+  - Hardened database pre-migration backup rotation sorting to ensure chronological ordering across multi-backup bursts within the same second.
 
 ### Added
 - **Detailed Moderation Error Logging**:

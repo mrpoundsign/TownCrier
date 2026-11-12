@@ -521,18 +521,44 @@ func ListBackups(dbPath string) ([]string, error) {
 		return nil, err
 	}
 
-	var matches []string
+	type matchItem struct {
+		path string
+		ts   time.Time
+		seq  int
+	}
+	var items []matchItem
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		if _, _, ok := parseDBBackupFilename(name, stem); ok {
-			matches = append(matches, filepath.Join(dir, name))
+		if _, ts, ok := parseDBBackupFilename(name, stem); ok {
+			seq := 0
+			mid := strings.TrimSuffix(strings.TrimPrefix(name, stem+"."), ".db")
+			if vIdx := strings.LastIndex(mid, "-v"); vIdx > 0 {
+				tsPart := mid[:vIdx]
+				if len(tsPart) > 18 && tsPart[17] == '-' {
+					seq, _ = strconv.Atoi(tsPart[18:])
+				}
+			}
+			items = append(items, matchItem{path: filepath.Join(dir, name), ts: ts, seq: seq})
 		}
 	}
 
-	sort.Strings(matches)
+	sort.Slice(items, func(i, j int) bool {
+		if !items[i].ts.Equal(items[j].ts) {
+			return items[i].ts.Before(items[j].ts)
+		}
+		if items[i].seq != items[j].seq {
+			return items[i].seq < items[j].seq
+		}
+		return items[i].path < items[j].path
+	})
+
+	matches := make([]string, len(items))
+	for i, it := range items {
+		matches[i] = it.path
+	}
 	return matches, nil
 }
 
@@ -603,15 +629,26 @@ func pruneOldBackups(dir, stem string, keep int) error {
 	type item struct {
 		name string
 		ver  int
+		ts   time.Time
+		seq  int
 	}
 	var all []item
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		ver, _, ok := parseDBBackupFilename(e.Name(), stem)
+		ver, ts, ok := parseDBBackupFilename(e.Name(), stem)
 		if ok {
-			all = append(all, item{name: e.Name(), ver: ver})
+			seq := 0
+			name := e.Name()
+			mid := strings.TrimSuffix(strings.TrimPrefix(name, stem+"."), ".db")
+			if vIdx := strings.LastIndex(mid, "-v"); vIdx > 0 {
+				tsPart := mid[:vIdx]
+				if len(tsPart) > 18 && tsPart[17] == '-' {
+					seq, _ = strconv.Atoi(tsPart[18:])
+				}
+			}
+			all = append(all, item{name: e.Name(), ver: ver, ts: ts, seq: seq})
 		}
 	}
 
@@ -620,6 +657,12 @@ func pruneOldBackups(dir, stem string, keep int) error {
 	}
 
 	sort.Slice(all, func(i, j int) bool {
+		if !all[i].ts.Equal(all[j].ts) {
+			return all[i].ts.Before(all[j].ts)
+		}
+		if all[i].seq != all[j].seq {
+			return all[i].seq < all[j].seq
+		}
 		return all[i].name < all[j].name
 	})
 
