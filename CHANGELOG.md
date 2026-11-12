@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.0.13 — 2026-11-11
+
+### Fixed
+- **YouTube Live Chat Moderation**:
+  - Automatically normalize InnerTube short chat message IDs (`LCC.EhwKGk...` / `ChwKGk...`) into full YouTube Data API v3 message IDs (`LCC.Cjg...EhwKGk...`) when calling `DELETE /liveChat/messages`, allowing the Event Log "Delete Message" action to work seamlessly on Public and Unlisted livestreams.
+  - Automatically invalidate stale cached `liveChatId` references on HTTP 404 responses during live chat moderation requests.
+
+### Added
+- **Detailed Moderation Error Logging**:
+  - Added structured error logging in `towncrier.log` for chat message deletion, user timeout, and user ban actions across Twitch, YouTube, and Kick.
+- **Privacy Policy & Google OAuth Security Disclosures**:
+  - Added explicit data protection disclosures for sensitive Google OAuth data, covering HTTPS/TLS 1.2+ with PKCE S256 in transit, Windows Credential Manager DPAPI encryption at rest, and local memory lifecycle protection.
+
+---
+
 ## v0.0.12 — 2026-11-10
 
 ### Added
