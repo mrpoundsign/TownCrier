@@ -430,11 +430,19 @@ func SynthesizeAndPlayPreview(
 		t0 := time.Now()
 		if player != nil {
 			player.ResetPanic()
+			if q := session.Queue(); q != nil && (q.IsPaused() || q.IsMicPaused()) {
+				player.Pause()
+			}
 		}
 
 		if streamEng, ok := eng.(tts.StreamingEngine); ok {
 			startedPlaying := false
-			var preBuffer []float32
+			type previewChunk struct {
+				samples []float32
+				rate    int
+			}
+			var preBufferChunks []previewChunk
+			preBufferSamples := 0
 			preBufferSR := 24000
 			var ttfa time.Duration
 
@@ -447,28 +455,36 @@ func SynthesizeAndPlayPreview(
 				}
 				minPreBufferSamples := preBufferSR * 9 / 10
 				if !startedPlaying {
-					preBuffer = append(preBuffer, samples...)
-					if len(preBuffer) >= minPreBufferSamples {
+					preBufferChunks = append(preBufferChunks, previewChunk{samples: samples, rate: sampleRate})
+					preBufferSamples += len(samples)
+					if preBufferSamples >= minPreBufferSamples {
 						startedPlaying = true
 						ttfa = time.Since(t0)
 						reportStatus(fmt.Sprintf("First audio in %v — playing preview...", ttfa.Round(time.Millisecond)))
 						if player != nil {
-							_ = player.Play(preBuffer, preBufferSR)
+							for _, ch := range preBufferChunks {
+								player.MarkSentenceBoundary()
+								_ = player.Play(ch.samples, ch.rate)
+							}
 						}
-						preBuffer = nil
+						preBufferChunks = nil
 					}
 					return true
 				}
 				if player != nil {
+					player.MarkSentenceBoundary()
 					_ = player.Play(samples, sampleRate)
 				}
 				return true
 			})
 			totalDur := time.Since(t0)
-			if !startedPlaying && len(preBuffer) > 0 {
+			if !startedPlaying && len(preBufferChunks) > 0 {
 				ttfa = totalDur
 				if player != nil && err == nil {
-					_ = player.Play(preBuffer, preBufferSR)
+					for _, ch := range preBufferChunks {
+						player.MarkSentenceBoundary()
+						_ = player.Play(ch.samples, ch.rate)
+					}
 				}
 			}
 			fyne.Do(func() {
@@ -506,6 +522,7 @@ func SynthesizeAndPlayPreview(
 				onStatus(fmt.Sprintf("Synthesized in %v. Playing preview...", dur.Round(time.Millisecond)))
 			}
 			if player != nil {
+				player.MarkSentenceBoundary()
 				_ = player.Play(samples, sampleRate)
 			}
 		})

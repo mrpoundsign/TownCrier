@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Immediate Mid-Speech Pause, Resume & Sentence-Boundary Rewind**:
+  - Added non-destructive WASAPI playback pause (`DevicePlayer.Pause`, `Resume`, `ResumeFromSentenceStart`, `RewindSentence`, and `MarkSentenceBoundary` in `pkg/audio/player.go`) that outputs silence immediately without dropping the active utterance buffer or causing audio clicks.
+  - Added per-clause sentence boundary tracking across streaming and non-streaming synthesis (`pkg/queue/queue.go` and Voice Preview in `internal/ui/voice_picker.go`) so resuming speech automatically rewinds to the start of the interrupted sentence, while `RewindSentence` steps back across earlier sentences.
+  - Background ONNX clause synthesis continues pre-buffering remaining clauses of the active message while paused for zero-latency resumption.
+
+### Changed
+- **Microphone VAD Gate Immediate Mid-Speech Pause Mode**:
+  - Upgraded Microphone Priority Pause Mode (`pkg/queue/queue.go`) from holding between clauses to pausing active speech immediately mid-sentence as soon as microphone voice activity is detected, then resuming cleanly from the beginning of the interrupted sentence once the hold release timer expires.
+  - Updated **Settings → TTS & Hardware → Microphone Priority** label to **Pause Speech While Speaking (Resume Sentence)** (with backwards-compatible parsing of legacy labels) and live status indicator to `• Speech Paused` (`internal/ui/settings.go`).
+  - Updated **Dashboard** playback controls (`Pause Speech` / `Resume Speech` / `Unmute & Resume`) and live status display (`⏸️ Paused` and `🎙️ Paused (Mic Active)`) to reflect real-time manual and microphone-gated pause states (`internal/ui/dashboard.go`, `internal/ui/main_window.go`).
+
+---
+
 ## v0.0.13 — 2026-11-12
 
 ### Fixed

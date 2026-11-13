@@ -13,15 +13,19 @@ import (
 )
 
 type mockPlayer struct {
-	mu        sync.Mutex
-	playing   atomic.Bool
-	stopCount atomic.Int32
-	samples   []float32
+	mu                  sync.Mutex
+	playing             atomic.Bool
+	paused              atomic.Bool
+	stopCount           atomic.Int32
+	pauseCount          atomic.Int32
+	resumeSentenceCount atomic.Int32
+	boundaryCount       atomic.Int32
+	samples             []float32
 }
 
 func (m *mockPlayer) Play(samples []float32, sampleRate int) error {
 	m.mu.Lock()
-	m.samples = samples
+	m.samples = append(m.samples, samples...)
 	m.mu.Unlock()
 	return nil
 }
@@ -30,13 +34,30 @@ func (m *mockPlayer) PlayWithOptions(samples []float32, sampleRate int, opts aud
 	return m.Play(samples, sampleRate)
 }
 
+func (m *mockPlayer) Pause() {
+	m.paused.Store(true)
+	m.pauseCount.Add(1)
+}
+func (m *mockPlayer) Resume() { m.paused.Store(false) }
+func (m *mockPlayer) ResumeFromSentenceStart() {
+	m.paused.Store(false)
+	m.resumeSentenceCount.Add(1)
+}
+func (m *mockPlayer) RewindSentence()       {}
+func (m *mockPlayer) IsPaused() bool        { return m.paused.Load() }
+func (m *mockPlayer) MarkSentenceBoundary() { m.boundaryCount.Add(1) }
+
 func (m *mockPlayer) Stop() {
 	m.stopCount.Add(1)
 	m.playing.Store(false)
+	m.paused.Store(false)
+	m.mu.Lock()
+	m.samples = m.samples[:0]
+	m.mu.Unlock()
 }
 
 func (m *mockPlayer) PanicStop()  { m.Stop() }
-func (m *mockPlayer) ResetPanic() { m.playing.Store(false) }
+func (m *mockPlayer) ResetPanic() { m.playing.Store(false); m.paused.Store(false) }
 func (m *mockPlayer) SwitchDevice(dev string) error { return nil }
 func (m *mockPlayer) SetVolume(vol float32) {}
 func (m *mockPlayer) Volume() float32       { return 1.0 }
@@ -400,6 +421,60 @@ func TestQueuePauseResume(t *testing.T) {
 	}
 }
 
+func TestQueueMidSpeechPauseResume(t *testing.T) {
+	player := &mockPlayer{}
+	engine := &mockEngine{synthLatency: 10 * time.Millisecond}
+	cfg := config.DefaultConfig()
+
+	q := NewQueue(player, engine, func() *config.Config { return cfg })
+	defer q.Close()
+
+	started := make(chan struct{})
+	q.SetOnItemStarted(func(item *Item) {
+		player.playing.Store(true)
+		close(started)
+	})
+
+	_ = q.Enqueue(&Item{
+		ID:       "msg-mid-pause",
+		Text:     "Pause me mid speech please",
+		Priority: 1,
+	})
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for item to start")
+	}
+
+	// Give a moment for playback loop to be active
+	time.Sleep(20 * time.Millisecond)
+
+	// Pause mid-speech
+	q.Pause()
+	if !q.IsPaused() {
+		t.Fatal("expected queue to be paused")
+	}
+	if !player.IsPaused() {
+		t.Fatal("expected player to be paused mid-speech")
+	}
+
+	// Rewind sentence while paused
+	q.RewindSentence()
+
+	// Resume
+	q.Resume()
+	if q.IsPaused() {
+		t.Fatal("expected queue unpaused")
+	}
+	if player.IsPaused() {
+		t.Fatal("expected player unpaused after resume")
+	}
+
+	// Unblock player so item completes
+	player.playing.Store(false)
+}
+
 type mockStreamingEngine struct {
 	mockEngine
 	clauses [][]float32
@@ -520,6 +595,100 @@ func TestQueueMicGateHoldsDispatchWhileSpeaking(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for item to start after mic gate released")
+	}
+}
+
+type blockingStreamEngine struct {
+	mockEngine
+	chunk1Done chan struct{}
+	allowChunk2 chan struct{}
+}
+
+func (e *blockingStreamEngine) SynthesizeStream(text string, voiceID string, speed float32, onChunk tts.StreamCallback) error {
+	c1 := make([]float32, 24000)
+	for i := range c1 {
+		c1[i] = 0.1
+	}
+	onChunk(c1, 24000)
+	close(e.chunk1Done)
+	<-e.allowChunk2
+	c2 := make([]float32, 2400)
+	for i := range c2 {
+		c2[i] = 0.2
+	}
+	onChunk(c2, 24000)
+	return nil
+}
+
+func TestQueueMicGatePausesMidSpeechAndResumesSentence(t *testing.T) {
+	player := &mockPlayer{}
+	player.playing.Store(true)
+
+	eng := &blockingStreamEngine{
+		chunk1Done:  make(chan struct{}),
+		allowChunk2: make(chan struct{}),
+	}
+	cfg := config.DefaultConfig()
+
+	q := NewQueue(player, eng, func() *config.Config { return cfg })
+	defer q.Close()
+
+	var gated atomic.Bool
+	q.SetMicGateFunc(gated.Load)
+
+	finished := make(chan struct{})
+	q.SetOnItemFinished(func(_ *Item) {
+		close(finished)
+	})
+
+	_ = q.Enqueue(&Item{ID: "mid-1", Text: "Sentence one. Sentence two.", Priority: 1})
+
+	select {
+	case <-eng.chunk1Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for chunk 1")
+	}
+
+	// Activate mic gate mid-speech: player must pause immediately while chunk 2 still buffers
+	gated.Store(true)
+	q.NotifyMicGateChanged()
+
+	if !player.IsPaused() {
+		t.Fatal("expected player to be paused immediately when mic gate activated")
+	}
+	if !q.IsMicPaused() {
+		t.Fatal("expected Queue.IsMicPaused() to be true")
+	}
+
+	// Unblock chunk 2 while still mic-gated -> must buffer without blocking
+	close(eng.allowChunk2)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if player.boundaryCount.Load() >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if player.boundaryCount.Load() < 2 {
+		t.Fatalf("expected second clause to buffer while paused, got boundaryCount=%d", player.boundaryCount.Load())
+	}
+
+	// Release mic gate -> player must resume from sentence start immediately
+	gated.Store(false)
+	q.NotifyMicGateChanged()
+
+	if player.IsPaused() {
+		t.Fatal("expected player unpaused after mic gate released")
+	}
+	if player.resumeSentenceCount.Load() != 1 {
+		t.Fatalf("expected ResumeFromSentenceStart called once, got %d", player.resumeSentenceCount.Load())
+	}
+
+	player.playing.Store(false)
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for item to finish")
 	}
 }
 

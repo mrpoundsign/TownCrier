@@ -82,6 +82,167 @@ func TestPlayerCallbackAndPanicStop(t *testing.T) {
 	}
 }
 
+func TestPlayerPauseResume(t *testing.T) {
+	p := &DevicePlayer{}
+	p.SetVolume(1.0)
+
+	samples := make([]float32, 1000)
+	for i := range samples {
+		samples[i] = 0.8
+	}
+
+	if err := p.Play(samples, 24000); err != nil {
+		t.Fatalf("Play failed: %v", err)
+	}
+
+	// Play 50 stereo frames (100 samples)
+	frameCount := 50
+	buf := make([]byte, frameCount*2*4)
+	p.onAudioCallback(buf, nil, uint32(frameCount))
+
+	p.mu.Lock()
+	cursorAfter50 := p.cursor
+	p.mu.Unlock()
+	if cursorAfter50 != 100 {
+		t.Fatalf("expected cursor=100 after 50 stereo frames, got %d", cursorAfter50)
+	}
+
+	// Pause playback
+	p.Pause()
+	if !p.IsPaused() {
+		t.Fatal("expected IsPaused to be true after Pause()")
+	}
+	if !p.IsPlaying() {
+		t.Fatal("expected IsPlaying to remain true while paused with pending samples")
+	}
+
+	// Audio callback while paused must emit silence and NOT advance cursor
+	p.onAudioCallback(buf, nil, uint32(frameCount))
+	outSamples := unsafe.Slice((*float32)(unsafe.Pointer(&buf[0])), frameCount*2)
+	for i, s := range outSamples {
+		if s != 0.0 {
+			t.Fatalf("sample at %d: expected 0.0 while paused, got %f", i, s)
+		}
+	}
+
+	p.mu.Lock()
+	cursorWhilePaused := p.cursor
+	p.mu.Unlock()
+	if cursorWhilePaused != 100 {
+		t.Fatalf("cursor advanced while paused: expected 100, got %d", cursorWhilePaused)
+	}
+
+	// Resume playback
+	p.Resume()
+	if p.IsPaused() {
+		t.Fatal("expected IsPaused to be false after Resume()")
+	}
+
+	// Audio callback should resume reading from cursor 100
+	p.onAudioCallback(buf, nil, uint32(frameCount))
+	for i, s := range outSamples {
+		if s < 0.79 || s > 0.81 {
+			t.Fatalf("sample at %d: expected ~0.8 after resume, got %f", i, s)
+		}
+	}
+
+	p.mu.Lock()
+	cursorAfterResume := p.cursor
+	p.mu.Unlock()
+	if cursorAfterResume != 200 {
+		t.Fatalf("expected cursor=200 after resuming, got %d", cursorAfterResume)
+	}
+}
+
+func TestPlayerSentenceBoundaryRewind(t *testing.T) {
+	p := &DevicePlayer{sampleRate: 24000}
+	p.SetVolume(1.0)
+
+	// Chunk 1: 100 mono samples -> 200 stereo samples in buffer (offset 0..200)
+	chunk1 := make([]float32, 100)
+	for i := range chunk1 {
+		chunk1[i] = 0.1
+	}
+	p.MarkSentenceBoundary()
+	if err := p.Play(chunk1, 24000); err != nil {
+		t.Fatalf("Play chunk1 failed: %v", err)
+	}
+
+	// Chunk 2: 200 mono samples -> 400 stereo samples in buffer (offset 200..600)
+	chunk2 := make([]float32, 200)
+	for i := range chunk2 {
+		chunk2[i] = 0.2
+	}
+	p.MarkSentenceBoundary()
+	if err := p.Play(chunk2, 24000); err != nil {
+		t.Fatalf("Play chunk2 failed: %v", err)
+	}
+
+	// Chunk 3: 300 mono samples -> 600 stereo samples in buffer (offset 600..1200)
+	chunk3 := make([]float32, 300)
+	for i := range chunk3 {
+		chunk3[i] = 0.3
+	}
+	p.MarkSentenceBoundary()
+	if err := p.Play(chunk3, 24000); err != nil {
+		t.Fatalf("Play chunk3 failed: %v", err)
+	}
+
+	p.mu.Lock()
+	if len(p.sentenceBoundaries) != 3 || p.sentenceBoundaries[0] != 0 || p.sentenceBoundaries[1] != 200 || p.sentenceBoundaries[2] != 600 {
+		p.mu.Unlock()
+		t.Fatalf("unexpected sentenceBoundaries: %v", p.sentenceBoundaries)
+	}
+	// Simulate playback having advanced to sample 450 (middle of chunk 2)
+	p.cursor = 450
+	p.mu.Unlock()
+
+	p.Pause()
+	if !p.IsPaused() {
+		t.Fatal("expected paused")
+	}
+
+	// Resume from sentence start should rewind to 200 (start of chunk 2)
+	p.ResumeFromSentenceStart()
+	if p.IsPaused() {
+		t.Fatal("expected unpaused after ResumeFromSentenceStart")
+	}
+
+	p.mu.Lock()
+	cur := p.cursor
+	p.mu.Unlock()
+	if cur != 200 {
+		t.Fatalf("expected cursor rewound to 200 (start of chunk 2), got %d", cur)
+	}
+
+	// Test RewindSentence when cursor is well past threshold vs within threshold
+	// At cursor 200 (at start of chunk 2), RewindSentence should jump to chunk 1 (0)
+	p.RewindSentence()
+	p.mu.Lock()
+	cur = p.cursor
+	p.mu.Unlock()
+	if cur != 0 {
+		t.Fatalf("expected cursor rewound to 0 (chunk 1), got %d", cur)
+	}
+
+	// Simulate playback finished (cursor at end of buffer) -> ResumeFromSentenceStart must stay idle
+	p.mu.Lock()
+	p.cursor = len(p.buffer)
+	p.mu.Unlock()
+	p.Pause()
+	p.ResumeFromSentenceStart()
+	if p.IsPlaying() {
+		t.Fatal("expected player to remain idle when resuming after buffer completion")
+	}
+	p.mu.Lock()
+	cur = p.cursor
+	bufLen := len(p.buffer)
+	p.mu.Unlock()
+	if cur != 0 || bufLen != 0 {
+		t.Fatalf("expected cleared buffer and cursor=0 after finished ResumeFromSentenceStart, got cursor=%d bufLen=%d", cur, bufLen)
+	}
+}
+
 func TestDeviceFallbackNotification(t *testing.T) {
 	p := &DevicePlayer{}
 	var notified atomic.Bool

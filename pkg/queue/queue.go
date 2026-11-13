@@ -49,15 +49,17 @@ type Queue struct {
 	currentAbortDetail  string
 	stopPlaybackCh      chan struct{}
 
-	paused   bool
-	panicked bool
-	closed   bool
+	paused    bool
+	micPaused bool
+	panicked  bool
+	closed    bool
 
-	onItemStarted  func(item *Item)
-	onItemFinished func(item *Item)
-	onItemOutcome  func(item *Item, spoken bool, outcome string, detail string)
-	onDepthChanged func(depth int)
-	onStateChanged func(paused, panicked bool)
+	onItemStarted         func(item *Item)
+	onItemFinished        func(item *Item)
+	onItemOutcome         func(item *Item, spoken bool, outcome string, detail string)
+	onDepthChanged        func(depth int)
+	onStateChanged        func(paused, panicked bool)
+	onMicGateStateChanged func(micPaused bool)
 
 	extraStarted  []func(item *Item)
 	extraFinished []func(item *Item)
@@ -91,15 +93,21 @@ func NewQueue(player audio.Player, engine tts.Engine, cfgFn func() *config.Confi
 func (q *Queue) SetMicGateFunc(fn func() bool) {
 	q.mu.Lock()
 	q.micGateFn = fn
-	q.cond.Broadcast()
 	q.mu.Unlock()
+	q.syncMicGateState()
 }
 
-// NotifyMicGateChanged wakes the queue dispatcher when the microphone VAD gate state changes.
+// NotifyMicGateChanged wakes the queue dispatcher and immediately pauses or resumes
+// active playback when the microphone VAD gate state changes.
 func (q *Queue) NotifyMicGateChanged() {
+	q.syncMicGateState()
+}
+
+// IsMicPaused reports whether the microphone VAD gate is currently pausing speech.
+func (q *Queue) IsMicPaused() bool {
 	q.mu.Lock()
-	q.cond.Broadcast()
-	q.mu.Unlock()
+	defer q.mu.Unlock()
+	return q.micPaused
 }
 
 func (q *Queue) isMicGated() bool {
@@ -112,32 +120,33 @@ func (q *Queue) isMicGated() bool {
 	return fn()
 }
 
-func (q *Queue) waitWhileMicGated(player audio.Player) bool {
-	if !q.isMicGated() {
-		return false
-	}
-	for player != nil && player.IsPlaying() {
-		q.mu.Lock()
-		aborted := q.currentAborted || q.closed
-		q.mu.Unlock()
-		if aborted {
-			return true
-		}
-		time.Sleep(15 * time.Millisecond)
-	}
+func (q *Queue) syncMicGateState() {
+	gated := q.isMicGated()
+
 	q.mu.Lock()
-	defer q.mu.Unlock()
-	for !q.currentAborted && !q.closed {
-		fn := q.micGateFn
-		q.mu.Unlock()
-		gated := fn != nil && fn()
-		q.mu.Lock()
-		if !gated || q.currentAborted || q.closed {
-			break
-		}
-		q.cond.Wait()
+	changed := q.micPaused != gated
+	q.micPaused = gated
+	manualPaused := q.paused
+	panicked := q.panicked
+	closed := q.closed
+	p := q.player
+	fn := q.onMicGateStateChanged
+	if !gated || changed {
+		q.cond.Broadcast()
 	}
-	return q.currentAborted || q.closed
+	q.mu.Unlock()
+
+	if !closed && !panicked && p != nil {
+		if gated {
+			p.Pause()
+		} else if changed && !manualPaused {
+			p.ResumeFromSentenceStart()
+		}
+	}
+
+	if changed && fn != nil {
+		fn(gated)
+	}
 }
 
 // Enqueue adds an item to the appropriate priority tier (0 for paid/events, 1 for chat).
@@ -194,14 +203,19 @@ func (q *Queue) CurrentItem() *Item {
 	return q.currentItem
 }
 
-// Pause pauses the queue; the current item finishes speaking, but subsequent items wait.
+// Pause pauses the queue and any currently playing speech.
 func (q *Queue) Pause() {
 	q.mu.Lock()
 	q.paused = true
+	p := q.player
 	fn := q.onStateChanged
 	extras := slices.Clone(q.extraState)
 	panicked := q.panicked
 	q.mu.Unlock()
+
+	if p != nil {
+		p.Pause()
+	}
 
 	if fn != nil {
 		fn(true, panicked)
@@ -211,25 +225,73 @@ func (q *Queue) Pause() {
 	}
 }
 
-// Resume unpauses the queue (and clears Panic Mode if active) and wakes up the dispatcher.
+// Resume unpauses the queue (and clears Panic Mode if active), resumes speech playback (at sentence start), and wakes up the dispatcher.
 func (q *Queue) Resume() {
 	q.mu.Lock()
 	q.paused = false
+	micPaused := q.micPaused
 	wasPanicked := q.panicked
 	q.panicked = false
-	if wasPanicked && q.player != nil {
-		q.player.ResetPanic()
+	p := q.player
+	if wasPanicked && p != nil {
+		p.ResetPanic()
 	}
 	fn := q.onStateChanged
 	extras := slices.Clone(q.extraState)
-	q.cond.Signal()
+	if !micPaused {
+		q.cond.Signal()
+	}
 	q.mu.Unlock()
+
+	if p != nil && !micPaused {
+		p.ResumeFromSentenceStart()
+	}
 
 	if fn != nil {
 		fn(false, false)
 	}
 	for _, ex := range extras {
 		ex(false, false)
+	}
+}
+
+// ResumeExact unpauses the queue and resumes speech playback from the exact mid-word pause point.
+func (q *Queue) ResumeExact() {
+	q.mu.Lock()
+	q.paused = false
+	micPaused := q.micPaused
+	wasPanicked := q.panicked
+	q.panicked = false
+	p := q.player
+	if wasPanicked && p != nil {
+		p.ResetPanic()
+	}
+	fn := q.onStateChanged
+	extras := slices.Clone(q.extraState)
+	if !micPaused {
+		q.cond.Signal()
+	}
+	q.mu.Unlock()
+
+	if p != nil && !micPaused {
+		p.Resume()
+	}
+
+	if fn != nil {
+		fn(false, false)
+	}
+	for _, ex := range extras {
+		ex(false, false)
+	}
+}
+
+// RewindSentence rewinds the currently playing speech to the previous sentence boundary.
+func (q *Queue) RewindSentence() {
+	q.mu.Lock()
+	p := q.player
+	q.mu.Unlock()
+	if p != nil {
+		p.RewindSentence()
 	}
 }
 
@@ -447,8 +509,12 @@ func (q *Queue) CancelAllForPlatform(platform string) {
 // SetPlayer dynamically updates the audio output player.
 func (q *Queue) SetPlayer(player audio.Player) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	q.player = player
+	shouldPause := (q.paused || q.micPaused) && !q.panicked && !q.closed
+	q.mu.Unlock()
+	if player != nil && shouldPause {
+		player.Pause()
+	}
 }
 
 // SetEngine dynamically updates the speech synthesis engine.
@@ -492,6 +558,13 @@ func (q *Queue) SetOnStateChanged(fn func(paused, panicked bool)) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.onStateChanged = fn
+}
+
+// SetOnMicGateStateChanged registers a callback invoked when the mic VAD gate pause state changes.
+func (q *Queue) SetOnMicGateStateChanged(fn func(micPaused bool)) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.onMicGateStateChanged = fn
 }
 
 // AddOnItemStarted registers an additional observer invoked when an item begins synthesis/speech.
@@ -604,7 +677,7 @@ func (q *Queue) popNext() (*Item, int, bool) {
 			return nil, 0, false
 		}
 
-		if q.paused {
+		if q.paused || q.micPaused {
 			q.cond.Wait()
 			continue
 		}
@@ -618,6 +691,7 @@ func (q *Queue) popNext() (*Item, int, bool) {
 				return nil, 0, false
 			}
 			if gated {
+				q.micPaused = true
 				q.cond.Wait()
 				continue
 			}
@@ -645,7 +719,7 @@ func (q *Queue) popNext() (*Item, int, bool) {
 			if q.closed {
 				return nil, 0, false
 			}
-			if q.paused || len(q.chatQueue) == 0 || len(q.eventsQueue) > 0 {
+			if q.paused || q.micPaused || len(q.chatQueue) == 0 || len(q.eventsQueue) > 0 {
 				continue
 			}
 
@@ -794,7 +868,12 @@ func (q *Queue) processItem(item *Item, depth int) {
 	if streamEng, ok := engine.(tts.StreamingEngine); ok {
 		chunkCount := 0
 		startedPlaying := false
-		var preBuffer []float32
+		type audioChunk struct {
+			samples []float32
+			rate    int
+		}
+		var preBufferChunks []audioChunk
+		preBufferSamples := 0
 		preBufferSR := 24000
 
 		err := streamEng.SynthesizeStream(item.Text, item.VoiceID, speed, func(samples []float32, sampleRate int) bool {
@@ -818,7 +897,10 @@ func (q *Queue) processItem(item *Item, depth int) {
 			}
 			if chunkCount == 1 && needsTranslationChime {
 				if chime := q.translationChimeForRate(cfg, preBufferSR); len(chime) > 0 {
-					preBuffer = append(preBuffer, chime...)
+					combined := make([]float32, 0, len(chime)+len(samples))
+					combined = append(combined, chime...)
+					combined = append(combined, samples...)
+					samples = combined
 				}
 			}
 
@@ -826,28 +908,26 @@ func (q *Queue) processItem(item *Item, depth int) {
 			// opening doesn't underrun while the next clause synthesizes.
 			minPreBufferSamples := preBufferSR * 9 / 10
 			if !startedPlaying {
-				preBuffer = append(preBuffer, samples...)
-				if len(preBuffer) >= minPreBufferSamples {
-					if q.waitWhileMicGated(player) {
-						return false
-					}
+				preBufferChunks = append(preBufferChunks, audioChunk{samples: samples, rate: sampleRate})
+				preBufferSamples += len(samples)
+				if preBufferSamples >= minPreBufferSamples {
 					startedPlaying = true
-					log.Printf("[Queue] Playing pre-buffered clauses 1..%d (%d samples at %d Hz)...", chunkCount, len(preBuffer), preBufferSR)
-					if playErr := player.Play(preBuffer, preBufferSR); playErr != nil {
-						log.Printf("[Queue] Player.Play failed on pre-buffer: %v", playErr)
-						synthOrPlayErr = fmt.Sprintf("audio play error: %v", playErr)
-						return false
+					log.Printf("[Queue] Playing pre-buffered clauses 1..%d (%d samples at %d Hz)...", chunkCount, preBufferSamples, preBufferSR)
+					for _, ch := range preBufferChunks {
+						player.MarkSentenceBoundary()
+						if playErr := player.Play(ch.samples, ch.rate); playErr != nil {
+							log.Printf("[Queue] Player.Play failed on pre-buffer chunk: %v", playErr)
+							synthOrPlayErr = fmt.Sprintf("audio play error: %v", playErr)
+							return false
+						}
 					}
-					preBuffer = nil
+					preBufferChunks = nil
 				}
 				return true
 			}
 
-			if q.waitWhileMicGated(player) {
-				return false
-			}
-
 			log.Printf("[Queue] Playing clause %d (%d samples at %d Hz)...", chunkCount, len(samples), sampleRate)
+			player.MarkSentenceBoundary()
 			if playErr := player.Play(samples, sampleRate); playErr != nil {
 				log.Printf("[Queue] Player.Play failed on clause %d: %v", chunkCount, playErr)
 				synthOrPlayErr = fmt.Sprintf("audio play error: %v", playErr)
@@ -864,11 +944,12 @@ func (q *Queue) processItem(item *Item, depth int) {
 			}
 			return
 		}
-		if !startedPlaying && len(preBuffer) > 0 && player != nil {
-			if !q.waitWhileMicGated(player) {
-				log.Printf("[Queue] Playing audio (%d samples at %d Hz)...", len(preBuffer), preBufferSR)
-				if playErr := player.Play(preBuffer, preBufferSR); playErr != nil {
-					log.Printf("[Queue] Player.Play failed: %v", playErr)
+		if !startedPlaying && len(preBufferChunks) > 0 && player != nil {
+			log.Printf("[Queue] Playing audio (%d samples at %d Hz)...", preBufferSamples, preBufferSR)
+			for _, ch := range preBufferChunks {
+				player.MarkSentenceBoundary()
+				if playErr := player.Play(ch.samples, ch.rate); playErr != nil {
+					log.Printf("[Queue] Player.Play failed on short pre-buffer: %v", playErr)
 					synthOrPlayErr = fmt.Sprintf("audio play error: %v", playErr)
 					return
 				}
@@ -910,11 +991,8 @@ func (q *Queue) processItem(item *Item, depth int) {
 			}
 		}
 
-		if q.waitWhileMicGated(player) {
-			return
-		}
-
 		log.Printf("[Queue] Playing audio (%d samples at %d Hz)...", len(samples), sampleRate)
+		player.MarkSentenceBoundary()
 		if err := player.Play(samples, sampleRate); err != nil {
 			log.Printf("[Queue] Player.Play failed: %v", err)
 			synthOrPlayErr = fmt.Sprintf("audio play error: %v", err)

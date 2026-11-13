@@ -243,10 +243,10 @@ func (v *DashboardView) buildControlsCard() *widget.Card {
 	}
 	v.queueDepthLabel = widget.NewLabel(queueText)
 
-	pauseText := "Pause Queue"
+	pauseText := "Pause Speech"
 	pauseIcon := theme.MediaPauseIcon()
 	if isPaused {
-		pauseText = "Resume Queue"
+		pauseText = "Resume Speech"
 		pauseIcon = theme.MediaPlayIcon()
 	}
 
@@ -745,27 +745,57 @@ func (v *DashboardView) SyncQueueState(paused, panicked bool) {
 	if v.pauseResumeBtn != nil {
 		switch {
 		case panicked:
-			v.pauseResumeBtn.SetText("Unmute & Resume Queue")
+			v.pauseResumeBtn.SetText("Unmute & Resume")
 			v.pauseResumeBtn.SetIcon(theme.MediaPlayIcon())
 		case paused:
-			v.pauseResumeBtn.SetText("Resume Queue")
+			v.pauseResumeBtn.SetText("Resume Speech")
 			v.pauseResumeBtn.SetIcon(theme.MediaPlayIcon())
 		default:
-			v.pauseResumeBtn.SetText("Pause Queue")
+			v.pauseResumeBtn.SetText("Pause Speech")
 			v.pauseResumeBtn.SetIcon(theme.MediaPauseIcon())
 		}
 	}
 	if v.nowPlayingLabel != nil {
-		idle := v.session.Queue() == nil || v.session.Queue().CurrentItem() == nil
+		var current *queue.Item
+		micPaused := false
+		if v.session != nil && v.session.Queue() != nil {
+			q := v.session.Queue()
+			current = q.CurrentItem()
+			micPaused = q.IsMicPaused()
+		}
+		idle := current == nil
 		switch {
 		case panicked:
 			v.nowPlayingLabel.SetText("🚨 PANIC MUTE ACTIVE — All TTS Silenced (Click Unmute or press Esc to resume)")
 		case paused && idle:
-			v.nowPlayingLabel.SetText("⏸️ Queue Paused")
-		case idle:
+			v.nowPlayingLabel.SetText("⏸️ Speech Paused")
+		case micPaused && idle:
+			v.nowPlayingLabel.SetText("🎙️ Speech Paused (Mic Active)")
+		case !idle:
+			v.nowPlayingLabel.SetText(v.formatSpeakingText(current))
+		default:
 			v.nowPlayingLabel.SetText("Idle (No speech active)")
 		}
 	}
+}
+
+func (v *DashboardView) formatSpeakingText(item *queue.Item) string {
+	speaker := "Unknown"
+	if item.Event != nil && item.Event.UserName != "" {
+		speaker = item.Event.UserName
+	}
+	prefix := "🗣️ Speaking"
+	if v.session != nil && v.session.Queue() != nil {
+		q := v.session.Queue()
+		switch {
+		case q.IsPaused():
+			prefix = "⏸️ Paused"
+		case q.IsMicPaused():
+			prefix = "🎙️ Paused (Mic Active)"
+		}
+	}
+	return fmt.Sprintf("%s [%s]: %s (Voice: %s, Speed: %.2fx)",
+		prefix, speaker, item.Text, tts.VoiceDisplayName(item.VoiceID), item.Speed)
 }
 
 func (v *DashboardView) updateCurrentlySpeaking(item *queue.Item) {
@@ -775,12 +805,7 @@ func (v *DashboardView) updateCurrentlySpeaking(item *queue.Item) {
 	if v.session != nil && v.session.IsPanicked() {
 		return
 	}
-	speaker := "Unknown"
-	if item.Event != nil && item.Event.UserName != "" {
-		speaker = item.Event.UserName
-	}
-	v.nowPlayingLabel.SetText(fmt.Sprintf("🗣️ Speaking [%s]: %s (Voice: %s, Speed: %.2fx)",
-		speaker, item.Text, tts.VoiceDisplayName(item.VoiceID), item.Speed))
+	v.nowPlayingLabel.SetText(v.formatSpeakingText(item))
 }
 
 func (v *DashboardView) updateFinishedSpeaking(item *queue.Item) {
@@ -791,9 +816,16 @@ func (v *DashboardView) updateFinishedSpeaking(item *queue.Item) {
 		v.nowPlayingLabel.SetText("🚨 PANIC MUTE ACTIVE — All TTS Silenced (Click Unmute or press Esc to resume)")
 		return
 	}
-	if v.session != nil && v.session.Queue() != nil && v.session.Queue().IsPaused() {
-		v.nowPlayingLabel.SetText("⏸️ Queue Paused")
-		return
+	if v.session != nil && v.session.Queue() != nil {
+		q := v.session.Queue()
+		if q.IsPaused() {
+			v.nowPlayingLabel.SetText("⏸️ Speech Paused")
+			return
+		}
+		if q.IsMicPaused() {
+			v.nowPlayingLabel.SetText("🎙️ Speech Paused (Mic Active)")
+			return
+		}
 	}
 	v.nowPlayingLabel.SetText("Idle (No speech active)")
 }
