@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.0.14 — 2026-11-14
 
 ### Added
 - **Immediate Mid-Speech Pause, Resume & Sentence-Boundary Rewind**:
