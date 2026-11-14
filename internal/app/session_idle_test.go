@@ -28,6 +28,12 @@ func (p *alertCapturePlayer) PlayWithOptions(samples []float32, sampleRate int, 
 func (p *alertCapturePlayer) Stop()                                {}
 func (p *alertCapturePlayer) PanicStop()                           {}
 func (p *alertCapturePlayer) ResetPanic()                          {}
+func (p *alertCapturePlayer) Pause()                               {}
+func (p *alertCapturePlayer) Resume()                              {}
+func (p *alertCapturePlayer) ResumeFromSentenceStart()             {}
+func (p *alertCapturePlayer) RewindSentence()                      {}
+func (p *alertCapturePlayer) IsPaused() bool                       { return false }
+func (p *alertCapturePlayer) MarkSentenceBoundary()                {}
 func (p *alertCapturePlayer) SwitchDevice(dev string) error        { return nil }
 func (p *alertCapturePlayer) SetVolume(vol float32)                {}
 func (p *alertCapturePlayer) Volume() float32                      { return 1.0 }

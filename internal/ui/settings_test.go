@@ -1022,6 +1022,12 @@ func TestSettingsView_MicGateControls(t *testing.T) {
 	}
 
 	// Switch to Pause mode -> duck slider disabled, device & threshold enabled
+	if FormatMicGateModeLabel(config.MicGateModePause) != MicGateLabelPause {
+		t.Fatalf("unexpected pause mode label: %q", FormatMicGateModeLabel(config.MicGateModePause))
+	}
+	if ParseMicGateModeLabel("Pause Speech Between Clauses While Speaking") != config.MicGateModePause {
+		t.Fatal("expected legacy pause label to parse to MicGateModePause")
+	}
 	view.micGateModeSelect.SetSelected(FormatMicGateModeLabel(config.MicGateModePause))
 	if sess.Config().Audio.MicGateMode != config.MicGateModePause {
 		t.Fatalf("expected MicGateMode=%q, got %q", config.MicGateModePause, sess.Config().Audio.MicGateMode)

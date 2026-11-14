@@ -276,6 +276,13 @@ func (mw *MainWindow) initStatusBar() {
 				mw.syncPanicUI(paused, panicked)
 			})
 		})
+		q.SetOnMicGateStateChanged(func(_ bool) {
+			fyne.Do(func() {
+				if mw.dashboardTab != nil {
+					mw.dashboardTab.SyncQueueState(q.IsPaused(), q.IsPanicked())
+				}
+			})
+		})
 	}
 
 	statusRow := container.NewBorder(nil, nil, nil, mw.panicBtn, mw.statusLabel)

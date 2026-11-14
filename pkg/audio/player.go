@@ -26,6 +26,12 @@ type PlayOptions struct {
 type Player interface {
 	Play(samples []float32, sampleRate int) error
 	PlayWithOptions(samples []float32, sampleRate int, opts PlayOptions) error
+	Pause()
+	Resume()
+	ResumeFromSentenceStart()
+	RewindSentence()
+	IsPaused() bool
+	MarkSentenceBoundary()
 	Stop()
 	PanicStop()
 	ResetPanic()
@@ -51,15 +57,18 @@ type DevicePlayer struct {
 	sampleRate   uint32
 	targetDevHex string
 
-	mu           sync.Mutex
-	buffer       []float32
-	cursor       int
-	aborted      atomic.Bool
-	closed       bool
-	volumeBits   atomic.Uint32
-	duckSet      atomic.Bool
-	duckBits     atomic.Uint32
-	fallbackFunc func(reason string)
+	mu                 sync.Mutex
+	buffer             []float32
+	cursor             int
+	sentenceBoundaries []int
+	pendingBoundary    bool
+	paused             atomic.Bool
+	aborted            atomic.Bool
+	closed             bool
+	volumeBits         atomic.Uint32
+	duckSet            atomic.Bool
+	duckBits           atomic.Uint32
+	fallbackFunc       func(reason string)
 }
 
 // NewDevicePlayer creates an audio player targeting the specified device ID (empty for system default).
@@ -181,7 +190,7 @@ func (p *DevicePlayer) onAudioCallback(pOutput, pInput []byte, frameCount uint32
 	numSamples := numFrames * channels
 	outSamples := unsafe.Slice((*float32)(unsafe.Pointer(&pOutput[0])), numSamples)
 
-	if p.aborted.Load() {
+	if p.aborted.Load() || p.paused.Load() {
 		for i := range outSamples {
 			outSamples[i] = 0
 		}
@@ -223,6 +232,7 @@ func (p *DevicePlayer) onAudioCallback(pOutput, pInput []byte, frameCount uint32
 	if p.cursor >= len(p.buffer) && len(p.buffer) > 0 {
 		p.buffer = p.buffer[:0]
 		p.cursor = 0
+		p.sentenceBoundaries = p.sentenceBoundaries[:0]
 	}
 }
 
@@ -281,6 +291,14 @@ func PanMonoToStereo(mono []float32, gain, pan float32) (leftGain, rightGain flo
 	return leftGain, rightGain, stereo
 }
 
+func (p *DevicePlayer) clearIfFinishedLocked() {
+	if p.cursor >= len(p.buffer) && len(p.buffer) > 0 {
+		p.buffer = p.buffer[:0]
+		p.cursor = 0
+		p.sentenceBoundaries = p.sentenceBoundaries[:0]
+	}
+}
+
 // Play queues PCM float32 samples into the player at center pan and unity gain,
 // automatically resampling if sampleRate differs from device sampleRate.
 func (p *DevicePlayer) Play(samples []float32, sampleRate int) error {
@@ -304,15 +322,13 @@ func (p *DevicePlayer) PlayWithOptions(samples []float32, sampleRate int, opts P
 	}
 
 	p.aborted.Store(false)
-	if p.cursor > 0 {
-		remaining := len(p.buffer) - p.cursor
-		if remaining > 0 {
-			copy(p.buffer, p.buffer[p.cursor:])
-			p.buffer = p.buffer[:remaining]
-		} else {
-			p.buffer = p.buffer[:0]
+	p.clearIfFinishedLocked()
+	if p.pendingBoundary {
+		boundary := len(p.buffer)
+		if len(p.sentenceBoundaries) == 0 || p.sentenceBoundaries[len(p.sentenceBoundaries)-1] != boundary {
+			p.sentenceBoundaries = append(p.sentenceBoundaries, boundary)
 		}
-		p.cursor = 0
+		p.pendingBoundary = false
 	}
 	p.buffer = append(p.buffer, stereo...)
 	return nil
@@ -321,11 +337,85 @@ func (p *DevicePlayer) PlayWithOptions(samples []float32, sampleRate int, opts P
 // Stop executes an Emergency Panic Mute (<50ms): flushes audio queue and zeroes outputs immediately.
 func (p *DevicePlayer) Stop() {
 	p.aborted.Store(true)
+	p.paused.Store(false)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.buffer = p.buffer[:0]
 	p.cursor = 0
+	p.sentenceBoundaries = p.sentenceBoundaries[:0]
+	p.pendingBoundary = false
+}
+
+// Pause pauses audio playback mid-buffer, emitting silence without advancing the cursor.
+func (p *DevicePlayer) Pause() {
+	p.paused.Store(true)
+}
+
+// Resume unpauses audio playback from the current cursor position.
+func (p *DevicePlayer) Resume() {
+	p.paused.Store(false)
+}
+
+// ResumeFromSentenceStart rewinds the playback cursor to the beginning of the currently playing sentence, then unpauses.
+func (p *DevicePlayer) ResumeFromSentenceStart() {
+	p.mu.Lock()
+	p.clearIfFinishedLocked()
+	if len(p.buffer) > 0 && !p.aborted.Load() {
+		targetBoundary := 0
+		for _, b := range p.sentenceBoundaries {
+			if b <= p.cursor {
+				targetBoundary = b
+			} else {
+				break
+			}
+		}
+		p.cursor = targetBoundary
+	}
+	p.mu.Unlock()
+	p.paused.Store(false)
+}
+
+// RewindSentence rewinds the playback cursor to the start of the current sentence or previous sentence.
+func (p *DevicePlayer) RewindSentence() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if len(p.sentenceBoundaries) == 0 {
+		p.cursor = 0
+		return
+	}
+
+	threshold := int(p.sampleRate) * 2 / 2 // 500ms in interleaved stereo samples
+	currentIdx := 0
+	for i, b := range p.sentenceBoundaries {
+		if b <= p.cursor {
+			currentIdx = i
+		} else {
+			break
+		}
+	}
+
+	targetBoundary := p.sentenceBoundaries[currentIdx]
+	if currentIdx > 0 && p.cursor-targetBoundary <= threshold {
+		p.cursor = p.sentenceBoundaries[currentIdx-1]
+	} else {
+		p.cursor = targetBoundary
+	}
+}
+
+// IsPaused returns true if playback is currently paused.
+func (p *DevicePlayer) IsPaused() bool {
+	return p.paused.Load()
+}
+
+// MarkSentenceBoundary records the start of a new sentence or clause in the active buffer.
+func (p *DevicePlayer) MarkSentenceBoundary() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.clearIfFinishedLocked()
+	p.pendingBoundary = true
 }
 
 // SetVolume sets the master output volume, clamped between 0.0 and 1.0.
@@ -401,9 +491,10 @@ func (p *DevicePlayer) PanicStop() {
 	p.Stop()
 }
 
-// ResetPanic clears the emergency abort flag so audio can play again.
+// ResetPanic clears the emergency abort and pause flags so audio can play again.
 func (p *DevicePlayer) ResetPanic() {
 	p.aborted.Store(false)
+	p.paused.Store(false)
 }
 
 // Close gracefully closes the audio device and context.

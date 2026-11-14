@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1588,15 +1589,26 @@ func TestSessionCoalesceConsecutiveViewerMessages(t *testing.T) {
 }
 
 type mockDuckPlayer struct {
-	mu       sync.Mutex
-	duckMult float32
+	mu                  sync.Mutex
+	duckMult            float32
+	paused              atomic.Bool
+	resumeSentenceCount atomic.Int32
 }
 
 func (m *mockDuckPlayer) Play(_ []float32, _ int) error                                    { return nil }
 func (m *mockDuckPlayer) PlayWithOptions(_ []float32, _ int, _ audio.PlayOptions) error    { return nil }
-func (m *mockDuckPlayer) Stop()                                                            {}
-func (m *mockDuckPlayer) PanicStop()                                                       {}
-func (m *mockDuckPlayer) ResetPanic()                                                      {}
+func (m *mockDuckPlayer) Stop()                                                            { m.paused.Store(false) }
+func (m *mockDuckPlayer) PanicStop()                                                       { m.paused.Store(false) }
+func (m *mockDuckPlayer) ResetPanic()                                                      { m.paused.Store(false) }
+func (m *mockDuckPlayer) Pause()                                                           { m.paused.Store(true) }
+func (m *mockDuckPlayer) Resume()                                                          { m.paused.Store(false) }
+func (m *mockDuckPlayer) ResumeFromSentenceStart() {
+	m.paused.Store(false)
+	m.resumeSentenceCount.Add(1)
+}
+func (m *mockDuckPlayer) RewindSentence()                                                  {}
+func (m *mockDuckPlayer) IsPaused() bool                                                   { return m.paused.Load() }
+func (m *mockDuckPlayer) MarkSentenceBoundary()                                            {}
 func (m *mockDuckPlayer) SwitchDevice(_ string) error                                      { return nil }
 func (m *mockDuckPlayer) SetVolume(_ float32)                                              {}
 func (m *mockDuckPlayer) Volume() float32                                                  { return 1.0 }
@@ -1650,17 +1662,27 @@ func TestSessionMicGateDuckAndPauseCoordination(t *testing.T) {
 		t.Fatalf("expected duck multiplier 1.0 after release hold, got %v", dp.DuckMultiplier())
 	}
 
-	// Switch to Pause mode -> IsMicGatePausing reflects mic activity
+	// Switch to Pause mode -> IsMicGatePausing reflects mic activity and pauses/resumes player immediately
 	_ = session.UpdateConfig(func(c *config.Config) {
 		c.Audio.MicGateMode = config.MicGateModePause
 	})
+	beforeResumeCount := dp.resumeSentenceCount.Load()
 	session.MicMonitor().ProcessSamples(loud, t0.Add(600*time.Millisecond))
 	if !session.IsMicGatePausing() {
 		t.Fatal("expected IsMicGatePausing()=true while speaking in pause mode")
 	}
+	if !dp.IsPaused() {
+		t.Fatal("expected player to be paused immediately while speaking in pause mode")
+	}
 	session.MicMonitor().ProcessSamples(quiet, t0.Add(1200*time.Millisecond))
 	if session.IsMicGatePausing() {
 		t.Fatal("expected IsMicGatePausing()=false after release hold in pause mode")
+	}
+	if dp.IsPaused() {
+		t.Fatal("expected player to be resumed after release hold in pause mode")
+	}
+	if dp.resumeSentenceCount.Load() != beforeResumeCount+1 {
+		t.Fatalf("expected ResumeFromSentenceStart called once after release hold, got delta %d", dp.resumeSentenceCount.Load()-beforeResumeCount)
 	}
 }
 

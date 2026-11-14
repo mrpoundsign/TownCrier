@@ -2054,31 +2054,38 @@ func (v *SettingsView) buildAudioCard() *widget.Card {
 	return widget.NewCard("Audio Output & Microphone Gate", "Select WASAPI playback device for OBS routing and configure streamer mic ducking/pausing", cardContent)
 }
 
+// Display labels for Microphone VAD Gate modes in the Settings UI.
+const (
+	MicGateLabelOff   = "Off (Disabled)"
+	MicGateLabelDuck  = "Duck TTS Volume While Speaking"
+	MicGateLabelPause = "Pause Speech While Speaking (Resume Sentence)"
+)
+
 // MicGateModeOptions lists the display labels for Microphone VAD Gate modes.
 var MicGateModeOptions = []string{
-	"Off (Disabled)",
-	"Duck TTS Volume While Speaking",
-	"Pause Speech Between Clauses While Speaking",
+	MicGateLabelOff,
+	MicGateLabelDuck,
+	MicGateLabelPause,
 }
 
 // FormatMicGateModeLabel converts a canonical MicGateMode string into its UI dropdown label.
 func FormatMicGateModeLabel(mode string) string {
 	switch config.NormalizeMicGateMode(mode) {
 	case config.MicGateModeDuck:
-		return "Duck TTS Volume While Speaking"
+		return MicGateLabelDuck
 	case config.MicGateModePause:
-		return "Pause Speech Between Clauses While Speaking"
+		return MicGateLabelPause
 	default:
-		return "Off (Disabled)"
+		return MicGateLabelOff
 	}
 }
 
 // ParseMicGateModeLabel converts a UI dropdown label into a canonical MicGateMode string.
 func ParseMicGateModeLabel(label string) string {
 	switch label {
-	case "Duck TTS Volume While Speaking":
+	case MicGateLabelDuck:
 		return config.MicGateModeDuck
-	case "Pause Speech Between Clauses While Speaking":
+	case MicGateLabelPause, "Pause Speech Between Clauses While Speaking":
 		return config.MicGateModePause
 	default:
 		return config.MicGateModeOff
@@ -2169,7 +2176,7 @@ func (v *SettingsView) updateMicGateStatusText(levelDB float32, active bool) {
 		if mode == config.MicGateModeDuck {
 			v.micGateStatusLabel.SetText(fmt.Sprintf("%.0f dB • Ducking", levelDB))
 		} else {
-			v.micGateStatusLabel.SetText(fmt.Sprintf("%.0f dB • Holding Speech", levelDB))
+			v.micGateStatusLabel.SetText(fmt.Sprintf("%.0f dB • Speech Paused", levelDB))
 		}
 		return
 	}
