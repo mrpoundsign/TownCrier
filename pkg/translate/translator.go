@@ -70,7 +70,7 @@ func NormalizeProvider(p string) string {
 
 // NormalizeTargetLang returns a canonical lowercased ISO-639-1 language code, defaulting to "en".
 func NormalizeTargetLang(lang string) string {
-	clean := strings.ToLower(strings.TrimSpace(lang))
+	clean := NormalizeLangCode(lang)
 	switch clean {
 	case "en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh", "ru", "hi", "tl":
 		return clean
@@ -174,14 +174,27 @@ type Result struct {
 
 // Options configures a single translation call.
 type Options struct {
-	Provider     string
-	TargetLang   string
-	SourceLang   string
-	ContactEmail string
-	EndpointURL  string
-	Model        string
-	APIKey       string
-	BypassCache  bool
+	Provider       string
+	TargetLang     string
+	SourceLang     string
+	ContactEmail   string
+	EndpointURL    string
+	Model          string
+	APIKey         string
+	BypassCache    bool
+	ForceTranslate bool // Bypasses single-language target short-circuiting (e.g. for mixed Taglish speech)
+}
+
+// MultiTargetItem holds the resolved text for a single target language in a multi-language fan-out.
+type MultiTargetItem struct {
+	Lang          string `json:"lang"`
+	LanguageBadge string `json:"label"`
+	LanguageName  string `json:"language_name"`
+	Text          string `json:"text"`
+	IsOriginal    bool   `json:"is_original"`
+	Provider      string `json:"provider,omitempty"`
+	Cached        bool   `json:"cached,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 type cacheEntry struct {
@@ -396,11 +409,12 @@ func (s *Service) ClearCache() {
 func makeCacheKey(opts Options, text string) string {
 	prov := NormalizeProvider(opts.Provider)
 	target := NormalizeTargetLang(opts.TargetLang)
+	src := NormalizeLangCode(opts.SourceLang)
 	hasKey := "nokey"
 	if strings.TrimSpace(opts.APIKey) != "" {
 		hasKey = "key"
 	}
-	return prov + "|" + hasKey + "|" + target + "|" + strings.TrimSpace(opts.ContactEmail) + "|" + strings.TrimSpace(opts.EndpointURL) + "|" + strings.TrimSpace(opts.Model) + "|" + strings.TrimSpace(text)
+	return prov + "|" + hasKey + "|" + src + "|" + target + "|" + strings.TrimSpace(opts.ContactEmail) + "|" + strings.TrimSpace(opts.EndpointURL) + "|" + strings.TrimSpace(opts.Model) + "|" + strings.TrimSpace(text)
 }
 
 func (s *Service) lookupCache(key string) (Result, bool) {
@@ -451,8 +465,8 @@ func (s *Service) Translate(ctx context.Context, text string, opts Options) (Res
 	}
 
 	// Universal target-language short-circuit: never send a network request to any provider
-	// when the message is already in the target language.
-	if opts.SourceLang != "" && opts.SourceLang == opts.TargetLang {
+	// when the message is already in the target language (unless ForceTranslate is set for mixed code-switching).
+	if !opts.ForceTranslate && opts.SourceLang != "" && opts.SourceLang == opts.TargetLang {
 		return Result{
 			TranslatedText: "",
 			SourceLang:     opts.TargetLang,
@@ -511,7 +525,9 @@ func (s *Service) Translate(ctx context.Context, text string, opts Options) (Res
 
 	// If the provider detected that the source language is already the target language,
 	// or returned identical text, return empty TranslatedText so the caller knows no translation was needed.
-	if res.SourceLang == opts.TargetLang || strings.EqualFold(res.TranslatedText, trimmed) {
+	// When ForceTranslate is set (e.g. mixed Taglish speech), keep any non-identical translated text even if
+	// the provider guessed the dominant token language matched TargetLang.
+	if strings.EqualFold(res.TranslatedText, trimmed) || (!opts.ForceTranslate && res.SourceLang == opts.TargetLang) {
 		res.TranslatedText = ""
 		res.SourceLang = opts.TargetLang
 	}
@@ -537,8 +553,17 @@ func (s *Service) translateRawChain(ctx context.Context, text, normTarget, normS
 	}
 
 	var lastErr error
+	var emptyOKRes *Result
 	now := s.now()
 	attempted := 0
+
+	hasNonDeepL := false
+	for _, c := range chain {
+		if NormalizeProvider(c.Provider) != ProviderDeepL {
+			hasNonDeepL = true
+			break
+		}
+	}
 
 	for offset := range n {
 		idx := (startIdx + offset) % n
@@ -547,6 +572,13 @@ func (s *Service) translateRawChain(ctx context.Context, text, normTarget, normS
 		cand.TargetLang = normTarget
 		cand.SourceLang = normSource
 		cand.BypassCache = bypassCache
+
+		// DeepL API v2 does not support Tagalog ("tl") or Hindi ("hi"); skip it when other providers
+		// are enabled in the chain so we avoid avoidable HTTP 400 errors and false backoff cooldowns.
+		if hasNonDeepL && cand.Provider == ProviderDeepL &&
+			(normTarget == "tl" || normTarget == "hi" || normSource == "tl" || normSource == "hi") {
+			continue
+		}
 
 		st := s.ProviderStatus(cand.Provider)
 		if st.InBackoff(now) {
@@ -559,10 +591,23 @@ func (s *Service) translateRawChain(ctx context.Context, text, normTarget, normS
 		attempted++
 		res, err := s.Translate(ctx, text, cand)
 		if err == nil {
+			// When ForceTranslate is set (known foreign utterance), if this provider echoed identical untranslated
+			// text (e.g. sparse direct pairs on MyMemory like es|tl), try remaining enabled providers first.
+			if cand.ForceTranslate && strings.TrimSpace(res.TranslatedText) == "" && n > 1 {
+				if emptyOKRes == nil {
+					cp := res
+					emptyOKRes = &cp
+				}
+				continue
+			}
 			return res, nil
 		}
 		lastErr = err
 		now = s.now()
+	}
+
+	if emptyOKRes != nil {
+		return *emptyOKRes, nil
 	}
 
 	if attempted == 0 {
@@ -806,3 +851,193 @@ func (s *Service) TranslateChain(ctx context.Context, text, targetLang, sourceLa
 		Sentences:      traces,
 	}, nil
 }
+
+const (
+	defaultMultiRESTTimeout   = 3500 * time.Millisecond
+	defaultMultiOllamaTimeout = 8000 * time.Millisecond
+)
+
+// TranslateMulti translates text concurrently into an ordered list of target languages (e.g. ["en", "es", "ja"]),
+// preserving the caller's target order, short-circuiting pure source-language matches with 0 network calls,
+// and normalizing bilingual code-switched utterances across all configured target languages.
+func (s *Service) TranslateMulti(
+	ctx context.Context,
+	text string,
+	sourceLang string,
+	targetLangs []string,
+	routingMode string,
+	chain []Options,
+) ([]MultiTargetItem, error) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil, errors.New("translate text cannot be empty")
+	}
+
+	targets := NormalizeTargetLangList(targetLangs, []string{DefaultTargetLang})
+	if len(targets) == 0 {
+		return nil, errors.New("no valid target languages configured")
+	}
+
+	mixedLang, isCodeSwitched := DetectCodeSwitching(trimmed)
+	normSource := NormalizeLangCode(sourceLang)
+	if !isCodeSwitched && (normSource == "" || normSource == "auto") {
+		normSource = DetectSourceLang(trimmed, DefaultTargetLang)
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx := ctx
+	var cancel context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		timeout := defaultMultiRESTTimeout
+		for _, opt := range chain {
+			p := NormalizeProvider(opt.Provider)
+			if p == ProviderOllama || p == ProviderLibreTranslate {
+				timeout = defaultMultiOllamaTimeout
+				break
+			}
+		}
+		runCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	items := make([]MultiTargetItem, len(targets))
+	errs := make([]error, len(targets))
+
+	var wg sync.WaitGroup
+	for i, tgt := range targets {
+		idx := i
+		targetCode := tgt
+		wg.Go(func() {
+			baseItem := MultiTargetItem{
+				Lang:          targetCode,
+				LanguageBadge: LanguageBadge(targetCode),
+				LanguageName:  LanguageName(targetCode),
+			}
+
+			if !isCodeSwitched && normSource != "" && normSource == targetCode {
+				baseItem.Text = trimmed
+				baseItem.IsOriginal = true
+				items[idx] = baseItem
+				return
+			}
+
+			res, err := s.translateSubtitleTarget(runCtx, trimmed, targetCode, normSource, mixedLang, isCodeSwitched, routingMode, chain)
+			if err != nil {
+				baseItem.Text = trimmed
+				baseItem.IsOriginal = true
+				baseItem.Error = err.Error()
+				items[idx] = baseItem
+				errs[idx] = err
+				return
+			}
+			if strings.TrimSpace(res.TranslatedText) == "" {
+				baseItem.Text = trimmed
+				baseItem.IsOriginal = true
+			} else {
+				baseItem.Text = res.TranslatedText
+			}
+			baseItem.Provider = res.Provider
+			baseItem.Cached = res.Cached
+			items[idx] = baseItem
+		})
+	}
+	wg.Wait()
+
+	// Return an overall error only when every target that required translation failed.
+	var neededCount, failedCount int
+	var firstErr error
+	for i := range items {
+		if errs[i] != nil {
+			neededCount++
+			failedCount++
+			if firstErr == nil {
+				firstErr = errs[i]
+			}
+		} else if !items[i].IsOriginal {
+			neededCount++
+		}
+	}
+	if neededCount > 0 && failedCount == neededCount {
+		return items, firstErr
+	}
+	return items, nil
+}
+
+func (s *Service) translateSubtitleTarget(
+	ctx context.Context,
+	trimmed string,
+	targetCode string,
+	normSource string,
+	mixedLang string,
+	isCodeSwitched bool,
+	routingMode string,
+	chain []Options,
+) (Result, error) {
+	var effSource string
+	if isCodeSwitched {
+		switch targetCode {
+		case "en":
+			effSource = mixedLang
+		case mixedLang:
+			effSource = "en"
+		default:
+			if normSource != "" && normSource != "auto" && normSource != targetCode {
+				effSource = normSource
+			} else {
+				effSource = mixedLang
+			}
+		}
+	} else {
+		effSource = normSource
+		if effSource == "" || effSource == "auto" || effSource == targetCode {
+			effSource = DetectSourceLang(trimmed, targetCode)
+		}
+	}
+
+	bypassCache := len(chain) > 0 && chain[0].BypassCache
+	if !bypassCache && s.sentenceCache != nil {
+		if cached, ok := s.sentenceCache.Lookup(targetCode, trimmed); ok && cached.TranslatedText != "" {
+			if cached.SourceLang == "" || cached.SourceLang == effSource {
+				return Result{
+					TranslatedText: cached.TranslatedText,
+					SourceLang:     cached.SourceLang,
+					Provider:       cached.Provider,
+					Cached:         true,
+				}, nil
+			}
+		}
+	}
+
+	forcedChain := make([]Options, len(chain))
+	for i, c := range chain {
+		c.ForceTranslate = true
+		forcedChain[i] = c
+	}
+
+	res, err := s.translateRawChain(ctx, trimmed, targetCode, effSource, routingMode, forcedChain, bypassCache)
+	// If a direct non-English pair (e.g. es -> tl on free MyMemory) failed or returned identical untranslated text,
+	// pivot via English (effSource -> en -> targetCode) so every target language still translates cleanly.
+	if (err != nil || strings.TrimSpace(res.TranslatedText) == "") &&
+		!isCodeSwitched && effSource != "" && effSource != "en" && targetCode != "en" {
+		enRes, enErr := s.translateRawChain(ctx, trimmed, "en", effSource, routingMode, forcedChain, bypassCache)
+		if enErr == nil && strings.TrimSpace(enRes.TranslatedText) != "" {
+			pivRes, pivErr := s.translateRawChain(ctx, enRes.TranslatedText, targetCode, "en", routingMode, forcedChain, bypassCache)
+			if pivErr == nil && strings.TrimSpace(pivRes.TranslatedText) != "" {
+				res = pivRes
+				res.SourceLang = effSource
+				err = nil
+			}
+		}
+	}
+	if err != nil {
+		return Result{}, err
+	}
+
+	if s.sentenceCache != nil && res.TranslatedText != "" && !strings.EqualFold(res.TranslatedText, trimmed) {
+		s.sentenceCache.Store(targetCode, trimmed, res.TranslatedText, effSource, res.Provider)
+	}
+	return res, nil
+}
+
