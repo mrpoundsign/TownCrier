@@ -3,6 +3,7 @@ package audio
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -61,6 +62,7 @@ type CaptureMonitor struct {
 
 	onActiveChange func(active bool)
 	onLevelUpdate  func(levelDB float32, active bool)
+	onSamples      func(samples []float32)
 }
 
 // NewCaptureMonitor creates a microphone VAD/RMS gate monitor with the given threshold (dBFS) and release hold duration.
@@ -133,6 +135,14 @@ func (m *CaptureMonitor) SetOnLevelUpdate(fn func(levelDB float32, active bool))
 	m.mu.Unlock()
 }
 
+// SetOnSamples registers a non-aliasing sample tap callback invoked with a cloned copy of each captured
+// 16 kHz mono float32 PCM buffer so downstream consumers (such as STT/VAD) share the open capture device safely.
+func (m *CaptureMonitor) SetOnSamples(fn func(samples []float32)) {
+	m.mu.Lock()
+	m.onSamples = fn
+	m.mu.Unlock()
+}
+
 // ProcessSamples evaluates a buffer of mono float32 PCM samples at timestamp now,
 // updating the current dBFS level and gate state with release hysteresis.
 func (m *CaptureMonitor) ProcessSamples(samples []float32, now time.Time) (levelDB float32, isActive bool) {
@@ -166,6 +176,7 @@ func (m *CaptureMonitor) ProcessSamples(samples []float32, now time.Time) (level
 	m.mu.Lock()
 	activeFn := m.onActiveChange
 	levelFn := m.onLevelUpdate
+	samplesFn := m.onSamples
 	m.mu.Unlock()
 
 	if stateChanged && activeFn != nil {
@@ -173,6 +184,9 @@ func (m *CaptureMonitor) ProcessSamples(samples []float32, now time.Time) (level
 	}
 	if levelFn != nil {
 		levelFn(db, curActive)
+	}
+	if samplesFn != nil && len(samples) > 0 {
+		samplesFn(slices.Clone(samples))
 	}
 	return db, curActive
 }
