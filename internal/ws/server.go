@@ -138,29 +138,35 @@ type Server struct {
 	host               string
 	port               int
 	authToken          string
-	controlEnabled     bool
-	ttsOverlayEnabled  bool
-	chatOverlayEnabled bool
-	listener           net.Listener
-	httpSrv            *http.Server
-	clients            map[*wsClient]struct{}
+	controlEnabled          bool
+	ttsOverlayEnabled       bool
+	chatOverlayEnabled      bool
+	subtitlesOverlayEnabled bool
+	listener                net.Listener
+	httpSrv                 *http.Server
+	stopCh                  chan struct{}
+	clients                 map[*wsClient]struct{}
 
-	overlaySubsMu sync.Mutex
-	overlaySubs   map[uint64]chan OverlayStreamEvent
-	overlaySubSeq uint64
+	overlaySubsMu  sync.Mutex
+	overlaySubs    map[uint64]chan OverlayStreamEvent
+	overlaySubSeq  uint64
+	subtitleSubs   map[uint64]chan SubtitleEvent
+	subtitleSubSeq uint64
 }
 
 // NewServer creates a new WebSocket & HTTP control server bound to the given Controller.
 func NewServer(ctrl Controller) *Server {
 	return &Server{
-		ctrl:               ctrl,
-		host:               config.DefaultWebSocketHost,
-		port:               config.DefaultWebSocketPort,
-		controlEnabled:     true,
-		ttsOverlayEnabled:  true,
-		chatOverlayEnabled: true,
-		clients:            make(map[*wsClient]struct{}),
-		overlaySubs:        make(map[uint64]chan OverlayStreamEvent),
+		ctrl:                    ctrl,
+		host:                    config.DefaultWebSocketHost,
+		port:                    config.DefaultWebSocketPort,
+		controlEnabled:          true,
+		ttsOverlayEnabled:       true,
+		chatOverlayEnabled:      true,
+		subtitlesOverlayEnabled: true,
+		clients:                 make(map[*wsClient]struct{}),
+		overlaySubs:             make(map[uint64]chan OverlayStreamEvent),
+		subtitleSubs:            make(map[uint64]chan SubtitleEvent),
 	}
 }
 
@@ -182,7 +188,8 @@ func (s *Server) removeOverlayStreamChan(id uint64) {
 	delete(s.overlaySubs, id)
 }
 
-// BroadcastOverlayReload notifies all connected /api/overlay/stream SSE clients and /ws clients to reload their snapshot and style.
+// BroadcastOverlayReload notifies all connected /api/overlay/stream SSE clients, /api/overlay/subtitles/stream SSE clients,
+// and /ws clients to reload their snapshot and style.
 func (s *Server) BroadcastOverlayReload() {
 	s.overlaySubsMu.Lock()
 	ev := OverlayStreamEvent{Kind: "reload"}
@@ -192,8 +199,41 @@ func (s *Server) BroadcastOverlayReload() {
 		default:
 		}
 	}
+	subEv := SubtitleEvent{Kind: "reload"}
+	for _, ch := range s.subtitleSubs {
+		select {
+		case ch <- subEv:
+		default:
+		}
+	}
 	s.overlaySubsMu.Unlock()
 	s.BroadcastState()
+}
+
+// BroadcastSubtitleEvent pushes a real-time multi-language voice subtitle event to all connected /api/overlay/subtitles/stream SSE subscribers.
+func (s *Server) BroadcastSubtitleEvent(ev SubtitleEvent) {
+	s.overlaySubsMu.Lock()
+	defer s.overlaySubsMu.Unlock()
+	for _, ch := range s.subtitleSubs {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+}
+
+// SetSubtitlesOverlayEnabled dynamically enables or disables the /overlay/subtitles endpoints without restarting the listener.
+func (s *Server) SetSubtitlesOverlayEnabled(enabled bool) {
+	s.mu.Lock()
+	s.subtitlesOverlayEnabled = enabled
+	s.mu.Unlock()
+}
+
+// IsSubtitlesOverlayEnabled reports whether the /overlay/subtitles routes are currently enabled.
+func (s *Server) IsSubtitlesOverlayEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.subtitlesOverlayEnabled
 }
 
 // SetFeatures dynamically updates which HTTP/WebSocket routes are enabled without restarting the listener.
@@ -237,6 +277,12 @@ func (s *Server) isChatOverlayEnabled() bool {
 	return s.chatOverlayEnabled
 }
 
+func (s *Server) stopChan() <-chan struct{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.stopCh
+}
+
 // Start begins listening on host:port (use port 0 for an ephemeral OS port in tests).
 func (s *Server) Start(host string, port int, authToken string) error {
 	s.mu.Lock()
@@ -262,6 +308,7 @@ func (s *Server) Start(host string, port int, authToken string) error {
 	s.port = ln.Addr().(*net.TCPAddr).Port
 	s.authToken = strings.TrimSpace(authToken)
 	s.listener = ln
+	s.stopCh = make(chan struct{})
 
 	mux := http.NewServeMux()
 	wsServer := websocket.Server{
@@ -291,9 +338,12 @@ func (s *Server) Start(host string, port int, authToken string) error {
 	// OBS Browser Source Overlay endpoints
 	mux.Handle("/overlay/tts", s.withCORSAndAuth(http.HandlerFunc(s.handleOverlayTTS)))
 	mux.Handle("/overlay/chat", s.withCORSAndAuth(http.HandlerFunc(s.handleOverlayChat)))
+	mux.Handle("/overlay/subtitles", s.withCORSAndAuth(http.HandlerFunc(s.handleOverlaySubtitles)))
 	mux.Handle("/overlay/designer", s.withCORSAndAuth(http.HandlerFunc(s.handleOverlayDesigner)))
 	mux.Handle("/api/overlay/chat", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlayChat)))
 	mux.Handle("/api/overlay/stream", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlayStream)))
+	mux.Handle("/api/overlay/subtitles", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlaySubtitles)))
+	mux.Handle("/api/overlay/subtitles/stream", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlaySubtitlesStream)))
 	mux.Handle("/api/overlay/style", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlayStyle)))
 
 	srv := &http.Server{
@@ -317,14 +367,20 @@ func (s *Server) Stop() error {
 	s.mu.Lock()
 	srv := s.httpSrv
 	ln := s.listener
+	stopCh := s.stopCh
 	s.httpSrv = nil
 	s.listener = nil
+	s.stopCh = nil
 	clients := make([]*wsClient, 0, len(s.clients))
 	for c := range s.clients {
 		clients = append(clients, c)
 	}
 	clear(s.clients)
 	s.mu.Unlock()
+
+	if stopCh != nil {
+		close(stopCh)
+	}
 
 	for _, c := range clients {
 		_ = c.conn.Close()

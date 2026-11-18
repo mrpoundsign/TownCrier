@@ -26,9 +26,16 @@ type ChatOverlaySnapshot struct {
 
 // OverlayStyleConfig holds the persisted visual style and custom CSS for OBS Browser Source overlays.
 type OverlayStyleConfig struct {
-	TTSPosition string `json:"tts_position"`
-	CustomCSS   string `json:"custom_css"`
-	StyleJSON   string `json:"style_json,omitempty"`
+	TTSEnabled         bool     `json:"tts_enabled"`
+	ChatEnabled        bool     `json:"chat_enabled"`
+	SubtitlesEnabled   bool     `json:"subtitles_enabled"`
+	TargetLanguages    []string `json:"target_languages,omitempty"`
+	TTSPosition        string   `json:"tts_position"`
+	CustomCSS          string   `json:"custom_css"`
+	StyleJSON          string   `json:"style_json,omitempty"`
+	SubtitlesCustomCSS string   `json:"subtitles_custom_css,omitempty"`
+	SubtitlesStyleJSON string   `json:"subtitles_style_json,omitempty"`
+	Target             string   `json:"target,omitempty"`
 }
 
 // OverlayStyleProvider is an optional interface implemented by Controller (such as app.Session)
@@ -88,7 +95,7 @@ func (s *Server) handleOverlayDesigner(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.isTTSOverlayEnabled() && !s.isChatOverlayEnabled() {
+	if !s.isTTSOverlayEnabled() && !s.isChatOverlayEnabled() && !s.IsSubtitlesOverlayEnabled() {
 		http.Error(w, "OBS Overlays are disabled in TownCrier Settings", http.StatusNotFound)
 		return
 	}
@@ -98,21 +105,41 @@ func (s *Server) handleOverlayDesigner(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(overlayDesignerHTML))
 }
 
+func (s *Server) populateOverlayStyleMeta(cfg *OverlayStyleConfig) {
+	if cfg == nil {
+		return
+	}
+	cfg.TTSEnabled = s.isTTSOverlayEnabled()
+	cfg.ChatEnabled = s.isChatOverlayEnabled()
+	cfg.SubtitlesEnabled = s.IsSubtitlesOverlayEnabled()
+	if cfg.TTSPosition == "" {
+		cfg.TTSPosition = "bottom"
+	}
+	if subStyleProv, ok := s.ctrl.(SubtitlesStyleProvider); ok && subStyleProv != nil {
+		cfg.SubtitlesCustomCSS, cfg.SubtitlesStyleJSON = subStyleProv.GetSubtitlesOverlayStyle()
+	}
+	if subProv, ok := s.ctrl.(SubtitlesOverlayProvider); ok && subProv != nil {
+		snap := subProv.SnapshotOverlaySubtitles()
+		if len(snap.TargetLanguages) > 0 {
+			cfg.TargetLanguages = snap.TargetLanguages
+		}
+	}
+}
+
 func (s *Server) handleAPIOverlayStyle(w http.ResponseWriter, r *http.Request) {
-	if !s.isTTSOverlayEnabled() && !s.isChatOverlayEnabled() {
+	if !s.isTTSOverlayEnabled() && !s.isChatOverlayEnabled() && !s.IsSubtitlesOverlayEnabled() {
 		http.Error(w, "OBS Overlays are disabled in TownCrier Settings", http.StatusNotFound)
 		return
 	}
 	styleProv, hasProv := s.ctrl.(OverlayStyleProvider)
+	subStyleProv, hasSubProv := s.ctrl.(SubtitlesStyleProvider)
 	switch r.Method {
 	case http.MethodGet:
 		var cfg OverlayStyleConfig
 		if hasProv && styleProv != nil {
 			cfg = styleProv.GetOverlayStyle()
 		}
-		if cfg.TTSPosition == "" {
-			cfg.TTSPosition = "bottom"
-		}
+		s.populateOverlayStyleMeta(&cfg)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(cfg)
@@ -122,17 +149,35 @@ func (s *Server) handleAPIOverlayStyle(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid JSON payload", http.StatusBadRequest)
 			return
 		}
-		if hasProv && styleProv != nil {
+		if strings.EqualFold(strings.TrimSpace(req.Target), "subtitles") {
+			if hasSubProv && subStyleProv != nil {
+				if err := subStyleProv.SaveSubtitlesOverlayStyle(req.SubtitlesCustomCSS, req.SubtitlesStyleJSON); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			} else if hasProv && styleProv != nil {
+				if err := styleProv.SaveOverlayStyle(req.SubtitlesCustomCSS, req.SubtitlesStyleJSON); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			}
+		} else if hasProv && styleProv != nil {
 			if err := styleProv.SaveOverlayStyle(req.CustomCSS, req.StyleJSON); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			req = styleProv.GetOverlayStyle()
 		}
+		var out OverlayStyleConfig
+		if hasProv && styleProv != nil {
+			out = styleProv.GetOverlayStyle()
+		} else {
+			out = req
+		}
+		s.populateOverlayStyleMeta(&out)
 		s.BroadcastOverlayReload()
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(req)
+		_ = json.NewEncoder(w).Encode(out)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -237,9 +282,12 @@ func (s *Server) handleAPIOverlayStream(w http.ResponseWriter, r *http.Request) 
 	defer keepAlive.Stop()
 
 	ctx := r.Context()
+	stopCh := s.stopChan()
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-stopCh:
 			return
 		case <-keepAlive.C:
 			if !s.isChatOverlayEnabled() {
@@ -857,7 +905,7 @@ const overlayDesignerHTML = `<!DOCTYPE html>
   body {
     background: var(--ui-bg);
     color: var(--ui-text);
-    font-family: 'Segoe UI', Inter, system-ui, -apple-system, sans-serif;
+    font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', Inter, system-ui, -apple-system, sans-serif;
     min-height: 100vh;
     display: flex;
     flex-direction: column;
@@ -870,6 +918,7 @@ const overlayDesignerHTML = `<!DOCTYPE html>
     align-items: center;
     justify-content: space-between;
     gap: 16px;
+    flex-wrap: wrap;
   }
   header h1 {
     font-size: 1.15rem;
@@ -879,6 +928,39 @@ const overlayDesignerHTML = `<!DOCTYPE html>
   header p {
     font-size: 0.85rem;
     color: var(--ui-muted);
+  }
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .tab-bar {
+    display: flex;
+    background: #090D16;
+    border: 1px solid var(--ui-border);
+    border-radius: 10px;
+    padding: 3px;
+    gap: 4px;
+  }
+  .tab-btn {
+    border: none;
+    background: transparent;
+    color: var(--ui-muted);
+    padding: 7px 14px;
+    border-radius: 7px;
+    font-size: 0.86rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 140ms ease;
+  }
+  .tab-btn:hover {
+    color: var(--ui-text);
+    background: rgba(51, 65, 85, 0.45);
+  }
+  .tab-btn.active {
+    background: var(--ui-accent);
+    color: #090D16;
   }
   .actions {
     display: flex;
@@ -908,7 +990,7 @@ const overlayDesignerHTML = `<!DOCTYPE html>
   .main {
     flex: 1;
     display: grid;
-    grid-template-columns: 380px 1fr;
+    grid-template-columns: 390px 1fr;
     gap: 20px;
     padding: 20px 24px;
   }
@@ -969,7 +1051,7 @@ const overlayDesignerHTML = `<!DOCTYPE html>
     min-height: 460px;
     border-radius: 12px;
     border: 1px solid var(--ui-border);
-    padding: 20px;
+    padding: 24px;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -988,7 +1070,7 @@ const overlayDesignerHTML = `<!DOCTYPE html>
   .preview-stage.dark { background: #090D16; }
   .preview-stage.light { background: #E2E8F0; }
 
-  /* Base Overlay Classes inside Preview */
+  /* Chat & TTS Overlay Classes inside Preview */
   .preview-scope {
     --bg: rgba(15, 23, 42, 0.92);
     --border: rgba(56, 189, 248, 0.48);
@@ -1083,8 +1165,123 @@ const overlayDesignerHTML = `<!DOCTYPE html>
     color: var(--muted);
     margin-left: 8px;
   }
+
+  /* Voice Subtitles Overlay Classes inside Preview */
+  .subtitles-preview-scope {
+    --bg: rgba(15, 23, 42, 0.90);
+    --border: rgba(56, 189, 248, 0.50);
+    --text: #F8FAFC;
+    --orig-text: #F8FAFC;
+    --muted: #94A3B8;
+    --accent: #38BDF8;
+    --badge-bg: rgba(56, 189, 248, 0.18);
+    --badge-border: rgba(56, 189, 248, 0.42);
+    --orig-badge-bg: rgba(56, 189, 248, 0.32);
+    --orig-badge-text: #F8FAFC;
+    --row-divider: rgba(51, 65, 85, 0.55);
+    --pill-bg: rgba(15, 23, 42, 0.85);
+    --pill-text: #38BDF8;
+    --card-radius: 14px;
+    --scale: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    height: 100%;
+    flex: 1;
+  }
+  .subtitles-preview-scope .mic-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--pill-bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 14px;
+    font-size: calc(0.80rem * var(--scale));
+    font-weight: 700;
+    color: var(--pill-text);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  }
+  .subtitles-preview-scope .eq {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2.5px;
+    height: 12px;
+  }
+  .subtitles-preview-scope .eq span {
+    width: 3px;
+    background: var(--pill-text);
+    border-radius: 2px;
+    animation: subBounce 0.8s ease-in-out infinite;
+  }
+  .subtitles-preview-scope .eq span:nth-child(1) { height: 5px; animation-delay: 0s; }
+  .subtitles-preview-scope .eq span:nth-child(2) { height: 12px; animation-delay: 0.15s; }
+  .subtitles-preview-scope .eq span:nth-child(3) { height: 8px; animation-delay: 0.30s; }
+  @keyframes subBounce {
+    0%, 100% { transform: scaleY(0.45); }
+    50% { transform: scaleY(1); }
+  }
+  .subtitles-preview-scope .card {
+    width: min(820px, 100%);
+    background: var(--bg);
+    border: 1.5px solid var(--border);
+    border-radius: var(--card-radius);
+    padding: 14px 20px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.58), 0 0 22px rgba(56, 189, 248, 0.14);
+    backdrop-filter: blur(10px);
+  }
+  .subtitles-preview-scope .rows {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .subtitles-preview-scope .lang-row {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--row-divider);
+  }
+  .subtitles-preview-scope .lang-row:first-child {
+    padding-top: 0;
+    border-top: none;
+  }
+  .subtitles-preview-scope .lang-badge {
+    flex: 0 0 auto;
+    min-width: calc(42px * var(--scale));
+    text-align: center;
+    font-size: calc(0.74rem * var(--scale));
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--badge-bg);
+    border: 1px solid var(--badge-border);
+    color: var(--accent);
+  }
+  .subtitles-preview-scope .lang-row.original .lang-badge {
+    background: var(--orig-badge-bg);
+    color: var(--orig-badge-text);
+  }
+  .subtitles-preview-scope .lang-text {
+    flex: 1 1 auto;
+    font-size: calc(1.24rem * var(--scale));
+    line-height: 1.42;
+    font-weight: 600;
+    color: var(--text);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.72);
+    word-break: break-word;
+  }
+  .subtitles-preview-scope .lang-row.original .lang-text {
+    color: var(--orig-text);
+  }
+  .hidden { display: none !important; }
 </style>
 <style id="designerDynamicCSS"></style>
+<style id="subtitlesDynamicCSS"></style>
 </head>
 <body>
 <header>
@@ -1092,14 +1289,21 @@ const overlayDesignerHTML = `<!DOCTYPE html>
     <h1>🎨 TownCrier — OBS Overlay Style Designer</h1>
     <p>Adjust colors, tags, and layout below. Changes save automatically and live-refresh your OBS Browser Sources.</p>
   </div>
-  <div class="actions">
-    <span id="saveStatus" class="status-pill">✓ Live-synced with OBS</span>
-    <button id="resetBtn" type="button">↺ Reset to Default</button>
+  <div class="header-right">
+    <div id="tabBar" class="tab-bar">
+      <button type="button" id="tabBtnChatTTS" class="tab-btn active" data-tab="chat_tts">💬 Chat & Now-Speaking</button>
+      <button type="button" id="tabBtnSubtitles" class="tab-btn" data-tab="subtitles">🎙️ Voice Subtitles</button>
+    </div>
+    <div class="actions">
+      <span id="saveStatus" class="status-pill">✓ Live-synced with OBS</span>
+      <button id="resetBtn" type="button">↺ Reset to Default</button>
+    </div>
   </div>
 </header>
 
 <div class="main">
-  <div class="panel">
+  <!-- Controls Panel: Chat & Now-Speaking -->
+  <div id="controlsChatTTS" class="panel">
     <h2>Colors & Backgrounds</h2>
     <div class="field-row">
       <label for="bgColor">Message Background</label>
@@ -1163,9 +1367,76 @@ const overlayDesignerHTML = `<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Controls Panel: Voice Subtitles -->
+  <div id="controlsSubtitles" class="panel hidden">
+    <h2>Subtitle Card & Badge Colors</h2>
+    <div class="field-row">
+      <label for="subBgColor">Card Background</label>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <input type="color" id="subBgColor" value="#0f172a">
+        <input type="range" id="subBgOpacity" min="0" max="100" value="90" title="Card Background Opacity">
+      </div>
+    </div>
+    <div class="field-row">
+      <label for="subBorderColor">Card Border & Accent</label>
+      <input type="color" id="subBorderColor" value="#38bdf8">
+    </div>
+    <div class="field-row">
+      <label for="subBadgeColor">Language Tag ([EN] / [JA]) Color</label>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <input type="color" id="subBadgeColor" value="#38bdf8">
+        <input type="range" id="subBadgeOpacity" min="0" max="100" value="18" title="Language Tag Background Opacity">
+      </div>
+    </div>
+    <div class="field-row">
+      <label for="subTextColor">Translated Text Color</label>
+      <input type="color" id="subTextColor" value="#f8fafc">
+    </div>
+    <div class="field-row">
+      <label for="subOrigTextColor">Spoken (Original) Text Color</label>
+      <input type="color" id="subOrigTextColor" value="#f8fafc">
+    </div>
+    <div class="field-row">
+      <label for="subDividerColor">Language Row Divider Color</label>
+      <input type="color" id="subDividerColor" value="#334155">
+    </div>
+    <div class="field-row">
+      <label for="subPillColor">"Listening" Indicator Color</label>
+      <input type="color" id="subPillColor" value="#38bdf8">
+    </div>
+
+    <h2>Elements & Visibility</h2>
+    <div class="field-row">
+      <label><input type="checkbox" id="subShowMicPill" checked> Show "Listening" Mic Indicator Pill</label>
+    </div>
+    <div class="field-row">
+      <label><input type="checkbox" id="subShowLangBadges" checked> Show Language Tags ([EN], [ES], [JA]...)</label>
+    </div>
+    <div class="field-row">
+      <label><input type="checkbox" id="subHighlightOriginal" checked> Highlight Spoken Language Tag</label>
+    </div>
+    <div class="field-row">
+      <label><input type="checkbox" id="subShowDividers" checked> Show Horizontal Dividers Between Languages</label>
+    </div>
+    <div class="field-row">
+      <label><input type="checkbox" id="subShowCardBorders" checked> Show Card Background, Border & Blur</label>
+    </div>
+
+    <h2>Typography & Shape</h2>
+    <div class="field-row">
+      <label for="subFontScale">Subtitle Font Scale</label>
+      <input type="range" id="subFontScale" min="60" max="220" value="100">
+    </div>
+    <div class="field-row">
+      <label for="subCardRadius">Card Corner Radius</label>
+      <input type="range" id="subCardRadius" min="0" max="28" value="14">
+    </div>
+  </div>
+
+  <!-- Live Preview Panel -->
   <div class="panel">
     <div style="display:flex;align-items:center;justify-content:space-between;">
-      <h2>Live Overlay Preview</h2>
+      <h2 id="previewTitle">Live Overlay Preview</h2>
       <div style="display:flex;gap:6px;">
         <button type="button" data-bg="checker" class="bg-btn">Checkerboard</button>
         <button type="button" data-bg="dark" class="bg-btn">Dark</button>
@@ -1173,37 +1444,64 @@ const overlayDesignerHTML = `<!DOCTYPE html>
       </div>
     </div>
 
-    <div id="previewStage" class="preview-stage checker preview-scope">
-      <div>
-        <div class="card">
-          <div class="header">
-            <span class="badge twitch">TWITCH</span>
-            <span class="speaker twitch">StreamerFan42</span>
-            <span class="voice-pill">kokoro:af_heart</span>
+    <div id="previewStage" class="preview-stage checker">
+      <!-- Chat & TTS Preview View -->
+      <div id="previewChatTTSView" class="preview-scope" style="display:flex;flex-direction:column;justify-content:space-between;flex:1;">
+        <div id="previewTTSCardWrap">
+          <div class="card">
+            <div class="header">
+              <span class="badge twitch">TWITCH</span>
+              <span class="speaker twitch">StreamerFan42</span>
+              <span class="voice-pill">kokoro:af_heart</span>
+            </div>
+            <div class="caption">StreamerFan42 says: This stream overlay looks awesome!</div>
           </div>
-          <div class="caption">StreamerFan42 says: This stream overlay looks awesome!</div>
+        </div>
+
+        <div id="previewChatFeedWrap" class="feed">
+          <div class="msg">
+            <span class="status">🗣️</span>
+            <span class="plat twitch">twitch</span>
+            <span class="user twitch">NightOwl:</span>
+            <span class="text">Let's gooo! Great raid earlier!</span>
+          </div>
+          <div class="msg">
+            <span class="status">🗣️</span>
+            <span class="plat youtube">youtube</span>
+            <span class="user youtube">Carlos_MX:</span>
+            <span class="text">Hello friends, this stream is amazing today!</span>
+            <span class="trans">🌐 ¡Hola amigos, este directo está increíble hoy!</span>
+          </div>
+          <div class="msg paid">
+            <span class="status">⏳</span>
+            <span class="plat kick">kick</span>
+            <span class="user kick">PixelHero:</span>
+            <span class="text">Raided with 45 viewers</span>
+          </div>
         </div>
       </div>
 
-      <div class="feed">
-        <div class="msg">
-          <span class="status">🗣️</span>
-          <span class="plat twitch">twitch</span>
-          <span class="user twitch">NightOwl:</span>
-          <span class="text">Let's gooo! Great raid earlier!</span>
+      <!-- Voice Subtitles Preview View -->
+      <div id="previewSubtitlesView" class="subtitles-preview-scope hidden">
+        <div class="mic-pill">
+          <div class="eq"><span></span><span></span><span></span></div>
+          <span>Listening</span>
         </div>
-        <div class="msg">
-          <span class="status">🗣️</span>
-          <span class="plat youtube">youtube</span>
-          <span class="user youtube">Carlos_MX:</span>
-          <span class="text">Hello friends, this stream is amazing today!</span>
-          <span class="trans">🌐 ¡Hola amigos, este directo está increíble hoy!</span>
-        </div>
-        <div class="msg paid">
-          <span class="status">⏳</span>
-          <span class="plat kick">kick</span>
-          <span class="user kick">PixelHero:</span>
-          <span class="text">Raided with 45 viewers</span>
+        <div class="card">
+          <div id="previewSubtitlesRows" class="rows">
+            <div class="lang-row original">
+              <span class="lang-badge">EN</span>
+              <span class="lang-text">Hello everyone, welcome back to the stream!</span>
+            </div>
+            <div class="lang-row">
+              <span class="lang-badge">ES</span>
+              <span class="lang-text">¡Hola a todos, bienvenidos de nuevo al directo!</span>
+            </div>
+            <div class="lang-row">
+              <span class="lang-badge">JA</span>
+              <span class="lang-text">皆さんこんにちは、配信にお帰りなさい！</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1214,6 +1512,7 @@ const overlayDesignerHTML = `<!DOCTYPE html>
 (function() {
   const params = new URLSearchParams(window.location.search);
   const token = params.get('token') || '';
+  const requestedTab = (params.get('tab') || '').toLowerCase();
   const apiUrl = '/api/overlay/style' + (token ? '?token=' + encodeURIComponent(token) : '');
 
   const defaults = {
@@ -1235,13 +1534,65 @@ const overlayDesignerHTML = `<!DOCTYPE html>
     cardRadius: 10
   };
 
+  const subDefaults = {
+    subBgColor: '#0f172a',
+    subBgOpacity: 90,
+    subBorderColor: '#38bdf8',
+    subBadgeColor: '#38bdf8',
+    subBadgeOpacity: 18,
+    subTextColor: '#f8fafc',
+    subOrigTextColor: '#f8fafc',
+    subDividerColor: '#334155',
+    subPillColor: '#38bdf8',
+    subShowMicPill: true,
+    subShowLangBadges: true,
+    subHighlightOriginal: true,
+    subShowDividers: true,
+    subShowCardBorders: true,
+    subFontScale: 100,
+    subCardRadius: 14
+  };
+
+  const sampleSentences = {
+    en: { badge: 'EN', text: 'Hello everyone, welcome back to the stream!' },
+    es: { badge: 'ES', text: '¡Hola a todos, bienvenidos de nuevo al directo!' },
+    tl: { badge: 'FIL', text: 'Kumusta sa inyong lahat, maligayang pagbabalik sa stream!' },
+    ja: { badge: 'JA', text: '皆さんこんにちは、配信にお帰りなさい！' },
+    fr: { badge: 'FR', text: 'Bonjour à tous, bon retour sur le stream !' },
+    de: { badge: 'DE', text: 'Hallo zusammen, willkommen zurück im Stream!' },
+    it: { badge: 'IT', text: 'Ciao a tutti, bentornati nella live!' },
+    pt: { badge: 'PT', text: 'Olá a todos, bem-vindos de volta à live!' },
+    ko: { badge: 'KO', text: '여러분 안녕하세요, 방송에 다시 오신 것을 환영합니다!' },
+    zh: { badge: 'ZH', text: '大家好，欢迎回到直播间！' },
+    ru: { badge: 'RU', text: 'Всем привет, с возвращением на стрим!' },
+    hi: { badge: 'HI', text: 'सभी को नमस्ते, स्ट्रीम में आपका फिर से स्वागत है!' }
+  };
+
   const els = {};
   Object.keys(defaults).forEach(function(k) {
     els[k] = document.getElementById(k);
   });
+  const subEls = {};
+  Object.keys(subDefaults).forEach(function(k) {
+    subEls[k] = document.getElementById(k);
+  });
+
   const dynamicCSS = document.getElementById('designerDynamicCSS');
+  const subDynamicCSS = document.getElementById('subtitlesDynamicCSS');
   const saveStatus = document.getElementById('saveStatus');
   const previewStage = document.getElementById('previewStage');
+  const tabBar = document.getElementById('tabBar');
+  const tabBtnChatTTS = document.getElementById('tabBtnChatTTS');
+  const tabBtnSubtitles = document.getElementById('tabBtnSubtitles');
+  const controlsChatTTS = document.getElementById('controlsChatTTS');
+  const controlsSubtitles = document.getElementById('controlsSubtitles');
+  const previewChatTTSView = document.getElementById('previewChatTTSView');
+  const previewSubtitlesView = document.getElementById('previewSubtitlesView');
+  const previewTTSCardWrap = document.getElementById('previewTTSCardWrap');
+  const previewChatFeedWrap = document.getElementById('previewChatFeedWrap');
+  const previewSubtitlesRows = document.getElementById('previewSubtitlesRows');
+
+  let activeTab = 'chat_tts';
   let saveTimer = null;
 
   function hexToRgba(hex, alphaPct) {
@@ -1251,6 +1602,39 @@ const overlayDesignerHTML = `<!DOCTYPE html>
     const b = parseInt(clean.substring(4, 6), 16) || 42;
     const a = (Math.max(0, Math.min(100, Number(alphaPct))) / 100).toFixed(2);
     return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + a + ')';
+  }
+
+  function setActiveTab(tab) {
+    activeTab = (tab === 'subtitles') ? 'subtitles' : 'chat_tts';
+    tabBtnChatTTS.classList.toggle('active', activeTab === 'chat_tts');
+    tabBtnSubtitles.classList.toggle('active', activeTab === 'subtitles');
+    controlsChatTTS.classList.toggle('hidden', activeTab !== 'chat_tts');
+    controlsSubtitles.classList.toggle('hidden', activeTab !== 'subtitles');
+    previewChatTTSView.classList.toggle('hidden', activeTab !== 'chat_tts');
+    previewSubtitlesView.classList.toggle('hidden', activeTab !== 'subtitles');
+  }
+
+  tabBtnChatTTS.addEventListener('click', function() { setActiveTab('chat_tts'); });
+  tabBtnSubtitles.addEventListener('click', function() { setActiveTab('subtitles'); });
+
+  function renderSubtitlePreviewRows(langs) {
+    const codes = (Array.isArray(langs) && langs.length > 0) ? langs : ['en', 'es', 'ja'];
+    previewSubtitlesRows.innerHTML = '';
+    codes.forEach(function(rawCode, idx) {
+      const code = (rawCode || 'en').toLowerCase();
+      const sample = sampleSentences[code] || { badge: code.toUpperCase(), text: sampleSentences.en.text };
+      const row = document.createElement('div');
+      row.className = 'lang-row' + (idx === 0 ? ' original' : '');
+      const b = document.createElement('span');
+      b.className = 'lang-badge';
+      b.textContent = sample.badge;
+      const t = document.createElement('span');
+      t.className = 'lang-text';
+      t.textContent = sample.text;
+      row.appendChild(b);
+      row.appendChild(t);
+      previewSubtitlesRows.appendChild(row);
+    });
   }
 
   function readState() {
@@ -1276,30 +1660,23 @@ const overlayDesignerHTML = `<!DOCTYPE html>
 
   function applyStateToControls(st) {
     const merged = Object.assign({}, defaults, st || {});
-    els.bgColor.value = merged.bgColor;
-    els.bgOpacity.value = merged.bgOpacity;
-    els.paidBgColor.value = merged.paidBgColor;
-    els.paidBgOpacity.value = merged.paidBgOpacity;
-    els.borderColor.value = merged.borderColor;
-    els.nameColor.value = merged.nameColor;
-    els.textColor.value = merged.textColor;
-    els.transColor.value = merged.transColor;
-    els.showPlatformTag.checked = !!merged.showPlatformTag;
-    els.platformNameColors.checked = !!merged.platformNameColors;
-    els.showStatusIcon.checked = !!merged.showStatusIcon;
-    els.showOriginalTrans.checked = !!merged.showOriginalTrans;
-    els.showVoicePill.checked = !!merged.showVoicePill;
-    els.showCardBorders.checked = !!merged.showCardBorders;
-    els.fontScale.value = merged.fontScale;
-    els.cardRadius.value = merged.cardRadius;
+    Object.keys(defaults).forEach(function(k) {
+      if (typeof defaults[k] === 'boolean') {
+        els[k].checked = !!merged[k];
+      } else {
+        els[k].value = merged[k];
+      }
+    });
   }
 
-  function generateCSS(st) {
+  function generateCSS(st, scopeSelector) {
+    const scope = scopeSelector || ':root, .preview-scope';
     const bgRow = hexToRgba(st.bgColor, st.bgOpacity);
     const bgPaid = hexToRgba(st.paidBgColor, st.paidBgOpacity);
     const borderRgba = hexToRgba(st.borderColor, st.showCardBorders ? 65 : 0);
+    const pfx = scopeSelector ? (scopeSelector + ' ') : '';
     const lines = [
-      ':root, .preview-scope {',
+      scope + ' {',
       '  --bg: ' + bgRow + ';',
       '  --bg-row: ' + bgRow + ';',
       '  --bg-paid: ' + bgPaid + ';',
@@ -1314,39 +1691,116 @@ const overlayDesignerHTML = `<!DOCTYPE html>
       '}'
     ];
     if (!st.showPlatformTag) {
-      lines.push('.plat, .badge { display: none !important; }');
+      lines.push(pfx + '.plat, ' + pfx + '.badge { display: none !important; }');
     }
     if (st.platformNameColors) {
-      lines.push('.user.twitch, .speaker.twitch { color: #B983FF !important; }');
-      lines.push('.user.youtube, .speaker.youtube { color: #FF4D6D !important; }');
-      lines.push('.user.kick, .speaker.kick { color: #53FC18 !important; }');
-      lines.push('.user.tiktok, .speaker.tiktok { color: #00F2FE !important; }');
+      lines.push(pfx + '.user.twitch, ' + pfx + '.speaker.twitch { color: #B983FF !important; }');
+      lines.push(pfx + '.user.youtube, ' + pfx + '.speaker.youtube { color: #FF4D6D !important; }');
+      lines.push(pfx + '.user.kick, ' + pfx + '.speaker.kick { color: #53FC18 !important; }');
+      lines.push(pfx + '.user.tiktok, ' + pfx + '.speaker.tiktok { color: #00F2FE !important; }');
     }
     if (!st.showStatusIcon) {
-      lines.push('.status { display: none !important; }');
+      lines.push(pfx + '.status { display: none !important; }');
     }
     if (!st.showOriginalTrans) {
-      lines.push('.trans { display: none !important; }');
+      lines.push(pfx + '.trans { display: none !important; }');
     }
     if (!st.showVoicePill) {
-      lines.push('.voice-pill { display: none !important; }');
+      lines.push(pfx + '.voice-pill { display: none !important; }');
     }
     if (!st.showCardBorders) {
-      lines.push('.msg, .card { border-color: transparent !important; box-shadow: none !important; }');
-      lines.push('.text, .user, .speaker, .caption { text-shadow: 0 2px 4px rgba(0,0,0,0.9) !important; }');
+      lines.push(pfx + '.msg, ' + pfx + '.card { border-color: transparent !important; box-shadow: none !important; }');
+      lines.push(pfx + '.text, ' + pfx + '.user, ' + pfx + '.speaker, ' + pfx + '.caption { text-shadow: 0 2px 4px rgba(0,0,0,0.9) !important; }');
     }
     return lines.join('\n');
   }
 
-  function saveStyle(customCSS, styleObj, statusMsg) {
+  function readSubState() {
+    return {
+      subBgColor: subEls.subBgColor.value,
+      subBgOpacity: Number(subEls.subBgOpacity.value),
+      subBorderColor: subEls.subBorderColor.value,
+      subBadgeColor: subEls.subBadgeColor.value,
+      subBadgeOpacity: Number(subEls.subBadgeOpacity.value),
+      subTextColor: subEls.subTextColor.value,
+      subOrigTextColor: subEls.subOrigTextColor.value,
+      subDividerColor: subEls.subDividerColor.value,
+      subPillColor: subEls.subPillColor.value,
+      subShowMicPill: subEls.subShowMicPill.checked,
+      subShowLangBadges: subEls.subShowLangBadges.checked,
+      subHighlightOriginal: subEls.subHighlightOriginal.checked,
+      subShowDividers: subEls.subShowDividers.checked,
+      subShowCardBorders: subEls.subShowCardBorders.checked,
+      subFontScale: Number(subEls.subFontScale.value),
+      subCardRadius: Number(subEls.subCardRadius.value)
+    };
+  }
+
+  function applySubStateToControls(st) {
+    const merged = Object.assign({}, subDefaults, st || {});
+    Object.keys(subDefaults).forEach(function(k) {
+      if (typeof subDefaults[k] === 'boolean') {
+        subEls[k].checked = !!merged[k];
+      } else {
+        subEls[k].value = merged[k];
+      }
+    });
+  }
+
+  function generateSubtitlesCSS(st, scopeSelector) {
+    const scope = scopeSelector || ':root, .subtitles-preview-scope';
+    const pfx = scopeSelector ? (scopeSelector + ' ') : '';
+    const bgCard = hexToRgba(st.subBgColor, st.subShowCardBorders ? st.subBgOpacity : 0);
+    const borderRgba = hexToRgba(st.subBorderColor, st.subShowCardBorders ? 55 : 0);
+    const badgeBg = hexToRgba(st.subBadgeColor, st.subBadgeOpacity);
+    const badgeBorder = hexToRgba(st.subBadgeColor, Math.min(100, st.subBadgeOpacity + 28));
+    const origBadgeBg = st.subHighlightOriginal
+      ? hexToRgba(st.subBadgeColor, Math.min(100, st.subBadgeOpacity + 22))
+      : badgeBg;
+    const origBadgeText = st.subHighlightOriginal ? '#F8FAFC' : st.subBadgeColor;
+    const dividerRgba = hexToRgba(st.subDividerColor, st.subShowDividers ? 60 : 0);
+    const pillBg = hexToRgba(st.subBgColor, 85);
+
+    const lines = [
+      scope + ' {',
+      '  --bg: ' + bgCard + ';',
+      '  --border: ' + borderRgba + ';',
+      '  --accent: ' + st.subBadgeColor + ';',
+      '  --badge-bg: ' + badgeBg + ';',
+      '  --badge-border: ' + badgeBorder + ';',
+      '  --orig-badge-bg: ' + origBadgeBg + ';',
+      '  --orig-badge-text: ' + origBadgeText + ';',
+      '  --text: ' + st.subTextColor + ';',
+      '  --orig-text: ' + st.subOrigTextColor + ';',
+      '  --row-divider: ' + dividerRgba + ';',
+      '  --pill-bg: ' + pillBg + ';',
+      '  --pill-text: ' + st.subPillColor + ';',
+      '  --scale: ' + (st.subFontScale / 100).toFixed(2) + ';',
+      '  --card-radius: ' + st.subCardRadius + 'px;',
+      '}'
+    ];
+    if (!st.subShowMicPill) {
+      lines.push(pfx + '.mic-pill { display: none !important; }');
+    }
+    if (!st.subShowLangBadges) {
+      lines.push(pfx + '.lang-badge { display: none !important; }');
+    }
+    if (!st.subShowDividers) {
+      lines.push(pfx + '.lang-row { border-top-color: transparent !important; }');
+    }
+    if (!st.subShowCardBorders) {
+      lines.push(pfx + '.card { background: transparent !important; border-color: transparent !important; box-shadow: none !important; backdrop-filter: none !important; }');
+      lines.push(pfx + '.lang-text { text-shadow: 0 2px 6px rgba(0,0,0,0.95), 0 0 12px rgba(0,0,0,0.85) !important; }');
+    }
+    return lines.join('\n');
+  }
+
+  function saveStylePayload(payload, statusMsg) {
     saveStatus.textContent = '⏳ Saving & updating OBS...';
     fetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        custom_css: customCSS,
-        style_json: styleObj ? JSON.stringify(styleObj) : ''
-      })
+      body: JSON.stringify(payload)
     })
       .then(function(r) {
         if (!r.ok) throw new Error('Save failed');
@@ -1357,54 +1811,122 @@ const overlayDesignerHTML = `<!DOCTYPE html>
       });
   }
 
-  function syncFromControls(autoSave) {
+  function syncChatTTSFromControls(autoSave) {
     const st = readState();
-    const css = generateCSS(st);
-    dynamicCSS.textContent = css;
+    dynamicCSS.textContent = generateCSS(st, '.preview-scope');
     if (autoSave) {
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(function() {
-        saveStyle(css, st, '✓ Auto-saved & Live-Updated OBS');
+        saveStylePayload({
+          target: 'chat_tts',
+          custom_css: generateCSS(st, ''),
+          style_json: JSON.stringify(st)
+        }, '✓ Auto-saved & Live-Updated OBS');
+      }, 150);
+    }
+  }
+
+  function syncSubtitlesFromControls(autoSave) {
+    const st = readSubState();
+    subDynamicCSS.textContent = generateSubtitlesCSS(st, '.subtitles-preview-scope');
+    if (autoSave) {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(function() {
+        saveStylePayload({
+          target: 'subtitles',
+          subtitles_custom_css: generateSubtitlesCSS(st, ''),
+          subtitles_style_json: JSON.stringify(st)
+        }, '✓ Auto-saved & Live-Updated OBS Subtitles');
       }, 150);
     }
   }
 
   Object.keys(els).forEach(function(k) {
-    els[k].addEventListener('input', function() { syncFromControls(true); });
-    els[k].addEventListener('change', function() { syncFromControls(true); });
+    els[k].addEventListener('input', function() { syncChatTTSFromControls(true); });
+    els[k].addEventListener('change', function() { syncChatTTSFromControls(true); });
+  });
+
+  Object.keys(subEls).forEach(function(k) {
+    subEls[k].addEventListener('input', function() { syncSubtitlesFromControls(true); });
+    subEls[k].addEventListener('change', function() { syncSubtitlesFromControls(true); });
   });
 
   document.querySelectorAll('.bg-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
-      previewStage.className = 'preview-stage preview-scope ' + (btn.dataset.bg || 'checker');
+      previewStage.className = 'preview-stage ' + (btn.dataset.bg || 'checker');
     });
   });
 
   document.getElementById('resetBtn').addEventListener('click', function() {
     if (saveTimer) clearTimeout(saveTimer);
-    applyStateToControls(defaults);
-    dynamicCSS.textContent = '';
-    saveStyle('', null, '✓ Reset to Default Obsidian Slate');
+    if (activeTab === 'subtitles') {
+      applySubStateToControls(subDefaults);
+      subDynamicCSS.textContent = '';
+      saveStylePayload({
+        target: 'subtitles',
+        subtitles_custom_css: '',
+        subtitles_style_json: ''
+      }, '✓ Reset Subtitles to Default Obsidian Slate');
+    } else {
+      applyStateToControls(defaults);
+      dynamicCSS.textContent = '';
+      saveStylePayload({
+        target: 'chat_tts',
+        custom_css: '',
+        style_json: ''
+      }, '✓ Reset to Default Obsidian Slate');
+    }
   });
 
   fetch(apiUrl, { cache: 'no-store' })
     .then(function(r) { return r.json(); })
     .then(function(data) {
+      const ttsOn = data.tts_enabled !== false;
+      const chatOn = data.chat_enabled !== false;
+      const subOn = !!data.subtitles_enabled;
+      const hasChatTTS = ttsOn || chatOn;
+
+      previewTTSCardWrap.classList.toggle('hidden', !ttsOn);
+      previewChatFeedWrap.classList.toggle('hidden', !chatOn);
+      tabBtnChatTTS.classList.toggle('hidden', !hasChatTTS);
+      tabBtnSubtitles.classList.toggle('hidden', !subOn);
+      tabBar.classList.toggle('hidden', !(hasChatTTS && subOn));
+
+      if (Array.isArray(data.target_languages) && data.target_languages.length > 0) {
+        renderSubtitlePreviewRows(data.target_languages);
+      }
+
+      if ((requestedTab === 'subtitles' && subOn) || (!hasChatTTS && subOn)) {
+        setActiveTab('subtitles');
+      } else {
+        setActiveTab('chat_tts');
+      }
+
       if (data.style_json) {
         try {
           applyStateToControls(JSON.parse(data.style_json));
-        } catch (_) {}
+        } catch (_) {
+          applyStateToControls(defaults);
+        }
       } else {
         applyStateToControls(defaults);
       }
-      if (data.custom_css) {
-        dynamicCSS.textContent = data.custom_css;
+      syncChatTTSFromControls(false);
+
+      if (data.subtitles_style_json) {
+        try {
+          applySubStateToControls(JSON.parse(data.subtitles_style_json));
+        } catch (_) {
+          applySubStateToControls(subDefaults);
+        }
       } else {
-        syncFromControls(false);
+        applySubStateToControls(subDefaults);
       }
+      syncSubtitlesFromControls(false);
     })
     .catch(function() {
-      syncFromControls(false);
+      syncChatTTSFromControls(false);
+      syncSubtitlesFromControls(false);
     });
 })();
 </script>

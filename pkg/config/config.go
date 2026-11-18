@@ -33,6 +33,7 @@ type Config struct {
 	Logging         LoggingConfig             `json:"logging"`
 	WebSocket       WebSocketConfig           `json:"websocket"`
 	Translation     TranslationConfig         `json:"translation"`
+	VoiceSubtitles  VoiceSubtitlesConfig      `json:"voice_subtitles"`
 	GlobalChatRules GlobalChatRules           `json:"global_chat_rules"`
 	Viewers         map[string]ViewerConfig   `json:"viewers"`
 	Platforms       map[string]PlatformConfig `json:"platforms"`
@@ -287,26 +288,36 @@ const (
 // WebSocketConfig configures the local dual-mode (Protobuf + JSON) WebSocket, HTTP REST control server,
 // and OBS Browser Source overlay endpoints.
 type WebSocketConfig struct {
-	Enabled                bool   `json:"enabled"`                             // External Control API & Elgato Stream Deck (/ws, /api/*)
-	TTSOverlayEnabled      bool   `json:"tts_overlay_enabled,omitempty"`       // OBS "Now Speaking" Caption Overlay (/overlay/tts)
-	TTSOverlayPosition     string `json:"tts_overlay_position,omitempty"`      // "bottom" (default) or "top"
-	ChatOverlayEnabled     bool   `json:"chat_overlay_enabled,omitempty"`      // OBS Live Chat & Alerts Overlay (/overlay/chat)
-	ChatOverlayPresetID    string `json:"chat_overlay_preset_id,omitempty"`    // Selected LiveLogPreset ID for /overlay/chat
-	ChatOverlayShowSummary bool   `json:"chat_overlay_show_summary,omitempty"` // Whether /overlay/chat displays the Events Summary banner
-	OverlayCustomCSS       string `json:"overlay_custom_css,omitempty"`        // Custom CSS applied to OBS overlays
-	OverlayStyleJSON       string `json:"overlay_style_json,omitempty"`        // Visual style designer state JSON
-	Host                   string `json:"host"`
-	Port                   int    `json:"port"`
-	AuthToken              string `json:"auth_token,omitempty"`
+	Enabled                 bool   `json:"enabled"`                             // External Control API & Elgato Stream Deck (/ws, /api/*)
+	TTSOverlayEnabled       bool   `json:"tts_overlay_enabled,omitempty"`       // OBS "Now Speaking" Caption Overlay (/overlay/tts)
+	TTSOverlayPosition      string `json:"tts_overlay_position,omitempty"`      // "bottom" (default) or "top"
+	ChatOverlayEnabled      bool   `json:"chat_overlay_enabled,omitempty"`      // OBS Live Chat & Alerts Overlay (/overlay/chat)
+	ChatOverlayPresetID     string `json:"chat_overlay_preset_id,omitempty"`    // Selected LiveLogPreset ID for /overlay/chat
+	ChatOverlayShowSummary  bool   `json:"chat_overlay_show_summary,omitempty"` // Whether /overlay/chat displays the Events Summary banner
+	SubtitlesOverlayEnabled bool   `json:"subtitles_overlay_enabled,omitempty"` // OBS Multi-Language Voice Subtitles Overlay (/overlay/subtitles)
+	OverlayCustomCSS        string `json:"overlay_custom_css,omitempty"`        // Custom CSS applied to OBS overlays
+	OverlayStyleJSON        string `json:"overlay_style_json,omitempty"`        // Visual style designer state JSON
+	Host                    string `json:"host"`
+	Port                    int    `json:"port"`
+	AuthToken               string `json:"auth_token,omitempty"`
 }
 
-// AnyEnabled reports whether any local HTTP/WebSocket feature (Control API, TTS Overlay, or Chat Overlay) is enabled.
+// AnyEnabled reports whether any local HTTP/WebSocket feature (Control API, TTS Overlay, Chat Overlay, or Subtitles Overlay) is enabled.
 func (w WebSocketConfig) AnyEnabled() bool {
-	return w.Enabled || w.TTSOverlayEnabled || w.ChatOverlayEnabled
+	return w.Enabled || w.TTSOverlayEnabled || w.ChatOverlayEnabled || w.SubtitlesOverlayEnabled
+}
+
+// EffectiveSubtitlesOverlayEnabled reports whether the OBS Multi-Language Voice Subtitles Overlay (/overlay/subtitles)
+// is active (requiring both VoiceSubtitles.Enabled and WebSocket.SubtitlesOverlayEnabled).
+func (c *Config) EffectiveSubtitlesOverlayEnabled() bool {
+	if c == nil {
+		return false
+	}
+	return c.WebSocket.SubtitlesOverlayEnabled && c.VoiceSubtitles.Enabled
 }
 
 // EffectiveWebSocketFeatures returns the active feature states for the local HTTP/WebSocket server,
-// gating TTS Overlay on TTS.Enabled and Chat Overlay on Logging.Enabled.
+// gating TTS Overlay on TTS.Enabled, Chat Overlay on Logging.Enabled, and Subtitles Overlay on VoiceSubtitles.Enabled.
 func (c *Config) EffectiveWebSocketFeatures() (controlEnabled, ttsOverlayEnabled, chatOverlayEnabled, anyEnabled bool) {
 	if c == nil {
 		return false, false, false, false
@@ -314,8 +325,168 @@ func (c *Config) EffectiveWebSocketFeatures() (controlEnabled, ttsOverlayEnabled
 	controlEnabled = c.WebSocket.Enabled
 	ttsOverlayEnabled = c.WebSocket.TTSOverlayEnabled && c.TTS.Enabled
 	chatOverlayEnabled = c.WebSocket.ChatOverlayEnabled && c.Logging.Enabled
-	anyEnabled = controlEnabled || ttsOverlayEnabled || chatOverlayEnabled
+	subtitlesOverlayEnabled := c.EffectiveSubtitlesOverlayEnabled()
+	anyEnabled = controlEnabled || ttsOverlayEnabled || chatOverlayEnabled || subtitlesOverlayEnabled
 	return controlEnabled, ttsOverlayEnabled, chatOverlayEnabled, anyEnabled
+}
+
+const (
+	DefaultVoiceSubtitleModel       = "whisper_turbo"
+	DefaultVoiceSubtitleVadThresh   = 0.50
+	DefaultVoiceSubtitleMinSilence  = 450
+	DefaultVoiceSubtitleMaxSpeech   = 12
+	DefaultVoiceSubtitleFadeSeconds = 10
+	DefaultVoiceSubtitleScale       = 100
+)
+
+// VoiceSubtitlesConfig configures offline microphone Speech-to-Text (Silero VAD + Whisper)
+// and multi-language OBS Browser Source subtitle fan-out.
+type VoiceSubtitlesConfig struct {
+	Enabled            bool     `json:"enabled"`
+	ModelFamily        string   `json:"model_family,omitempty"`         // "whisper_turbo", "whisper_base", "whisper_small", "whisper_tiny"
+	UseGPU             bool     `json:"use_gpu"`                        // DirectML GPU execution when FP weights exist
+	NumThreads         int      `json:"num_threads,omitempty"`          // default 4
+	VadThreshold       float32  `json:"vad_threshold,omitempty"`        // default 0.50
+	MinSilenceMs       int      `json:"min_silence_ms,omitempty"`       // default 450
+	MaxSpeechSeconds   int      `json:"max_speech_seconds,omitempty"`   // default 12
+	IdleUnloadMinutes  int      `json:"idle_unload_minutes,omitempty"`  // default 0 (keep warm while enabled)
+	SpokenLanguages    []string `json:"spoken_languages,omitempty"`     // default ["en", "tl"]
+	TargetLanguages    []string `json:"target_languages,omitempty"`     // default ["en", "tl", "ja"]
+	OverlayPosition    string   `json:"overlay_position,omitempty"`     // "bottom" (default) or "top"
+	OverlayAlign       string   `json:"overlay_align,omitempty"`        // "center" (default) or "left"
+	OverlayFadeSeconds int      `json:"overlay_fade_seconds,omitempty"` // default 10, -1 = never fade
+	OverlayScale       int      `json:"overlay_scale,omitempty"`        // default 100 (50..300)
+	OverlayCustomCSS   string   `json:"overlay_custom_css,omitempty"`
+	OverlayStyleJSON   string   `json:"overlay_style_json,omitempty"`
+}
+
+func normalizeSubtitleLangCode(raw string) string {
+	clean := strings.ToLower(strings.TrimSpace(raw))
+	clean = strings.Trim(clean, "<>|")
+	if idx := strings.IndexAny(clean, "-_"); idx > 0 {
+		clean = clean[:idx]
+	}
+	switch clean {
+	case "iw":
+		return "he"
+	case "fil", "tgl", "tagalog", "filipino", "philipino", "philippino":
+		return "tl"
+	}
+	return clean
+}
+
+// NormalizeVoiceSubtitleModel returns a canonical Whisper model family ID.
+func NormalizeVoiceSubtitleModel(model string) string {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "whisper_tiny", "tiny":
+		return "whisper_tiny"
+	case "whisper_base", "base":
+		return "whisper_base"
+	case "whisper_small", "small":
+		return "whisper_small"
+	case "whisper_turbo", "turbo", "large-v3-turbo", "whisper-large-v3-turbo":
+		return "whisper_turbo"
+	default:
+		return DefaultVoiceSubtitleModel
+	}
+}
+
+// NormalizeVoiceSubtitlesConfig clamps and normalizes all fields of a VoiceSubtitlesConfig.
+func NormalizeVoiceSubtitlesConfig(vs *VoiceSubtitlesConfig) {
+	if vs == nil {
+		return
+	}
+	vs.ModelFamily = NormalizeVoiceSubtitleModel(vs.ModelFamily)
+	if vs.NumThreads <= 0 {
+		vs.NumThreads = 4
+	} else if vs.NumThreads > 16 {
+		vs.NumThreads = 16
+	}
+	if vs.VadThreshold <= 0.05 || vs.VadThreshold >= 0.99 {
+		vs.VadThreshold = DefaultVoiceSubtitleVadThresh
+	}
+	switch {
+	case vs.MinSilenceMs <= 0:
+		vs.MinSilenceMs = DefaultVoiceSubtitleMinSilence
+	case vs.MinSilenceMs < 150:
+		vs.MinSilenceMs = 150
+	case vs.MinSilenceMs > 3000:
+		vs.MinSilenceMs = 3000
+	}
+	switch {
+	case vs.MaxSpeechSeconds <= 0:
+		vs.MaxSpeechSeconds = DefaultVoiceSubtitleMaxSpeech
+	case vs.MaxSpeechSeconds < 3:
+		vs.MaxSpeechSeconds = 3
+	case vs.MaxSpeechSeconds > 30:
+		vs.MaxSpeechSeconds = 30
+	}
+	if vs.IdleUnloadMinutes < 0 {
+		vs.IdleUnloadMinutes = 0
+	}
+
+	var spoken []string
+	seenSpoken := make(map[string]struct{}, len(vs.SpokenLanguages))
+	for _, raw := range vs.SpokenLanguages {
+		c := normalizeSubtitleLangCode(raw)
+		switch c {
+		case "en", "tl", "ja", "es", "fr", "de", "it", "pt", "ko", "zh", "ru", "hi", "id", "vi", "th", "ar", "nl", "pl", "tr", "uk":
+			if _, ok := seenSpoken[c]; !ok {
+				seenSpoken[c] = struct{}{}
+				spoken = append(spoken, c)
+			}
+		}
+	}
+	if len(spoken) == 0 {
+		spoken = []string{"en", "tl"}
+	}
+	vs.SpokenLanguages = spoken
+
+	var targets []string
+	seenTarget := make(map[string]struct{}, len(vs.TargetLanguages))
+	for _, raw := range vs.TargetLanguages {
+		c := normalizeSubtitleLangCode(raw)
+		switch c {
+		case "en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh", "ru", "hi", "tl":
+			if _, ok := seenTarget[c]; !ok {
+				seenTarget[c] = struct{}{}
+				targets = append(targets, c)
+			}
+		}
+	}
+	if len(targets) == 0 {
+		targets = []string{"en", "tl", "ja"}
+	}
+	vs.TargetLanguages = targets
+
+	if strings.EqualFold(strings.TrimSpace(vs.OverlayPosition), "top") {
+		vs.OverlayPosition = "top"
+	} else {
+		vs.OverlayPosition = "bottom"
+	}
+	if strings.EqualFold(strings.TrimSpace(vs.OverlayAlign), "left") {
+		vs.OverlayAlign = "left"
+	} else {
+		vs.OverlayAlign = "center"
+	}
+
+	switch {
+	case vs.OverlayFadeSeconds == 0:
+		vs.OverlayFadeSeconds = DefaultVoiceSubtitleFadeSeconds
+	case vs.OverlayFadeSeconds < 0:
+		vs.OverlayFadeSeconds = -1
+	case vs.OverlayFadeSeconds > 120:
+		vs.OverlayFadeSeconds = 120
+	}
+
+	switch {
+	case vs.OverlayScale <= 0:
+		vs.OverlayScale = DefaultVoiceSubtitleScale
+	case vs.OverlayScale < 50:
+		vs.OverlayScale = 50
+	case vs.OverlayScale > 300:
+		vs.OverlayScale = 300
+	}
 }
 
 // ResolveLiveLogPreset finds a saved LiveLogPreset by ID (or case-insensitive name),
@@ -965,6 +1136,22 @@ func DefaultConfig() *Config {
 			Provider:             TranslationProviderMyMemory,
 			TargetLang:           DefaultTranslationTargetLang,
 			MinConfidence:        DefaultTranslationMinConfidence,
+		},
+		VoiceSubtitles: VoiceSubtitlesConfig{
+			Enabled:            false,
+			ModelFamily:        DefaultVoiceSubtitleModel,
+			UseGPU:             false,
+			NumThreads:         4,
+			VadThreshold:       DefaultVoiceSubtitleVadThresh,
+			MinSilenceMs:       DefaultVoiceSubtitleMinSilence,
+			MaxSpeechSeconds:   DefaultVoiceSubtitleMaxSpeech,
+			IdleUnloadMinutes:  0,
+			SpokenLanguages:    []string{"en", "tl"},
+			TargetLanguages:    []string{"en", "tl", "ja"},
+			OverlayPosition:    "bottom",
+			OverlayAlign:       "center",
+			OverlayFadeSeconds: DefaultVoiceSubtitleFadeSeconds,
+			OverlayScale:       DefaultVoiceSubtitleScale,
 		},
 		GlobalChatRules: GlobalChatRules{
 			SpeakNames:                        true,
@@ -1629,6 +1816,8 @@ func (c *Config) Clone() *Config {
 	clone.Bots.CustomBots = slices.Clone(c.Bots.CustomBots)
 	clone.Logging.LiveLogs = slices.Clone(c.Logging.LiveLogs)
 	clone.Translation.Providers = slices.Clone(c.Translation.Providers)
+	clone.VoiceSubtitles.SpokenLanguages = slices.Clone(c.VoiceSubtitles.SpokenLanguages)
+	clone.VoiceSubtitles.TargetLanguages = slices.Clone(c.VoiceSubtitles.TargetLanguages)
 
 	if c.Viewers != nil {
 		clone.Viewers = make(map[string]ViewerConfig, len(c.Viewers))
@@ -1682,6 +1871,8 @@ func Load(path string) (*Config, error) {
 						cfg.TTS.Preset = ""
 						cfg.TTS.EnabledModels = nil
 						cfg.Translation.Providers = nil
+						cfg.VoiceSubtitles.SpokenLanguages = nil
+						cfg.VoiceSubtitles.TargetLanguages = nil
 						if errParse := json.Unmarshal(legacyData, cfg); errParse == nil {
 							_ = migrate(cfg)
 							// Migrate immediately to the new location
@@ -1701,6 +1892,8 @@ func Load(path string) (*Config, error) {
 	cfg.TTS.Preset = ""
 	cfg.TTS.EnabledModels = nil
 	cfg.Translation.Providers = nil
+	cfg.VoiceSubtitles.SpokenLanguages = nil
+	cfg.VoiceSubtitles.TargetLanguages = nil
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config json: %w", err)
 	}
@@ -2019,6 +2212,7 @@ func migrate(cfg *Config) error {
 	}
 	cfg.GlobalChatRules.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(cfg.GlobalChatRules.IgnoreMentionsMode)
 	NormalizeTranslationProviders(&cfg.Translation)
+	NormalizeVoiceSubtitlesConfig(&cfg.VoiceSubtitles)
 
 	return nil
 }

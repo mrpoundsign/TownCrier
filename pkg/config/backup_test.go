@@ -305,3 +305,99 @@ func TestConfigSchemaPreMigrationBackupAndDowngradeDetection(t *testing.T) {
 		t.Error("expected schema regression to be cleared after RestoreConfigBackup")
 	}
 }
+
+func TestProgressiveLegacyTranslationUpgradeAndBackupMerge(t *testing.T) {
+	loc := TestLocations(t.TempDir())
+	configPath := loc.ConfigPath()
+
+	// 1. Simulate an existing pre-VoiceSubtitles v2 config.json with custom Translation provider order,
+	// Round-Robin routing, Japanese chat target, and custom chime.
+	legacyJSON := `{
+  "version": 2,
+  "translation": {
+    "enabled": true,
+    "routing_mode": "round_robin",
+    "play_chime_before_speak": false,
+    "chime_sound_path": "C:\\Sounds\\custom_chime.wav",
+    "target_lang": "ja",
+    "min_confidence": 0.80,
+    "providers": [
+      {"provider": "deepl", "enabled": true},
+      {"provider": "ollama", "enabled": true, "endpoint_url": "http://127.0.0.1:11434", "model": "qwen2.5:7b"},
+      {"provider": "mymemory", "enabled": false, "contact_email": "streamer@example.com"}
+    ]
+  }
+}`
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte(legacyJSON), 0o600); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+
+	upgraded, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load legacy config failed: %v", err)
+	}
+
+	// Verify 100% of existing Translation settings & provider chain order survived intact
+	if !upgraded.Translation.Enabled || upgraded.Translation.RoutingMode != TranslationRoutingRoundRobin {
+		t.Fatalf("unexpected upgraded Translation header fields: %+v", upgraded.Translation)
+	}
+	if upgraded.Translation.TargetLang != "ja" || upgraded.Translation.MinConfidence != 0.80 || upgraded.Translation.PlayChimeBeforeSpeak {
+		t.Fatalf("unexpected upgraded Chat Translation settings: %+v", upgraded.Translation)
+	}
+	if len(upgraded.Translation.Providers) != 5 ||
+		upgraded.Translation.Providers[0].Provider != TranslationProviderDeepL ||
+		upgraded.Translation.Providers[1].Provider != TranslationProviderOllama ||
+		upgraded.Translation.Providers[1].Model != "qwen2.5:7b" {
+		t.Fatalf("unexpected upgraded Translation provider chain: %+v", upgraded.Translation.Providers)
+	}
+
+	// Verify VoiceSubtitles was progressively populated with safe defaults (disabled by default)
+	if upgraded.VoiceSubtitles.Enabled {
+		t.Fatal("expected VoiceSubtitles.Enabled=false on progressive upgrade")
+	}
+	if !slices.Equal(upgraded.VoiceSubtitles.SpokenLanguages, []string{"en", "tl"}) ||
+		!slices.Equal(upgraded.VoiceSubtitles.TargetLanguages, []string{"en", "tl", "ja"}) {
+		t.Fatalf("unexpected VoiceSubtitles default language lists: %+v", upgraded.VoiceSubtitles)
+	}
+
+	// 2. Verify Backup Export/Parse/ApplyBackup carries custom 2-language VoiceSubtitles list while keeping local GPU/threads
+	upgraded.VoiceSubtitles.Enabled = true
+	upgraded.VoiceSubtitles.TargetLanguages = []string{"tl", "ja"}
+	upgraded.VoiceSubtitles.UseGPU = true
+	upgraded.VoiceSubtitles.NumThreads = 12
+	upgraded.WebSocket.SubtitlesOverlayEnabled = true
+
+	backupBytes, err := ExportBackup(upgraded, "0.0.14")
+	if err != nil {
+		t.Fatalf("ExportBackup failed: %v", err)
+	}
+	bundle, err := ParseBackup(backupBytes)
+	if err != nil {
+		t.Fatalf("ParseBackup failed: %v", err)
+	}
+	if !slices.Equal(bundle.Config.VoiceSubtitles.TargetLanguages, []string{"tl", "ja"}) {
+		t.Fatalf("ParseBackup failed to preserve 2-element TargetLanguages [tl ja], got %v", bundle.Config.VoiceSubtitles.TargetLanguages)
+	}
+
+	localCfg := DefaultConfig()
+	localCfg.VoiceSubtitles.UseGPU = false
+	localCfg.VoiceSubtitles.NumThreads = 4
+
+	merged, err := ApplyBackup(localCfg, bundle, DefaultImportOptions())
+	if err != nil {
+		t.Fatalf("ApplyBackup failed: %v", err)
+	}
+	if !merged.VoiceSubtitles.Enabled || !merged.WebSocket.SubtitlesOverlayEnabled {
+		t.Fatal("expected Selective Merge with IncludeTranslation=true to import VoiceSubtitles")
+	}
+	if !slices.Equal(merged.VoiceSubtitles.TargetLanguages, []string{"tl", "ja"}) {
+		t.Fatalf("expected merged TargetLanguages [tl ja], got %v", merged.VoiceSubtitles.TargetLanguages)
+	}
+	if merged.VoiceSubtitles.UseGPU || merged.VoiceSubtitles.NumThreads != 4 {
+		t.Fatalf("expected PreserveMachinePaths=true to keep local UseGPU=false & NumThreads=4, got %+v", merged.VoiceSubtitles)
+	}
+}
+
