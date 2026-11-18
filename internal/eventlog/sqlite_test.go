@@ -46,10 +46,13 @@ func TestSQLiteBackendAndManagerLifecycle(t *testing.T) {
 		t.Fatalf("NewSQLiteBackend failed: %v", err)
 	}
 
+	baseTime := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+
 	webhook := &mockWebhookSink{}
 	mgr := NewManager(RetentionPolicy{
 		ChatRetentionDays:  30,
 		EventRetentionDays: 90,
+		Now:                baseTime.Add(time.Hour),
 	}, sqlBackend)
 	mgr.AddBackend(webhook)
 	defer func() { _ = mgr.Close() }()
@@ -59,8 +62,6 @@ func TestSQLiteBackendAndManagerLifecycle(t *testing.T) {
 		liveEvents = append(liveEvents, ev)
 	})
 	defer unsub()
-
-	baseTime := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 
 	// 1. Append an event that passed filters and is queued (with EmoteSpans)
 	e1 := &Entry{
