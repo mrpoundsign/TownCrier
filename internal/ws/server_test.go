@@ -642,7 +642,18 @@ func TestServerSubtitlesOverlayAndSSE(t *testing.T) {
 		t.Fatalf("unexpected subtitle SSE payload: %q", gotSSE)
 	}
 
-	// 5. Disabling SubtitlesOverlay returns 404
+	// 5. /overlay unified canvas endpoint + POST /api/overlay/style target="unified"
+	resUni, err := client.Get(baseURL + "/overlay")
+	if err != nil {
+		t.Fatalf("GET /overlay failed: %v", err)
+	}
+	bodyUni, _ := io.ReadAll(resUni.Body)
+	_ = resUni.Body.Close()
+	if resUni.StatusCode != http.StatusOK || !strings.Contains(string(bodyUni), "TownCrier — Unified OBS Canvas Overlay") {
+		t.Fatalf("unexpected /overlay response: status=%d", resUni.StatusCode)
+	}
+
+	// 6. Disabling SubtitlesOverlay returns 404 on both /overlay/subtitles and /overlay
 	srv.SetSubtitlesOverlayEnabled(false)
 	resDisabled, err := client.Get(baseURL + "/overlay/subtitles")
 	if err != nil {

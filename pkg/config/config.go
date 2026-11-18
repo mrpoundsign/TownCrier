@@ -295,11 +295,35 @@ type WebSocketConfig struct {
 	ChatOverlayPresetID     string `json:"chat_overlay_preset_id,omitempty"`    // Selected LiveLogPreset ID for /overlay/chat
 	ChatOverlayShowSummary  bool   `json:"chat_overlay_show_summary,omitempty"` // Whether /overlay/chat displays the Events Summary banner
 	SubtitlesOverlayEnabled bool   `json:"subtitles_overlay_enabled,omitempty"` // OBS Multi-Language Voice Subtitles Overlay (/overlay/subtitles)
+	UnifiedOverlayWidth     int    `json:"unified_overlay_width,omitempty"`     // Unified OBS Canvas Overlay width (default 1920)
+	UnifiedOverlayHeight    int    `json:"unified_overlay_height,omitempty"`    // Unified OBS Canvas Overlay height (default 1080)
+	UnifiedLayoutJSON       string `json:"unified_layout_json,omitempty"`       // Unified OBS Canvas per-widget positions/sizes JSON
 	OverlayCustomCSS        string `json:"overlay_custom_css,omitempty"`        // Custom CSS applied to OBS overlays
 	OverlayStyleJSON        string `json:"overlay_style_json,omitempty"`        // Visual style designer state JSON
 	Host                    string `json:"host"`
 	Port                    int    `json:"port"`
 	AuthToken               string `json:"auth_token,omitempty"`
+}
+
+// NormalizeUnifiedOverlaySize clamps custom unified canvas dimensions to sensible bounds, defaulting to 1920x1080.
+func NormalizeUnifiedOverlaySize(w, h int) (int, int) {
+	switch {
+	case w <= 0:
+		w = 1920
+	case w < 640:
+		w = 640
+	case w > 7680:
+		w = 7680
+	}
+	switch {
+	case h <= 0:
+		h = 1080
+	case h < 360:
+		h = 360
+	case h > 4320:
+		h = 4320
+	}
+	return w, h
 }
 
 // AnyEnabled reports whether any local HTTP/WebSocket feature (Control API, TTS Overlay, Chat Overlay, or Subtitles Overlay) is enabled.

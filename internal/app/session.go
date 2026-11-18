@@ -1774,16 +1774,24 @@ func (s *Session) QueryOverlayChat(ctx context.Context, presetID string, limit i
 func (s *Session) GetOverlayStyle() ws.OverlayStyleConfig {
 	cfg := s.Config()
 	if cfg == nil {
-		return ws.OverlayStyleConfig{TTSPosition: "bottom"}
+		return ws.OverlayStyleConfig{
+			TTSPosition:   "bottom",
+			UnifiedWidth:  1920,
+			UnifiedHeight: 1080,
+		}
 	}
 	pos := strings.ToLower(strings.TrimSpace(cfg.WebSocket.TTSOverlayPosition))
 	if pos != "top" {
 		pos = "bottom"
 	}
+	uw, uh := config.NormalizeUnifiedOverlaySize(cfg.WebSocket.UnifiedOverlayWidth, cfg.WebSocket.UnifiedOverlayHeight)
 	return ws.OverlayStyleConfig{
-		CustomCSS:   cfg.WebSocket.OverlayCustomCSS,
-		StyleJSON:   cfg.WebSocket.OverlayStyleJSON,
-		TTSPosition: pos,
+		CustomCSS:         cfg.WebSocket.OverlayCustomCSS,
+		StyleJSON:         cfg.WebSocket.OverlayStyleJSON,
+		TTSPosition:       pos,
+		UnifiedWidth:      uw,
+		UnifiedHeight:     uh,
+		UnifiedLayoutJSON: cfg.WebSocket.UnifiedLayoutJSON,
 	}
 }
 
@@ -1792,6 +1800,16 @@ func (s *Session) SaveOverlayStyle(customCSS, styleJSON string) error {
 	return s.UpdateConfig(func(c *config.Config) {
 		c.WebSocket.OverlayCustomCSS = customCSS
 		c.WebSocket.OverlayStyleJSON = styleJSON
+	})
+}
+
+// SaveUnifiedLayout implements ws.UnifiedLayoutProvider, persisting the Unified OBS Canvas resolution and widget layout.
+func (s *Session) SaveUnifiedLayout(width, height int, layoutJSON string) error {
+	uw, uh := config.NormalizeUnifiedOverlaySize(width, height)
+	return s.UpdateConfig(func(c *config.Config) {
+		c.WebSocket.UnifiedOverlayWidth = uw
+		c.WebSocket.UnifiedOverlayHeight = uh
+		c.WebSocket.UnifiedLayoutJSON = layoutJSON
 	})
 }
 
