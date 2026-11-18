@@ -35,6 +35,9 @@ type OverlayStyleConfig struct {
 	StyleJSON          string   `json:"style_json,omitempty"`
 	SubtitlesCustomCSS string   `json:"subtitles_custom_css,omitempty"`
 	SubtitlesStyleJSON string   `json:"subtitles_style_json,omitempty"`
+	UnifiedWidth       int      `json:"unified_width,omitempty"`
+	UnifiedHeight      int      `json:"unified_height,omitempty"`
+	UnifiedLayoutJSON  string   `json:"unified_layout_json,omitempty"`
 	Target             string   `json:"target,omitempty"`
 }
 
@@ -43,6 +46,12 @@ type OverlayStyleConfig struct {
 type OverlayStyleProvider interface {
 	GetOverlayStyle() OverlayStyleConfig
 	SaveOverlayStyle(customCSS, styleJSON string) error
+}
+
+// UnifiedLayoutProvider is an optional interface implemented by Controller (such as app.Session)
+// to persist the Unified OBS Canvas resolution and per-widget layout.
+type UnifiedLayoutProvider interface {
+	SaveUnifiedLayout(width, height int, layoutJSON string) error
 }
 
 // OverlayStreamEvent represents a real-time Server-Sent Event pushed to /api/overlay/stream subscribers.
@@ -115,6 +124,7 @@ func (s *Server) populateOverlayStyleMeta(cfg *OverlayStyleConfig) {
 	if cfg.TTSPosition == "" {
 		cfg.TTSPosition = "bottom"
 	}
+	cfg.UnifiedWidth, cfg.UnifiedHeight = config.NormalizeUnifiedOverlaySize(cfg.UnifiedWidth, cfg.UnifiedHeight)
 	if subStyleProv, ok := s.ctrl.(SubtitlesStyleProvider); ok && subStyleProv != nil {
 		cfg.SubtitlesCustomCSS, cfg.SubtitlesStyleJSON = subStyleProv.GetSubtitlesOverlayStyle()
 	}
@@ -133,6 +143,7 @@ func (s *Server) handleAPIOverlayStyle(w http.ResponseWriter, r *http.Request) {
 	}
 	styleProv, hasProv := s.ctrl.(OverlayStyleProvider)
 	subStyleProv, hasSubProv := s.ctrl.(SubtitlesStyleProvider)
+	layoutProv, hasLayoutProv := s.ctrl.(UnifiedLayoutProvider)
 	switch r.Method {
 	case http.MethodGet:
 		var cfg OverlayStyleConfig
@@ -149,7 +160,8 @@ func (s *Server) handleAPIOverlayStyle(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid JSON payload", http.StatusBadRequest)
 			return
 		}
-		if strings.EqualFold(strings.TrimSpace(req.Target), "subtitles") {
+		switch strings.ToLower(strings.TrimSpace(req.Target)) {
+		case "subtitles":
 			if hasSubProv && subStyleProv != nil {
 				if err := subStyleProv.SaveSubtitlesOverlayStyle(req.SubtitlesCustomCSS, req.SubtitlesStyleJSON); err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -161,10 +173,19 @@ func (s *Server) handleAPIOverlayStyle(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-		} else if hasProv && styleProv != nil {
-			if err := styleProv.SaveOverlayStyle(req.CustomCSS, req.StyleJSON); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
+		case "unified":
+			if hasLayoutProv && layoutProv != nil {
+				if err := layoutProv.SaveUnifiedLayout(req.UnifiedWidth, req.UnifiedHeight, req.UnifiedLayoutJSON); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			}
+		default:
+			if hasProv && styleProv != nil {
+				if err := styleProv.SaveOverlayStyle(req.CustomCSS, req.StyleJSON); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
 			}
 		}
 		var out OverlayStyleConfig
@@ -1278,6 +1299,99 @@ const overlayDesignerHTML = `<!DOCTYPE html>
   .subtitles-preview-scope .lang-row.original .lang-text {
     color: var(--orig-text);
   }
+
+  /* Unified Canvas Layout Editor */
+  select, input[type="number"] {
+    background: #090D16;
+    color: var(--ui-text);
+    border: 1px solid var(--ui-border);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 0.85rem;
+  }
+  .layout-stage-wrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 420px;
+  }
+  .layout-stage {
+    position: relative;
+    width: 100%;
+    max-width: 960px;
+    aspect-ratio: 16 / 9;
+    border-radius: 10px;
+    border: 1.5px dashed rgba(56, 189, 248, 0.45);
+    overflow: hidden;
+    user-select: none;
+    background-image:
+      linear-gradient(to right, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+    background-size: 5% 5%;
+  }
+  .drag-box {
+    position: absolute;
+    border: 2px solid rgba(56, 189, 248, 0.72);
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.76);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    cursor: move;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: border-color 120ms ease;
+  }
+  .drag-box.selected {
+    border-color: #34D399;
+    box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.28), 0 10px 26px rgba(0, 0, 0, 0.55);
+  }
+  .drag-box-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 8px;
+    background: rgba(30, 41, 59, 0.92);
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #38BDF8;
+    border-bottom: 1px solid rgba(51, 65, 85, 0.65);
+  }
+  .drag-box.selected .drag-box-hdr {
+    color: #34D399;
+  }
+  .drag-box-body {
+    flex: 1;
+    padding: 8px 10px;
+    font-size: 0.78rem;
+    color: var(--ui-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    line-height: 1.35;
+  }
+  .resize-handle {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 16px;
+    height: 16px;
+    cursor: nwse-resize;
+    background: linear-gradient(135deg, transparent 45%, #38BDF8 45%, #38BDF8 65%, transparent 65%, transparent 80%, #38BDF8 80%);
+  }
+  .drag-box.selected .resize-handle {
+    background: linear-gradient(135deg, transparent 45%, #34D399 45%, #34D399 65%, transparent 65%, transparent 80%, #34D399 80%);
+  }
+  .widget-cfg-card {
+    background: #090D16;
+    border: 1px solid var(--ui-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
   .hidden { display: none !important; }
 </style>
 <style id="designerDynamicCSS"></style>
@@ -1291,6 +1405,7 @@ const overlayDesignerHTML = `<!DOCTYPE html>
   </div>
   <div class="header-right">
     <div id="tabBar" class="tab-bar">
+      <button type="button" id="tabBtnLayout" class="tab-btn" data-tab="layout">📐 Unified Canvas</button>
       <button type="button" id="tabBtnChatTTS" class="tab-btn active" data-tab="chat_tts">💬 Chat & Now-Speaking</button>
       <button type="button" id="tabBtnSubtitles" class="tab-btn" data-tab="subtitles">🎙️ Voice Subtitles</button>
     </div>
@@ -1433,6 +1548,68 @@ const overlayDesignerHTML = `<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Controls Panel: Unified Canvas Layout -->
+  <div id="controlsLayout" class="panel hidden">
+    <h2>Canvas Resolution (/overlay)</h2>
+    <div class="field-row">
+      <label for="uniResPreset">Preset</label>
+      <select id="uniResPreset">
+        <option value="1920x1080">1920 × 1080 (1080p)</option>
+        <option value="1280x720">1280 × 720 (720p)</option>
+        <option value="2560x1440">2560 × 1440 (1440p)</option>
+        <option value="3840x2160">3840 × 2160 (4K)</option>
+        <option value="1080x1920">1080 × 1920 (Vertical)</option>
+        <option value="custom">Custom...</option>
+      </select>
+    </div>
+    <div class="field-row">
+      <label>Width × Height (px)</label>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <input type="number" id="uniWidth" min="640" max="7680" value="1920" style="width:76px;">
+        <span>×</span>
+        <input type="number" id="uniHeight" min="360" max="4320" value="1080" style="width:76px;">
+      </div>
+    </div>
+    <div class="field-row">
+      <label><input type="checkbox" id="uniSnapGrid" checked> Snap Drag & Resize to 2% Grid</label>
+    </div>
+
+    <h2>Enabled Modules (Drag on Canvas)</h2>
+    <div id="uniCardTTS" class="widget-cfg-card">
+      <div class="field-row">
+        <label><input type="checkbox" id="uniVisTTS" checked> 🗣️ Now Speaking</label>
+        <span id="uniRectTTS" style="font-size:0.78rem;color:var(--ui-muted);">24%, 4%</span>
+      </div>
+      <div class="field-row">
+        <label for="uniScaleTTS">Widget Scale</label>
+        <input type="range" id="uniScaleTTS" min="50" max="200" value="100">
+      </div>
+    </div>
+    <div id="uniCardChat" class="widget-cfg-card">
+      <div class="field-row">
+        <label><input type="checkbox" id="uniVisChat" checked> 💬 Live Chat</label>
+        <span id="uniRectChat" style="font-size:0.78rem;color:var(--ui-muted);">2%, 36%</span>
+      </div>
+      <div class="field-row">
+        <label for="uniScaleChat">Widget Scale</label>
+        <input type="range" id="uniScaleChat" min="50" max="200" value="100">
+      </div>
+    </div>
+    <div id="uniCardSubtitles" class="widget-cfg-card">
+      <div class="field-row">
+        <label><input type="checkbox" id="uniVisSubtitles" checked> 🎙️ Voice Subtitles</label>
+        <span id="uniRectSubtitles" style="font-size:0.78rem;color:var(--ui-muted);">22%, 74%</span>
+      </div>
+      <div class="field-row">
+        <label for="uniScaleSubtitles">Widget Scale</label>
+        <input type="range" id="uniScaleSubtitles" min="50" max="200" value="100">
+      </div>
+    </div>
+    <p style="font-size:0.80rem;color:var(--ui-muted);line-height:1.4;">
+      Drag widgets to position them and use the bottom-right corner handle to resize. Colors and fonts come from the Chat &amp; Now-Speaking and Voice Subtitles tabs.
+    </p>
+  </div>
+
   <!-- Live Preview Panel -->
   <div class="panel">
     <div style="display:flex;align-items:center;justify-content:space-between;">
@@ -1501,6 +1678,27 @@ const overlayDesignerHTML = `<!DOCTYPE html>
               <span class="lang-badge">JA</span>
               <span class="lang-text">皆さんこんにちは、配信にお帰りなさい！</span>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Unified Canvas Layout View -->
+      <div id="previewLayoutView" class="layout-stage-wrap hidden">
+        <div id="layoutStage" class="layout-stage">
+          <div id="dragTTS" class="drag-box" data-widget="tts">
+            <div class="drag-box-hdr"><span>🗣️ Now Speaking</span><span class="dim-lbl"></span></div>
+            <div class="drag-box-body">StreamerFan42 says: This stream overlay looks awesome!</div>
+            <div class="resize-handle"></div>
+          </div>
+          <div id="dragChat" class="drag-box" data-widget="chat">
+            <div class="drag-box-hdr"><span>💬 Live Chat</span><span class="dim-lbl"></span></div>
+            <div class="drag-box-body">NightOwl: Let's gooo!<br>Carlos_MX: ¡Hola amigos!</div>
+            <div class="resize-handle"></div>
+          </div>
+          <div id="dragSubtitles" class="drag-box" data-widget="subtitles">
+            <div class="drag-box-hdr"><span>🎙️ Voice Subtitles</span><span class="dim-lbl"></span></div>
+            <div class="drag-box-body">[EN] Hello everyone!<br>[ES] ¡Hola a todos!</div>
+            <div class="resize-handle"></div>
           </div>
         </div>
       </div>
@@ -1582,10 +1780,13 @@ const overlayDesignerHTML = `<!DOCTYPE html>
   const saveStatus = document.getElementById('saveStatus');
   const previewStage = document.getElementById('previewStage');
   const tabBar = document.getElementById('tabBar');
+  const tabBtnLayout = document.getElementById('tabBtnLayout');
   const tabBtnChatTTS = document.getElementById('tabBtnChatTTS');
   const tabBtnSubtitles = document.getElementById('tabBtnSubtitles');
+  const controlsLayout = document.getElementById('controlsLayout');
   const controlsChatTTS = document.getElementById('controlsChatTTS');
   const controlsSubtitles = document.getElementById('controlsSubtitles');
+  const previewLayoutView = document.getElementById('previewLayoutView');
   const previewChatTTSView = document.getElementById('previewChatTTSView');
   const previewSubtitlesView = document.getElementById('previewSubtitlesView');
   const previewTTSCardWrap = document.getElementById('previewTTSCardWrap');
@@ -1594,6 +1795,45 @@ const overlayDesignerHTML = `<!DOCTYPE html>
 
   let activeTab = 'chat_tts';
   let saveTimer = null;
+
+  // --- Unified Canvas State ---
+  const defaultUniLayout = {
+    tts:       { x: 24, y: 4,  w: 52, h: 16, scale: 100, visible: true },
+    chat:      { x: 2,  y: 36, w: 28, h: 60, scale: 100, visible: true },
+    subtitles: { x: 22, y: 74, w: 56, h: 22, scale: 100, visible: true }
+  };
+  let uniState = JSON.parse(JSON.stringify(defaultUniLayout));
+  let uniModules = { tts: true, chat: true, subtitles: false };
+  const layoutStage = document.getElementById('layoutStage');
+  const uniResPreset = document.getElementById('uniResPreset');
+  const uniWidthEl = document.getElementById('uniWidth');
+  const uniHeightEl = document.getElementById('uniHeight');
+  const uniSnapGrid = document.getElementById('uniSnapGrid');
+  const dragBoxes = {
+    tts: document.getElementById('dragTTS'),
+    chat: document.getElementById('dragChat'),
+    subtitles: document.getElementById('dragSubtitles')
+  };
+  const uniCards = {
+    tts: document.getElementById('uniCardTTS'),
+    chat: document.getElementById('uniCardChat'),
+    subtitles: document.getElementById('uniCardSubtitles')
+  };
+  const uniVis = {
+    tts: document.getElementById('uniVisTTS'),
+    chat: document.getElementById('uniVisChat'),
+    subtitles: document.getElementById('uniVisSubtitles')
+  };
+  const uniScale = {
+    tts: document.getElementById('uniScaleTTS'),
+    chat: document.getElementById('uniScaleChat'),
+    subtitles: document.getElementById('uniScaleSubtitles')
+  };
+  const uniRectLbl = {
+    tts: document.getElementById('uniRectTTS'),
+    chat: document.getElementById('uniRectChat'),
+    subtitles: document.getElementById('uniRectSubtitles')
+  };
 
   function hexToRgba(hex, alphaPct) {
     const clean = (hex || '#0f172a').replace('#', '');
@@ -1605,17 +1845,131 @@ const overlayDesignerHTML = `<!DOCTYPE html>
   }
 
   function setActiveTab(tab) {
-    activeTab = (tab === 'subtitles') ? 'subtitles' : 'chat_tts';
+    if (tab === 'subtitles') activeTab = 'subtitles';
+    else if (tab === 'layout') activeTab = 'layout';
+    else activeTab = 'chat_tts';
+
+    tabBtnLayout.classList.toggle('active', activeTab === 'layout');
     tabBtnChatTTS.classList.toggle('active', activeTab === 'chat_tts');
     tabBtnSubtitles.classList.toggle('active', activeTab === 'subtitles');
+    controlsLayout.classList.toggle('hidden', activeTab !== 'layout');
     controlsChatTTS.classList.toggle('hidden', activeTab !== 'chat_tts');
     controlsSubtitles.classList.toggle('hidden', activeTab !== 'subtitles');
+    previewLayoutView.classList.toggle('hidden', activeTab !== 'layout');
     previewChatTTSView.classList.toggle('hidden', activeTab !== 'chat_tts');
     previewSubtitlesView.classList.toggle('hidden', activeTab !== 'subtitles');
   }
 
+  tabBtnLayout.addEventListener('click', function() { setActiveTab('layout'); });
   tabBtnChatTTS.addEventListener('click', function() { setActiveTab('chat_tts'); });
   tabBtnSubtitles.addEventListener('click', function() { setActiveTab('subtitles'); });
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+  function snapVal(v) { return uniSnapGrid.checked ? Math.round(v / 2) * 2 : Math.round(v * 10) / 10; }
+
+  function renderUnifiedStage() {
+    const w = clamp(parseInt(uniWidthEl.value, 10) || 1920, 640, 7680);
+    const h = clamp(parseInt(uniHeightEl.value, 10) || 1080, 360, 4320);
+    layoutStage.style.aspectRatio = w + ' / ' + h;
+    layoutStage.style.maxWidth = (h > w) ? '420px' : '960px';
+
+    const presetVal = w + 'x' + h;
+    let foundPreset = false;
+    for (let i = 0; i < uniResPreset.options.length; i++) {
+      if (uniResPreset.options[i].value === presetVal) {
+        uniResPreset.value = presetVal;
+        foundPreset = true;
+        break;
+      }
+    }
+    if (!foundPreset) uniResPreset.value = 'custom';
+
+    ['tts', 'chat', 'subtitles'].forEach(function(k) {
+      const enabled = !!uniModules[k];
+      uniCards[k].classList.toggle('hidden', !enabled);
+      const st = uniState[k];
+      uniVis[k].checked = st.visible !== false;
+      uniScale[k].value = st.scale || 100;
+      const box = dragBoxes[k];
+      box.classList.toggle('hidden', !enabled || st.visible === false);
+      box.style.left = st.x + '%';
+      box.style.top = st.y + '%';
+      box.style.width = st.w + '%';
+      box.style.height = st.h + '%';
+      const dim = Math.round(st.w * w / 100) + '×' + Math.round(st.h * h / 100) + ' (' + (st.scale || 100) + '%)';
+      box.querySelector('.dim-lbl').textContent = dim;
+      uniRectLbl[k].textContent = Math.round(st.x) + '%, ' + Math.round(st.y) + '% • ' + dim;
+    });
+  }
+
+  function saveUnifiedLayout(autoSave) {
+    renderUnifiedStage();
+    if (!autoSave) return;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(function() {
+      saveStylePayload({
+        target: 'unified',
+        unified_width: clamp(parseInt(uniWidthEl.value, 10) || 1920, 640, 7680),
+        unified_height: clamp(parseInt(uniHeightEl.value, 10) || 1080, 360, 4320),
+        unified_layout_json: JSON.stringify(uniState)
+      }, '✓ Auto-saved & Live-Updated Unified Canvas');
+    }, 150);
+  }
+
+  uniResPreset.addEventListener('change', function() {
+    if (uniResPreset.value === 'custom') return;
+    const parts = uniResPreset.value.split('x');
+    if (parts.length === 2) {
+      uniWidthEl.value = parts[0];
+      uniHeightEl.value = parts[1];
+      saveUnifiedLayout(true);
+    }
+  });
+  uniWidthEl.addEventListener('change', function() { saveUnifiedLayout(true); });
+  uniHeightEl.addEventListener('change', function() { saveUnifiedLayout(true); });
+
+  ['tts', 'chat', 'subtitles'].forEach(function(k) {
+    uniVis[k].addEventListener('change', function() {
+      uniState[k].visible = uniVis[k].checked;
+      saveUnifiedLayout(true);
+    });
+    uniScale[k].addEventListener('input', function() {
+      uniState[k].scale = Number(uniScale[k].value);
+      saveUnifiedLayout(true);
+    });
+
+    const box = dragBoxes[k];
+    box.addEventListener('pointerdown', function(ev) {
+      ev.preventDefault();
+      Object.values(dragBoxes).forEach(function(b) { b.classList.remove('selected'); });
+      box.classList.add('selected');
+      const isResize = ev.target.classList.contains('resize-handle');
+      const rect = layoutStage.getBoundingClientRect();
+      const startX = ev.clientX;
+      const startY = ev.clientY;
+      const orig = Object.assign({}, uniState[k]);
+
+      function onMove(mv) {
+        const dxPct = ((mv.clientX - startX) / rect.width) * 100;
+        const dyPct = ((mv.clientY - startY) / rect.height) * 100;
+        if (isResize) {
+          uniState[k].w = clamp(snapVal(orig.w + dxPct), 10, 100 - orig.x);
+          uniState[k].h = clamp(snapVal(orig.h + dyPct), 8, 100 - orig.y);
+        } else {
+          uniState[k].x = clamp(snapVal(orig.x + dxPct), 0, 100 - orig.w);
+          uniState[k].y = clamp(snapVal(orig.y + dyPct), 0, 100 - orig.h);
+        }
+        renderUnifiedStage();
+      }
+      function onUp() {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        saveUnifiedLayout(true);
+      }
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+  });
 
   function renderSubtitlePreviewRows(langs) {
     const codes = (Array.isArray(langs) && langs.length > 0) ? langs : ['en', 'es', 'ja'];
@@ -1859,7 +2213,18 @@ const overlayDesignerHTML = `<!DOCTYPE html>
 
   document.getElementById('resetBtn').addEventListener('click', function() {
     if (saveTimer) clearTimeout(saveTimer);
-    if (activeTab === 'subtitles') {
+    if (activeTab === 'layout') {
+      uniState = JSON.parse(JSON.stringify(defaultUniLayout));
+      uniWidthEl.value = 1920;
+      uniHeightEl.value = 1080;
+      renderUnifiedStage();
+      saveStylePayload({
+        target: 'unified',
+        unified_width: 1920,
+        unified_height: 1080,
+        unified_layout_json: ''
+      }, '✓ Reset Unified Canvas Layout to 1920×1080 Default');
+    } else if (activeTab === 'subtitles') {
       applySubStateToControls(subDefaults);
       subDynamicCSS.textContent = '';
       saveStylePayload({
@@ -1885,18 +2250,35 @@ const overlayDesignerHTML = `<!DOCTYPE html>
       const chatOn = data.chat_enabled !== false;
       const subOn = !!data.subtitles_enabled;
       const hasChatTTS = ttsOn || chatOn;
+      const anyOn = hasChatTTS || subOn;
+
+      uniModules = { tts: ttsOn, chat: chatOn, subtitles: subOn };
+      uniWidthEl.value = data.unified_width || 1920;
+      uniHeightEl.value = data.unified_height || 1080;
+      if (data.unified_layout_json) {
+        try {
+          const parsed = JSON.parse(data.unified_layout_json);
+          ['tts', 'chat', 'subtitles'].forEach(function(k) {
+            if (parsed[k]) uniState[k] = Object.assign({}, defaultUniLayout[k], parsed[k]);
+          });
+        } catch (_) {}
+      }
+      renderUnifiedStage();
 
       previewTTSCardWrap.classList.toggle('hidden', !ttsOn);
       previewChatFeedWrap.classList.toggle('hidden', !chatOn);
+      tabBtnLayout.classList.toggle('hidden', !anyOn);
       tabBtnChatTTS.classList.toggle('hidden', !hasChatTTS);
       tabBtnSubtitles.classList.toggle('hidden', !subOn);
-      tabBar.classList.toggle('hidden', !(hasChatTTS && subOn));
+      tabBar.classList.toggle('hidden', !anyOn);
 
       if (Array.isArray(data.target_languages) && data.target_languages.length > 0) {
         renderSubtitlePreviewRows(data.target_languages);
       }
 
-      if ((requestedTab === 'subtitles' && subOn) || (!hasChatTTS && subOn)) {
+      if (requestedTab === 'layout' && anyOn) {
+        setActiveTab('layout');
+      } else if ((requestedTab === 'subtitles' && subOn) || (!hasChatTTS && subOn)) {
         setActiveTab('subtitles');
       } else {
         setActiveTab('chat_tts');

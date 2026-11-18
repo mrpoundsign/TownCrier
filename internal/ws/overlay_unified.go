@@ -1,0 +1,649 @@
+package ws
+
+import "net/http"
+
+func (s *Server) handleOverlayUnified(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.isTTSOverlayEnabled() && !s.isChatOverlayEnabled() && !s.IsSubtitlesOverlayEnabled() {
+		http.Error(w, "OBS Overlays are disabled in TownCrier Settings", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(unifiedOverlayHTML))
+}
+
+const unifiedOverlayHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TownCrier — Unified OBS Canvas Overlay</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', Inter, system-ui, -apple-system, sans-serif;
+  }
+  .canvas {
+    position: relative;
+    width: 1920px;
+    height: 1080px;
+    transform-origin: top left;
+    pointer-events: none;
+  }
+  .widget-slot {
+    position: absolute;
+    overflow: visible;
+    display: flex;
+    flex-direction: column;
+  }
+  .widget-inner {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    transform-origin: top left;
+    display: flex;
+    flex-direction: column;
+  }
+  .hidden { display: none !important; }
+
+  /* --- Now Speaking Widget --- */
+  #widgetTTS {
+    --bg: rgba(15, 23, 42, 0.92);
+    --border: rgba(56, 189, 248, 0.48);
+    --text: #F8FAFC;
+    --muted: #94A3B8;
+    --accent: #38BDF8;
+    --font-scale: 1;
+    color: var(--text);
+    font-size: calc(16px * var(--font-scale));
+  }
+  #widgetTTS .card {
+    width: 100%;
+    background: var(--bg);
+    border: 1.5px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 20px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 24px rgba(56, 189, 248, 0.14);
+    backdrop-filter: blur(10px);
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 220ms ease, transform 220ms ease;
+  }
+  #widgetTTS .card.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  #widgetTTS .header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+  #widgetTTS .badge {
+    display: inline-block;
+    font-size: 0.72em;
+    font-weight: 800;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 5px;
+    background: #334155;
+    color: #F8FAFC;
+  }
+  #widgetTTS .badge.twitch { background: #9146FF; }
+  #widgetTTS .badge.youtube { background: #FF0033; }
+  #widgetTTS .badge.kick { background: #53FC18; color: #090D16; }
+  #widgetTTS .badge.tiktok { background: #00F2FE; color: #090D16; }
+  #widgetTTS .speaker {
+    font-weight: 700;
+    color: var(--accent);
+  }
+  #widgetTTS .voice-pill {
+    font-size: 0.74rem;
+    color: var(--muted);
+    background: rgba(148, 163, 184, 0.14);
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+  #widgetTTS .caption {
+    font-size: 1.15em;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.4;
+  }
+
+  /* --- Live Chat Widget --- */
+  #widgetChat {
+    --bg-row: rgba(15, 23, 42, 0.86);
+    --bg-paid: rgba(30, 41, 59, 0.94);
+    --border-row: rgba(51, 65, 85, 0.65);
+    --border-paid: rgba(56, 189, 248, 0.75);
+    --text: #F8FAFC;
+    --muted: #94A3B8;
+    --accent: #38BDF8;
+    --trans-color: #BAE6FD;
+    --font-scale: 1;
+    --card-radius: 10px;
+    color: var(--text);
+    font-size: calc(15px * var(--font-scale));
+    justify-content: flex-end;
+  }
+  #widgetChat .feed {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 6px;
+    height: 100%;
+    overflow: hidden;
+  }
+  #widgetChat .msg {
+    background: var(--bg-row);
+    border: 1px solid var(--border-row);
+    border-radius: var(--card-radius);
+    padding: 8px 12px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.42);
+    line-height: 1.38;
+  }
+  #widgetChat .msg.paid {
+    background: var(--bg-paid);
+    border-color: var(--border-paid);
+  }
+  #widgetChat .plat {
+    display: inline-block;
+    font-size: 0.70em;
+    font-weight: 800;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: #334155;
+    color: #F8FAFC;
+    margin-right: 6px;
+  }
+  #widgetChat .plat.twitch { background: #9146FF; }
+  #widgetChat .plat.youtube { background: #FF0033; }
+  #widgetChat .plat.kick { background: #53FC18; color: #090D16; }
+  #widgetChat .plat.tiktok { background: #00F2FE; color: #090D16; }
+  #widgetChat .user {
+    font-weight: 700;
+    color: var(--accent);
+    margin-right: 6px;
+  }
+  #widgetChat .text { color: var(--text); }
+  #widgetChat .trans {
+    display: block;
+    font-size: 0.9em;
+    color: var(--trans-color);
+    margin-top: 2px;
+  }
+  #widgetChat .status {
+    float: right;
+    font-size: 0.78em;
+    color: var(--muted);
+    margin-left: 8px;
+  }
+
+  /* --- Voice Subtitles Widget --- */
+  #widgetSubtitles {
+    --bg: rgba(15, 23, 42, 0.90);
+    --border: rgba(56, 189, 248, 0.50);
+    --text: #F8FAFC;
+    --orig-text: #F8FAFC;
+    --muted: #94A3B8;
+    --accent: #38BDF8;
+    --badge-bg: rgba(56, 189, 248, 0.18);
+    --badge-border: rgba(56, 189, 248, 0.42);
+    --orig-badge-bg: rgba(56, 189, 248, 0.32);
+    --orig-badge-text: #F8FAFC;
+    --row-divider: rgba(51, 65, 85, 0.55);
+    --pill-bg: rgba(15, 23, 42, 0.85);
+    --pill-text: #38BDF8;
+    --card-radius: 14px;
+    --scale: 1;
+    color: var(--text);
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+  }
+  #widgetSubtitles .mic-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--pill-bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 14px;
+    font-size: calc(0.80rem * var(--scale));
+    font-weight: 700;
+    color: var(--pill-text);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 160ms ease, transform 160ms ease;
+  }
+  #widgetSubtitles .mic-pill.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  #widgetSubtitles .eq {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2.5px;
+    height: 12px;
+  }
+  #widgetSubtitles .eq span {
+    width: 3px;
+    background: var(--pill-text);
+    border-radius: 2px;
+    animation: uniBounce 0.8s ease-in-out infinite;
+  }
+  #widgetSubtitles .eq span:nth-child(1) { height: 5px; animation-delay: 0s; }
+  #widgetSubtitles .eq span:nth-child(2) { height: 12px; animation-delay: 0.15s; }
+  #widgetSubtitles .eq span:nth-child(3) { height: 8px; animation-delay: 0.30s; }
+  @keyframes uniBounce {
+    0%, 100% { transform: scaleY(0.45); }
+    50% { transform: scaleY(1); }
+  }
+  #widgetSubtitles .card {
+    width: 100%;
+    background: var(--bg);
+    border: 1.5px solid var(--border);
+    border-radius: var(--card-radius);
+    padding: 14px 20px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.58), 0 0 22px rgba(56, 189, 248, 0.14);
+    backdrop-filter: blur(10px);
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 220ms ease, transform 220ms ease;
+  }
+  #widgetSubtitles .card.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  #widgetSubtitles .rows {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  #widgetSubtitles .lang-row {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--row-divider);
+  }
+  #widgetSubtitles .lang-row:first-child {
+    padding-top: 0;
+    border-top: none;
+  }
+  #widgetSubtitles .lang-badge {
+    flex: 0 0 auto;
+    min-width: calc(42px * var(--scale));
+    text-align: center;
+    font-size: calc(0.74rem * var(--scale));
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--badge-bg);
+    border: 1px solid var(--badge-border);
+    color: var(--accent);
+  }
+  #widgetSubtitles .lang-row.original .lang-badge {
+    background: var(--orig-badge-bg);
+    color: var(--orig-badge-text);
+  }
+  #widgetSubtitles .lang-text {
+    flex: 1 1 auto;
+    font-size: calc(1.24rem * var(--scale));
+    line-height: 1.42;
+    font-weight: 600;
+    color: var(--text);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.72);
+    word-break: break-word;
+  }
+  #widgetSubtitles .lang-row.original .lang-text {
+    color: var(--orig-text);
+  }
+</style>
+<style id="chatTTSScopedCSS"></style>
+<style id="subtitlesScopedCSS"></style>
+</head>
+<body>
+<div id="canvas" class="canvas">
+  <div id="slotTTS" class="widget-slot hidden">
+    <div id="widgetTTS" class="widget-inner">
+      <div id="ttsCard" class="card">
+        <div class="header">
+          <span id="ttsPlat" class="badge"></span>
+          <span id="ttsSpeaker" class="speaker"></span>
+          <span id="ttsVoice" class="voice-pill"></span>
+        </div>
+        <div id="ttsCaption" class="caption"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="slotChat" class="widget-slot hidden">
+    <div id="widgetChat" class="widget-inner">
+      <div id="chatFeed" class="feed"></div>
+    </div>
+  </div>
+
+  <div id="slotSubtitles" class="widget-slot hidden">
+    <div id="widgetSubtitles" class="widget-inner">
+      <div id="subMicPill" class="mic-pill">
+        <div class="eq"><span></span><span></span><span></span></div>
+        <span>Listening</span>
+      </div>
+      <div id="subCard" class="card">
+        <div id="subRows" class="rows"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token') || '';
+  const wOverride = parseInt(params.get('w') || '0', 10);
+  const hOverride = parseInt(params.get('h') || '0', 10);
+  const qSuffix = token ? ('?token=' + encodeURIComponent(token)) : '';
+
+  const defaultLayout = {
+    tts:       { x: 24, y: 4,  w: 52, h: 16, scale: 100, visible: true },
+    chat:      { x: 2,  y: 36, w: 28, h: 60, scale: 100, visible: true },
+    subtitles: { x: 22, y: 74, w: 56, h: 22, scale: 100, visible: true }
+  };
+
+  const canvasEl = document.getElementById('canvas');
+  const slotTTS = document.getElementById('slotTTS');
+  const slotChat = document.getElementById('slotChat');
+  const slotSubtitles = document.getElementById('slotSubtitles');
+  const widgetTTS = document.getElementById('widgetTTS');
+  const widgetChat = document.getElementById('widgetChat');
+  const widgetSubtitles = document.getElementById('widgetSubtitles');
+
+  const chatTTSScopedCSS = document.getElementById('chatTTSScopedCSS');
+  const subtitlesScopedCSS = document.getElementById('subtitlesScopedCSS');
+
+  let canvasW = 1920;
+  let canvasH = 1080;
+  let chatConnected = false;
+  let subConnected = false;
+  let wsConnected = false;
+  let subFadeSeconds = 10;
+  let subFadeTimer = null;
+
+  function scopeCSS(rawCSS, containerSelector) {
+    if (!rawCSS) return '';
+    const targets = containerSelector.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    return rawCSS.replace(/([^{}]+)\{([^}]*)\}/g, function(_, sel, body) {
+      const scoped = sel.split(',').map(function(part) {
+        const p = part.trim();
+        if (!p) return '';
+        if (p === ':root' || p === '.preview-scope' || p === '.subtitles-preview-scope') {
+          return targets.join(', ');
+        }
+        return targets.map(function(t) { return t + ' ' + p; }).join(', ');
+      }).filter(Boolean).join(', ');
+      return scoped + ' {' + body + '}';
+    });
+  }
+
+  function fitCanvas() {
+    canvasEl.style.width = canvasW + 'px';
+    canvasEl.style.height = canvasH + 'px';
+    const vw = window.innerWidth || canvasW;
+    const vh = window.innerHeight || canvasH;
+    const scale = Math.min(vw / canvasW, vh / canvasH);
+    canvasEl.style.transform = (Math.abs(scale - 1) < 0.002) ? 'none' : ('scale(' + scale.toFixed(4) + ')');
+  }
+  window.addEventListener('resize', fitCanvas);
+
+  function applySlot(slotEl, innerEl, cfg, enabled) {
+    const merged = Object.assign({}, cfg || {});
+    if (!enabled || merged.visible === false) {
+      slotEl.classList.add('hidden');
+      return false;
+    }
+    slotEl.classList.remove('hidden');
+    slotEl.style.left = (merged.x || 0) + '%';
+    slotEl.style.top = (merged.y || 0) + '%';
+    slotEl.style.width = (merged.w || 30) + '%';
+    slotEl.style.height = (merged.h || 20) + '%';
+    const sc = (merged.scale || 100) / 100;
+    if (Math.abs(sc - 1) < 0.01) {
+      innerEl.style.transform = 'none';
+      innerEl.style.width = '100%';
+      innerEl.style.height = '100%';
+    } else {
+      innerEl.style.transform = 'scale(' + sc.toFixed(2) + ')';
+      innerEl.style.width = (100 / sc).toFixed(2) + '%';
+      innerEl.style.height = (100 / sc).toFixed(2) + '%';
+    }
+    return true;
+  }
+
+  // --- Chat Helpers ---
+  const chatFeed = document.getElementById('chatFeed');
+  function outcomeIcon(outcome, spoken) {
+    if (spoken || outcome === 'spoken') return '🗣️';
+    if (outcome === 'queued') return '⏳';
+    return '';
+  }
+  function appendChatEntry(entry) {
+    if (!entry) return;
+    if (entry.id && chatFeed.querySelector('[data-id="' + CSS.escape(entry.id) + '"]')) return;
+    const div = document.createElement('div');
+    div.className = 'msg' + (entry.is_paid_or_event ? ' paid' : '');
+    div.dataset.id = entry.id || '';
+    const st = document.createElement('span');
+    st.className = 'status';
+    st.textContent = outcomeIcon(entry.outcome, entry.spoken);
+    div.appendChild(st);
+    const plat = (entry.platform || 'chat').toLowerCase();
+    const badge = document.createElement('span');
+    badge.className = 'plat ' + plat;
+    badge.textContent = plat;
+    div.appendChild(badge);
+    const user = document.createElement('span');
+    user.className = 'user ' + plat;
+    user.textContent = (entry.display_name || entry.user_name || 'Chat') + ':';
+    div.appendChild(user);
+    const hasTrans = !!(entry.translated_text && entry.translated_text !== entry.raw_text);
+    const txt = document.createElement('span');
+    txt.className = 'text';
+    txt.textContent = hasTrans ? entry.translated_text : (entry.raw_text || entry.spoken_text || '');
+    div.appendChild(txt);
+    if (hasTrans && entry.raw_text) {
+      const tr = document.createElement('span');
+      tr.className = 'trans';
+      tr.textContent = '🌐 ' + entry.raw_text;
+      div.appendChild(tr);
+    }
+    chatFeed.appendChild(div);
+    while (chatFeed.children.length > 25) {
+      chatFeed.removeChild(chatFeed.firstChild);
+    }
+  }
+  function loadChatSnapshot() {
+    fetch('/api/overlay/chat?limit=25' + (token ? '&token=' + encodeURIComponent(token) : ''), { cache: 'no-store' })
+      .then(function(r) { return r.json(); })
+      .then(function(snap) {
+        chatFeed.innerHTML = '';
+        (snap.entries || []).slice().reverse().forEach(appendChatEntry);
+      })
+      .catch(function() {});
+  }
+  function ensureChatStream() {
+    loadChatSnapshot();
+    if (chatConnected) return;
+    chatConnected = true;
+    const es = new EventSource('/api/overlay/stream?limit=25' + (token ? '&token=' + encodeURIComponent(token) : ''));
+    es.onmessage = function(e) {
+      try {
+        const ev = JSON.parse(e.data);
+        if (ev.kind === 'reload') {
+          loadAllMeta();
+        } else if (ev.kind === 'append' && ev.entry) {
+          appendChatEntry(ev.entry);
+        } else if (ev.kind === 'outcome' && ev.event_id && ev.update) {
+          const row = chatFeed.querySelector('[data-id="' + CSS.escape(ev.event_id) + '"]');
+          if (row) {
+            const st = row.querySelector('.status');
+            if (st) st.textContent = outcomeIcon(ev.update.outcome, ev.update.spoken);
+          }
+        }
+      } catch (_) {}
+    };
+  }
+
+  // --- Subtitles Helpers ---
+  const subMicPill = document.getElementById('subMicPill');
+  const subCard = document.getElementById('subCard');
+  const subRows = document.getElementById('subRows');
+  function renderSubtitle(ev) {
+    if (!ev || !Array.isArray(ev.lines) || ev.lines.length === 0) return;
+    if (subFadeTimer) { clearTimeout(subFadeTimer); subFadeTimer = null; }
+    subRows.innerHTML = '';
+    ev.lines.forEach(function(ln) {
+      const row = document.createElement('div');
+      row.className = 'lang-row' + (ln.is_original ? ' original' : '');
+      const b = document.createElement('span');
+      b.className = 'lang-badge';
+      b.textContent = ln.label || (ln.lang || '').toUpperCase();
+      const t = document.createElement('span');
+      t.className = 'lang-text';
+      t.textContent = ln.text || '';
+      row.appendChild(b);
+      row.appendChild(t);
+      subRows.appendChild(row);
+    });
+    subCard.classList.add('visible');
+    if (subFadeSeconds > 0) {
+      subFadeTimer = setTimeout(function() { subCard.classList.remove('visible'); }, subFadeSeconds * 1000);
+    }
+  }
+  function loadSubtitlesSnapshot() {
+    fetch('/api/overlay/subtitles' + qSuffix, { cache: 'no-store' })
+      .then(function(r) { return r.json(); })
+      .then(function(snap) {
+        if (snap && typeof snap.fade_seconds === 'number') subFadeSeconds = snap.fade_seconds;
+        subMicPill.classList.toggle('visible', !!(snap && snap.speaking));
+        if (snap && snap.latest && Array.isArray(snap.latest.lines) && snap.latest.lines.length > 0) {
+          renderSubtitle(snap.latest);
+        }
+      })
+      .catch(function() {});
+  }
+  function ensureSubtitlesStream() {
+    loadSubtitlesSnapshot();
+    if (subConnected) return;
+    subConnected = true;
+    const es = new EventSource('/api/overlay/subtitles/stream' + qSuffix);
+    es.onmessage = function(e) {
+      try {
+        const ev = JSON.parse(e.data);
+        switch (ev.kind) {
+          case 'speaking':
+            subMicPill.classList.toggle('visible', !!ev.speaking);
+            break;
+          case 'subtitle':
+            subMicPill.classList.toggle('visible', false);
+            renderSubtitle(ev);
+            break;
+          case 'clear':
+            subMicPill.classList.toggle('visible', false);
+            subCard.classList.remove('visible');
+            subRows.innerHTML = '';
+            break;
+          case 'reload':
+            loadAllMeta();
+            break;
+        }
+      } catch (_) {}
+    };
+  }
+
+  // --- Now Speaking WS Helpers ---
+  const ttsCard = document.getElementById('ttsCard');
+  const ttsPlat = document.getElementById('ttsPlat');
+  const ttsSpeaker = document.getElementById('ttsSpeaker');
+  const ttsVoice = document.getElementById('ttsVoice');
+  const ttsCaption = document.getElementById('ttsCaption');
+  function ensureTTSWS() {
+    if (wsConnected) return;
+    wsConnected = true;
+    const proto = (window.location.protocol === 'https:') ? 'wss://' : 'ws://';
+    const ws = new WebSocket(proto + window.location.host + '/ws' + qSuffix);
+    ws.onmessage = function(ev) {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.speechEvent) {
+          const se = msg.speechEvent;
+          if (se.started) {
+            const p = (se.platform || 'chat').toLowerCase();
+            ttsPlat.className = 'badge ' + p;
+            ttsPlat.textContent = p;
+            ttsSpeaker.textContent = se.displayName || se.username || 'Chat';
+            ttsVoice.textContent = se.voiceId || '';
+            ttsCaption.textContent = se.spokenText || '';
+            ttsCard.classList.add('visible');
+          } else {
+            ttsCard.classList.remove('visible');
+          }
+        } else if (msg.state) {
+          loadAllMeta();
+        }
+      } catch (_) {}
+    };
+    ws.onclose = function() {
+      wsConnected = false;
+      setTimeout(ensureTTSWS, 2500);
+    };
+  }
+
+  function loadAllMeta() {
+    fetch('/api/overlay/style' + qSuffix, { cache: 'no-store' })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        canvasW = (wOverride > 0) ? wOverride : (data.unified_width || 1920);
+        canvasH = (hOverride > 0) ? hOverride : (data.unified_height || 1080);
+        fitCanvas();
+
+        chatTTSScopedCSS.textContent = scopeCSS(data.custom_css || '', '#widgetTTS, #widgetChat');
+        subtitlesScopedCSS.textContent = scopeCSS(data.subtitles_custom_css || '', '#widgetSubtitles');
+
+        let layout = JSON.parse(JSON.stringify(defaultLayout));
+        if (data.unified_layout_json) {
+          try {
+            const parsed = JSON.parse(data.unified_layout_json);
+            if (parsed.tts) layout.tts = Object.assign(layout.tts, parsed.tts);
+            if (parsed.chat) layout.chat = Object.assign(layout.chat, parsed.chat);
+            if (parsed.subtitles) layout.subtitles = Object.assign(layout.subtitles, parsed.subtitles);
+          } catch (_) {}
+        }
+
+        if (applySlot(slotTTS, widgetTTS, layout.tts, !!data.tts_enabled)) ensureTTSWS();
+        if (applySlot(slotChat, widgetChat, layout.chat, !!data.chat_enabled)) ensureChatStream();
+        if (applySlot(slotSubtitles, widgetSubtitles, layout.subtitles, !!data.subtitles_enabled)) ensureSubtitlesStream();
+      })
+      .catch(function() {});
+  }
+
+  loadAllMeta();
+})();
+</script>
+</body>
+</html>
+`

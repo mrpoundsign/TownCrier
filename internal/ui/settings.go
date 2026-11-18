@@ -112,10 +112,17 @@ type SettingsView struct {
 	alertClearBtn        *widget.Button
 	alertTestBtn         *widget.Button
 	wsControlCard             *widget.Card
+	wsOpenDesignerBtn         *widget.Button
+	wsUnifiedSection          *fyne.Container
+	wsUnifiedResSelect        *widget.Select
+	wsUnifiedLink             *widget.Hyperlink
+	wsCopyUnifiedBtn          *widget.Button
+	wsUnifiedLayoutBtn        *widget.Button
 	wsTTSOverlayGroup         *fyne.Container
 	wsTTSOverlayCheck         *widget.Check
 	wsTTSOverlaySection       *fyne.Container
 	wsTTSOverlayPosSelect     *widget.Select
+	wsTTSOverlayLink          *widget.Hyperlink
 	wsCopyTTSOverlayBtn       *widget.Button
 	wsChatOverlayGroup        *fyne.Container
 	wsChatOverlayCheck        *widget.Check
@@ -123,23 +130,26 @@ type SettingsView struct {
 	wsChatOverlayPresetSelect *widget.Select
 	wsChatOverlaySummaryCheck *widget.Check
 	wsChatOverlayPresetMap    map[string]string
+	wsChatOverlayLink         *widget.Hyperlink
 	wsCopyChatOverlayBtn      *widget.Button
 	wsSubtitlesOverlayGroup   *fyne.Container
 	wsSubtitlesOverlayCheck   *widget.Check
 	wsSubtitlesOverlaySection *fyne.Container
+	wsSubtitlesOverlayLink    *widget.Hyperlink
 	wsCopySubtitlesOverlayBtn *widget.Button
 	wsEnabledCheck            *widget.Check
-	wsControlSection      *fyne.Container
-	wsNetSection          *fyne.Container
-	wsHostEntry           *ScrollPassEntry
-	wsPortEntry           *ScrollPassEntry
-	wsTokenEntry          *ScrollPassEntry
-	wsStatusLabel         *widget.Label
-	streamDeckInstallBtn  *widget.Button
-	streamDeckStatusLabel *widget.Label
-	streamDeckPluginsDir  string
-	onOverlayChanged      func()
-	generalBox            *fyne.Container
+	wsControlSection          *fyne.Container
+	wsNetSection              *fyne.Container
+	wsHostEntry               *ScrollPassEntry
+	wsPortEntry               *ScrollPassEntry
+	wsTokenEntry              *ScrollPassEntry
+	wsStatusLabel             *widget.Label
+	streamDeckInstallBtn      *widget.Button
+	streamDeckStatusLabel     *widget.Label
+	streamDeckPluginsDir      string
+	onOverlayChanged          func()
+	generalBox                *fyne.Container
+	obsBox                    *fyne.Container
 	ttsBox                *fyne.Container
 	enableTTSCheck            *widget.Check
 	enableLogCheck            *widget.Check
@@ -916,9 +926,10 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		backupCard,
 	)
 
-	obsTabContent := newPanelVScroll(container.NewVBox(
+	v.obsBox = container.NewVBox(
 		v.wsControlCard,
-	))
+	)
+	obsTabContent := newPanelVScroll(v.obsBox)
 
 	v.ttsBox = container.NewVBox(
 		v.globalVoiceCard,
@@ -1452,8 +1463,42 @@ func (v *SettingsView) refreshWSStatusLabel() {
 			v.wsNetSection.Hide()
 		}
 	}
+	anyOverlayOn := ttsOverlayOn || chatOverlayOn || subtitlesOverlayOn
+	if v.wsOpenDesignerBtn != nil {
+		if anyOverlayOn {
+			v.wsOpenDesignerBtn.Enable()
+		} else {
+			v.wsOpenDesignerBtn.Disable()
+		}
+	}
+	if v.wsUnifiedSection != nil {
+		if anyOverlayOn {
+			v.wsUnifiedSection.Show()
+		} else {
+			v.wsUnifiedSection.Hide()
+		}
+	}
+
+	updateOverlayLink := func(link *widget.Hyperlink, path string) {
+		if link == nil {
+			return
+		}
+		raw := v.overlayURL(path, nil)
+		link.SetText(raw)
+		if parsed, err := url.Parse(raw); err == nil {
+			link.SetURL(parsed)
+		}
+	}
+	updateOverlayLink(v.wsUnifiedLink, "/overlay")
+	updateOverlayLink(v.wsTTSOverlayLink, "/overlay/tts")
+	updateOverlayLink(v.wsChatOverlayLink, "/overlay/chat")
+	updateOverlayLink(v.wsSubtitlesOverlayLink, "/overlay/subtitles")
+
 	if v.wsControlCard != nil {
 		v.wsControlCard.Refresh()
+	}
+	if v.obsBox != nil {
+		v.obsBox.Refresh()
 	}
 	if v.generalBox != nil {
 		v.generalBox.Refresh()
@@ -1619,6 +1664,88 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 	})
 	v.wsCopyTTSOverlayBtn.Importance = widget.HighImportance
 
+	v.wsOpenDesignerBtn = widget.NewButtonWithIcon("🎨 Open Style Designer", theme.ColorPaletteIcon(), func() {
+		v.openOverlayDesignerTab("")
+	})
+	v.wsOpenDesignerBtn.Importance = widget.HighImportance
+
+	unifiedResOpts := []string{
+		"1920×1080 (1080p)",
+		"1280×720 (720p)",
+		"2560×1440 (1440p)",
+		"3840×2160 (4K)",
+		"1080×1920 (Vertical)",
+	}
+	formatUnifiedRes := func(w, h int) string {
+		cw, ch := config.NormalizeUnifiedOverlaySize(w, h)
+		switch {
+		case cw == 1280 && ch == 720:
+			return "1280×720 (720p)"
+		case cw == 2560 && ch == 1440:
+			return "2560×1440 (1440p)"
+		case cw == 3840 && ch == 2160:
+			return "3840×2160 (4K)"
+		case cw == 1080 && ch == 1920:
+			return "1080×1920 (Vertical)"
+		default:
+			return "1920×1080 (1080p)"
+		}
+	}
+	v.wsUnifiedResSelect = widget.NewSelect(unifiedResOpts, func(selected string) {
+		if v.initializing {
+			return
+		}
+		uw, uh := 1920, 1080
+		switch selected {
+		case "1280×720 (720p)":
+			uw, uh = 1280, 720
+		case "2560×1440 (1440p)":
+			uw, uh = 2560, 1440
+		case "3840×2160 (4K)":
+			uw, uh = 3840, 2160
+		case "1080×1920 (Vertical)":
+			uw, uh = 1080, 1920
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.WebSocket.UnifiedOverlayWidth = uw
+			c.WebSocket.UnifiedOverlayHeight = uh
+		})
+		if v.session != nil && v.session.WSServer() != nil {
+			v.session.WSServer().BroadcastOverlayReload()
+		}
+		v.setStatus(fmt.Sprintf("✓ Unified OBS Canvas resolution set to %d×%d.", uw, uh))
+	})
+	v.wsUnifiedResSelect.SetSelected(formatUnifiedRes(cfg.WebSocket.UnifiedOverlayWidth, cfg.WebSocket.UnifiedOverlayHeight))
+
+	v.wsCopyUnifiedBtn = widget.NewButtonWithIcon("📋 Copy Unified Overlay URL", theme.ContentCopyIcon(), func() {
+		targetURL := v.overlayURL("/overlay", nil)
+		if app := fyne.CurrentApp(); app != nil && app.Clipboard() != nil {
+			app.Clipboard().SetContent(targetURL)
+		}
+		v.setStatus("✓ Copied Unified OBS Canvas Overlay URL: " + targetURL)
+	})
+	v.wsCopyUnifiedBtn.Importance = widget.HighImportance
+
+	v.wsUnifiedLayoutBtn = widget.NewButtonWithIcon("📐 Edit Canvas Layout", theme.GridIcon(), func() {
+		v.openOverlayDesignerTab("layout")
+	})
+
+	v.wsUnifiedLink = widget.NewHyperlink("", nil)
+	unifiedInfo := widget.NewLabelWithStyle(
+		"Single Browser Source (/overlay) combining all enabled overlays at your chosen resolution. Drag and resize each module in the Canvas Layout Designer.",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	unifiedInfo.Wrapping = fyne.TextWrapWord
+
+	v.wsUnifiedSection = container.NewVBox(
+		widget.NewLabelWithStyle("Unified OBS Canvas Overlay (/overlay — All Enabled Modules)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewHBox(widget.NewLabel("Canvas Resolution:"), v.wsUnifiedResSelect, v.wsCopyUnifiedBtn, v.wsUnifiedLayoutBtn),
+		container.NewHBox(widget.NewLabel("URL:"), v.wsUnifiedLink),
+		unifiedInfo,
+		widget.NewSeparator(),
+	)
+
 	ttsDesignerBtn := widget.NewButtonWithIcon("🎨 Customize Style", theme.ColorPaletteIcon(), openChatTTSDesigner)
 
 	ttsOverlayInfo := widget.NewLabelWithStyle(
@@ -1628,6 +1755,7 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 	)
 	ttsOverlayInfo.Wrapping = fyne.TextWrapWord
 
+	v.wsTTSOverlayLink = widget.NewHyperlink("", nil)
 	ttsOverlayControlsRow := container.NewHBox(
 		v.wsCopyTTSOverlayBtn,
 		widget.NewLabel("Position:"),
@@ -1636,6 +1764,7 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 	)
 	v.wsTTSOverlaySection = container.NewVBox(
 		ttsOverlayControlsRow,
+		container.NewHBox(widget.NewLabel("URL:"), v.wsTTSOverlayLink),
 		ttsOverlayInfo,
 	)
 	v.wsTTSOverlayGroup = container.NewVBox(
@@ -1716,6 +1845,7 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 	)
 	chatOverlayInfo.Wrapping = fyne.TextWrapWord
 
+	v.wsChatOverlayLink = widget.NewHyperlink("", nil)
 	chatOverlayControlsRow := container.NewHBox(
 		widget.NewLabel("Live Log:"),
 		v.wsChatOverlayPresetSelect,
@@ -1726,6 +1856,7 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 
 	v.wsChatOverlaySection = container.NewVBox(
 		chatOverlayControlsRow,
+		container.NewHBox(widget.NewLabel("URL:"), v.wsChatOverlayLink),
 		chatOverlayInfo,
 	)
 	v.wsChatOverlayGroup = container.NewVBox(
@@ -1770,8 +1901,10 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 	)
 	subtitlesOverlayInfo.Wrapping = fyne.TextWrapWord
 
+	v.wsSubtitlesOverlayLink = widget.NewHyperlink("", nil)
 	v.wsSubtitlesOverlaySection = container.NewVBox(
 		container.NewHBox(v.wsCopySubtitlesOverlayBtn, subtitlesDesignerBtn),
+		container.NewHBox(widget.NewLabel("URL:"), v.wsSubtitlesOverlayLink),
 		subtitlesOverlayInfo,
 	)
 	v.wsSubtitlesOverlayGroup = container.NewVBox(
@@ -1946,7 +2079,12 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 		sdRow,
 	)
 
+	designerBar := container.NewBorder(nil, nil, nil, v.wsOpenDesignerBtn, widget.NewLabelWithStyle("OBS Browser Source Overlays & Style Designer", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
+
 	cardContent := container.NewVBox(
+		designerBar,
+		widget.NewSeparator(),
+		v.wsUnifiedSection,
 		v.wsTTSOverlayGroup,
 		v.wsChatOverlayGroup,
 		v.wsSubtitlesOverlayGroup,
