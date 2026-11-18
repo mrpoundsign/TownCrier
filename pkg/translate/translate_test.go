@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -521,3 +522,225 @@ func TestSplitSentencesAndTwoTierCache(t *testing.T) {
 		t.Errorf("Step C TranslatedText = %q", res3.TranslatedText)
 	}
 }
+
+func TestIsMixedTaglishAndTranslateMulti(t *testing.T) {
+	if IsMixedTaglish("Hello everyone, welcome back to the stream!") {
+		t.Fatal("expected pure English not to be marked mixed Taglish")
+	}
+	if IsMixedTaglish("Magandang gabi po sa inyong lahat!") {
+		t.Fatal("expected pure Tagalog not to be marked mixed Taglish")
+	}
+	if !IsMixedTaglish("Wait lang guys, mag-heal muna ako before the boss fight!") {
+		t.Fatal("expected Taglish phrase to be detected by IsMixedTaglish")
+	}
+	if lang, ok := DetectCodeSwitching("Wait amigos, estamos jugando this boss fight!"); !ok || lang != "es" {
+		t.Fatalf("expected Spanglish code-switching to detect 'es', got lang=%q ok=%v", lang, ok)
+	}
+
+	var (
+		mu       sync.Mutex
+		pairHits = make(map[string]int)
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lp := r.URL.Query().Get("langpair")
+		q := r.URL.Query().Get("q")
+		mu.Lock()
+		pairHits[lp]++
+		mu.Unlock()
+
+		var out string
+		switch lp {
+		case "en|tl":
+			if strings.Contains(q, "mag-heal") {
+				out = "Sandali lang mga kasama, magpapagaling muna ako bago ang laban sa boss!"
+			} else {
+				out = "Maligayang pagbabalik sa stream!"
+			}
+		case "en|ja":
+			out = "配信にお帰りなさい！"
+		case "tl|en":
+			if strings.Contains(q, "mag-heal") {
+				out = "Wait a second guys, I will heal first before the boss fight!"
+			} else {
+				out = "Good evening to you all!"
+			}
+		case "tl|ja":
+			if strings.Contains(q, "mag-heal") {
+				out = "みんなちょっと待って、ボス戦の前にまず回復するね！"
+			} else {
+				out = "皆さん、こんばんは！"
+			}
+		default:
+			out = "tx:" + lp
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"responseData":{"translatedText":"` + out + `","match":1.0},"responseStatus":200}`))
+	}))
+	defer srv.Close()
+
+	svc := NewService()
+	svc.SetHTTPClient(srv.Client())
+	svc.SetCloudEndpoints(srv.URL, srv.URL, srv.URL)
+	chain := []Options{{Provider: ProviderMyMemory}}
+	targets := []string{"fil", "ja", "en"} // "fil" normalizes to "tl" with badge "FIL"
+
+	// Case 1: Pure English spoken -> 0 calls for "en", 2 concurrent calls ("en|tl" and "en|ja")
+	itemsEN, err := svc.TranslateMulti(context.Background(), "Welcome back to the stream!", "en", targets, RoutingPriority, chain)
+	if err != nil {
+		t.Fatalf("TranslateMulti pure EN failed: %v", err)
+	}
+	if len(itemsEN) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(itemsEN))
+	}
+	if itemsEN[0].Lang != "tl" || itemsEN[0].LanguageBadge != "FIL" || itemsEN[0].IsOriginal || itemsEN[0].Text != "Maligayang pagbabalik sa stream!" {
+		t.Errorf("unexpected itemsEN[0]: %+v", itemsEN[0])
+	}
+	if itemsEN[1].Lang != "ja" || itemsEN[1].LanguageBadge != "JA" || itemsEN[1].Text != "配信にお帰りなさい！" {
+		t.Errorf("unexpected itemsEN[1]: %+v", itemsEN[1])
+	}
+	if itemsEN[2].Lang != "en" || !itemsEN[2].IsOriginal || itemsEN[2].Text != "Welcome back to the stream!" {
+		t.Errorf("unexpected itemsEN[2]: %+v", itemsEN[2])
+	}
+	mu.Lock()
+	if pairHits["en|en"] != 0 || pairHits["en|tl"] != 1 || pairHits["en|ja"] != 1 {
+		t.Errorf("unexpected pairHits after Case 1: %v", pairHits)
+	}
+	pairHits = make(map[string]int)
+	mu.Unlock()
+
+	// Case 2: Pure Tagalog spoken -> 0 calls for "tl", 2 concurrent calls ("tl|ja" and "tl|en")
+	itemsTL, err := svc.TranslateMulti(context.Background(), "Magandang gabi po sa inyong lahat!", "tl", targets, RoutingPriority, chain)
+	if err != nil {
+		t.Fatalf("TranslateMulti pure TL failed: %v", err)
+	}
+	if !itemsTL[0].IsOriginal || itemsTL[0].Text != "Magandang gabi po sa inyong lahat!" {
+		t.Errorf("expected original Tagalog in slot 0, got %+v", itemsTL[0])
+	}
+	if itemsTL[1].Text != "皆さん、こんばんは！" || itemsTL[2].Text != "Good evening to you all!" {
+		t.Errorf("unexpected TL translations: ja=%q en=%q", itemsTL[1].Text, itemsTL[2].Text)
+	}
+	mu.Lock()
+	if pairHits["tl|tl"] != 0 || pairHits["tl|ja"] != 1 || pairHits["tl|en"] != 1 {
+		t.Errorf("unexpected pairHits after Case 2: %v", pairHits)
+	}
+	pairHits = make(map[string]int)
+	mu.Unlock()
+
+	// Case 3: Mixed Taglish spoken -> translates ALL 3 targets cleanly without false short-circuit!
+	taglish := "Wait lang guys, mag-heal muna ako before the boss fight!"
+	itemsMix, err := svc.TranslateMulti(context.Background(), taglish, "tl", targets, RoutingPriority, chain)
+	if err != nil {
+		t.Fatalf("TranslateMulti Taglish failed: %v", err)
+	}
+	if itemsMix[0].Text != "Sandali lang mga kasama, magpapagaling muna ako bago ang laban sa boss!" {
+		t.Errorf("expected clean Tagalog normalization on FIL row, got %q", itemsMix[0].Text)
+	}
+	if itemsMix[1].Text != "みんなちょっと待って、ボス戦の前にまず回復するね！" {
+		t.Errorf("expected Japanese translation on JA row, got %q", itemsMix[1].Text)
+	}
+	if itemsMix[2].Text != "Wait a second guys, I will heal first before the boss fight!" {
+		t.Errorf("expected clean English normalization on EN row, got %q", itemsMix[2].Text)
+	}
+	mu.Lock()
+	if pairHits["en|tl"] != 1 || pairHits["tl|ja"] != 1 || pairHits["tl|en"] != 1 {
+		t.Errorf("expected all 3 pairs queried for mixed Taglish, got %v", pairHits)
+	}
+	mu.Unlock()
+}
+
+func TestTranslateMultiSpanishAndRoundRobinPivot(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		pairHits = make(map[string]int)
+		deeplTL  atomic.Int32
+	)
+
+	// MyMemory echoes untranslated Spanish on sparse direct "es|tl", but succeeds on "es|en", "en|tl", and "es|ja".
+	mmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lp := r.URL.Query().Get("langpair")
+		q := r.URL.Query().Get("q")
+		mu.Lock()
+		pairHits[lp]++
+		mu.Unlock()
+
+		var out string
+		switch lp {
+		case "es|en":
+			out = "Hello friends, how are you today?"
+		case "es|tl":
+			// Echo identical Spanish to simulate sparse direct non-English pair
+			out = q
+		case "en|tl":
+			out = "Kumusta mga kaibigan, kumusta kayo ngayon?"
+		case "es|ja":
+			out = "こんにちは友達、今日はお元気ですか？"
+		default:
+			out = "mm:" + lp
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"responseData":{"translatedText":"` + out + `","match":1.0},"responseStatus":200}`))
+	}))
+	defer mmSrv.Close()
+
+	// DeepL supports EN and JA, and would return HTTP 400 if ever called with unsupported target "TL".
+	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req deepLRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.TargetLang == "TL" {
+			deeplTL.Add(1)
+			http.Error(w, `{"message":"Value for 'target_lang' not supported."}`, http.StatusBadRequest)
+			return
+		}
+		var out string
+		switch req.TargetLang {
+		case "EN":
+			out = "Hello friends, how are you today?"
+		case "JA":
+			out = "こんにちは友達、今日はお元気ですか？"
+		default:
+			out = "dl:" + req.TargetLang
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"translations":[{"detected_source_language":"ES","text":"` + out + `"}]}`))
+	}))
+	defer dlSrv.Close()
+
+	svc := NewService()
+	svc.SetHTTPClient(mmSrv.Client())
+	svc.SetCloudEndpoints(mmSrv.URL, "", dlSrv.URL)
+
+	chain := []Options{
+		{Provider: ProviderMyMemory},
+		{Provider: ProviderDeepL, APIKey: "test-key:fx"},
+	}
+	spanish := "Hola amigos, ¿cómo están hoy?"
+
+	// Verify Spanish -> ["en", "tl", "ja"] in round_robin mode:
+	// - Never skips "tl" due to false whatlanggo Spa/Tgl confusion
+	// - Skips DeepL on unsupported "tl" without putting DeepL into backoff
+	// - Pivots "es -> en -> tl" cleanly when MyMemory echoes untranslated Spanish on "es|tl"
+	items, err := svc.TranslateMulti(context.Background(), spanish, "es", []string{"en", "tl", "ja"}, RoutingRoundRobin, chain)
+	if err != nil {
+		t.Fatalf("TranslateMulti Spanish failed: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(items))
+	}
+	if items[0].Lang != "en" || items[0].IsOriginal || items[0].Text != "Hello friends, how are you today?" {
+		t.Errorf("unexpected EN item: %+v", items[0])
+	}
+	if items[1].Lang != "tl" || items[1].LanguageBadge != "FIL" || items[1].IsOriginal || items[1].Text != "Kumusta mga kaibigan, kumusta kayo ngayon?" {
+		t.Errorf("expected translated Tagalog via English pivot (not raw Spanish), got %+v", items[1])
+	}
+	if items[2].Lang != "ja" || items[2].IsOriginal || items[2].Text != "こんにちは友達、今日はお元気ですか？" {
+		t.Errorf("unexpected JA item: %+v", items[2])
+	}
+	if deeplTL.Load() != 0 {
+		t.Errorf("expected DeepL never to be called with unsupported TL target, got %d calls", deeplTL.Load())
+	}
+	if st := svc.ProviderStatus(ProviderDeepL); st.FailureCount != 0 {
+		t.Errorf("expected 0 DeepL failures, got %+v", st)
+	}
+}
+
