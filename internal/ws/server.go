@@ -10,6 +10,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/pprof"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -346,6 +348,20 @@ func (s *Server) Start(host string, port int, authToken string) error {
 	mux.Handle("/api/overlay/subtitles", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlaySubtitles)))
 	mux.Handle("/api/overlay/subtitles/stream", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlaySubtitlesStream)))
 	mux.Handle("/api/overlay/style", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlayStyle)))
+
+	// Local pprof diagnostic endpoints (http://127.0.0.1:8765/debug/pprof/)
+	mux.Handle("/debug/pprof/", s.withCORSAndAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/mutex") {
+			runtime.SetMutexProfileFraction(1)
+		} else if strings.HasSuffix(r.URL.Path, "/block") {
+			runtime.SetBlockProfileRate(10000)
+		}
+		pprof.Index(w, r)
+	})))
+	mux.Handle("/debug/pprof/cmdline", s.withCORSAndAuth(http.HandlerFunc(pprof.Cmdline)))
+	mux.Handle("/debug/pprof/profile", s.withCORSAndAuth(http.HandlerFunc(pprof.Profile)))
+	mux.Handle("/debug/pprof/symbol", s.withCORSAndAuth(http.HandlerFunc(pprof.Symbol)))
+	mux.Handle("/debug/pprof/trace", s.withCORSAndAuth(http.HandlerFunc(pprof.Trace)))
 
 	srv := &http.Server{
 		Handler:           mux,

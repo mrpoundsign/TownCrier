@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/pkg/audio"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 	"github.com/mrpoundsign/TownCrier/pkg/secrets"
+	"github.com/mrpoundsign/TownCrier/pkg/stt"
 )
 
 func TestSharedTranslationTabAndVoiceSubtitlesLanguageLists(t *testing.T) {
@@ -32,6 +35,12 @@ func TestSharedTranslationTabAndVoiceSubtitlesLanguageLists(t *testing.T) {
 	})
 	view.SetCaptureDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
 		return []audio.DeviceInfo{{ID: "mic1", Name: "Shure MV7", IsDefault: true}}, nil
+	})
+	view.SetSTTGPUDeviceEnumerator(func() ([]stt.GPUDevice, error) {
+		return []stt.GPUDevice{
+			{GPUIndex: 0, VKIndex: 0, Name: "Vulkan0", Description: "Intel(R) HD Graphics 630", Type: "igpu", MemoryTotalMB: 4096},
+			{GPUIndex: 1, VKIndex: 1, Name: "Vulkan1", Description: "NVIDIA GeForce GTX 1060", Type: "dgpu", MemoryTotalMB: 6144},
+		}, nil
 	})
 
 	obj := view.Build()
@@ -106,7 +115,34 @@ func TestSharedTranslationTabAndVoiceSubtitlesLanguageLists(t *testing.T) {
 		t.Fatalf("expected reordered TargetLanguages [tl en ja es], got %v", got)
 	}
 
-	// 7. Clicking "Configure Shared Translation Providers" switches subTabs to Translation
+	// 7. Initially no GGML model is installed in temp dir -> Compute Device selector is locked/disabled with loud prompt
+	if !view.vsComputeDeviceSelect.Disabled() {
+		t.Fatal("expected vsComputeDeviceSelect to be disabled before GPU-ready GGML model is installed")
+	}
+
+	// Simulate GGML model + Silero VAD installed on disk -> Compute Device selector unlocks and lists Intel HD 630 iGPU
+	sttDir := view.effectiveSTTModelDir()
+	_ = os.MkdirAll(filepath.Join(sttDir, stt.ModelWhisperTurbo), 0755)
+	_ = os.WriteFile(stt.VadModelPath(sttDir), []byte("vad"), 0644)
+	ggmlPath, _ := stt.GGMLModelPath(sttDir, stt.ModelWhisperTurbo)
+	_ = os.WriteFile(ggmlPath, []byte("ggml"), 0644)
+	view.refreshVoiceSubtitleModelStatus()
+
+	if view.vsComputeDeviceSelect.Disabled() {
+		t.Fatal("expected vsComputeDeviceSelect to unlock once GGML model is installed")
+	}
+
+	igpuDev := stt.GPUDevice{GPUIndex: 0, VKIndex: 0, Name: "Vulkan0", Description: "Intel(R) HD Graphics 630", Type: "igpu", MemoryTotalMB: 4096}
+	view.vsComputeDeviceSelect.SetSelected(igpuDev.UILabel())
+	if got := sess.Config().VoiceSubtitles.ComputeDevice; got != "vulkan:Intel(R) HD Graphics 630" {
+		t.Fatalf("expected ComputeDevice 'vulkan:Intel(R) HD Graphics 630', got %q", got)
+	}
+	view.vsThreadsSelect.SetSelected("2 Threads (4-Core Laptop Friendly)")
+	if got := sess.Config().VoiceSubtitles.NumThreads; got != 2 {
+		t.Fatalf("expected NumThreads=2, got %d", got)
+	}
+
+	// 8. Clicking "Configure Shared Translation Providers" switches subTabs to Translation
 	test.Tap(view.vsOpenTranslationTabBtn)
 	if view.subTabs.Selected() != view.translationTabItem {
 		t.Fatal("expected clicking Configure Shared Translation Providers to select Translation tab")

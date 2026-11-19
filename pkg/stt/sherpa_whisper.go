@@ -27,15 +27,16 @@ type SherpaWhisperEngine struct {
 	numThreads   int
 	useGPU       bool
 	provider     string
+	providerAtom atomic.Value
 	idleTimeout  time.Duration
 	idleTimer    *time.Timer
 	closed       bool
 }
 
-// NewSherpaWhisperEngine initializes a local offline Whisper recognizer for the specified model family.
+// NewSherpaWhisperEngine initializes a local offline CPU Whisper recognizer for legacy sherpa-onnx ONNX weights.
 func NewSherpaWhisperEngine(family string, baseSTTDir string, numThreads int, useGPU bool) (*SherpaWhisperEngine, error) {
 	if numThreads <= 0 {
-		numThreads = 4
+		numThreads = SmartSTTThreads(0, 0, false)
 	}
 	normFamily := NormalizeModelFamily(family)
 	if strings.TrimSpace(baseSTTDir) == "" {
@@ -71,16 +72,14 @@ func (e *SherpaWhisperEngine) ensureLoadedLocked(whisperLang string) error {
 		return nil
 	}
 
-	encPath, decPath, tokPath, usingFP, err := ResolveWhisperFiles(e.baseSTTDir, e.family, e.useGPU)
+	// Bundled sherpa-onnx-go binaries are CPU-only; always prefer INT8 ONNX weights on CPU so FP32 weights
+	// are never silently loaded onto CPU threads.
+	encPath, decPath, tokPath, _, err := ResolveWhisperFiles(e.baseSTTDir, e.family, false)
 	if err != nil {
 		return err
 	}
 
 	provider := "cpu"
-	if e.useGPU && usingFP {
-		provider = "directml"
-	}
-
 	cfg := sherpa.OfflineRecognizerConfig{
 		FeatConfig: sherpa.FeatureConfig{
 			SampleRate: DefaultSampleRate,
@@ -103,19 +102,6 @@ func (e *SherpaWhisperEngine) ensureLoadedLocked(whisperLang string) error {
 	}
 
 	rec := sherpa.NewOfflineRecognizer(&cfg)
-	if rec == nil && provider == "directml" {
-		// Fall back cleanly to CPU (preferring INT8 weights if present) when DirectML initialization fails
-		int8Enc, int8Dec, int8Tok, _, fallbackErr := ResolveWhisperFiles(e.baseSTTDir, e.family, false)
-		if fallbackErr == nil {
-			cfg.ModelConfig.Whisper.Encoder = int8Enc
-			cfg.ModelConfig.Whisper.Decoder = int8Dec
-			cfg.ModelConfig.Tokens = int8Tok
-		}
-		cfg.ModelConfig.Provider = "cpu"
-		rec = sherpa.NewOfflineRecognizer(&cfg)
-		provider = "cpu"
-	}
-
 	if rec == nil {
 		return fmt.Errorf("initialize sherpa-onnx OfflineRecognizer (%s) from %s: %w", e.family, e.baseSTTDir, ErrModelNotFound)
 	}
@@ -123,7 +109,8 @@ func (e *SherpaWhisperEngine) ensureLoadedLocked(whisperLang string) error {
 	e.recognizer = rec
 	e.activeConfig = cfg
 	e.activeLang = whisperLang
-	e.provider = provider
+	e.provider = fmt.Sprintf("cpu-onnx (%d threads)", e.numThreads)
+	e.providerAtom.Store(e.provider)
 	tts.ReclaimOSMemory()
 	return nil
 }
@@ -133,11 +120,12 @@ func (e *SherpaWhisperEngine) ModelFamily() string {
 	return e.family
 }
 
-// Provider returns the active ONNX execution provider ("directml" or "cpu").
+// Provider returns the active ONNX execution provider without locking e.mu during active decoding.
 func (e *SherpaWhisperEngine) Provider() string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.provider
+	if v, ok := e.providerAtom.Load().(string); ok {
+		return v
+	}
+	return ""
 }
 
 // SetIdleTimeout configures automatic native model unloading after d of inactivity (0 disables).

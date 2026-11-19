@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/mrpoundsign/TownCrier/pkg/tts"
@@ -26,12 +27,12 @@ import (
 const defaultASRModelsReleaseAPIURL = "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/tags/asr-models"
 
 var (
-	// ErrChecksumMismatch indicates a downloaded STT asset failed SHA-256 verification.
+	// ErrChecksumMismatch indicates a downloaded STT asset failed SHA-256 verification or lacked a required checksum.
 	ErrChecksumMismatch = errors.New("downloaded stt file checksum mismatch")
 
-	// SileroVadURL is the upstream sherpa-onnx release asset for Silero VAD (~644 KB).
+	// SileroVadURL is the upstream sherpa-onnx release asset for Silero VAD (~644 KB) with a pinned SHA-256 digest.
 	SileroVadURL          = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
-	SileroVadSHA256       = ""
+	SileroVadSHA256       = "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
 	SileroVadSize   int64 = 643854
 
 	// ASRModelsReleaseAPIURL is the GitHub Releases API endpoint for upstream sherpa-onnx ASR/VAD assets.
@@ -71,6 +72,9 @@ func fileExistsNonEmpty(p string) bool {
 
 // IsVadInstalled reports whether silero_vad.onnx is present in baseSTTDir.
 func IsVadInstalled(baseSTTDir string) bool {
+	if strings.TrimSpace(baseSTTDir) == "" && testing.Testing() {
+		return false
+	}
 	return fileExistsNonEmpty(VadModelPath(baseSTTDir))
 }
 
@@ -115,13 +119,40 @@ func ResolveWhisperFiles(baseSTTDir, family string, preferFP bool) (encoderPath,
 	return "", "", "", false, fmt.Errorf("%w: missing whisper %s encoder/decoder ONNX files in %s", ErrModelNotFound, spec.Prefix, dir)
 }
 
-// IsModelInstalled reports whether both silero_vad.onnx and the requested Whisper model family are installed in baseSTTDir.
-func IsModelInstalled(baseSTTDir, family string) bool {
+// GGMLModelPath returns the target file path for the quantized GGML Whisper model of family inside baseSTTDir.
+func GGMLModelPath(baseSTTDir, family string) (string, error) {
+	spec, ok := ModelSpecByID(family)
+	if !ok {
+		return "", fmt.Errorf("%w: unknown model family %q", ErrModelNotFound, family)
+	}
+	if strings.TrimSpace(spec.GGMLFile) == "" {
+		return "", fmt.Errorf("%w: model family %q has no GGML file configured", ErrModelNotFound, family)
+	}
+	return filepath.Join(ModelFamilyDir(baseSTTDir, spec.ID), spec.GGMLFile), nil
+}
+
+func hasGGMLFile(baseSTTDir, family string) bool {
+	p, err := GGMLModelPath(baseSTTDir, family)
+	return err == nil && fileExistsNonEmpty(p)
+}
+
+// IsGGMLModelInstalled reports whether both silero_vad.onnx and the GPU/iGPU/CPU-ready GGML Whisper model exist in baseSTTDir.
+func IsGGMLModelInstalled(baseSTTDir, family string) bool {
+	return IsVadInstalled(baseSTTDir) && hasGGMLFile(baseSTTDir, family)
+}
+
+// IsSherpaModelInstalled reports whether silero_vad.onnx and legacy sherpa-onnx Whisper ONNX files exist in baseSTTDir.
+func IsSherpaModelInstalled(baseSTTDir, family string) bool {
 	if !IsVadInstalled(baseSTTDir) {
 		return false
 	}
 	_, _, _, _, err := ResolveWhisperFiles(baseSTTDir, family, false)
 	return err == nil
+}
+
+// IsModelInstalled reports whether silero_vad.onnx and either GGML or legacy ONNX Whisper weights are installed in baseSTTDir.
+func IsModelInstalled(baseSTTDir, family string) bool {
+	return IsGGMLModelInstalled(baseSTTDir, family) || IsSherpaModelInstalled(baseSTTDir, family)
 }
 
 type progressHashReader struct {
@@ -152,14 +183,53 @@ type ModelManifest struct {
 	InstalledAt string            `json:"installed_at"`
 }
 
+func isValidSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
+func verifyDownloadSHA256(ctx context.Context, name, assetURL, expectedSHA256, computedHex string) error {
+	expected := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(expectedSHA256)), "sha256:")
+	if expected == "" {
+		expected = fetchRemoteAssetSHA256(ctx, assetURL)
+	}
+	if expected == "" {
+		return fmt.Errorf("%w (%s): missing required SHA-256 verification digest", ErrChecksumMismatch, name)
+	}
+	if strings.EqualFold(computedHex, expected) {
+		return nil
+	}
+	// If upstream HuggingFace/GitHub published an updated model weight revision, verify against the
+	// authoritative remote Git-LFS / Release SHA-256 digest (still 100% fail-closed if missing or mismatched).
+	if strings.HasPrefix(assetURL, "https://huggingface.co/") || strings.HasPrefix(assetURL, "https://github.com/k2-fsa/sherpa-onnx/") {
+		if remoteDigest := fetchRemoteAssetSHA256(ctx, assetURL); isValidSHA256Hex(remoteDigest) && strings.EqualFold(computedHex, remoteDigest) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w (%s): expected %s, got %s", ErrChecksumMismatch, name, expected, computedHex)
+}
+
 // DownloadModel downloads and installs silero_vad.onnx and the requested Whisper model family into baseSTTDir.
 func DownloadModel(baseSTTDir, family string, onProgress tts.DownloadProgressFunc) error {
 	return DownloadModelWithContext(context.Background(), baseSTTDir, family, onProgress)
 }
 
-// DownloadModelWithContext downloads silero_vad.onnx (if missing) and the requested Whisper model archive
-// into baseSTTDir with cancellation, progress reporting, and SHA-256 verification.
+// ForceDownloadModelWithContext downloads (or updates in-place) silero_vad.onnx and the requested Whisper model
+// even if an older version of the model is already installed in baseSTTDir.
+func ForceDownloadModelWithContext(parentCtx context.Context, baseSTTDir, family string, onProgress tts.DownloadProgressFunc) error {
+	return downloadModelInternal(parentCtx, baseSTTDir, family, true, onProgress)
+}
+
+// DownloadModelWithContext downloads silero_vad.onnx (if missing) and the requested Whisper model
+// into baseSTTDir with cancellation, progress reporting, and strict fail-closed SHA-256 verification.
 func DownloadModelWithContext(parentCtx context.Context, baseSTTDir, family string, onProgress tts.DownloadProgressFunc) error {
+	return downloadModelInternal(parentCtx, baseSTTDir, family, false, onProgress)
+}
+
+func downloadModelInternal(parentCtx context.Context, baseSTTDir, family string, forceWhisper bool, onProgress tts.DownloadProgressFunc) error {
 	if strings.TrimSpace(baseSTTDir) == "" {
 		baseSTTDir = DefaultSTTModelDir()
 	}
@@ -167,8 +237,16 @@ func DownloadModelWithContext(parentCtx context.Context, baseSTTDir, family stri
 	if !ok {
 		return fmt.Errorf("unsupported STT model family %q", family)
 	}
-	if IsModelInstalled(baseSTTDir, spec.ID) {
-		return nil
+
+	useGGML := strings.TrimSpace(spec.GGMLURL) != "" && strings.TrimSpace(spec.GGMLFile) != ""
+	if !forceWhisper {
+		if useGGML {
+			if IsGGMLModelInstalled(baseSTTDir, spec.ID) {
+				return nil
+			}
+		} else if IsSherpaModelInstalled(baseSTTDir, spec.ID) {
+			return nil
+		}
 	}
 
 	if err := os.MkdirAll(baseSTTDir, 0755); err != nil {
@@ -176,15 +254,23 @@ func DownloadModelWithContext(parentCtx context.Context, baseSTTDir, family stri
 	}
 
 	needVAD := !IsVadInstalled(baseSTTDir)
-	_, _, _, _, whisperErr := ResolveWhisperFiles(baseSTTDir, spec.ID, false)
-	needWhisper := whisperErr != nil
+	var needWhisper bool
+	var whisperExpectedBytes int64
+	if useGGML {
+		needWhisper = forceWhisper || !hasGGMLFile(baseSTTDir, spec.ID)
+		whisperExpectedBytes = spec.GGMLSize
+	} else {
+		_, _, _, _, whisperErr := ResolveWhisperFiles(baseSTTDir, spec.ID, false)
+		needWhisper = forceWhisper || whisperErr != nil
+		whisperExpectedBytes = spec.ArchiveSize
+	}
 
 	var totalExpected int64
 	if needVAD {
 		totalExpected += SileroVadSize
 	}
 	if needWhisper {
-		totalExpected += spec.ArchiveSize
+		totalExpected += whisperExpectedBytes
 	}
 	if totalExpected == 0 {
 		return nil
@@ -222,13 +308,23 @@ func DownloadModelWithContext(parentCtx context.Context, baseSTTDir, family stri
 
 	if needWhisper {
 		familyDir := ModelFamilyDir(baseSTTDir, spec.ID)
-		if err := downloadAndExtractTarBz2(ctx, spec.ID, spec.ArchiveURL, spec.ArchiveSHA256, spec.ArchiveSize, familyDir, &totalAtomic, reportProgress); err != nil {
-			return err
+		if useGGML {
+			ggmlPath := filepath.Join(familyDir, spec.GGMLFile)
+			if err := downloadSingleAsset(ctx, spec.ID, spec.GGMLURL, spec.GGMLSHA256, spec.GGMLSize, ggmlPath, &totalAtomic, reportProgress); err != nil {
+				return err
+			}
+		} else {
+			if err := downloadAndExtractTarBz2(ctx, spec.ID, spec.ArchiveURL, spec.ArchiveSHA256, spec.ArchiveSize, familyDir, &totalAtomic, reportProgress); err != nil {
+				return err
+			}
 		}
 	}
 
+	if useGGML && !IsGGMLModelInstalled(baseSTTDir, spec.ID) {
+		return fmt.Errorf("stt model download finished but GGML files are still missing for %s in %s", spec.ID, baseSTTDir)
+	}
 	if !IsModelInstalled(baseSTTDir, spec.ID) {
-		return fmt.Errorf("stt model extraction finished but required files are still missing for %s in %s", spec.ID, baseSTTDir)
+		return fmt.Errorf("stt model installation finished but required files are still missing for %s in %s", spec.ID, baseSTTDir)
 	}
 	return nil
 }
@@ -292,12 +388,8 @@ func downloadSingleAsset(
 	}
 
 	computed := hex.EncodeToString(hasher.Sum(nil))
-	expected := expectedSHA256
-	if expected == "" {
-		expected = fetchGitHubASRReleaseDigest(ctx, assetURL)
-	}
-	if expected != "" && !strings.EqualFold(computed, expected) {
-		return fmt.Errorf("%w (%s): expected %s, got %s", ErrChecksumMismatch, name, expected, computed)
+	if err := verifyDownloadSHA256(ctx, name, assetURL, expectedSHA256, computed); err != nil {
+		return err
 	}
 
 	if renErr := os.Rename(stagePath, targetPath); renErr != nil {
@@ -403,12 +495,8 @@ func downloadAndExtractTarBz2(
 	}
 
 	computed := hex.EncodeToString(hasher.Sum(nil))
-	expected := expectedSHA256
-	if expected == "" {
-		expected = fetchGitHubASRReleaseDigest(ctx, archiveURL)
-	}
-	if expected != "" && !strings.EqualFold(computed, expected) {
-		return fmt.Errorf("%w (%s): expected %s, got %s", ErrChecksumMismatch, name, expected, computed)
+	if err := verifyDownloadSHA256(ctx, name, archiveURL, expectedSHA256, computed); err != nil {
+		return err
 	}
 
 	for _, sf := range staged {
@@ -478,6 +566,74 @@ func ReadModelManifest(dir string) (*ModelManifest, error) {
 		return nil, err
 	}
 	return &m, nil
+}
+
+func fetchRemoteAssetSHA256(ctx context.Context, assetURL string) string {
+	if d := fetchHuggingFaceLFSDigest(ctx, assetURL); isValidSHA256Hex(d) {
+		return d
+	}
+	if d := fetchGitHubASRReleaseDigest(ctx, assetURL); isValidSHA256Hex(d) {
+		return d
+	}
+	return ""
+}
+
+func fetchHuggingFaceLFSDigest(ctx context.Context, assetURL string) string {
+	if !strings.HasPrefix(assetURL, "https://huggingface.co/") && !strings.Contains(assetURL, "/ggml-") {
+		return ""
+	}
+	apiCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(apiCtx, http.MethodHead, assetURL, nil)
+	if err != nil {
+		return ""
+	}
+	noRedirectClient := &http.Client{
+		Transport: sttHTTPClient.Transport,
+		Timeout:   8 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	for _, hdr := range []string{"X-Linked-Etag", "X-Repo-Commit-Sha256", "ETag"} {
+		val := strings.Trim(strings.TrimSpace(resp.Header.Get(hdr)), `"`)
+		val = strings.TrimPrefix(strings.ToLower(val), "sha256:")
+		if isValidSHA256Hex(val) {
+			return val
+		}
+	}
+	return ""
+}
+
+// CheckSTTModelUpdate checks whether an installed GGML Whisper model has a newer SHA-256 digest available
+// (either via a newer compiled-in ModelSpec.GGMLSHA256 or upstream HuggingFace Git-LFS X-Linked-Etag).
+func CheckSTTModelUpdate(ctx context.Context, baseSTTDir, family string) (updateAvailable bool, localSHA, remoteSHA string) {
+	spec, ok := ModelSpecByID(family)
+	if !ok || !IsGGMLModelInstalled(baseSTTDir, spec.ID) {
+		return false, "", ""
+	}
+	famDir := ModelFamilyDir(baseSTTDir, spec.ID)
+	manifest, err := ReadModelManifest(famDir)
+	if err == nil && manifest != nil && manifest.Assets != nil {
+		localSHA = strings.ToLower(strings.TrimSpace(manifest.Assets[spec.GGMLFile]))
+	}
+	remoteSHA = strings.ToLower(strings.TrimSpace(spec.GGMLSHA256))
+	if ctx != nil {
+		if liveSHA := fetchRemoteAssetSHA256(ctx, spec.GGMLURL); isValidSHA256Hex(liveSHA) {
+			remoteSHA = liveSHA
+		}
+	}
+	if localSHA != "" && remoteSHA != "" && !strings.EqualFold(localSHA, remoteSHA) {
+		return true, localSHA, remoteSHA
+	}
+	return false, localSHA, remoteSHA
 }
 
 func fetchGitHubASRReleaseDigest(ctx context.Context, assetURL string) string {

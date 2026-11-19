@@ -97,6 +97,7 @@ type Session struct {
 	heldSubSeq    atomic.Uint64
 
 	sttMu            sync.Mutex
+	sttSyncMu        sync.Mutex
 	sttModelDir      string
 	sttEngine        stt.Engine
 	sttEngineKey     string
@@ -109,6 +110,7 @@ type Session struct {
 	sttWg            sync.WaitGroup
 	sttSpeaking      atomic.Bool
 	sttTranscribing  atomic.Bool
+	sttLastDecodeMs  atomic.Int64
 	sttSeq           atomic.Uint64
 	latestSubtitle   *ws.SubtitleEvent
 	onVoiceSubtitle  func(ev ws.SubtitleEvent)

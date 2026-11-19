@@ -21,6 +21,7 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
     steps:
       - name: Compute Version & Tag
         id: meta
@@ -33,8 +34,13 @@ jobs:
             RAW_VER="${RAW_VER#v}"
             TAG_NAME="v${RAW_VER}"
           fi
+          IS_PRERELEASE="false"
+          if [[ "${RAW_VER}" == *-* ]]; then
+            IS_PRERELEASE="true"
+          fi
           echo "version=${RAW_VER}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
 
   build-linux-windows:
     name: Build & Package Desktop GUI (Windows & Linux)
@@ -70,6 +76,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 zip \
+            cmake ninja-build glslc libvulkan-dev spirv-headers \
             libgl1-mesa-dev xorg-dev libxcursor-dev libxrandr-dev \
             libxinerama-dev libxi-dev libxxf86vm-dev libasound2-dev \
             libwayland-dev libxkbcommon-dev
@@ -164,6 +171,7 @@ jobs:
         with:
           tag_name: ${{ needs.meta.outputs.tag }}
           name: TownCrier ${{ needs.meta.outputs.tag }}
+          prerelease: ${{ needs.meta.outputs.prerelease == 'true' }}
           generate_release_notes: true
           files: |
             dist/*

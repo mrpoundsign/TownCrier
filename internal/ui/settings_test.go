@@ -333,13 +333,19 @@ func TestSettingsView_TTSAndLoggingToggles(t *testing.T) {
 		t.Fatalf("expected 5 subtabs when both are re-enabled, got %d", len(view.subTabs.Items))
 	}
 
-	// 4. User unchecks enableTTSCheck
+	// 4. User unchecks enableTTSCheck directly from the Application Features card
 	view.enableTTSCheck.SetChecked(false)
 	if !ttsToggled.Load() {
 		t.Error("expected onTTSChanged callback to be called")
 	}
 	if sess.Config().TTS.Enabled {
 		t.Error("expected session config TTS.Enabled to be false")
+	}
+	if view.globalVoiceCard.Visible() {
+		t.Error("expected globalVoiceCard to be hidden when user unchecks enableTTSCheck")
+	}
+	if view.audioCard.Visible() {
+		t.Error("expected audioCard to be hidden when user unchecks enableTTSCheck")
 	}
 }
 

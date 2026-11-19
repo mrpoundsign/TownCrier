@@ -368,8 +368,9 @@ const (
 type VoiceSubtitlesConfig struct {
 	Enabled            bool     `json:"enabled"`
 	ModelFamily        string   `json:"model_family,omitempty"`         // "whisper_turbo", "whisper_base", "whisper_small", "whisper_tiny"
-	UseGPU             bool     `json:"use_gpu"`                        // DirectML GPU execution when FP weights exist
-	NumThreads         int      `json:"num_threads,omitempty"`          // default 4
+	ComputeDevice      string   `json:"compute_device,omitempty"`       // "auto" (default), "igpu", "dgpu", "cpu", or "vulkan:<device>"
+	UseGPU             bool     `json:"use_gpu,omitempty"`              // legacy flag retained for backward compatibility
+	NumThreads         int      `json:"num_threads,omitempty"`          // 0 = Auto (smart cap), or explicit 1..16
 	VadThreshold       float32  `json:"vad_threshold,omitempty"`        // default 0.50
 	MinSilenceMs       int      `json:"min_silence_ms,omitempty"`       // default 450
 	MaxSpeechSeconds   int      `json:"max_speech_seconds,omitempty"`   // default 12
@@ -415,14 +416,45 @@ func NormalizeVoiceSubtitleModel(model string) string {
 	}
 }
 
+// NormalizeVoiceSubtitleComputeDevice returns a canonical compute device string ("auto", "igpu", "dgpu", "cpu", or "vulkan:<name>").
+func NormalizeVoiceSubtitleComputeDevice(dev string) string {
+	trimmed := strings.TrimSpace(dev)
+	lower := strings.ToLower(trimmed)
+	switch lower {
+	case "", "auto", "default":
+		return "auto"
+	case "igpu", "integrated":
+		return "igpu"
+	case "dgpu", "discrete", "gpu":
+		return "dgpu"
+	case "cpu", "off", "none", "cpu_only":
+		return "cpu"
+	}
+	if strings.HasPrefix(lower, "vulkan:") {
+		spec := strings.TrimSpace(trimmed[len("vulkan:"):])
+		if spec != "" {
+			return "vulkan:" + spec
+		}
+	}
+	return "auto"
+}
+
 // NormalizeVoiceSubtitlesConfig clamps and normalizes all fields of a VoiceSubtitlesConfig.
 func NormalizeVoiceSubtitlesConfig(vs *VoiceSubtitlesConfig) {
 	if vs == nil {
 		return
 	}
 	vs.ModelFamily = NormalizeVoiceSubtitleModel(vs.ModelFamily)
-	if vs.NumThreads <= 0 {
-		vs.NumThreads = 4
+	rawDev := strings.TrimSpace(vs.ComputeDevice)
+	if !vs.UseGPU && strings.EqualFold(rawDev, "auto") {
+		vs.ComputeDevice = "cpu"
+		vs.UseGPU = false
+	} else {
+		vs.ComputeDevice = NormalizeVoiceSubtitleComputeDevice(rawDev)
+		vs.UseGPU = vs.ComputeDevice != "cpu"
+	}
+	if vs.NumThreads < 0 {
+		vs.NumThreads = 0
 	} else if vs.NumThreads > 16 {
 		vs.NumThreads = 16
 	}
@@ -1166,8 +1198,9 @@ func DefaultConfig() *Config {
 		VoiceSubtitles: VoiceSubtitlesConfig{
 			Enabled:            false,
 			ModelFamily:        DefaultVoiceSubtitleModel,
-			UseGPU:             false,
-			NumThreads:         4,
+			ComputeDevice:      "auto",
+			UseGPU:             true,
+			NumThreads:         0,
 			VadThreshold:       DefaultVoiceSubtitleVadThresh,
 			MinSilenceMs:       DefaultVoiceSubtitleMinSilence,
 			MaxSpeechSeconds:   DefaultVoiceSubtitleMaxSpeech,
