@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,6 +93,7 @@ type SettingsView struct {
 	uiScaleSelect     *widget.Select
 	globalVoiceField  *VoiceSpeedField
 	syncTTSControls   func()
+	refreshPackLabels func()
 	prevModels        []string
 	prevPreset        string
 	prevUseGPU        bool
@@ -263,7 +265,11 @@ type SettingsView struct {
 	vsModelSelect           *widget.Select
 	vsModelStatusLabel      *widget.Label
 	vsDownloadModelBtn      *widget.Button
-	vsGPUCheck              *widget.Check
+	vsComputeDeviceSelect   *widget.Select
+	vsComputeRefreshBtn     *widget.Button
+	vsComputeDeviceMap      map[string]string
+	vsThreadsSelect         *widget.Select
+	sttGPUEnum              func() ([]stt.GPUDevice, error)
 	vsSilenceSelect         *widget.Select
 	vsSpokenAddSelect       *widget.Select
 	vsAddSpokenBtn          *widget.Button
@@ -284,6 +290,11 @@ type SettingsView struct {
 	vsTestPhraseEntry       *ScrollPassEntry
 	vsTestSubtitleBtn       *widget.Button
 	vsLivePreviewLabel      *widget.Label
+
+	micUIPending  atomic.Bool
+	micLevelBits  atomic.Uint32
+	micGateActive atomic.Bool
+	lastMicUINano atomic.Int64
 }
 
 // NewSettingsView constructs a SettingsView for configuring audio, TTS hardware, and global rules.
@@ -298,17 +309,25 @@ func NewSettingsView(w fyne.Window, cfg *config.Config, player audio.Player, eng
 		translationOn = cfg.Translation.Enabled
 		voiceSubOn = cfg.VoiceSubtitles.Enabled
 	}
+	defaultModelDir := tts.DefaultModelDir()
+	defaultSTTModelDir := stt.DefaultSTTModelDir()
+	if testing.Testing() {
+		defaultModelDir = ""
+		defaultSTTModelDir = ""
+	}
 	return &SettingsView{
 		window:                w,
 		cfg:                   cfg,
 		player:                player,
 		engine:                engine,
-		modelDir:              tts.DefaultModelDir(),
-		sttModelDir:           stt.DefaultSTTModelDir(),
+		modelDir:              defaultModelDir,
+		sttModelDir:           defaultSTTModelDir,
 		deviceMap:             make(map[string]string),
 		deviceEnum:            audio.EnumeratePlaybackDevices,
 		micDeviceMap:          make(map[string]string),
 		captureDeviceEnum:     audio.EnumerateCaptureDevices,
+		vsComputeDeviceMap:    make(map[string]string),
+		sttGPUEnum:            stt.EnumerateGPUDevices,
 		prevModels:            slices.Clone(cfg.TTS.EffectiveEnabledModels()),
 		prevPreset:            cfg.TTS.Preset,
 		prevUseGPU:            cfg.TTS.UseGPU,
@@ -985,6 +1004,23 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 			c.TTS.Enabled = checked
 		})
 		v.ttsEnabled = checked
+		if !checked {
+			if v.session != nil {
+				if eng := v.session.Engine(); eng != nil {
+					_ = eng.Close()
+					v.session.SetEngine(nil)
+				}
+				tts.ReclaimOSMemory()
+			}
+			v.setStatus("✓ Text-to-Speech disabled.")
+		} else {
+			v.setStatus("Enabling Text-to-Speech...")
+			if v.session == nil || v.session.Engine() == nil {
+				v.reloadTTSEngine(v.refreshPackLabels)
+			} else {
+				v.setStatus("✓ Text-to-Speech enabled.")
+			}
+		}
 		if v.ttsOutputModeCard != nil {
 			if checked {
 				v.ttsOutputModeCard.Show()
@@ -1016,11 +1052,7 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 		if v.onTTSChanged != nil {
 			v.onTTSChanged(checked)
 		}
-		if checked {
-			v.setStatus("✓ Text-to-Speech enabled.")
-		} else {
-			v.setStatus("Text-to-Speech disabled.")
-		}
+		v.SyncTTSState(checked)
 	})
 	v.enableTTSCheck.SetChecked(cfg.TTS.Enabled)
 
@@ -2532,9 +2564,30 @@ func (v *SettingsView) updateMicGateStatusText(levelDB float32, active bool) {
 }
 
 // SyncMicLevel updates the live microphone input level bar and gate status label on the Fyne UI thread.
+// Coalesces high-frequency (~100 Hz) WASAPI audio callbacks so at most one UI frame (~20 Hz) is queued at a time.
 func (v *SettingsView) SyncMicLevel(levelDB float32, active bool) {
+	prevActive := v.micGateActive.Swap(active)
+	prevDB := math.Float32frombits(v.micLevelBits.Swap(math.Float32bits(levelDB)))
+
+	nowNano := time.Now().UnixNano()
+	lastNano := v.lastMicUINano.Load()
+	if active == prevActive && math.Abs(float64(levelDB-prevDB)) < 0.75 && nowNano-lastNano < int64(250*time.Millisecond) {
+		return
+	}
+	if active == prevActive && nowNano-lastNano < int64(50*time.Millisecond) {
+		return
+	}
+	if !v.micUIPending.CompareAndSwap(false, true) {
+		return
+	}
+	v.lastMicUINano.Store(nowNano)
+
 	fyne.Do(func() {
-		norm := (float64(levelDB) - float64(audio.MinCaptureDBFS)) / (0.0 - float64(audio.MinCaptureDBFS))
+		v.micUIPending.Store(false)
+		curDB := math.Float32frombits(v.micLevelBits.Load())
+		curActive := v.micGateActive.Load()
+
+		norm := (float64(curDB) - float64(audio.MinCaptureDBFS)) / (0.0 - float64(audio.MinCaptureDBFS))
 		if norm < 0.0 {
 			norm = 0.0
 		} else if norm > 1.0 {
@@ -2546,7 +2599,7 @@ func (v *SettingsView) SyncMicLevel(levelDB float32, active bool) {
 		if v.vsMicLevelBar != nil {
 			v.vsMicLevelBar.SetValue(norm)
 		}
-		v.updateMicGateStatusText(levelDB, active)
+		v.updateMicGateStatusText(curDB, curActive)
 	})
 }
 
@@ -2952,6 +3005,7 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		}
 		syncModelUpdateControls()
 	}
+	v.refreshPackLabels = refreshPackLabels
 
 	v.checkModelUpdatesBtn = widget.NewButtonWithIcon("Check for Voice Updates", theme.ViewRefreshIcon(), func() {
 		cfg := v.currentConfig()
@@ -3308,33 +3362,6 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	}
 
 	syncWidgetsFromConfig()
-
-	v.enableTTSCheck = widget.NewCheck("Enable Text-to-Speech (TTS)", func(checked bool) {
-		if v.initializing || syncingControls {
-			return
-		}
-		v.updateConfig(func(c *config.Config) {
-			c.TTS.Enabled = checked
-		})
-		if !checked {
-			if v.session != nil {
-				if eng := v.session.Engine(); eng != nil {
-					_ = eng.Close()
-					v.session.SetEngine(nil)
-				}
-				tts.ReclaimOSMemory()
-			}
-			v.setStatus("✓ Text-to-Speech disabled.")
-		} else {
-			v.setStatus("Enabling Text-to-Speech...")
-			v.reloadTTSEngine(refreshPackLabels)
-		}
-		if v.onTTSChanged != nil {
-			v.onTTSChanged(checked)
-		}
-		v.SyncTTSState(checked)
-	})
-	v.enableTTSCheck.SetChecked(v.currentConfig().TTS.Enabled)
 
 	presetRow := container.NewBorder(
 		nil,

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -26,6 +27,15 @@ var VoiceSubtitleSilenceOptions = []string{
 	"450 ms (Default)",
 	"650 ms (Relaxed)",
 	"900 ms (Long Pause)",
+}
+
+// VoiceSubtitleThreadOptions lists selectable Whisper helper/CPU thread limits.
+var VoiceSubtitleThreadOptions = []string{
+	"Auto (Smart Cap — Recommended)",
+	"1 Thread (Lowest CPU Impact)",
+	"2 Threads (4-Core Laptop Friendly)",
+	"4 Threads",
+	"8 Threads",
 }
 
 // VoiceSubtitleFadeOptions lists selectable OBS subtitle auto-fade durations.
@@ -149,15 +159,139 @@ func parseSubtitleScaleOption(label string) int {
 	return config.DefaultVoiceSubtitleScale
 }
 
-func (v *SettingsView) effectiveSTTModelDir() string {
-	if v.session != nil {
-		return v.session.STTModelDir()
+func formatSTTThreadsOption(threads int) string {
+	switch threads {
+	case 1:
+		return "1 Thread (Lowest CPU Impact)"
+	case 2:
+		return "2 Threads (4-Core Laptop Friendly)"
+	case 4:
+		return "4 Threads"
+	case 8:
+		return "8 Threads"
+	default:
+		return "Auto (Smart Cap — Recommended)"
 	}
+}
+
+func parseSTTThreadsOption(label string) int {
+	var n int
+	if _, err := fmt.Sscanf(strings.TrimSpace(label), "%d", &n); err == nil && n >= 1 && n <= 16 {
+		return n
+	}
+	return 0
+}
+
+// SetSTTGPUDeviceEnumerator overrides Vulkan GPU enumeration on SettingsView (used in headless unit tests).
+func (v *SettingsView) SetSTTGPUDeviceEnumerator(fn func() ([]stt.GPUDevice, error)) {
+	v.mu.Lock()
+	v.sttGPUEnum = fn
+	v.mu.Unlock()
+}
+
+func formatActiveSTTProviderBadge(prov string) string {
+	trimmed := strings.TrimSpace(prov)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(trimmed), "vulkan:") {
+		return strings.TrimSpace(trimmed[len("vulkan:"):])
+	}
+	return trimmed
+}
+
+func (v *SettingsView) refreshSTTComputeDeviceList(forceRefresh bool) {
+	if v.vsComputeDeviceSelect == nil {
+		return
+	}
+
+	var devs []stt.GPUDevice
+	v.mu.Lock()
+	enumFn := v.sttGPUEnum
+	v.mu.Unlock()
+
+	if forceRefresh && enumFn == nil {
+		devs, _ = stt.RefreshGPUDevices()
+	} else if enumFn != nil {
+		if forceRefresh {
+			// If using default enumerator, trigger a fresh probe
+			_, _ = stt.RefreshGPUDevices()
+		}
+		devs, _ = enumFn()
+	}
+
+	const (
+		optAuto = "Auto (Best Vulkan GPU / iGPU)"
+		optIGPU = "Integrated iGPU Only (Save Gaming GPU)"
+		optDGPU = "Discrete GPU Only (Fastest)"
+		optCPU  = "CPU Only"
+	)
+
+	opts := []string{optAuto, optIGPU, optDGPU}
+	devMap := map[string]string{
+		optAuto: stt.ComputeDeviceAuto,
+		optIGPU: stt.ComputeDeviceIGPU,
+		optDGPU: stt.ComputeDeviceDGPU,
+		optCPU:  stt.ComputeDeviceCPU,
+	}
+
+	for _, d := range devs {
+		lbl := d.UILabel()
+		val := d.ConfigValue()
+		if _, exists := devMap[lbl]; !exists {
+			opts = append(opts, lbl)
+			devMap[lbl] = val
+		}
+	}
+	opts = append(opts, optCPU)
+
+	cfg := v.currentConfig()
+	wantVal := stt.ComputeDeviceAuto
+	if cfg != nil {
+		wantVal = config.NormalizeVoiceSubtitleComputeDevice(cfg.VoiceSubtitles.ComputeDevice)
+	}
+
+	selectedLabel := optAuto
+	matched := false
+	for _, lbl := range opts {
+		if strings.EqualFold(devMap[lbl], wantVal) {
+			selectedLabel = lbl
+			matched = true
+			break
+		}
+	}
+	if !matched && strings.HasPrefix(strings.ToLower(wantVal), "vulkan:") {
+		// Preserve saved specific GPU name even if temporarily disconnected
+		customLbl := strings.TrimSpace(wantVal[len("vulkan:"):]) + " (Saved GPU)"
+		opts = slices.Insert(opts, len(opts)-1, customLbl)
+		devMap[customLbl] = wantVal
+		selectedLabel = customLbl
+	}
+
+	v.mu.Lock()
+	v.vsComputeDeviceMap = devMap
+	v.mu.Unlock()
+
+	prevInit := v.initializing
+	v.initializing = true
+	v.vsComputeDeviceSelect.Options = opts
+	v.vsComputeDeviceSelect.SetSelected(selectedLabel)
+	v.vsComputeDeviceSelect.Refresh()
+	v.initializing = prevInit
+}
+
+func (v *SettingsView) effectiveSTTModelDir() string {
 	v.mu.Lock()
 	dir := v.sttModelDir
 	v.mu.Unlock()
 	if strings.TrimSpace(dir) != "" {
 		return dir
+	}
+	if v.session != nil {
+		return v.session.STTModelDir()
+	}
+	if testing.Testing() {
+		return ""
 	}
 	return stt.DefaultSTTModelDir()
 }
@@ -184,7 +318,16 @@ func (v *SettingsView) SyncSTTStatus(speaking bool, transcribing bool, errText s
 				fam = config.NormalizeVoiceSubtitleModel(cfg.VoiceSubtitles.ModelFamily)
 			}
 			if stt.IsModelInstalled(v.effectiveSTTModelDir(), fam) {
-				v.vsSTTStatusLabel.SetText("🟢 Listening Ready")
+				status := "🟢 Ready"
+				if v.session != nil {
+					if prov := formatActiveSTTProviderBadge(v.session.ActiveSTTProvider()); prov != "" {
+						status += " • " + prov
+					}
+					if ms := v.session.LastSTTDecodeMs(); ms > 0 {
+						status += fmt.Sprintf(" • %d ms", ms)
+					}
+				}
+				v.vsSTTStatusLabel.SetText(status)
 			} else {
 				v.vsSTTStatusLabel.SetText("⚪ Model Not Installed")
 			}
@@ -230,28 +373,83 @@ func (v *SettingsView) refreshVoiceSubtitleModelStatus() {
 		fam = config.NormalizeVoiceSubtitleModel(cfg.VoiceSubtitles.ModelFamily)
 	}
 	spec, _ := stt.ModelSpecByID(fam)
-	installed := stt.IsModelInstalled(v.effectiveSTTModelDir(), fam)
+	dir := v.effectiveSTTModelDir()
+	ggmlInstalled := stt.IsGGMLModelInstalled(dir, fam)
+	legacyInstalled := stt.IsSherpaModelInstalled(dir, fam)
 
-	if v.vsGPUCheck != nil {
-		if spec.SupportsFP32 {
-			v.vsGPUCheck.Enable()
-		} else {
-			v.vsGPUCheck.Disable()
-		}
-	}
-
-	if installed {
-		v.vsModelStatusLabel.SetText(fmt.Sprintf("✓ %s + Silero VAD installed on disk.", spec.DisplayName))
-		v.vsDownloadModelBtn.SetText("Installed")
+	switch {
+	case ggmlInstalled:
+		v.vsModelStatusLabel.TextStyle = fyne.TextStyle{}
+		v.vsModelStatusLabel.SetText(fmt.Sprintf("✓ %s + Silero VAD installed (Vulkan GPU / iGPU / CPU ready, SHA-256 verified).", spec.DisplayName))
+		v.vsDownloadModelBtn.SetText("✓ GPU Model Installed")
 		v.vsDownloadModelBtn.Importance = widget.LowImportance
 		v.vsDownloadModelBtn.Disable()
-	} else {
-		v.vsModelStatusLabel.SetText(fmt.Sprintf("⚠️ %s (~%d MB) is not downloaded yet.", spec.DisplayName, spec.ApproxSizeMB))
-		v.vsDownloadModelBtn.SetText(fmt.Sprintf("Download Model (~%d MB)", spec.ApproxSizeMB))
+		if !testing.Testing() {
+			go func(checkDir, checkFam string, checkSpec stt.ModelSpec) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				updateAvail, _, _ := stt.CheckSTTModelUpdate(ctx, checkDir, checkFam)
+				if !updateAvail {
+					return
+				}
+				fyne.Do(func() {
+					curCfg := v.currentConfig()
+					if curCfg == nil || config.NormalizeVoiceSubtitleModel(curCfg.VoiceSubtitles.ModelFamily) != checkFam {
+						return
+					}
+					if v.vsModelStatusLabel == nil || v.vsDownloadModelBtn == nil {
+						return
+					}
+					v.vsModelStatusLabel.TextStyle = fyne.TextStyle{Bold: true}
+					v.vsModelStatusLabel.SetText(fmt.Sprintf("🔄 MODEL UPDATE AVAILABLE: A newer SHA-256 verified version of %s is available.\n👉 Click '🔄 Update GPU / iGPU Model (~%d MB)' on the right to update.", checkSpec.DisplayName, checkSpec.ApproxSizeMB))
+					v.vsDownloadModelBtn.SetText(fmt.Sprintf("🔄 Update GPU / iGPU Model (~%d MB)", checkSpec.ApproxSizeMB))
+					v.vsDownloadModelBtn.Importance = widget.HighImportance
+					v.vsDownloadModelBtn.Enable()
+					v.vsModelStatusLabel.Refresh()
+					v.vsDownloadModelBtn.Refresh()
+				})
+			}(dir, fam, spec)
+		}
+	case legacyInstalled:
+		v.vsModelStatusLabel.TextStyle = fyne.TextStyle{Bold: true}
+		v.vsModelStatusLabel.SetText(fmt.Sprintf("⚠️ GPU / iGPU LOCKED: Only legacy CPU-only weights are installed for %s.\n👉 Click '⬇ Upgrade to GPU / iGPU Model (~%d MB)' on the right to unlock GPU & iGPU selection!", spec.DisplayName, spec.ApproxSizeMB))
+		v.vsDownloadModelBtn.SetText(fmt.Sprintf("⬇ Upgrade to GPU / iGPU Model (~%d MB)", spec.ApproxSizeMB))
+		v.vsDownloadModelBtn.Importance = widget.HighImportance
+		v.vsDownloadModelBtn.Enable()
+	default:
+		v.vsModelStatusLabel.TextStyle = fyne.TextStyle{Bold: true}
+		v.vsModelStatusLabel.SetText(fmt.Sprintf("⚠️ MODEL NOT INSTALLED: GPU / iGPU selection is locked until %s is downloaded.\n👉 Click '⬇ Download GPU / iGPU Model (~%d MB)' on the right to install!", spec.DisplayName, spec.ApproxSizeMB))
+		v.vsDownloadModelBtn.SetText(fmt.Sprintf("⬇ Download GPU / iGPU Model (~%d MB)", spec.ApproxSizeMB))
 		v.vsDownloadModelBtn.Importance = widget.HighImportance
 		v.vsDownloadModelBtn.Enable()
 	}
+	v.vsModelStatusLabel.Refresh()
 	v.vsDownloadModelBtn.Refresh()
+	v.syncComputeDeviceLockState(ggmlInstalled, legacyInstalled, spec)
+}
+
+func (v *SettingsView) syncComputeDeviceLockState(ggmlInstalled, legacyInstalled bool, spec stt.ModelSpec) {
+	if v.vsComputeDeviceSelect == nil {
+		return
+	}
+	if ggmlInstalled {
+		v.vsComputeDeviceSelect.Enable()
+		v.refreshSTTComputeDeviceList(false)
+		return
+	}
+
+	lockedMsg := fmt.Sprintf("🔒 CPU Only — Click '⬇ Download GPU / iGPU Model (~%d MB)' Above to Unlock GPU / iGPU", spec.ApproxSizeMB)
+	if legacyInstalled {
+		lockedMsg = fmt.Sprintf("🔒 CPU Only — Click '⬇ Upgrade to GPU / iGPU Model (~%d MB)' Above to Unlock GPU / iGPU", spec.ApproxSizeMB)
+	}
+
+	prevInit := v.initializing
+	v.initializing = true
+	v.vsComputeDeviceSelect.Options = []string{lockedMsg}
+	v.vsComputeDeviceSelect.SetSelected(lockedMsg)
+	v.vsComputeDeviceSelect.Disable()
+	v.vsComputeDeviceSelect.Refresh()
+	v.initializing = prevInit
 }
 
 func (v *SettingsView) syncVoiceSubtitlesControlsFromConfig() {
@@ -265,8 +463,9 @@ func (v *SettingsView) syncVoiceSubtitlesControlsFromConfig() {
 	if v.vsModelSelect != nil {
 		v.vsModelSelect.SetSelected(stt.ModelLabelForID(vs.ModelFamily))
 	}
-	if v.vsGPUCheck != nil {
-		v.vsGPUCheck.SetChecked(vs.UseGPU)
+	v.refreshSTTComputeDeviceList(false)
+	if v.vsThreadsSelect != nil {
+		v.vsThreadsSelect.SetSelected(formatSTTThreadsOption(vs.NumThreads))
 	}
 	if v.vsSilenceSelect != nil {
 		v.vsSilenceSelect.SetSelected(formatSilenceOption(vs.MinSilenceMs))
@@ -376,7 +575,7 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 		modal := NewModelDownloadModal(v.window, spec.DisplayName, spec.ApproxSizeMB, cancel)
 
 		go func() {
-			err := stt.DownloadModelWithContext(dlCtx, targetDir, spec.ID, func(cur, tot int64) {
+			err := stt.ForceDownloadModelWithContext(dlCtx, targetDir, spec.ID, func(cur, tot int64) {
 				modal.UpdateProgress(cur, tot)
 			})
 			cancelled := modal.IsCancelling()
@@ -404,15 +603,52 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 		}()
 	})
 
-	v.vsGPUCheck = widget.NewCheck("Use DirectML GPU acceleration when FP weights are available", func(checked bool) {
+	v.vsComputeDeviceSelect = widget.NewSelect([]string{"Auto (Best Vulkan GPU / iGPU)"}, func(selected string) {
 		if v.initializing {
 			return
 		}
+		v.mu.Lock()
+		devVal, ok := v.vsComputeDeviceMap[selected]
+		v.mu.Unlock()
+		if !ok || devVal == "" {
+			devVal = stt.ComputeDeviceAuto
+		}
 		v.updateConfig(func(c *config.Config) {
-			c.VoiceSubtitles.UseGPU = checked
+			c.VoiceSubtitles.ComputeDevice = devVal
+			c.VoiceSubtitles.UseGPU = devVal != stt.ComputeDeviceCPU
 		})
+		v.SyncSTTStatus(false, false, "")
+		v.setStatus("✓ Whisper compute device set to " + selected)
 	})
-	v.vsGPUCheck.SetChecked(vs.UseGPU)
+
+	v.vsComputeRefreshBtn = widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() {
+		cfg := v.currentConfig()
+		fam := config.DefaultVoiceSubtitleModel
+		if cfg != nil {
+			fam = config.NormalizeVoiceSubtitleModel(cfg.VoiceSubtitles.ModelFamily)
+		}
+		if !stt.IsGGMLModelInstalled(v.effectiveSTTModelDir(), fam) {
+			v.refreshVoiceSubtitleModelStatus()
+			v.setStatus("⚠️ Click '⬇ Upgrade / Download GPU Model' right above Compute Device first to unlock GPU & iGPU selection.")
+			return
+		}
+		v.refreshSTTComputeDeviceList(true)
+		v.setStatus("✓ Refreshed Vulkan GPU / iGPU adapter list.")
+	})
+	v.refreshSTTComputeDeviceList(false)
+
+	v.vsThreadsSelect = widget.NewSelect(VoiceSubtitleThreadOptions, func(selected string) {
+		if v.initializing {
+			return
+		}
+		th := parseSTTThreadsOption(selected)
+		v.updateConfig(func(c *config.Config) {
+			c.VoiceSubtitles.NumThreads = th
+		})
+		v.SyncSTTStatus(false, false, "")
+		v.setStatus("✓ Whisper CPU helper threads set to " + selected)
+	})
+	v.vsThreadsSelect.SetSelected(formatSTTThreadsOption(vs.NumThreads))
 
 	v.vsSilenceSelect = widget.NewSelect(VoiceSubtitleSilenceOptions, func(selected string) {
 		if v.initializing {
@@ -504,15 +740,16 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 	spokenDesc.Wrapping = fyne.TextWrapWord
 
 	sttCard := widget.NewCard(
-		"Offline Speech Recognition (Microphone, VAD & Whisper)",
-		"100% local speech-to-text powered by Silero VAD and Whisper ONNX",
+		"Offline Speech Recognition (Microphone, VAD & Whisper GPU / iGPU / CPU)",
+		"100% local speech-to-text powered by Silero VAD and SHA-256 verified Whisper (Vulkan NVIDIA/AMD/Intel GPUs, iGPUs, or CPU)",
 		container.NewVBox(
 			makeRow("Microphone Input:", container.NewBorder(nil, nil, nil, v.vsMicRefreshBtn, v.vsMicDeviceSelect)),
-			makeRow("Live Mic Level:", container.NewBorder(nil, nil, nil, v.vsSTTStatusLabel, v.vsMicLevelBar)),
+			makeRow("Live Mic & Engine:", container.NewBorder(nil, nil, nil, v.vsSTTStatusLabel, v.vsMicLevelBar)),
 			widget.NewSeparator(),
 			makeRow("Offline Whisper Model:", v.vsModelSelect),
 			container.NewBorder(nil, nil, nil, v.vsDownloadModelBtn, v.vsModelStatusLabel),
-			v.vsGPUCheck,
+			makeRow("Compute Device:", container.NewBorder(nil, nil, nil, v.vsComputeRefreshBtn, v.vsComputeDeviceSelect)),
+			makeRow("CPU Helper Threads:", v.vsThreadsSelect),
 			makeRow("Phrase End Pause:", v.vsSilenceSelect),
 			widget.NewSeparator(),
 			widget.NewLabelWithStyle("Spoken Languages (Microphone Input)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),

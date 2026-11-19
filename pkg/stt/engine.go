@@ -30,12 +30,16 @@ const (
 	DefaultMaxSpeechSec int     = 12
 )
 
-// ModelSpec describes an offline multilingual Whisper model pack distributed via sherpa-onnx.
+// ModelSpec describes an offline multilingual Whisper model pack (quantized GGML for Vulkan GPU/iGPU/CPU + legacy ONNX support).
 type ModelSpec struct {
 	ID            string
-	Prefix        string // filename prefix inside the extracted archive ("tiny", "base", "small", "turbo")
+	Prefix        string // filename prefix inside legacy sherpa-onnx archives ("tiny", "base", "small", "turbo")
 	DisplayName   string
 	Label         string
+	GGMLFile      string
+	GGMLURL       string
+	GGMLSHA256    string
+	GGMLSize      int64
 	ArchiveURL    string
 	ArchiveSHA256 string
 	ArchiveSize   int64
@@ -46,54 +50,72 @@ type ModelSpec struct {
 }
 
 // AllModelSpecs lists all supported offline multilingual Whisper model families in UI display order.
+// Every model carries a compile-time pinned SHA-256 digest verified fail-closed before installation,
+// and executes natively on Vulkan Discrete GPUs (NVIDIA/AMD/Intel), Integrated iGPUs, and CPU.
 var AllModelSpecs = []ModelSpec{
 	{
 		ID:           ModelWhisperTurbo,
 		Prefix:       "turbo",
-		DisplayName:  "Whisper Large-v3-Turbo (INT8)",
-		Label:        "Whisper Large-v3-Turbo — Best Taglish & Multilingual (~538 MB)",
+		DisplayName:  "Whisper Large-v3-Turbo (Q5_0)",
+		Label:        "Whisper Large-v3-Turbo (Q5_0) — Best Taglish & Multilingual (~547 MB)",
+		GGMLFile:     "ggml-large-v3-turbo-q5_0.bin",
+		GGMLURL:      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+		GGMLSHA256:   "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+		GGMLSize:     574041195,
 		ArchiveURL:   "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-turbo.tar.bz2",
 		ArchiveSize:  563790207,
-		ApproxSizeMB: 538,
-		SupportsFP32: false,
-		Recommended:  true,
-		Description:  "Compressed 4-layer decoder from Whisper Large-v3. Highest accuracy for Filipino/Tagalog, Taglish code-switching, Japanese, and English at fast INT8 speed.",
-	},
-	{
-		ID:           ModelWhisperBase,
-		Prefix:       "base",
-		DisplayName:  "Whisper Base",
-		Label:        "Whisper Base — Fast & Lightweight (~198 MB)",
-		ArchiveURL:   "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.tar.bz2",
-		ArchiveSize:  207557382,
-		ApproxSizeMB: 198,
+		ApproxSizeMB: 547,
 		SupportsFP32: true,
-		Recommended:  false,
-		Description:  "Lightweight multilingual model suitable for clear English speech on low-RAM machines.",
+		Recommended:  true,
+		Description:  "Compressed 4-layer decoder from Whisper Large-v3. Highest accuracy for Filipino/Tagalog, Taglish, Japanese, and English on Vulkan GPUs, modern iGPUs, and fast CPUs.",
 	},
 	{
 		ID:           ModelWhisperSmall,
 		Prefix:       "small",
-		DisplayName:  "Whisper Small",
-		Label:        "Whisper Small — Balanced GPU/CPU (~610 MB)",
+		DisplayName:  "Whisper Small (Q5_1)",
+		Label:        "Whisper Small (Q5_1) — Balanced iGPU / GPU / CPU (~181 MB)",
+		GGMLFile:     "ggml-small-q5_1.bin",
+		GGMLURL:      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
+		GGMLSHA256:   "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+		GGMLSize:     190085487,
 		ArchiveURL:   "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-small.tar.bz2",
 		ArchiveSize:  639387718,
-		ApproxSizeMB: 610,
+		ApproxSizeMB: 181,
 		SupportsFP32: true,
 		Recommended:  false,
-		Description:  "Includes both FP16/FP32 weights (for DirectML GPU acceleration) and INT8 CPU weights.",
+		Description:  "Great balance of multilingual accuracy and low memory bandwidth — ideal sweet spot for laptop Intel/AMD iGPUs and older GPUs.",
+	},
+	{
+		ID:           ModelWhisperBase,
+		Prefix:       "base",
+		DisplayName:  "Whisper Base (Q5_1)",
+		Label:        "Whisper Base (Q5_1) — Fast & Lightweight for Older iGPUs (~57 MB)",
+		GGMLFile:     "ggml-base-q5_1.bin",
+		GGMLURL:      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
+		GGMLSHA256:   "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+		GGMLSize:     59707625,
+		ArchiveURL:   "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.tar.bz2",
+		ArchiveSize:  207557382,
+		ApproxSizeMB: 57,
+		SupportsFP32: true,
+		Recommended:  false,
+		Description:  "Very fast multilingual model for older integrated GPUs (e.g. Intel HD 630) and low-RAM laptops.",
 	},
 	{
 		ID:           ModelWhisperTiny,
 		Prefix:       "tiny",
-		DisplayName:  "Whisper Tiny",
-		Label:        "Whisper Tiny — Ultra-Low RAM (~111 MB)",
+		DisplayName:  "Whisper Tiny (Q5_1)",
+		Label:        "Whisper Tiny (Q5_1) — Ultra-Light Baseline (~31 MB)",
+		GGMLFile:     "ggml-tiny-q5_1.bin",
+		GGMLURL:      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin",
+		GGMLSHA256:   "818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7",
+		GGMLSize:     32152673,
 		ArchiveURL:   "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.tar.bz2",
 		ArchiveSize:  116204861,
-		ApproxSizeMB: 111,
+		ApproxSizeMB: 31,
 		SupportsFP32: true,
 		Recommended:  false,
-		Description:  "Smallest footprint for quick testing on constrained hardware (lower accuracy on non-English speech).",
+		Description:  "Smallest footprint for quick latency testing on constrained hardware (lower accuracy on non-English speech).",
 	},
 }
 

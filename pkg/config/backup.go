@@ -352,6 +352,7 @@ func ApplyBackup(current *Config, bundle *BackupBundle, opts ImportOptions) (*Co
 		out.WebSocket.SubtitlesOverlayEnabled = inc.WebSocket.SubtitlesOverlayEnabled
 		if opts.PreserveMachinePaths {
 			out.Translation.ChimeSoundPath = cur.Translation.ChimeSoundPath
+			out.VoiceSubtitles.ComputeDevice = cur.VoiceSubtitles.ComputeDevice
 			out.VoiceSubtitles.UseGPU = cur.VoiceSubtitles.UseGPU
 			out.VoiceSubtitles.NumThreads = cur.VoiceSubtitles.NumThreads
 		}
@@ -411,6 +412,7 @@ func restoreMachineSpecificSettings(cur, out *Config) {
 	out.TTS.NumThreads = cur.TTS.NumThreads
 	out.TTS.Preset = cur.TTS.Preset
 	out.TTS.AlertSoundPath = cur.TTS.AlertSoundPath
+	out.VoiceSubtitles.ComputeDevice = cur.VoiceSubtitles.ComputeDevice
 	out.VoiceSubtitles.UseGPU = cur.VoiceSubtitles.UseGPU
 	out.VoiceSubtitles.NumThreads = cur.VoiceSubtitles.NumThreads
 	out.Translation.ChimeSoundPath = cur.Translation.ChimeSoundPath

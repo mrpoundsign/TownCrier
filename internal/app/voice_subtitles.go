@@ -7,6 +7,7 @@ import (
 	"log"
 	"slices"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/mrpoundsign/TownCrier/internal/ws"
@@ -28,6 +29,9 @@ func (s *Session) STTModelDir() string {
 	s.sttMu.Unlock()
 	if dir != "" {
 		return dir
+	}
+	if testing.Testing() {
+		return ""
 	}
 	return stt.DefaultSTTModelDir()
 }
@@ -64,6 +68,22 @@ func (s *Session) notifySTTStatus(errText string) {
 	if fn != nil {
 		fn(s.sttSpeaking.Load(), s.sttTranscribing.Load(), errText)
 	}
+}
+
+// ActiveSTTProvider returns the active compute backend string of the loaded STT engine (or "" when unloaded).
+func (s *Session) ActiveSTTProvider() string {
+	s.sttMu.Lock()
+	eng := s.sttEngine
+	s.sttMu.Unlock()
+	if eng == nil {
+		return ""
+	}
+	return eng.Provider()
+}
+
+// LastSTTDecodeMs returns the decode latency in milliseconds of the most recent recognized utterance (or 0).
+func (s *Session) LastSTTDecodeMs() int64 {
+	return s.sttLastDecodeMs.Load()
 }
 
 // ReloadSTTEngine re-evaluates and loads the configured Silero VAD and Whisper model (e.g. after a model download completes).
@@ -185,6 +205,21 @@ func (s *Session) syncVoiceSubtitles(cfg *config.Config) {
 	if cfg == nil {
 		return
 	}
+	if !testing.Testing() {
+		cfgCopy := cfg.Clone()
+		go s.syncVoiceSubtitlesSync(cfgCopy)
+		return
+	}
+	s.syncVoiceSubtitlesSync(cfg)
+}
+
+func (s *Session) syncVoiceSubtitlesSync(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	s.sttSyncMu.Lock()
+	defer s.sttSyncMu.Unlock()
+
 	vs := cfg.VoiceSubtitles
 	config.NormalizeVoiceSubtitlesConfig(&vs)
 
@@ -193,7 +228,7 @@ func (s *Session) syncVoiceSubtitles(cfg *config.Config) {
 	s.mu.RUnlock()
 
 	if !running || !vs.Enabled {
-		s.stopVoiceSubtitles()
+		s.stopVoiceSubtitlesLocked(true)
 		return
 	}
 
@@ -208,7 +243,7 @@ func (s *Session) syncVoiceSubtitles(cfg *config.Config) {
 		return
 	}
 
-	wantEngineKey := fmt.Sprintf("%s|%s|%d|%t", vs.ModelFamily, baseDir, vs.NumThreads, vs.UseGPU)
+	wantEngineKey := fmt.Sprintf("%s|%s|%d|%s", vs.ModelFamily, baseDir, vs.NumThreads, vs.ComputeDevice)
 	wantSegKey := fmt.Sprintf("%s|%.3f|%d|%d", baseDir, vs.VadThreshold, vs.MinSilenceMs, vs.MaxSpeechSeconds)
 
 	s.sttMu.Lock()
@@ -234,15 +269,16 @@ func (s *Session) syncVoiceSubtitles(cfg *config.Config) {
 	if needNewEngine {
 		var err error
 		if engFactory != nil {
-			newEng, err = engFactory(vs.ModelFamily, baseDir, vs.NumThreads, vs.UseGPU)
+			newEng, err = engFactory(vs.ModelFamily, baseDir, vs.NumThreads, vs.ComputeDevice != "cpu")
 		} else {
-			newEng, err = stt.NewSherpaWhisperEngine(vs.ModelFamily, baseDir, vs.NumThreads, vs.UseGPU)
+			newEng, err = stt.NewBestEngine(vs.ModelFamily, baseDir, vs.NumThreads, vs.ComputeDevice)
 		}
 		if err != nil {
 			log.Printf("[Session] Failed to load STT engine (%s): %v", vs.ModelFamily, err)
 			s.notifySTTStatus("STT model load failed: " + err.Error())
 			return
 		}
+		s.sttLastDecodeMs.Store(0)
 	}
 
 	var newSeg stt.Segmenter
@@ -293,15 +329,21 @@ func (s *Session) syncVoiceSubtitles(cfg *config.Config) {
 	s.sttMu.Unlock()
 
 	if oldSeg != nil {
-		_ = oldSeg.Close()
+		go func(seg stt.Segmenter) {
+			_ = seg.Close()
+		}(oldSeg)
 	}
 	if oldEng != nil {
-		_ = oldEng.Close()
+		go func(eng stt.Engine) {
+			_ = eng.Close()
+		}(oldEng)
 	}
 	s.notifySTTStatus("")
 }
 
 func (s *Session) stopVoiceSubtitles() {
+	s.sttSyncMu.Lock()
+	defer s.sttSyncMu.Unlock()
 	s.stopVoiceSubtitlesLocked(true)
 }
 
@@ -427,6 +469,9 @@ func (s *Session) processUtteranceSamples(samples []float32) {
 		s.sttTranscribing.Store(false)
 		s.notifySTTStatus("Transcription error: " + err.Error())
 		return
+	}
+	if tr.Latency > 0 {
+		s.sttLastDecodeMs.Store(tr.Latency.Milliseconds())
 	}
 	if strings.TrimSpace(tr.Text) == "" || s.IsPanicked() {
 		s.sttTranscribing.Store(false)

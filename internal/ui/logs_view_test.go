@@ -370,7 +370,7 @@ func TestLogsViewStreamSessionAndTotalsSummary(t *testing.T) {
 	defer func() { _ = mgr.Close() }()
 
 	ctx := context.Background()
-	startTime := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+	startTime := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Hour)
 	streamSess, err := backend.StartSession(ctx, startTime, "twitch", "teststreamer")
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -763,7 +763,7 @@ func TestLogsViewLatestSessionAutoSwitchAndThemeContrast(t *testing.T) {
 	defer func() { _ = mgr.Close() }()
 
 	ctx := context.Background()
-	t1 := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	t1 := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Hour)
 	s1, err := backend.StartSession(ctx, t1, "twitch", "streamer")
 	if err != nil {
 		t.Fatalf("StartSession 1: %v", err)
@@ -879,7 +879,7 @@ func TestLiveLogPresetsAndZeroChromePopOutWindow(t *testing.T) {
 	defer func() { _ = mgr.Close() }()
 
 	ctx := context.Background()
-	t1 := time.Date(2026, 10, 20, 14, 0, 0, 0, time.UTC)
+	t1 := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Hour)
 	s1, err := backend.StartSession(ctx, t1, "twitch", "streamer")
 	if err != nil {
 		t.Fatalf("StartSession 1: %v", err)
