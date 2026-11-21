@@ -46,6 +46,7 @@
                 </ul>
               </li>
               <li><a class="sidebar-link" href="translation-guides.html">Translation Setup Guides</a></li>
+              <li><a class="sidebar-link" href="api.html">Control API Reference</a></li>
             </ul>
           </div>
 
@@ -336,7 +337,7 @@
           <section id="streamdeck-api" class="card">
             <span class="badge">Hardware &amp; Automation</span>
             <h2>9. Elgato Stream Deck Plugin &amp; Local Control API</h2>
-            <div class="path-pill">Location: Settings &rarr; General &amp; Audio &rarr; Stream Deck &amp; WebSocket Control Server</div>
+            <div class="path-pill">Location: Settings &rarr; General &amp; Audio &rarr; OBS Overlays &amp; External Control</div>
             <p>
               Control TownCrier from hardware macro pads, Streamer.bot, Touch Portal, or custom scripts:
             </p>
@@ -344,6 +345,9 @@
               <li><strong>1-Click Elgato Stream Deck Installer:</strong> Click <strong>Install / Update Elgato Stream Deck Plugin</strong> in <strong>Settings &rarr; General &amp; Audio</strong> to install the native plugin (<code>com.github.mrpoundsign.towncrier.sdPlugin</code>) with 5 actions: <em>TTS Output Mode</em>, <em>Emergency Panic Mute</em>, <em>Speech Queue Control</em>, <em>Custom TTS Announcement</em>, and <em>Master Volume</em> (including Stream Deck + rotary dial support).</li>
               <li><strong>Dual-Mode WebSocket &amp; HTTP REST Server:</strong> Runs locally on <code>127.0.0.1:8765</code> by default (configurable host, port, and optional Bearer auth token), supporting binary Protocol Buffers (<code>/ws?format=protobuf</code>), JSON WebSocket (<code>/ws</code>), and REST endpoints (<code>/api/status</code>, <code>/api/speak</code>, <code>/api/mode</code>, <code>/api/panic</code>, <code>/api/queue</code>, <code>/api/volume</code>).</li>
             </ul>
+            <div class="btn-group">
+              <a class="btn btn-secondary" href="api.html">Control API Reference</a>
+            </div>
           </section>
         </main>
 
@@ -353,6 +357,7 @@
             <a href="./">Home</a>
             <a href="features.html">Features &amp; Config Guide</a>
             <a href="translation-guides.html">Translation Guides</a>
+            <a href="api.html">Control API Reference</a>
             <a href="privacy.html">Privacy Policy</a>
             <a href="terms.html">Terms of Service</a>
             <a href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>

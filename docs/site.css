@@ -331,9 +331,36 @@ a:hover {
   text-decoration: underline;
 }
 
-:where(a:any-link, button):focus-visible {
+:where(a:any-link, button, summary, [tabindex="0"]):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important;
+  clip-path: inset(50%) !important;
+  overflow: hidden !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  white-space: nowrap !important;
+}
+
+.skip-link:focus-visible {
+  position: fixed;
+  inset-block-start: 0.75rem;
+  inset-inline-start: 0.75rem;
+  z-index: 1000;
+  background: var(--accent);
+  color: #0F172A;
+  font-weight: 700;
+  font-size: 0.9rem;
+  padding: 0.55rem 0.9rem;
+  border-radius: 6px;
+  text-decoration: none;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
 }
 
 .btn-group {
@@ -506,4 +533,401 @@ footer nav a {
 
 footer nav a:hover {
   color: var(--accent);
+}
+
+/* API Method & Protocol Badges */
+.method-badge {
+  display: inline-block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 5px;
+  border: 1px solid var(--border-color);
+  background: rgba(15, 23, 42, 0.8);
+  color: var(--text-main);
+  white-space: nowrap;
+}
+
+.method-get {
+  border-color: rgba(52, 211, 153, 0.55);
+  background: rgba(52, 211, 153, 0.12);
+  color: #6EE7B7;
+}
+
+.method-post {
+  border-color: rgba(56, 189, 248, 0.55);
+  background: rgba(56, 189, 248, 0.14);
+  color: #7DD3FC;
+}
+
+.method-ws {
+  border-color: rgba(167, 139, 250, 0.55);
+  background: rgba(167, 139, 250, 0.14);
+  color: #C4B5FD;
+}
+
+.method-sse {
+  border-color: rgba(251, 191, 36, 0.55);
+  background: rgba(251, 191, 36, 0.14);
+  color: #FDE68A;
+}
+
+/* Responsive Data Tables */
+.table-wrapper {
+  overflow: auto;
+  max-inline-size: 100%;
+  max-block-size: min(560px, 75vh);
+  container-type: inline-size;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin: 1rem 0 1.25rem;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.api-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.9rem;
+  text-align: left;
+}
+
+.api-table caption {
+  caption-side: top;
+  text-align: left;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0.6rem 0.85rem;
+  background: var(--sidebar-bg);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.api-table thead {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+}
+
+.api-table thead th {
+  background: var(--sidebar-bg);
+  color: var(--text-main);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.65rem 0.85rem;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.api-table tbody th {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  background: var(--card-bg);
+  color: var(--text-main);
+  font-weight: 600;
+  padding: 0.7rem 0.85rem;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: top;
+}
+
+.api-table tbody td {
+  padding: 0.7rem 0.85rem;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-muted);
+  vertical-align: top;
+}
+
+.api-table tbody tr:last-child th,
+.api-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table-endpoints {
+  --label-2: "Method / Protocol";
+  --label-3: "Gate";
+  --label-4: "Purpose";
+}
+
+.table-status {
+  --label-2: "Meaning";
+  --label-3: "Common Cause";
+}
+
+.table-fields {
+  --label-2: "Type";
+  --label-3: "Default";
+  --label-4: "Description";
+}
+
+.table-ws-actions {
+  --label-2: "Parameters";
+  --label-3: "Effect";
+}
+
+.table-schema {
+  --label-2: "Protobuf Type";
+  --label-3: "Description";
+}
+
+.table-overlays {
+  --label-2: "Method";
+  --label-3: "Query Params / Body";
+  --label-4: "Description";
+}
+
+@container (width < 600px) {
+  .api-table,
+  .api-table thead,
+  .api-table tbody,
+  .api-table tr,
+  .api-table th,
+  .api-table td {
+    display: block;
+  }
+
+  .api-table thead {
+    display: none;
+  }
+
+  .api-table tbody tr {
+    margin: 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+    background: rgba(15, 23, 42, 0.7);
+  }
+
+  .api-table tbody th {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 2;
+    background: var(--sidebar-bg);
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .api-table tbody td {
+    border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+  }
+
+  .api-table tbody td:last-child {
+    border-bottom: 0;
+  }
+
+  .api-table tbody td::before {
+    font-weight: 600;
+    color: var(--text-main);
+    margin-inline-end: 0.35rem;
+  }
+
+  .api-table tbody td:nth-child(2)::before {
+    content: var(--label-2) ": ";
+  }
+
+  .api-table tbody td:nth-child(3)::before {
+    content: var(--label-3) ": ";
+  }
+
+  .api-table tbody td:nth-child(4)::before {
+    content: var(--label-4) ": ";
+  }
+}
+
+/* Copyable Code Figures & Copy Button */
+.code-figure {
+  margin: 1rem 0 1.25rem;
+}
+
+.code-figure figcaption {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+}
+
+.copyable {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.copyable pre {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.copyable .copy {
+  position: relative;
+  flex: none;
+  order: 1;
+}
+
+.copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 2rem;
+  min-block-size: 2rem;
+  padding: 0.35rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: rgba(15, 23, 42, 0.92);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.copy-button:hover {
+  color: var(--text-main);
+  border-color: var(--accent);
+}
+
+.copy-button svg {
+  width: 1rem;
+  height: 1rem;
+  display: block;
+}
+
+.copy-button .icon-check {
+  display: none;
+}
+
+.copy-button[data-copied] {
+  border-color: #34D399;
+  color: #34D399;
+}
+
+.copy-button[data-copied] .icon-copy {
+  display: none;
+}
+
+.copy-button[data-copied] .icon-check {
+  display: block;
+}
+
+.copy-button[data-failed] {
+  border-color: #F87171;
+  color: #F87171;
+}
+
+@media (pointer: coarse) {
+  .copy-button {
+    min-inline-size: 2.75rem;
+    min-block-size: 2.75rem;
+  }
+}
+
+.copy .tip {
+  position: absolute;
+  inset-inline-end: calc(100% + 0.45rem);
+  inset-block-start: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  border-radius: 5px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.copy-button[data-copied] + .tip,
+.copy-button[data-failed] + .tip {
+  opacity: 1;
+}
+
+.copy-button[data-copied] + .tip {
+  border-color: #34D399;
+  color: #34D399;
+}
+
+.copy-button[data-failed] + .tip {
+  border-color: #F87171;
+  color: #F87171;
+}
+
+@media (hover: hover) {
+  .copyable {
+    display: block;
+    position: relative;
+  }
+
+  .copyable pre {
+    padding-inline-end: 3.25rem;
+  }
+
+  .copyable .copy {
+    position: absolute;
+    inset-block-start: 0.5rem;
+    inset-inline-end: 0.5rem;
+  }
+
+  .copyable .copy-button {
+    opacity: 0;
+    transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .copyable:hover .copy-button,
+  .copyable:focus-within .copy-button,
+  .copyable .copy-button:focus-visible,
+  .copyable .copy-button[data-copied],
+  .copyable .copy-button[data-failed] {
+    opacity: 1;
+  }
+}
+
+/* Native Details / Schema Disclosures */
+.schema-details {
+  margin: 1rem 0 1.25rem;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.schema-details summary {
+  cursor: pointer;
+  padding: 0.75rem 1rem;
+  font-weight: 600;
+  font-size: 0.94rem;
+  color: var(--text-main);
+  border-radius: 8px;
+}
+
+.schema-details summary:hover {
+  color: var(--accent);
+}
+
+.schema-details[open] summary {
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 8px 8px 0 0;
+}
+
+.schema-details-body {
+  padding: 0.85rem 1rem 1rem;
+}
+
+.schema-details-body .code-figure:last-child {
+  margin-bottom: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .sidebar-link,
+  .sidebar-sublink,
+  .btn,
+  .copy-button {
+    transition: opacity 0.15s ease;
+  }
 }

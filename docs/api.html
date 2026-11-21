@@ -1,0 +1,1233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Local Control API &amp; WebSocket Reference | TownCrier</title>
+  <link rel="canonical" href="https://mrpoundsign.com/TownCrier/api.html">
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <a href="#main-content" class="skip-link visually-hidden">Skip to main content</a>
+  <div class="app-shell">
+    <header class="site-header">
+      <a class="brand" href="./">
+        <img src="icon.png" alt="TownCrier Logo" width="56" height="56" fetchpriority="high">
+        <div>
+          <div class="brand-title">TownCrier</div>
+          <div class="brand-subtitle">Offline Neural TTS &amp; Multi-Platform Livestream Chat Aggregator</div>
+        </div>
+      </a>
+      <div class="header-actions">
+        <a class="btn" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Download Latest Release</a>
+        <a class="btn btn-secondary" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </div>
+    </header>
+
+    <div class="docs-layout">
+      <aside class="sidebar">
+        <nav aria-label="Documentation">
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Documentation</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="./">Overview &amp; Home</a></li>
+              <li><a class="sidebar-link" href="features.html">Features &amp; Config Guide</a></li>
+              <li><a class="sidebar-link" href="translation-guides.html">Translation Setup Guides</a></li>
+              <li>
+                <a class="sidebar-link" href="api.html" aria-current="page">Control API Reference</a>
+                <ul class="sidebar-subnav" role="list">
+                  <li><a class="sidebar-sublink" href="#overview">1. Overview &amp; Setup</a></li>
+                  <li><a class="sidebar-sublink" href="#auth-cors">2. Auth, CORS &amp; Formats</a></li>
+                  <li><a class="sidebar-sublink" href="#speak">3. Custom Speech (/api/speak)</a></li>
+                  <li><a class="sidebar-sublink" href="#rest-endpoints">4. Control REST Endpoints</a></li>
+                  <li><a class="sidebar-sublink" href="#websocket">5. WebSocket Protocol (/ws)</a></li>
+                  <li><a class="sidebar-sublink" href="#schemas">6. Schemas &amp; Protobuf</a></li>
+                  <li><a class="sidebar-sublink" href="#overlays">7. OBS Overlay Endpoints</a></li>
+                  <li><a class="sidebar-sublink" href="#recipes">8. Integration Recipes</a></li>
+                </ul>
+              </li>
+            </ul>
+          </div>
+
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Legal &amp; Policies</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="privacy.html">Privacy Policy</a></li>
+              <li><a class="sidebar-link" href="terms.html">Terms of Service</a></li>
+            </ul>
+          </div>
+
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Project</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub Repository &#8599;</a></li>
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Releases &amp; Installer &#8599;</a></li>
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">Report an Issue &#8599;</a></li>
+            </ul>
+          </div>
+        </nav>
+      </aside>
+
+      <div class="content-column">
+        <main>
+          <div class="page-title-banner">
+            <h1 id="main-content" tabindex="-1">Local Control API &amp; WebSocket Reference</h1>
+            <p>Trigger custom TTS messages, control the speech queue, subscribe to live speech events, and drive OBS overlays from Streamer.bot, Touch Portal, scripts, or hardware controllers.</p>
+          </div>
+
+          <!-- 1. Overview & Enabling the Server -->
+          <section id="overview" class="card">
+            <span class="badge">Quick Start</span>
+            <h2>1. Overview &amp; Enabling the Server</h2>
+            <div class="path-pill">Location: Settings &rarr; General &amp; Audio &rarr; OBS Overlays &amp; External Control</div>
+            <p>
+              TownCrier embeds a local HTTP REST, dual-mode WebSocket (JSON + binary Protocol Buffers), and Server-Sent Events (SSE) server that runs in-process at <code>http://127.0.0.1:8765</code> (<code>ws://127.0.0.1:8765/ws</code>) by default.
+            </p>
+            <h3>Server Feature Toggles</h3>
+            <p>
+              The listener starts automatically whenever at least one of the three independent toggles in <strong>OBS Overlays &amp; External Control</strong> is checked:
+            </p>
+            <ul>
+              <li><strong>Enable External Control API &amp; Elgato Stream Deck (<code>/ws</code>, <code>/api/*</code>):</strong> Unlocks all HTTP control endpoints (<code>/api/status</code>, <code>/api/speak</code>, <code>/api/mode</code>, <code>/api/panic</code>, <code>/api/queue</code>, <code>/api/volume</code>) and mutating commands over WebSocket.</li>
+              <li><strong>Enable OBS 'Now Speaking' Caption Overlay (<code>/overlay/tts</code>):</strong> Requires <em>Enable Text-to-Speech (TTS)</em>. Enables <code>/overlay/tts</code>, <code>/overlay/designer</code>, <code>/api/overlay/style</code>, and read-only WebSocket connections on <code>/ws</code> (mutating commands are rejected with HTTP/WS error <code>"external control api is disabled in TownCrier settings"</code> unless the Control API toggle is also enabled).</li>
+              <li><strong>Enable OBS Live Chat &amp; Alerts Overlay (<code>/overlay/chat</code>):</strong> Requires <em>Enable Event Logging</em>. Enables <code>/overlay/chat</code>, <code>/api/overlay/chat</code>, <code>/api/overlay/stream</code>, and the Overlay Designer.</li>
+            </ul>
+            <p>
+              To change the bind address, port, or shared secret, edit <strong>Host</strong>, <strong>Port</strong>, or <strong>Auth Token</strong> and click <strong>Apply Network Settings</strong>.
+            </p>
+
+            <div tabindex="0" role="region" aria-labelledby="tbl-endpoints-caption" class="table-wrapper">
+              <table class="api-table table-endpoints">
+                <caption id="tbl-endpoints-caption">Complete HTTP, WebSocket, and OBS overlay route directory</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Endpoint</th>
+                    <th scope="col">Method / Protocol</th>
+                    <th scope="col">Gate</th>
+                    <th scope="col">Purpose</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><code>/api/status</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td>Control API</td>
+                    <td>Fetch current TTS, mode, idle, queue, panic, and volume state</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/speak</code></th>
+                    <td><span class="method-badge method-post">POST</span></td>
+                    <td>Control API</td>
+                    <td>Enqueue a custom TTS message with optional voice, speed, priority, and speaker</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/mode</code></th>
+                    <td><span class="method-badge method-post">POST</span></td>
+                    <td>Control API</td>
+                    <td>Set or cycle TTS output mode (<code>always_on</code>, <code>auto_idle</code>, <code>always_off</code>) and AFK timeout</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/panic</code></th>
+                    <td><span class="method-badge method-post">POST</span></td>
+                    <td>Control API</td>
+                    <td>Toggle, activate, or clear Emergency Panic Mute</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/queue</code></th>
+                    <td><span class="method-badge method-post">POST</span></td>
+                    <td>Control API</td>
+                    <td>Pause, resume, skip current item, or clear the speech queue</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/volume</code></th>
+                    <td><span class="method-badge method-post">POST</span></td>
+                    <td>Control API</td>
+                    <td>Set absolute volume (<code>0.0</code>&ndash;<code>1.0</code>) or apply a relative delta</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/ws</code></th>
+                    <td><span class="method-badge method-ws">WS</span></td>
+                    <td>Control API or TTS Overlay</td>
+                    <td>Bidirectional JSON / binary Protobuf command channel and live state/speech stream</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/overlay/tts</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td>TTS Overlay + TTS</td>
+                    <td>OBS Browser Source page displaying the active Now-Speaking caption card</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/overlay/chat</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td>Chat Overlay + Logging</td>
+                    <td>OBS Browser Source page rendering a filtered live chat and alerts feed</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/overlay/designer</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td>Either Overlay</td>
+                    <td>Interactive browser UI for customizing overlay colors, typography, and visibility</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/overlay/chat</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td>Chat Overlay + Logging</td>
+                    <td>JSON snapshot of recent chat entries and session summary metrics for a Live Log preset</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/overlay/stream</code></th>
+                    <td><span class="method-badge method-sse">SSE</span></td>
+                    <td>Chat Overlay + Logging</td>
+                    <td>Server-Sent Events stream pushing <code>append</code>, <code>outcome</code>, and <code>reload</code> events</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/overlay/style</code></th>
+                    <td><span class="method-badge method-get">GET</span> <span class="method-badge method-post">POST</span></td>
+                    <td>Either Overlay</td>
+                    <td>Read or persist custom overlay CSS and style JSON; triggers live reload on POST</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- 2. Authentication, CORS & Wire Formats -->
+          <section id="auth-cors" class="card">
+            <span class="badge">Protocol &amp; Security</span>
+            <h2>2. Authentication, CORS &amp; Wire Formats</h2>
+            <h3>Authentication</h3>
+            <p>
+              When <strong>Auth Token</strong> is left blank in Settings, all endpoints accept unauthenticated local requests. Once an Auth Token is configured, every HTTP, WebSocket, and overlay route requires it via either:
+            </p>
+            <ul>
+              <li><strong>HTTP Header:</strong> <code>Authorization: Bearer &lt;token&gt;</code> (or raw <code>Authorization: &lt;token&gt;</code>)</li>
+              <li><strong>Query Parameter:</strong> <code>?token=&lt;token&gt;</code> (useful for OBS Browser Source URLs, browser <code>WebSocket</code> clients, and simple webhook callers)</li>
+            </ul>
+            <p>Tokens are validated using constant-time comparison.</p>
+            <div class="callout">
+              <p><strong>Network Binding Security Warning:</strong> Keep Host set to <code>127.0.0.1</code> unless you need to reach TownCrier from another PC (such as a dual-PC streaming setup). Always configure a strong <strong>Auth Token</strong> before changing Host to a LAN IP or <code>0.0.0.0</code>, and limit network access with your local firewall.</p>
+            </div>
+
+            <h3>CORS &amp; Preflight Handling</h3>
+            <ul>
+              <li>Every response sets <code>Access-Control-Allow-Origin: *</code>, <code>Access-Control-Allow-Methods: GET, POST, OPTIONS</code>, and <code>Access-Control-Allow-Headers: Authorization, Content-Type</code>.</li>
+              <li>HTTP <code>OPTIONS</code> preflight requests return <code>204 No Content</code> immediately without requiring an Auth Token.</li>
+            </ul>
+
+            <h3>JSON vs. Binary Protocol Buffers Negotiation</h3>
+            <ul>
+              <li><strong>Default Format (<code>application/json</code>):</strong> All <code>/api/*</code> responses default to JSON encoded with <code>protojson</code> (<code>EmitUnpopulated: true</code>). Field names in responses use <strong>lowerCamelCase</strong> (for example <code>queueDepth</code>, <code>outputMode</code>, <code>speechEvent</code>), and 64-bit integer <code>idleSeconds</code> serializes as a JSON string (e.g. <code>"0"</code>).</li>
+              <li><strong>Binary Protobuf (<code>application/x-protobuf</code>):</strong> Pass <code>Content-Type: application/x-protobuf</code> and/or <code>Accept: application/x-protobuf</code> on HTTP calls to send and receive raw serialized <code>towncrier.control.v1</code> messages.</li>
+              <li><strong>Request Body Limits:</strong> <code>/api/speak</code> reads up to <strong>64 KiB</strong>; all other control POST endpoints read up to <strong>16 KiB</strong>.</li>
+            </ul>
+
+            <div tabindex="0" role="region" aria-labelledby="tbl-status-caption" class="table-wrapper">
+              <table class="api-table table-status">
+                <caption id="tbl-status-caption">HTTP status codes returned by TownCrier control and overlay routes</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">HTTP Status</th>
+                    <th scope="col">Meaning</th>
+                    <th scope="col">Common Cause</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><code>200 OK</code></th>
+                    <td>Request processed</td>
+                    <td>Returns a <code>ServerEnvelope</code> JSON/Protobuf response (or overlay HTML/JSON)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>204 No Content</code></th>
+                    <td>CORS preflight succeeded</td>
+                    <td><code>OPTIONS</code> request handled</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>400 Bad Request</code></th>
+                    <td>Invalid payload or command error</td>
+                    <td>Malformed JSON/Protobuf, empty <code>text</code> on <code>/api/speak</code>, TTS disabled, unknown <code>/api/queue</code> action, or missing <code>volume</code>/<code>delta</code> on <code>/api/volume</code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>401 Unauthorized</code></th>
+                    <td>Missing or invalid Auth Token</td>
+                    <td>Auth Token is set in Settings but Bearer header / <code>?token=</code> did not match</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>403 Forbidden</code></th>
+                    <td>Feature disabled</td>
+                    <td>External Control API is unchecked in Settings (or both Control API and TTS Overlay are unchecked for <code>/ws</code>)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>404 Not Found</code></th>
+                    <td>Overlay route disabled</td>
+                    <td>Requested <code>/overlay/*</code> or <code>/api/overlay/*</code> route while that overlay (or TTS/Logging) is disabled</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>405 Method Not Allowed</code></th>
+                    <td>Wrong HTTP verb</td>
+                    <td>Sending <code>GET</code> to a <code>POST</code> control route or <code>POST</code> to <code>/api/status</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- 3. Sending Custom Messages (/api/speak) -->
+          <section id="speak" class="card">
+            <span class="badge">Speech Queue API</span>
+            <h2>3. Sending Custom Messages (<code>POST /api/speak</code>)</h2>
+            <p>
+              Enqueue arbitrary text directly into TownCrier's priority speech queue from channel point redemptions, stream alerts, timers, bots, or scripts. You may send JSON (<code>snake_case</code> or <code>camelCase</code> keys accepted), binary <code>SpeakCommand</code> Protobuf, or a <code>?text=</code> query parameter fallback on an empty POST body.
+            </p>
+
+            <div tabindex="0" role="region" aria-labelledby="tbl-speak-fields-caption" class="table-wrapper">
+              <table class="api-table table-fields">
+                <caption id="tbl-speak-fields-caption">Request parameters for POST /api/speak and WebSocket speak commands</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Field</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Default</th>
+                    <th scope="col">Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><code>text</code></th>
+                    <td><code>string</code></td>
+                    <td>Required</td>
+                    <td>Text to synthesize and speak. Trimmed; returns <code>400</code> if empty. Can also be passed via query string <code>?text=...</code> when body <code>text</code> is blank.</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>voice_id</code></th>
+                    <td><code>string</code></td>
+                    <td>Global Default Voice</td>
+                    <td>Canonical TownCrier voice ID (e.g., <code>supertonic:f1</code>, <code>supertonic:m2</code>, <code>af_bella</code>, <code>piper:spk_0</code>). If omitted or blank, uses <code>GlobalChatRules.DefaultVoice</code>.</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>speed</code></th>
+                    <td><code>float32</code></td>
+                    <td>Global Default Speed (<code>1.0</code>)</td>
+                    <td>Speech rate multiplier. Any value <code>&lt;= 0</code> falls back to your configured global default speed (or <code>1.0</code>).</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>priority</code></th>
+                    <td><code>int32</code></td>
+                    <td><code>0</code> (High / Events)</td>
+                    <td><code>0</code> places the message in the <strong>Events tier</strong> (spoken ahead of regular chat with no staleness expiry). Any non-zero value (e.g. <code>1</code>) places it in the <strong>Chat tier</strong> (subject to the 30-second burst staleness TTL).</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>username</code></th>
+                    <td><code>string</code></td>
+                    <td><code>"RemoteControl"</code></td>
+                    <td>Display label shown in the <code>SpeechEvent</code> payload and the OBS Now-Speaking overlay.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="callout">
+              <p>
+                <strong>Queue &amp; Pipeline Behavior:</strong> Custom messages are enqueued directly with <code>platform: "websocket"</code>, bypassing chat profanity/emote filters, per-viewer voice routing, and <code>TTSOutputMode</code> (<code>Auto-AFK</code> / <code>Always Off</code>) gating so alerts and Stream Deck announcements still play when chat TTS is paused by mode. They require <em>Enable Text-to-Speech (TTS)</em> to be enabled (otherwise <code>400 "TTS is disabled"</code>), are dropped while <em>Emergency Panic Mute</em> is active, reset consecutive-speaker name suppression, and trigger <code>SpeechEvent</code> broadcasts on <code>/ws</code> and <code>/overlay/tts</code>—but are <strong>not</strong> written to the Live Log feed, SQLite history, or <code>/overlay/chat</code>.
+              </p>
+            </div>
+
+            <figure class="code-figure">
+              <figcaption id="fig-speak-json">Send a custom announcement via JSON POST with Bearer auth (cURL):</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-speak-json" aria-label="Copy cURL JSON speak example">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-speak-json" tabindex="0"><code id="code-speak-json">curl -X POST http://127.0.0.1:8765/api/speak \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Welcome to the stream! Hydration check!",
+    "voice_id": "supertonic:f1",
+    "speed": 1.05,
+    "priority": 0,
+    "username": "ChannelRewards"
+  }'</code></pre>
+              </div>
+            </figure>
+
+            <figure class="code-figure">
+              <figcaption id="fig-speak-query">Quick query-string webhook POST (no JSON body needed):</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-speak-query" aria-label="Copy cURL query-string speak example">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-speak-query" tabindex="0"><code id="code-speak-query">curl -X POST "http://127.0.0.1:8765/api/speak?text=New%20sub%20alert!&amp;token=YOUR_TOKEN"</code></pre>
+              </div>
+            </figure>
+
+            <figure class="code-figure">
+              <figcaption id="fig-speak-resp">Example 200 OK JSON ServerEnvelope response:</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-speak-resp" aria-label="Copy example /api/speak JSON response">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-speak-resp" tabindex="0"><code id="code-speak-resp">{
+  "requestId": "",
+  "ok": true,
+  "error": "",
+  "state": {
+    "ttsEnabled": true,
+    "outputMode": "TTS_OUTPUT_MODE_ALWAYS_ON",
+    "userIdle": false,
+    "idleSeconds": "0",
+    "idleTimeoutSeconds": 15,
+    "speakingActive": true,
+    "paused": false,
+    "panicked": false,
+    "queueDepth": 1,
+    "volume": 1,
+    "currentVoice": "supertonic:f1",
+    "currentlySpeaking": ""
+  }
+}</code></pre>
+              </div>
+            </figure>
+          </section>
+
+          <!-- 4. Control REST Endpoints -->
+          <section id="rest-endpoints" class="card">
+            <span class="badge">HTTP REST</span>
+            <h2>4. Control REST Endpoints</h2>
+            <p>
+              All control REST endpoints return a <code>ServerEnvelope</code> containing the updated <code>StateSnapshot</code> and broadcast state updates to connected <code>/ws</code> clients whenever a command mutates state.
+            </p>
+
+            <h3><code>GET /api/status</code></h3>
+            <p>Returns <code>200 OK</code> with the current <code>StateSnapshot</code> (read-only).</p>
+            <figure class="code-figure">
+              <figcaption id="fig-rest-status">Query current TownCrier status:</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-rest-status" aria-label="Copy GET /api/status example">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-rest-status" tabindex="0"><code id="code-rest-status">curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:8765/api/status</code></pre>
+              </div>
+            </figure>
+
+            <h3><code>POST /api/mode</code></h3>
+            <p>
+              Sets or cycles the TTS output mode. Accepts JSON <code>{"mode": "...", "idle_timeout_seconds": 30}</code> or query parameter <code>?mode=...</code>:
+            </p>
+            <ul>
+              <li><code>mode</code> values (case-insensitive): <code>"always_on"</code>, <code>"auto_idle"</code> (aliases: <code>"auto"</code>, <code>"idle"</code>, <code>"afk"</code>), <code>"always_off"</code> (aliases: <code>"off"</code>, <code>"disabled"</code>, <code>"muted"</code>), or <code>"cycle"</code> / <code>"toggle"</code> (advances <code>Always On &rarr; Auto-AFK &rarr; Always Off &rarr; Always On</code>). Unknown or empty values default to <code>always_on</code>.</li>
+              <li><code>idle_timeout_seconds</code> (optional positive integer): Updates the Auto-AFK inactivity threshold in seconds.</li>
+            </ul>
+            <figure class="code-figure">
+              <figcaption id="fig-rest-mode">Switch to Auto-AFK mode with a 30-second timeout:</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-rest-mode" aria-label="Copy POST /api/mode example">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-rest-mode" tabindex="0"><code id="code-rest-mode">curl -X POST http://127.0.0.1:8765/api/mode \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "auto_idle", "idle_timeout_seconds": 30}'</code></pre>
+              </div>
+            </figure>
+
+            <h3><code>POST /api/panic</code></h3>
+            <p>
+              Controls Emergency Panic Mute. Accepts JSON <code>{"action": "..."}</code> or <code>?action=...</code>:
+              <code>"toggle"</code> (default if omitted), <code>"mute"</code> (aliases: <code>"on"</code>, <code>"panic"</code>), or <code>"clear"</code> (aliases: <code>"unmute"</code>, <code>"off"</code>, <code>"reset"</code>).
+            </p>
+            <figure class="code-figure">
+              <figcaption id="fig-rest-panic">Trigger or toggle Emergency Panic Mute:</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-rest-panic" aria-label="Copy POST /api/panic example">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-rest-panic" tabindex="0"><code id="code-rest-panic">curl -X POST "http://127.0.0.1:8765/api/panic?action=mute" \
+  -H "Authorization: Bearer YOUR_TOKEN"</code></pre>
+              </div>
+            </figure>
+
+            <h3><code>POST /api/queue</code></h3>
+            <p>
+              Controls speech queue playback. Accepts JSON <code>{"action": "..."}</code> or <code>?action=...</code> with one of four actions (missing or unrecognized values return <code>400 Bad Request</code>):
+            </p>
+            <ul>
+              <li><code>"pause"</code> &mdash; Pauses queue dispatch and immediately halts active audio playback mid-speech.</li>
+              <li><code>"resume"</code> &mdash; Unpauses the queue, clears Panic Mute if active, and resumes active speech cleanly from the start of the interrupted sentence.</li>
+              <li><code>"skip"</code> &mdash; Aborts the currently speaking item and advances to the next queued item.</li>
+              <li><code>"clear"</code> &mdash; Flushes all pending items and stops the currently speaking item.</li>
+            </ul>
+            <figure class="code-figure">
+              <figcaption id="fig-rest-queue">Skip the currently playing TTS message:</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-rest-queue" aria-label="Copy POST /api/queue example">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-rest-queue" tabindex="0"><code id="code-rest-queue">curl -X POST http://127.0.0.1:8765/api/queue \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action": "skip"}'</code></pre>
+              </div>
+            </figure>
+
+            <h3><code>POST /api/volume</code></h3>
+            <p>
+              Updates and persists master TTS playback volume. Accepts JSON with <code>"volume"</code> (absolute level) and/or <code>"delta"</code> (relative offset applied after <code>volume</code> if both are provided). At least one field must be present (otherwise returns <code>400 Bad Request</code>); the resulting level is clamped to <code>0.0</code>&ndash;<code>1.0</code>.
+            </p>
+            <figure class="code-figure">
+              <figcaption id="fig-rest-volume">Adjust volume down by 10% (or set to 0.75):</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-rest-volume" aria-label="Copy POST /api/volume example">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-rest-volume" tabindex="0"><code id="code-rest-volume">curl -X POST http://127.0.0.1:8765/api/volume \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"delta": -0.10}'</code></pre>
+              </div>
+            </figure>
+          </section>
+
+          <!-- 5. Dual-Mode WebSocket API -->
+          <section id="websocket" class="card">
+            <span class="badge">Real-Time Bidirectional</span>
+            <h2>5. Dual-Mode WebSocket API (<code>/ws</code>)</h2>
+            <p>
+              Connect to <code>ws://127.0.0.1:8765/ws</code> (with optional <code>?token=YOUR_TOKEN</code> or Bearer header) for low-latency commands and real-time broadcasts.
+            </p>
+            <ul>
+              <li><strong>Text JSON vs. Binary Protobuf:</strong> Connects in JSON text mode by default. Pass <code>?format=protobuf</code> (aliases: <code>proto</code>, <code>bin</code>, <code>binary</code>) or include <code>protobuf</code> in the <code>Sec-WebSocket-Protocol</code> header to default to binary Protobuf frames. Each incoming frame also switches that client's active mode dynamically (text frames return JSON; binary frames return binary Protobuf).</li>
+              <li><strong>Initial Snapshot &amp; Live Push:</strong> Immediately upon connecting, the server sends a <code>ServerEnvelope</code> containing the current <code>state</code> (<code>StateSnapshot</code>). Whenever state changes or speech items start/finish, the server pushes updated <code>StateSnapshot</code> and <code>SpeechEvent</code> envelopes to connected clients.</li>
+              <li><strong>Read-Only Overlay Mode:</strong> If <em>Enable OBS 'Now Speaking' Caption Overlay</em> is on while <em>Enable External Control API</em> is off, <code>/ws</code> allows connections and <code>get_state</code> queries, but rejects all mutating commands.</li>
+            </ul>
+
+            <h3>Flat Convenience JSON vs. Canonical <code>protojson</code></h3>
+            <p>
+              Over JSON WebSocket frames, TownCrier accepts both canonical <code>protojson</code> <code>ClientEnvelope</code> objects (such as <code>{"requestId":"1","speak":{"text":"Hi"}}</code>) and flat convenience objects using <code>"action"</code> (or <code>"command"</code>) with <code>snake_case</code> keys:
+            </p>
+
+            <div tabindex="0" role="region" aria-labelledby="tbl-ws-actions-caption" class="table-wrapper">
+              <table class="api-table table-ws-actions">
+                <caption id="tbl-ws-actions-caption">Supported flat JSON convenience actions on ws://127.0.0.1:8765/ws</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Action / Aliases</th>
+                    <th scope="col">Parameters</th>
+                    <th scope="col">Effect</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><code>get_state</code>, <code>state</code>, <code>status</code></th>
+                    <td><em>None</em> (optional <code>request_id</code>)</td>
+                    <td>Returns current <code>StateSnapshot</code> (read-only; allowed when Control API is disabled)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>cycle_tts_mode</code>, <code>cycle_mode</code>, <code>toggle_mode</code></th>
+                    <td><em>None</em></td>
+                    <td>Cycles output mode: <code>Always On &rarr; Auto-AFK &rarr; Always Off</code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>set_tts_mode</code>, <code>set_mode</code>, <code>mode</code></th>
+                    <td><code>mode</code>, optional <code>idle_timeout_seconds</code></td>
+                    <td>Sets output mode (<code>always_on</code>, <code>auto_idle</code>, <code>always_off</code>) and optional AFK timeout</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>speak</code>, <code>tts</code></th>
+                    <td><code>text</code>, optional <code>voice_id</code>, <code>speed</code>, <code>priority</code>, <code>username</code></td>
+                    <td>Enqueues a custom TTS announcement directly into the speech queue</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>panic</code>, <code>panic_toggle</code>, <code>toggle_panic</code></th>
+                    <td><em>None</em></td>
+                    <td>Toggles Emergency Panic Mute</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>panic_mute</code>, <code>mute</code></th>
+                    <td><em>None</em></td>
+                    <td>Activates Emergency Panic Mute and zeroes audio buffers</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>panic_clear</code>, <code>unmute</code></th>
+                    <td><em>None</em></td>
+                    <td>Clears Emergency Panic Mute</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>pause</code>, <code>queue_pause</code></th>
+                    <td><em>None</em></td>
+                    <td>Pauses queue and current speech playback</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>resume</code>, <code>queue_resume</code></th>
+                    <td><em>None</em></td>
+                    <td>Resumes queue and active playback from sentence start</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>skip</code>, <code>queue_skip</code></th>
+                    <td><em>None</em></td>
+                    <td>Skips the currently playing message</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>clear</code>, <code>queue_clear</code></th>
+                    <td><em>None</em></td>
+                    <td>Clears all pending speech and stops the active item</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>set_volume</code>, <code>volume</code></th>
+                    <td>Optional <code>volume</code>, optional <code>delta</code></td>
+                    <td>Sets absolute volume (<code>0.0</code>&ndash;<code>1.0</code>) or applies relative delta</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <figure class="code-figure">
+              <figcaption id="fig-ws-flat">Flat convenience JSON WebSocket request:</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-ws-flat" aria-label="Copy flat JSON WebSocket speak payload">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-ws-flat" tabindex="0"><code id="code-ws-flat">{
+  "request_id": "msg-42",
+  "action": "speak",
+  "text": "Boss fight starting in 10 seconds!",
+  "voice_id": "supertonic:m2",
+  "speed": 1.0,
+  "priority": 0,
+  "username": "GameTrigger"
+}</code></pre>
+              </div>
+            </figure>
+
+            <figure class="code-figure">
+              <figcaption id="fig-ws-protojson">Canonical protojson ClientEnvelope equivalent:</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-ws-protojson" aria-label="Copy canonical protojson ClientEnvelope payload">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-ws-protojson" tabindex="0"><code id="code-ws-protojson">{
+  "requestId": "msg-42",
+  "speak": {
+    "text": "Boss fight starting in 10 seconds!",
+    "voiceId": "supertonic:m2",
+    "speed": 1.0,
+    "priority": 0,
+    "username": "GameTrigger"
+  }
+}</code></pre>
+              </div>
+            </figure>
+
+            <figure class="code-figure">
+              <figcaption id="fig-ws-speechevent">Server-pushed SpeechEvent JSON frames (item started, then finished):</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-ws-speechevent" aria-label="Copy example SpeechEvent JSON frames">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-ws-speechevent" tabindex="0"><code id="code-ws-speechevent">// Started
+{
+  "requestId": "",
+  "ok": true,
+  "error": "",
+  "speechEvent": {
+    "id": "ws-1795247923854000000-1",
+    "text": "Boss fight starting in 10 seconds!",
+    "voiceId": "supertonic:m2",
+    "username": "GameTrigger",
+    "platform": "websocket",
+    "finished": false
+  }
+}
+
+// Finished
+{
+  "requestId": "",
+  "ok": true,
+  "error": "",
+  "speechEvent": {
+    "id": "ws-1795247923854000000-1",
+    "text": "Boss fight starting in 10 seconds!",
+    "voiceId": "supertonic:m2",
+    "username": "GameTrigger",
+    "platform": "websocket",
+    "finished": true
+  }
+}</code></pre>
+              </div>
+            </figure>
+          </section>
+
+          <!-- 6. Response Schemas & Protocol Buffers -->
+          <section id="schemas" class="card">
+            <span class="badge">Protobuf v1</span>
+            <h2>6. Response Schemas &amp; Protocol Buffers</h2>
+            <p>
+              HTTP REST responses and WebSocket messages share the <code>towncrier.control.v1.ServerEnvelope</code> schema defined in <a href="https://github.com/mrpoundsign/TownCrier/blob/main/proto/control/v1/control.proto" target="_blank" rel="noopener noreferrer"><code>proto/control/v1/control.proto</code></a>.
+            </p>
+
+            <h3><code>ServerEnvelope</code></h3>
+            <div tabindex="0" role="region" aria-labelledby="tbl-server-env-caption" class="table-wrapper">
+              <table class="api-table table-schema">
+                <caption id="tbl-server-env-caption">ServerEnvelope top-level response fields (protojson lowerCamelCase)</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">JSON Key</th>
+                    <th scope="col">Protobuf Type</th>
+                    <th scope="col">Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><code>requestId</code></th>
+                    <td><code>string</code></td>
+                    <td>Echoes the caller's <code>request_id</code> / <code>requestId</code> when sent over WebSocket (empty string for HTTP or broadcasts)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>ok</code></th>
+                    <td><code>bool</code></td>
+                    <td><code>true</code> if the command succeeded (or for read-only/broadcast frames); <code>false</code> on error</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>error</code></th>
+                    <td><code>string</code></td>
+                    <td>Human-readable error description when <code>ok</code> is <code>false</code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>state</code></th>
+                    <td><code>StateSnapshot</code></td>
+                    <td>Present (oneof <code>payload</code>) for command replies, <code>/api/status</code>, and state broadcasts</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>speechEvent</code></th>
+                    <td><code>SpeechEvent</code></td>
+                    <td>Present (oneof <code>payload</code>) on WebSocket broadcasts when queued speech starts or finishes</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3><code>StateSnapshot</code></h3>
+            <div tabindex="0" role="region" aria-labelledby="tbl-state-snapshot-caption" class="table-wrapper">
+              <table class="api-table table-schema">
+                <caption id="tbl-state-snapshot-caption">StateSnapshot fields returned in ServerEnvelope.state</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">JSON Key</th>
+                    <th scope="col">Protobuf Type</th>
+                    <th scope="col">Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><code>ttsEnabled</code></th>
+                    <td><code>bool</code></td>
+                    <td>Whether the TTS subsystem is enabled in General &amp; Audio</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>outputMode</code></th>
+                    <td><code>TTSOutputMode</code></td>
+                    <td><code>"TTS_OUTPUT_MODE_ALWAYS_ON"</code>, <code>"TTS_OUTPUT_MODE_AUTO_IDLE"</code>, or <code>"TTS_OUTPUT_MODE_ALWAYS_OFF"</code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>userIdle</code></th>
+                    <td><code>bool</code></td>
+                    <td><code>true</code> when keyboard/mouse idle duration exceeds <code>idleTimeoutSeconds</code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>idleSeconds</code></th>
+                    <td><code>int64</code> (JSON string)</td>
+                    <td>Current system keyboard/mouse inactivity duration in seconds (serialized as a string in <code>protojson</code>, e.g. <code>"0"</code>)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>idleTimeoutSeconds</code></th>
+                    <td><code>int32</code></td>
+                    <td>Configured Auto-AFK threshold in seconds (default <code>15</code>)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>speakingActive</code></th>
+                    <td><code>bool</code></td>
+                    <td><code>true</code> when TTS is enabled and effectively active under the current <code>outputMode</code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>paused</code></th>
+                    <td><code>bool</code></td>
+                    <td><code>true</code> if the speech queue is paused</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>panicked</code></th>
+                    <td><code>bool</code></td>
+                    <td><code>true</code> if Emergency Panic Mute is currently latched</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>queueDepth</code></th>
+                    <td><code>int32</code></td>
+                    <td>Total pending items across both the Events and Chat priority tiers</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>volume</code></th>
+                    <td><code>float</code></td>
+                    <td>Master TTS playback gain (<code>0.0</code> to <code>1.0</code>)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>currentVoice</code></th>
+                    <td><code>string</code></td>
+                    <td>Configured global default voice ID</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>currentlySpeaking</code></th>
+                    <td><code>string</code></td>
+                    <td>Text of the item currently synthesizing/speaking, or <code>""</code> if idle</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3><code>SpeechEvent</code></h3>
+            <div tabindex="0" role="region" aria-labelledby="tbl-speech-event-caption" class="table-wrapper">
+              <table class="api-table table-schema">
+                <caption id="tbl-speech-event-caption">SpeechEvent fields pushed via WebSocket when speech starts or ends</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">JSON Key</th>
+                    <th scope="col">Protobuf Type</th>
+                    <th scope="col">Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><code>id</code></th>
+                    <td><code>string</code></td>
+                    <td>Unique event/item identifier (matches <code>ws-...</code> for custom queue requests)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>text</code></th>
+                    <td><code>string</code></td>
+                    <td>Resolved speech text being spoken</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>voiceId</code></th>
+                    <td><code>string</code></td>
+                    <td>Voice ID used for synthesis</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>username</code></th>
+                    <td><code>string</code></td>
+                    <td>Chatter username or custom <code>username</code> supplied to <code>/api/speak</code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>platform</code></th>
+                    <td><code>string</code></td>
+                    <td>Source platform (<code>"twitch"</code>, <code>"youtube"</code>, <code>"kick"</code>, <code>"tiktok"</code>, or <code>"websocket"</code>)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>finished</code></th>
+                    <td><code>bool</code></td>
+                    <td><code>false</code> when playback starts, <code>true</code> when playback finishes or is aborted/skipped</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <details class="schema-details">
+              <summary>View full proto/control/v1/control.proto definition</summary>
+              <div class="schema-details-body">
+                <figure class="code-figure">
+                  <figcaption id="fig-proto-file">proto/control/v1/control.proto:</figcaption>
+                  <div class="copyable">
+                    <span class="copy">
+                      <button type="button" class="copy-button" command="--copy" commandfor="code-proto-file" aria-label="Copy control.proto schema">
+                        <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                      </button>
+                      <span class="tip" role="status"></span>
+                    </span>
+                    <pre role="region" aria-labelledby="fig-proto-file" tabindex="0"><code id="code-proto-file">syntax = "proto3";
+
+package towncrier.control.v1;
+
+option go_package = "github.com/mrpoundsign/TownCrier/internal/ws/controlv1;controlv1";
+
+enum TTSOutputMode {
+  TTS_OUTPUT_MODE_UNSPECIFIED = 0;
+  TTS_OUTPUT_MODE_ALWAYS_ON = 1;
+  TTS_OUTPUT_MODE_AUTO_IDLE = 2;
+  TTS_OUTPUT_MODE_ALWAYS_OFF = 3;
+}
+
+message ClientEnvelope {
+  string request_id = 1;
+  oneof command {
+    GetStateCommand get_state = 2;
+    SetTTSModeCommand set_tts_mode = 3;
+    CycleTTSModeCommand cycle_tts_mode = 4;
+    SpeakCommand speak = 5;
+    PanicCommand panic = 6;
+    QueueActionCommand queue_action = 7;
+    SetVolumeCommand set_volume = 8;
+  }
+}
+
+message GetStateCommand {}
+
+message SetTTSModeCommand {
+  TTSOutputMode mode = 1;
+  optional int32 idle_timeout_seconds = 2;
+}
+
+message CycleTTSModeCommand {}
+
+message SpeakCommand {
+  string text = 1;
+  string voice_id = 2;
+  float speed = 3;
+  int32 priority = 4;
+  string username = 5;
+}
+
+enum PanicAction {
+  PANIC_ACTION_UNSPECIFIED = 0;
+  PANIC_ACTION_TOGGLE = 1;
+  PANIC_ACTION_MUTE = 2;
+  PANIC_ACTION_CLEAR = 3;
+}
+
+message PanicCommand {
+  PanicAction action = 1;
+}
+
+enum QueueAction {
+  QUEUE_ACTION_UNSPECIFIED = 0;
+  QUEUE_ACTION_PAUSE = 1;
+  QUEUE_ACTION_RESUME = 2;
+  QUEUE_ACTION_SKIP = 3;
+  QUEUE_ACTION_CLEAR = 4;
+}
+
+message QueueActionCommand {
+  QueueAction action = 1;
+}
+
+message SetVolumeCommand {
+  optional float volume = 1; // 0.0 to 1.0
+  optional float delta = 2;  // e.g. +0.05 / -0.05 for Stream Deck+ rotary dials
+}
+
+message StateSnapshot {
+  bool tts_enabled = 1;
+  TTSOutputMode output_mode = 2;
+  bool user_idle = 3;
+  int64 idle_seconds = 4;
+  int32 idle_timeout_seconds = 5;
+  bool speaking_active = 6;
+  bool paused = 7;
+  bool panicked = 8;
+  int32 queue_depth = 9;
+  float volume = 10;
+  string current_voice = 11;
+  string currently_speaking = 12;
+}
+
+message SpeechEvent {
+  string id = 1;
+  string text = 2;
+  string voice_id = 3;
+  string username = 4;
+  string platform = 5;
+  bool finished = 6;
+}
+
+message ServerEnvelope {
+  string request_id = 1;
+  bool ok = 2;
+  string error = 3;
+  oneof payload {
+    StateSnapshot state = 4;
+    SpeechEvent speech_event = 5;
+  }
+}</code></pre>
+                  </div>
+                </figure>
+              </div>
+            </details>
+          </section>
+
+          <!-- 7. OBS Browser Source & Overlay Endpoints -->
+          <section id="overlays" class="card">
+            <span class="badge">OBS Studio &amp; SSE</span>
+            <h2>7. OBS Browser Source &amp; Overlay Endpoints</h2>
+            <p>
+              Alongside the Control API, TownCrier serves transparent HTML OBS Browser Sources, a visual Style Designer, and underlying JSON/SSE data feeds that custom overlay widgets can consume directly.
+            </p>
+
+            <div tabindex="0" role="region" aria-labelledby="tbl-overlays-caption" class="table-wrapper">
+              <table class="api-table table-overlays">
+                <caption id="tbl-overlays-caption">OBS Browser Source pages and overlay data/style endpoints</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Endpoint</th>
+                    <th scope="col">Method</th>
+                    <th scope="col">Query Params / Body</th>
+                    <th scope="col">Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><code>/overlay/tts</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td><code>?pos=top</code> (or <code>position=top</code>), <code>?align=center</code>, <code>?scale=50..300</code>, <code>?token=</code></td>
+                    <td>Transparent Now-Speaking caption card powered by <code>/ws</code> and <code>/api/overlay/style</code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/overlay/chat</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td><code>?preset=</code>, <code>?summary=1|0</code>, <code>?limit=5..100</code> (default <code>25</code>), <code>?fade=&lt;sec&gt;</code>, <code>?scale=50..300</code>, <code>?token=</code></td>
+                    <td>Transparent live chat &amp; alerts overlay matching any configured Live Log preset</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/overlay/designer</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td><code>?token=</code></td>
+                    <td>Browser-based Overlay Style Designer that live-syncs colors, fonts, badges, and radius</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/overlay/chat</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td><code>?preset=</code>, <code>?limit=1..100</code> (default <code>25</code>), <code>?summary=1|true|on|yes</code> or <code>0|false|off|no</code></td>
+                    <td>Returns <code>ChatOverlaySnapshot</code> JSON (<code>preset</code>, <code>show_summary</code>, <code>scale</code>, <code>custom_css</code>, <code>entries</code>, <code>summary</code>)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/overlay/stream</code></th>
+                    <td><span class="method-badge method-sse">SSE</span></td>
+                    <td><code>?preset=</code>, <code>?token=</code></td>
+                    <td><code>text/event-stream</code> pushing <code>OverlayStreamEvent</code> JSON with <code>kind</code>: <code>"append"</code>, <code>"outcome"</code>, or <code>"reload"</code> (plus 15s <code>: ping</code> keepalives)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/overlay/style</code></th>
+                    <td><span class="method-badge method-get">GET</span> <span class="method-badge method-post">POST</span></td>
+                    <td>JSON body: <code>tts_position</code>, <code>custom_css</code>, <code>style_json</code></td>
+                    <td>Reads or saves persisted overlay styling; <code>POST</code> broadcasts <code>reload</code> to SSE and WebSocket overlays</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <figure class="code-figure">
+              <figcaption id="fig-overlay-sse">Subscribe to real-time filtered chat events via Server-Sent Events (JavaScript):</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-overlay-sse" aria-label="Copy SSE overlay stream JavaScript example">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-overlay-sse" tabindex="0"><code id="code-overlay-sse">const es = new EventSource(
+  "http://127.0.0.1:8765/api/overlay/stream?preset=twitch-alerts&amp;token=YOUR_TOKEN"
+);
+
+es.onmessage = (event) =&gt; {
+  const payload = JSON.parse(event.data);
+  if (payload.kind === "append" &amp;&amp; payload.entry) {
+    console.log(payload.entry.platform, payload.entry.display_name, payload.entry.raw_text);
+  } else if (payload.kind === "outcome") {
+    console.log("Outcome updated:", payload.event_id, payload.update);
+  } else if (payload.kind === "reload") {
+    console.log("Overlay style or config changed—refresh snapshot.");
+  }
+};</code></pre>
+              </div>
+            </figure>
+          </section>
+
+          <!-- 8. Integration Recipes -->
+          <section id="recipes" class="card">
+            <span class="badge">Examples</span>
+            <h2>8. Integration Recipes</h2>
+
+            <h3>PowerShell (<code>Invoke-RestMethod</code>)</h3>
+            <figure class="code-figure">
+              <figcaption id="fig-recipe-ps">Enqueue a custom TTS message from a Windows PowerShell script:</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-recipe-ps" aria-label="Copy PowerShell Invoke-RestMethod recipe">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-recipe-ps" tabindex="0"><code id="code-recipe-ps">$headers = @{
+  "Authorization" = "Bearer YOUR_TOKEN"
+  "Content-Type"  = "application/json"
+}
+
+$body = @{
+  text     = "Build succeeded on the streaming PC!"
+  voice_id = "supertonic:f1"
+  speed    = 1.0
+  priority = 0
+  username = "PowerShell"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8765/api/speak" -Headers $headers -Body $body</code></pre>
+              </div>
+            </figure>
+
+            <h3>JavaScript / Node.js WebSocket Client</h3>
+            <figure class="code-figure">
+              <figcaption id="fig-recipe-js">Send custom speech and listen for StateSnapshot and SpeechEvent updates:</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-recipe-js" aria-label="Copy JavaScript WebSocket recipe">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-recipe-js" tabindex="0"><code id="code-recipe-js">const ws = new WebSocket("ws://127.0.0.1:8765/ws?token=YOUR_TOKEN");
+
+ws.addEventListener("open", () =&gt; {
+  ws.send(JSON.stringify({
+    request_id: "announce-1",
+    action: "speak",
+    text: "Thanks for the channel point redemption!",
+    voice_id: "af_bella",
+    speed: 1.0,
+    priority: 0,
+    username: "ChannelPoints"
+  }));
+});
+
+ws.addEventListener("message", (event) =&gt; {
+  const env = JSON.parse(event.data);
+  if (env.speechEvent) {
+    console.log(env.speechEvent.finished ? "Done:" : "Speaking:", env.speechEvent.text);
+  } else if (env.state) {
+    console.log("Queue depth:", env.state.queueDepth, "Mode:", env.state.outputMode);
+  }
+});</code></pre>
+              </div>
+            </figure>
+
+            <h3>Streamer.bot</h3>
+            <p>You can integrate TownCrier with Streamer.bot either code-free using <strong>Fetch URL</strong> or via a <strong>C# Execute Code</strong> sub-action:</p>
+            <ol>
+              <li><strong>Zero-Code (Fetch URL Sub-Action):</strong> Add <strong>Core &rarr; Network &rarr; Fetch URL</strong>, set URL to <code>http://127.0.0.1:8765/api/speak</code>, Method to <code>POST</code>, add header <code>Authorization: Bearer YOUR_TOKEN</code> (if configured), set Content-Type to <code>application/json</code>, and pass a JSON body using Streamer.bot variables such as <code>{"text":"%user% redeemed %rewardName%: %rawInput%","username":"%user%","priority":0}</code>.</li>
+              <li><strong>C# Execute Code Sub-Action:</strong> Reuse a single static <code>HttpClient</code> to post JSON from custom C# triggers:</li>
+            </ol>
+            <figure class="code-figure">
+              <figcaption id="fig-recipe-sb">Streamer.bot C# Execute Code sub-action:</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-recipe-sb" aria-label="Copy Streamer.bot C# recipe">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-recipe-sb" tabindex="0"><code id="code-recipe-sb">using System;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+
+public class CPHInline
+{
+    private static readonly HttpClient Http = new HttpClient();
+
+    public bool Execute()
+    {
+        string user = CPH.TryGetArg("user", out string u) ? u : "StreamerBot";
+        string msg  = CPH.TryGetArg("rawInput", out string r) ? r : "Alert triggered!";
+
+        var payload = JsonSerializer.Serialize(new {
+            text = $"{user} says: {msg}",
+            voice_id = "supertonic:f1",
+            priority = 0,
+            username = user
+        });
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, "http://127.0.0.1:8765/api/speak");
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "YOUR_TOKEN");
+        req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+
+        using var resp = Http.Send(req);
+        return resp.IsSuccessStatusCode;
+    }
+}</code></pre>
+              </div>
+            </figure>
+
+            <h3>Touch Portal, SAMMI &amp; Mix It Up Webhooks</h3>
+            <p>Any automation tool capable of making local HTTP requests or opening a WebSocket can control TownCrier directly:</p>
+            <ul>
+              <li><strong>Endpoint URL:</strong> <code>http://127.0.0.1:8765/api/speak</code> (or <code>/api/queue</code>, <code>/api/panic</code>, <code>/api/mode</code>, <code>/api/volume</code>)</li>
+              <li><strong>HTTP Method:</strong> <code>POST</code></li>
+              <li><strong>Headers:</strong> <code>Content-Type: application/json</code> and (if an Auth Token is set) <code>Authorization: Bearer YOUR_TOKEN</code></li>
+              <li><strong>WebSocket Alternative:</strong> Connect your automation tool's custom WebSocket client to <code>ws://127.0.0.1:8765/ws?token=YOUR_TOKEN</code> and send flat JSON frames such as <code>{"action":"skip"}</code> or <code>{"action":"speak","text":"..."}</code>.</li>
+            </ul>
+          </section>
+        </main>
+
+        <footer>
+          <div>&copy; TownCrier Open Source Project. Licensed under GNU AGPLv3.</div>
+          <nav aria-label="Footer">
+            <a href="./">Home</a>
+            <a href="features.html">Features &amp; Config Guide</a>
+            <a href="translation-guides.html">Translation Guides</a>
+            <a href="api.html">Control API Reference</a>
+            <a href="privacy.html">Privacy Policy</a>
+            <a href="terms.html">Terms of Service</a>
+            <a href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>
+          </nav>
+        </footer>
+      </div>
+    </div>
+  </div>
+  <script src="site.js" defer></script>
+</body>
+</html>
