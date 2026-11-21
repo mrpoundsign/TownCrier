@@ -10,6 +10,27 @@ set -euo pipefail
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 cd "$ROOT_DIR"
 
+STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMRD)"
+if [ -z "$STAGED_FILES" ]; then
+    exit 0
+fi
+
+NEEDS_GO_GATE=false
+while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    case "$file" in
+        *.go|go.mod|go.sum|.golangci.yml|build.sh|FyneApp.toml|assets/*|cmd/*|internal/*|pkg/*|proto/*)
+            NEEDS_GO_GATE=true
+            break
+            ;;
+    esac
+done <<< "$STAGED_FILES"
+
+if [ "$NEEDS_GO_GATE" = "false" ]; then
+    echo "==> [pre-commit] No Go/code/build files staged; skipping Go quality gate."
+    exit 0
+fi
+
 echo "==> [pre-commit] Running TownCrier Quality Gate..."
 
 # If invoked from Windows Git (msys/cygwin) where WSL is the primary build environment, run inside WSL
