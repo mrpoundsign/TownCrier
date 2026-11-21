@@ -349,7 +349,11 @@ func (m *Manager) Query(ctx context.Context, filter QueryFilter) (*QueryResult, 
 	m.mu.RUnlock()
 
 	if filter.Retention.ChatRetentionDays == 0 && filter.Retention.EventRetentionDays == 0 {
+		customNow := filter.Retention.Now
 		filter.Retention = policy
+		if !customNow.IsZero() {
+			filter.Retention.Now = customNow
+		}
 	}
 
 	return primary.Query(ctx, filter)
@@ -367,7 +371,11 @@ func (m *Manager) Summarize(ctx context.Context, filter QueryFilter) (*QuerySumm
 	m.mu.RUnlock()
 
 	if filter.Retention.ChatRetentionDays == 0 && filter.Retention.EventRetentionDays == 0 {
+		customNow := filter.Retention.Now
 		filter.Retention = policy
+		if !customNow.IsZero() {
+			filter.Retention.Now = customNow
+		}
 	}
 
 	return primary.Summarize(ctx, filter)
