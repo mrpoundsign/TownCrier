@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -624,6 +625,19 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 		nil,
 		v.onStatus,
 	)
+	voiceField.SetBaseSpeedProvider(func() float32 {
+		if v.session == nil || v.session.Config() == nil {
+			return 1.0
+		}
+		_, _, _, _, _, _, spd := v.session.Config().EffectiveChatRules(strings.ToLower(strings.TrimSpace(platform)))
+		if spd > 0 {
+			return spd
+		}
+		if v.session.Config().GlobalChatRules.DefaultSpeed > 0 {
+			return v.session.Config().GlobalChatRules.DefaultSpeed
+		}
+		return 1.0
+	})
 
 	ignoreCheck := widget.NewCheck("Ignore this chatter (silent)", nil)
 

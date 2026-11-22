@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/pkg/chat"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
@@ -167,6 +169,23 @@ func formatViewerAccountsTitle(vc config.ViewerConfig) string {
 	return title
 }
 
+func (v *ViewersTabView) effectiveBaseSpeed(platform string) float32 {
+	if v.session == nil || v.session.Config() == nil {
+		return 1.0
+	}
+	cfg := v.session.Config()
+	if strings.TrimSpace(platform) != "" {
+		_, _, _, _, _, _, spd := cfg.EffectiveChatRules(strings.ToLower(strings.TrimSpace(platform)))
+		if spd > 0 {
+			return spd
+		}
+	}
+	if cfg.GlobalChatRules.DefaultSpeed > 0 {
+		return cfg.GlobalChatRules.DefaultSpeed
+	}
+	return 1.0
+}
+
 func (v *ViewersTabView) buildViewerRow(key string, vc config.ViewerConfig) fyne.CanvasObject {
 	title := formatViewerAccountsTitle(vc)
 
@@ -179,7 +198,21 @@ func (v *ViewersTabView) buildViewerRow(key string, vc config.ViewerConfig) fyne
 
 	subtitle := ""
 	if v.ttsEnabled {
-		subtitle = fmt.Sprintf("Voice: %s | Speed: %.2fx %s", tts.VoiceDisplayName(vc.Voice), vc.Speed, statusText)
+		mult := vc.Speed
+		if mult <= 0 {
+			mult = 1.0
+		}
+		plat := vc.Platform
+		if plat == "" && len(vc.Accounts) > 0 {
+			plat = vc.Accounts[0].Platform
+		}
+		baseSpd := v.effectiveBaseSpeed(plat)
+		effSpd := chat.ResolveEffectiveSpeed(baseSpd, mult)
+		if math.Abs(float64(effSpd-mult)) >= 0.005 {
+			subtitle = fmt.Sprintf("Voice: %s | Speed: %.2fx (%.2fx effective) %s", tts.VoiceDisplayName(vc.Voice), mult, effSpd, statusText)
+		} else {
+			subtitle = fmt.Sprintf("Voice: %s | Speed: %.2fx %s", tts.VoiceDisplayName(vc.Voice), mult, statusText)
+		}
 	} else if statusText != "" {
 		subtitle = statusText
 	}
@@ -321,6 +354,12 @@ func (v *ViewersTabView) showEditDialog(existingKey string, existing *config.Vie
 		nil,
 		v.setStatus,
 	)
+	voiceField.SetBaseSpeedProvider(func() float32 {
+		if len(accounts) > 0 {
+			return v.effectiveBaseSpeed(accounts[0].Platform)
+		}
+		return v.effectiveBaseSpeed(platformSelect.Selected)
+	})
 	formElements := []fyne.CanvasObject{
 		widget.NewLabelWithStyle("Linked Platform Accounts:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		accountsList,

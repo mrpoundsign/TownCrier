@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -113,6 +114,19 @@ func FormatVoiceSpeedSummary(voiceID string, speed float32) string {
 	return fmt.Sprintf("%s  •  %.2fx", tts.VoiceDisplayName(id), speed)
 }
 
+// FormatChatterVoiceSpeedSummary formats a chatter's voice ID, per-user speed multiplier, and resulting effective speed.
+func FormatChatterVoiceSpeedSummary(voiceID string, multiplier float32, baseSpeed float32) string {
+	id := tts.VoiceIDFromLabel(voiceID)
+	if multiplier <= 0 {
+		multiplier = 1.0
+	}
+	eff := chat.ResolveEffectiveSpeed(baseSpeed, multiplier)
+	if math.Abs(float64(eff-multiplier)) >= 0.005 {
+		return fmt.Sprintf("%s  •  %.2fx (%.2fx effective)", tts.VoiceDisplayName(id), multiplier, eff)
+	}
+	return fmt.Sprintf("%s  •  %.2fx", tts.VoiceDisplayName(id), multiplier)
+}
+
 // VoiceSpeedField provides an inline summary label and an Edit button that opens ShowVoiceSpeedDialog.
 type VoiceSpeedField struct {
 	Container *fyne.Container
@@ -124,6 +138,7 @@ type VoiceSpeedField struct {
 	dialogTitle string
 	voiceID     string
 	speed       float32
+	baseSpeedFn func() float32
 	onChanged   func(voiceID string, speed float32)
 	onStatus    func(msg string)
 }
@@ -139,6 +154,33 @@ func resolveInitialVoiceID(session *app.Session, voiceID string) string {
 		}
 	}
 	return tts.VoiceIDFromLabel(voiceID)
+}
+
+func (f *VoiceSpeedField) effectiveBaseSpeed() (float32, bool) {
+	if f.baseSpeedFn == nil {
+		return 1.0, false
+	}
+	sp := f.baseSpeedFn()
+	if sp <= 0 {
+		sp = 1.0
+	}
+	return sp, true
+}
+
+func (f *VoiceSpeedField) summaryText() string {
+	if baseSpd, isMult := f.effectiveBaseSpeed(); isMult {
+		return FormatChatterVoiceSpeedSummary(f.voiceID, f.speed, baseSpd)
+	}
+	return FormatVoiceSpeedSummary(f.voiceID, f.speed)
+}
+
+// SetBaseSpeedProvider configures the field to treat Speed() as a per-user multiplier on top of the returned base speed.
+func (f *VoiceSpeedField) SetBaseSpeedProvider(fn func() float32) {
+	f.baseSpeedFn = fn
+	if f.Label != nil {
+		f.Label.SetText(f.summaryText())
+		f.Label.Refresh()
+	}
 }
 
 // NewVoiceSpeedField creates an inline voice and speed display paired with an Edit button.
@@ -166,13 +208,22 @@ func NewVoiceSpeedField(
 		onStatus:    onStatus,
 	}
 
-	f.Label = widget.NewLabel(FormatVoiceSpeedSummary(f.voiceID, f.speed))
+	f.Label = widget.NewLabel(f.summaryText())
 	f.Label.Truncation = fyne.TextTruncateEllipsis
 
 	f.EditBtn = widget.NewButtonWithIcon("Edit", theme.DocumentCreateIcon(), func() {
-		ShowVoiceSpeedDialog(
+		var enabledModels []string
+		if f.session != nil {
+			enabledModels = f.session.Config().TTS.EffectiveEnabledModels()
+		}
+		baseSpd, isMult := f.effectiveBaseSpeed()
+		showVoiceSpeedDialogInternal(
 			f.window,
 			f.session,
+			enabledModels,
+			true,
+			isMult,
+			baseSpd,
 			f.dialogTitle,
 			f.voiceID,
 			f.speed,
@@ -198,7 +249,7 @@ func (f *VoiceSpeedField) SetVoiceAndSpeed(voiceID string, speed float32) {
 	f.voiceID = resolveInitialVoiceID(f.session, voiceID)
 	f.speed = speed
 	if f.Label != nil {
-		f.Label.SetText(FormatVoiceSpeedSummary(f.voiceID, f.speed))
+		f.Label.SetText(f.summaryText())
 		f.Label.Refresh()
 	}
 }
@@ -231,7 +282,7 @@ func ShowVoiceSpeedDialog(
 	if session != nil {
 		enabledModels = session.Config().TTS.EffectiveEnabledModels()
 	}
-	showVoiceSpeedDialogInternal(w, session, enabledModels, true, title, initialVoice, initialSpeed, onSave, onStatus)
+	showVoiceSpeedDialogInternal(w, session, enabledModels, true, false, 1.0, title, initialVoice, initialSpeed, onSave, onStatus)
 }
 
 // ShowVoiceSpeedDialogForModels opens the voice & speed selection and preview dialog restricted strictly
@@ -246,7 +297,7 @@ func ShowVoiceSpeedDialogForModels(
 	onSave func(voiceID string, speed float32),
 	onStatus func(msg string),
 ) {
-	showVoiceSpeedDialogInternal(w, session, allowedModels, false, title, initialVoice, initialSpeed, onSave, onStatus)
+	showVoiceSpeedDialogInternal(w, session, allowedModels, false, false, 1.0, title, initialVoice, initialSpeed, onSave, onStatus)
 }
 
 func showVoiceSpeedDialogInternal(
@@ -254,6 +305,8 @@ func showVoiceSpeedDialogInternal(
 	session *app.Session,
 	enabledModels []string,
 	includeCurrentIfDisabled bool,
+	isMultiplier bool,
+	baseSpeed float32,
 	title string,
 	initialVoice string,
 	initialSpeed float32,
@@ -268,6 +321,9 @@ func showVoiceSpeedDialogInternal(
 	}
 	if initialSpeed <= 0 {
 		initialSpeed = 1.0
+	}
+	if baseSpeed <= 0 {
+		baseSpeed = 1.0
 	}
 
 	fallbackCurrent := ""
@@ -341,12 +397,25 @@ func showVoiceSpeedDialogInternal(
 	voiceScroll := newPanelVScroll(voiceListBox)
 	voiceScroll.SetMinSize(fyne.NewSize(500, 230))
 
-	speedLabel := widget.NewLabel(fmt.Sprintf("%.2fx", initialSpeed))
+	formatSpeedText := func(val float32) string {
+		if isMultiplier {
+			eff := chat.ResolveEffectiveSpeed(baseSpeed, val)
+			return fmt.Sprintf("%.2fx (Effective: %.2fx)", val, eff)
+		}
+		return fmt.Sprintf("%.2fx", val)
+	}
+
+	speedTitle := "Speed:"
+	if isMultiplier {
+		speedTitle = "Speed Multiplier:"
+	}
+
+	speedLabel := widget.NewLabel(formatSpeedText(initialSpeed))
 	speedSlider := widget.NewSlider(0.5, 2.0)
 	speedSlider.Step = 0.05
 	speedSlider.SetValue(float64(initialSpeed))
 	speedSlider.OnChanged = func(val float64) {
-		speedLabel.SetText(fmt.Sprintf("%.2fx", val))
+		speedLabel.SetText(formatSpeedText(float32(val)))
 	}
 
 	sampleEntry := NewScrollPassEntry()
@@ -354,11 +423,15 @@ func showVoiceSpeedDialogInternal(
 
 	var previewBtn *widget.Button
 	previewBtn = widget.NewButtonWithIcon("Preview Voice", theme.MediaPlayIcon(), func() {
+		previewSpeed := float32(speedSlider.Value)
+		if isMultiplier {
+			previewSpeed = chat.ResolveEffectiveSpeed(baseSpeed, previewSpeed)
+		}
 		SynthesizeAndPlayPreview(
 			session,
 			sampleEntry.Text,
 			selectedVoice,
-			float32(speedSlider.Value),
+			previewSpeed,
 			previewBtn,
 			onStatus,
 		)
@@ -367,7 +440,7 @@ func showVoiceSpeedDialogInternal(
 
 	bottomControls := container.NewVBox(
 		widget.NewSeparator(),
-		container.NewBorder(nil, nil, widget.NewLabelWithStyle("Speed:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), speedLabel, speedSlider),
+		container.NewBorder(nil, nil, widget.NewLabelWithStyle(speedTitle, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), speedLabel, speedSlider),
 		widget.NewLabelWithStyle("Preview Sample Text:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		sampleEntry,
 		previewBtn,
@@ -609,7 +682,11 @@ func ShowPermittedVoicesDialog(
 
 			var prevBtn *widget.Button
 			prevBtn = widget.NewButtonWithIcon("", theme.MediaPlayIcon(), func() {
-				SynthesizeAndPlayPreview(session, defaultPreviewSampleText, vid, 1.0, prevBtn, onStatus)
+				previewSpeed := float32(1.0)
+				if session != nil && session.Config() != nil && session.Config().GlobalChatRules.DefaultSpeed > 0 {
+					previewSpeed = session.Config().GlobalChatRules.DefaultSpeed
+				}
+				SynthesizeAndPlayPreview(session, defaultPreviewSampleText, vid, previewSpeed, prevBtn, onStatus)
 			})
 			row := container.NewBorder(nil, nil, nil, prevBtn, ck)
 			listBox.Add(row)

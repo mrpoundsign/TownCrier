@@ -197,6 +197,25 @@ func (r *Router) Resolve(event *Event, cfg *config.Config) ResolvedSpeech {
 	return r.ResolveWithOptions(event, cfg, true)
 }
 
+// ResolveEffectiveSpeed computes the final TTS synthesis speed by multiplying the
+// effective default/platform base speed (defaulting to 1.0 when <= 0) by a per-user
+// speed multiplier (defaulting to 1.0 when <= 0), clamped to [0.25, 3.0].
+func ResolveEffectiveSpeed(baseSpeed, viewerMultiplier float32) float32 {
+	if baseSpeed <= 0 {
+		baseSpeed = 1.0
+	}
+	if viewerMultiplier <= 0 {
+		viewerMultiplier = 1.0
+	}
+	speed := baseSpeed * viewerMultiplier
+	if speed < 0.25 {
+		speed = 0.25
+	} else if speed > 3.0 {
+		speed = 3.0
+	}
+	return speed
+}
+
 // ResolveWithOptions resolves voice, speed, and formatted speech text for an event.
 // When commitState is true, the router immediately updates its consecutive-speaker tracking state.
 // When commitState is false, the caller is responsible for calling RecordSpoken once the event is actually enqueued for speech.
@@ -258,14 +277,8 @@ func (r *Router) ResolveWithOptions(event *Event, cfg *config.Config, commitStat
 		voiceID = "af_bella"
 	}
 
-	// 4. Resolve Speed (Viewer -> Platform -> Global)
-	speed := viewerSpeed
-	if speed <= 0 {
-		speed = effectiveDefaultSpeed
-	}
-	if speed <= 0 {
-		speed = 1.0
-	}
+	// 4. Resolve Speed (Platform/Global Base Speed * Per-Viewer Multiplier)
+	speed := ResolveEffectiveSpeed(effectiveDefaultSpeed, viewerSpeed)
 
 	// 5. Determine Spoken Display Name (strip leading '@' so TTS never speaks "at")
 	spokenName := resolveSpokenName(event, cfg)
