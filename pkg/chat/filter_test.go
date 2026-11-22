@@ -98,7 +98,7 @@ func TestSanitizeSpam(t *testing.T) {
 	}{
 		{"What is this????", "What is this?"},
 		{"Wait WHAT!?!?!?", "Wait WHAT?!"},
-		{"Hello.....", "Hello."},
+		{"Hello.....", "Hello…"},
 		{"hahahahah wwwwwww that was funny", "hahahahah w that was funny"},
 		{"looooooooool so coolllllll", "lool so cooll"},
 	}
@@ -363,6 +363,37 @@ func TestCopypastaFilter(t *testing.T) {
 	// 3. After window expires (> 30s after last seen), message is allowed again
 	if f.IsDuplicate("twitch", pasta, window, baseTime.Add(45*time.Second)) {
 		t.Fatalf("occurrence after sliding window expiration should not be flagged as duplicate")
+	}
+}
+
+func TestSanitizePausePunctuationAndIdempotency(t *testing.T) {
+	s := NewSanitizer(300)
+
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"all...blah", "all…blah"},
+		{"all..blah", "all…blah"},
+		{"all... blah", "all… blah"},
+		{"Hello……", "Hello…"},
+		{"Hello...…...", "Hello…"},
+		{"Wait——what", "Wait—what"},
+		{"Wait----what", "Wait--what"},
+		{"3.14 and Mr. Smith", "3.14 and Mr. Smith"},
+		{"well-known", "well-known"},
+		{"what… what… what…", "what… what…"},
+	}
+
+	for _, tt := range tests {
+		first := s.Sanitize(tt.input, nil, false, nil)
+		if first != tt.expected {
+			t.Errorf("Sanitize(%q) = %q, want %q", tt.input, first, tt.expected)
+		}
+		second := s.Sanitize(first, nil, false, nil)
+		if second != first {
+			t.Errorf("Sanitize not idempotent for %q: first=%q, second=%q", tt.input, first, second)
+		}
 	}
 }
 

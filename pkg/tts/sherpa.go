@@ -264,6 +264,36 @@ func (e *SherpaEngine) unloadIfIdle() {
 	ReclaimOSMemory()
 }
 
+func (e *SherpaEngine) generateAudio(text, voiceID string, speed float32) ([]float32, int, error) {
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return nil, 0, ErrEngineClosed
+	}
+	if err := e.ensureLoadedLocked(); err != nil {
+		e.mu.Unlock()
+		return nil, 0, err
+	}
+	fallbackSR := e.sampleRate
+	if fallbackSR <= 0 {
+		fallbackSR = 24000
+	}
+	sid := ResolveFamilySpeakerID(e.family, voiceID, e.numSpk)
+	audio := e.tts.Generate(text, sid, speed)
+	e.resetIdleTimerLocked()
+	e.mu.Unlock()
+
+	if audio == nil || len(audio.Samples) == 0 {
+		return nil, 0, ErrSynthesisFailed
+	}
+
+	chunkSR := audio.SampleRate
+	if chunkSR <= 0 {
+		chunkSR = fallbackSR
+	}
+	return audio.Samples, chunkSR, nil
+}
+
 // SynthesizeStream splits input text into complete sentences and invokes onChunk for each sentence.
 // Avoiding mid-sentence splits preserves natural prosody across all neural TTS models.
 func (e *SherpaEngine) SynthesizeStream(text string, voiceID string, speed float32, onChunk StreamCallback) error {
@@ -293,34 +323,66 @@ func (e *SherpaEngine) SynthesizeStream(text string, voiceID string, speed float
 		return nil
 	}
 
+	emittedAny := false
 	for i, clause := range clauses {
-		if e.family == ModelKittenMini || e.family == ModelKittenNano {
-			// Kitten v0.8 INT8/FP16 models suffer an 85% amplitude collapse (peak 0.076 vs 0.490)
-			// when short phrases end with token ID 5 ('!'). Replacing '!' with '.' preserves full volume and prosody.
-			clause = strings.ReplaceAll(clause, "!", ".")
-		}
-		e.mu.Lock()
-		if e.closed {
-			e.mu.Unlock()
-			return ErrEngineClosed
-		}
-		if err := e.ensureLoadedLocked(); err != nil {
-			e.mu.Unlock()
-			return err
-		}
-		sid := ResolveFamilySpeakerID(e.family, voiceID, e.numSpk)
-		audio := e.tts.Generate(clause, sid, speed)
-		e.resetIdleTimerLocked()
-		e.mu.Unlock()
+		var (
+			chunkSamples []float32
+			chunkSR      = sr
+		)
 
-		if audio == nil || len(audio.Samples) == 0 {
-			return ErrSynthesisFailed
-		}
+		if e.family == ModelSupertonic {
+			prepared := NormalizeSupertonicPausePunctuation(clause)
+			if prepared == "" {
+				continue
+			}
+			samples, genSR, err := e.generateAudio(prepared, voiceID, speed)
+			if err != nil {
+				return err
+			}
+			chunkSamples = samples
+			chunkSR = genSR
+		} else {
+			if e.family == ModelKittenMini || e.family == ModelKittenNano {
+				// Kitten v0.8 INT8/FP16 models suffer an 85% amplitude collapse (peak 0.076 vs 0.490)
+				// when short phrases end with token ID 5 ('!'). Replacing '!' with '.' preserves full volume and prosody.
+				clause = strings.ReplaceAll(clause, "!", ".")
+			}
 
-		chunkSamples := audio.Samples
-		chunkSR := audio.SampleRate
-		if chunkSR <= 0 {
-			chunkSR = sr
+			rawSegments := SplitPauseSegments(clause)
+			if len(rawSegments) == 0 {
+				continue
+			}
+			segments := make([]string, 0, len(rawSegments))
+			for _, seg := range rawSegments {
+				cleaned := CleanEspeakStrayDots(seg)
+				if cleaned != "" && hasSpeakableContent(cleaned) {
+					segments = append(segments, cleaned)
+				}
+			}
+			if len(segments) == 0 {
+				continue
+			}
+
+			rendered := make([][]float32, 0, len(segments))
+			for j, seg := range segments {
+				if len(segments) > 1 && j < len(segments)-1 {
+					seg = ensureContinuationComma(seg)
+				}
+				samples, segSR, err := e.generateAudio(seg, voiceID, speed)
+				if err != nil {
+					return err
+				}
+				if segSR > 0 {
+					chunkSR = segSR
+				}
+				rendered = append(rendered, samples)
+			}
+
+			if len(rendered) == 1 {
+				chunkSamples = rendered[0]
+			} else {
+				chunkSamples = JoinPauseSegments(rendered, chunkSR, DefaultPausePunctuationMs, speed)
+			}
 		}
 
 		// Append a brief ~30ms prosodic pause between clauses (except the final clause)
@@ -333,9 +395,15 @@ func (e *SherpaEngine) SynthesizeStream(text string, voiceID string, speed float
 			}
 		}
 
+		emittedAny = true
 		if onChunk != nil && !onChunk(chunkSamples, chunkSR) {
 			return nil
 		}
+	}
+
+	if !emittedAny && onChunk != nil {
+		silenceLen := max(1, sr*emptyPauseFallbackMs/1000)
+		onChunk(make([]float32, silenceLen), sr)
 	}
 
 	return nil
