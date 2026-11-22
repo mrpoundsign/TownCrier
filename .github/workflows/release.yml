@@ -102,8 +102,10 @@ jobs:
 
       - name: Build & Package Windows and Linux Distributions
         run: |
-          chmod +x ./build.sh
-          ./build.sh all
+          chmod +x ./build.sh ./scripts/build-whisper-vulkan.sh
+          ./build.sh win
+          ./build.sh linux
+          ./build.sh package
 
       - name: Upload Windows & Linux Artifacts
         uses: actions/upload-artifact@v4
@@ -134,7 +136,7 @@ jobs:
 
       - name: Build & Package macOS Distribution
         run: |
-          chmod +x ./build.sh
+          chmod +x ./build.sh ./scripts/build-whisper-vulkan.sh
           ./build.sh mac
           ./build.sh package-mac
 

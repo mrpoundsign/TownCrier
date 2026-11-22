@@ -230,6 +230,7 @@ func TestQueueModerationCancel(t *testing.T) {
 
 	q := NewQueue(player, engine, func() *config.Config { return cfg })
 	defer q.Close()
+	q.Pause()
 
 	// Enqueue messages
 	_ = q.Enqueue(&Item{
