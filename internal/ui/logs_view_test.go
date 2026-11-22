@@ -321,7 +321,8 @@ func TestLogsTableIconsAndHoverTooltips(t *testing.T) {
 
 	// Verify inline emote tokenization and emoteMessageCell rendering
 	cache := NewEmoteCache(t.TempDir(), nil)
-	kappaURL := "https://static-cdn.jtvnw.net/emoticons/v2/25/static/dark/1.0"
+	defer cache.Close()
+	kappaURL := "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0"
 	cache.Put(kappaURL, resPlatformTwitch)
 	lv.SetEmoteCache(cache)
 
@@ -1022,7 +1023,8 @@ func TestLogsViewChatPanelScaling(t *testing.T) {
 	})
 
 	cache := NewEmoteCache(t.TempDir(), nil)
-	cache.Put("https://static-cdn.jtvnw.net/emoticons/v2/25/static/dark/1.0", resPlatformTwitch)
+	defer cache.Close()
+	cache.Put("https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0", resPlatformTwitch)
 	lv := NewLogsView(w, sess)
 	lv.SetEmoteCache(cache)
 	defer lv.Close()
@@ -1301,7 +1303,8 @@ func TestLogsViewCoalescedLiveRenderAndTabDeferral(t *testing.T) {
 	sess.SetEventLogger(mgr)
 
 	cache := NewEmoteCache(t.TempDir(), nil)
-	cache.Put("https://static-cdn.jtvnw.net/emoticons/v2/25/static/dark/1.0", resPlatformTwitch)
+	defer cache.Close()
+	cache.Put("https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0", resPlatformTwitch)
 	lv := NewLogsView(w, sess)
 	lv.SetEmoteCache(cache)
 	defer lv.Close()

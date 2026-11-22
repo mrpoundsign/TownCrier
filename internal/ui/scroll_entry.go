@@ -7,6 +7,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -322,4 +323,66 @@ func (r *scrollPassEntryRenderer) Refresh() {
 	}
 	r.base.Refresh()
 	r.catcher.Resize(r.entry.Size())
+}
+
+type resizeNotifyLayout struct {
+	onLayout func()
+}
+
+func (l *resizeNotifyLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	for _, obj := range objects {
+		if obj == nil || !obj.Visible() {
+			continue
+		}
+		if cur := obj.Position(); cur.X != 0 || cur.Y != 0 {
+			obj.Move(fyne.NewPos(0, 0))
+		}
+		if obj.Size() != size {
+			obj.Resize(size)
+		}
+	}
+	if l.onLayout != nil {
+		l.onLayout()
+	}
+}
+
+func (l *resizeNotifyLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	var minSize fyne.Size
+	for _, obj := range objects {
+		if obj == nil || !obj.Visible() {
+			continue
+		}
+		ms := obj.MinSize()
+		minSize.Width = max(minSize.Width, ms.Width)
+		minSize.Height = max(minSize.Height, ms.Height)
+	}
+	return minSize
+}
+
+// newResizeNotifyContainer wraps child so viewport resize/layout invokes onLayout after child sizing.
+func newResizeNotifyContainer(child fyne.CanvasObject, onLayout func()) *fyne.Container {
+	return container.New(&resizeNotifyLayout{onLayout: onLayout}, child)
+}
+
+type notifyVBoxLayout struct {
+	inner    fyne.Layout
+	onLayout func()
+}
+
+func (l *notifyVBoxLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	l.inner.Layout(objects, size)
+	if l.onLayout != nil {
+		l.onLayout()
+	}
+}
+
+func (l *notifyVBoxLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	return l.inner.MinSize(objects)
+}
+
+func newNotifyVBoxContainer(onLayout func()) *fyne.Container {
+	return container.New(&notifyVBoxLayout{
+		inner:    layout.NewVBoxLayout(),
+		onLayout: onLayout,
+	})
 }

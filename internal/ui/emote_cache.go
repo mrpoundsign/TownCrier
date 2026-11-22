@@ -1,13 +1,9 @@
 package ui
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"image"
-	_ "image/gif"  // Register GIF decoder for animated/static emotes
-	_ "image/jpeg" // Register JPEG decoder for custom thumbnails
-	"image/png"
 	"io"
 	"net/http"
 	"os"
@@ -24,7 +20,6 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
-	_ "golang.org/x/image/webp" // Register WebP decoder for Kick/YouTube emotes
 
 	"github.com/mrpoundsign/TownCrier/pkg/chat"
 )
@@ -52,15 +47,20 @@ func DefaultEmoteCache() *EmoteCache {
 	return defaultEmoteCacheInst
 }
 
-// EmoteCache caches downloaded platform emote images in memory and on disk as normalized PNGs.
+// EmoteCache caches downloaded platform emote images (static and animated) in memory and on disk.
 type EmoteCache struct {
-	mu         sync.RWMutex
-	cacheDir   string
-	httpClient *http.Client
-	mem        map[string]fyne.Resource
-	inFlight   map[string][]func(fyne.Resource)
-	failedAt   map[string]time.Time
-	sem        chan struct{}
+	mu           sync.Mutex
+	cacheDir     string
+	httpClient   *http.Client
+	mem          map[string]*EmoteAsset
+	lastUsed     map[string]uint64
+	accessSeq    uint64
+	animBytes    int64
+	maxAnimBytes int64
+	inFlight     map[string][]func(*EmoteAsset)
+	failedAt     map[string]time.Time
+	sem          chan struct{}
+	animator     *emoteAnimator
 }
 
 // NewEmoteCache creates a new EmoteCache backed by cacheDir and httpClient.
@@ -72,18 +72,98 @@ func NewEmoteCache(cacheDir string, client *http.Client) *EmoteCache {
 		_ = os.MkdirAll(cacheDir, 0o755)
 	}
 	return &EmoteCache{
-		cacheDir:   cacheDir,
-		httpClient: client,
-		mem:        make(map[string]fyne.Resource),
-		inFlight:   make(map[string][]func(fyne.Resource)),
-		failedAt:   make(map[string]time.Time),
-		sem:        make(chan struct{}, 6),
+		cacheDir:     cacheDir,
+		httpClient:   client,
+		mem:          make(map[string]*EmoteAsset),
+		lastUsed:     make(map[string]uint64),
+		maxAnimBytes: emoteMaxAnimBytes,
+		inFlight:     make(map[string][]func(*EmoteAsset)),
+		failedAt:     make(map[string]time.Time),
+		sem:          make(chan struct{}, 6),
+		animator:     newEmoteAnimator(),
 	}
 }
 
-func emoteCacheKey(rawURL string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(rawURL)))
-	return hex.EncodeToString(sum[:16]) + ".png"
+func emoteCacheStem(rawURL string) string {
+	norm := chat.NormalizeTwitchEmoteURL(rawURL)
+	sum := sha256.Sum256([]byte(norm))
+	return hex.EncodeToString(sum[:16])
+}
+
+// SetAnimationEnabled toggles emote playback across all widgets backed by this cache.
+func (c *EmoteCache) SetAnimationEnabled(enabled bool) {
+	if c == nil || c.animator == nil {
+		return
+	}
+	c.animator.SetEnabled(enabled)
+}
+
+// AnimationEnabled reports whether emote animation playback is currently enabled.
+func (c *EmoteCache) AnimationEnabled() bool {
+	if c == nil || c.animator == nil {
+		return false
+	}
+	return c.animator.IsEnabled()
+}
+
+// VisibleAnimatedCount returns the count of animated emote widgets currently marked visible.
+func (c *EmoteCache) VisibleAnimatedCount() int {
+	if c == nil || c.animator == nil {
+		return 0
+	}
+	return c.animator.VisibleCount()
+}
+
+// Close stops the emote animation scheduler for this cache.
+func (c *EmoteCache) Close() {
+	if c == nil || c.animator == nil {
+		return
+	}
+	c.animator.Close()
+}
+
+func (c *EmoteCache) storeMemLocked(stem string, asset *EmoteAsset) {
+	if asset == nil {
+		return
+	}
+	if prev, exists := c.mem[stem]; exists && prev != nil && prev.IsAnimated() {
+		c.animBytes -= prev.MemBytes
+	}
+	c.mem[stem] = asset
+	c.accessSeq++
+	c.lastUsed[stem] = c.accessSeq
+	if asset.IsAnimated() {
+		c.animBytes += asset.MemBytes
+		c.evictAnimatedLRULocked(stem)
+	}
+}
+
+func (c *EmoteCache) evictAnimatedLRULocked(keepStem string) {
+	if c.maxAnimBytes <= 0 {
+		return
+	}
+	for c.animBytes > c.maxAnimBytes {
+		var oldestStem string
+		var oldestSeq uint64
+		for stem, asset := range c.mem {
+			if stem == keepStem || asset == nil || !asset.IsAnimated() {
+				continue
+			}
+			seq := c.lastUsed[stem]
+			if oldestStem == "" || seq < oldestSeq {
+				oldestStem = stem
+				oldestSeq = seq
+			}
+		}
+		if oldestStem == "" {
+			break
+		}
+		if victim := c.mem[oldestStem]; victim != nil {
+			c.animBytes -= victim.MemBytes
+		}
+		delete(c.mem, oldestStem)
+		delete(c.lastUsed, oldestStem)
+	}
 }
 
 // Put stores a pre-loaded emote resource for a URL (useful in unit tests).
@@ -91,92 +171,140 @@ func (c *EmoteCache) Put(rawURL string, res fyne.Resource) {
 	if c == nil || rawURL == "" || res == nil {
 		return
 	}
-	key := emoteCacheKey(rawURL)
+	stem := emoteCacheStem(rawURL)
+	var asset *EmoteAsset
+	if content := res.Content(); len(content) > 0 {
+		if decoded, _, _, err := decodeEmoteAsset(stem, content); err == nil && decoded != nil {
+			asset = decoded
+		}
+	}
+	if asset == nil {
+		asset = &EmoteAsset{StaticResource: res}
+	}
 	c.mu.Lock()
-	c.mem[key] = res
+	c.storeMemLocked(stem, asset)
 	c.mu.Unlock()
 }
 
-// GetOrFetch returns the cached emote resource immediately if available in memory or on disk.
+// GetOrFetch returns the static cached emote resource immediately if available in memory or on disk.
 // Otherwise it initiates a deduplicated asynchronous HTTP fetch and invokes onLoaded on the Fyne UI thread.
 func (c *EmoteCache) GetOrFetch(rawURL string, onLoaded func(fyne.Resource)) fyne.Resource {
-	u := strings.TrimSpace(rawURL)
+	var cb func(*EmoteAsset)
+	if onLoaded != nil {
+		cb = func(a *EmoteAsset) {
+			if a != nil && a.StaticResource != nil {
+				onLoaded(a.StaticResource)
+			}
+		}
+	}
+	asset := c.GetOrFetchAsset(rawURL, cb)
+	if asset == nil {
+		return nil
+	}
+	return asset.StaticResource
+}
+
+// GetOrFetchAsset returns the cached emote asset (static or animated) immediately if available in memory or on disk.
+// Otherwise it initiates a deduplicated asynchronous HTTP fetch and invokes onLoaded on the Fyne UI thread.
+func (c *EmoteCache) GetOrFetchAsset(rawURL string, onLoaded func(*EmoteAsset)) *EmoteAsset {
+	u := chat.NormalizeTwitchEmoteURL(rawURL)
 	if c == nil || u == "" {
 		return nil
 	}
-	key := emoteCacheKey(u)
+	stem := emoteCacheStem(u)
 
-	c.mu.RLock()
-	if res, ok := c.mem[key]; ok {
-		c.mu.RUnlock()
-		return res
+	c.mu.Lock()
+	if asset, ok := c.mem[stem]; ok && asset != nil {
+		c.accessSeq++
+		c.lastUsed[stem] = c.accessSeq
+		c.mu.Unlock()
+		return asset
 	}
-	c.mu.RUnlock()
+	cacheDir := c.cacheDir
+	c.mu.Unlock()
 
-	// Check on-disk cache
-	if c.cacheDir != "" {
-		diskPath := filepath.Join(c.cacheDir, key)
-		if data, err := os.ReadFile(diskPath); err == nil && len(data) > 0 {
-			res := fyne.NewStaticResource(key, data)
-			c.mu.Lock()
-			c.mem[key] = res
-			c.mu.Unlock()
-			return res
+	if cacheDir != "" {
+		for _, suffix := range []string{"_v2.gif", "_v2.webp", "_v2.png"} {
+			diskPath := filepath.Join(cacheDir, stem+suffix)
+			data, err := os.ReadFile(diskPath)
+			if err != nil || len(data) == 0 {
+				continue
+			}
+			if asset, _, _, decErr := decodeEmoteAsset(stem, data); decErr == nil && asset != nil {
+				c.mu.Lock()
+				if existing, ok := c.mem[stem]; ok && existing != nil {
+					c.accessSeq++
+					c.lastUsed[stem] = c.accessSeq
+					c.mu.Unlock()
+					return existing
+				}
+				c.storeMemLocked(stem, asset)
+				c.mu.Unlock()
+				return asset
+			}
 		}
 	}
 
 	c.mu.Lock()
-	if res, ok := c.mem[key]; ok {
+	if asset, ok := c.mem[stem]; ok && asset != nil {
+		c.accessSeq++
+		c.lastUsed[stem] = c.accessSeq
 		c.mu.Unlock()
-		return res
+		return asset
 	}
-	if failTime, failed := c.failedAt[key]; failed && time.Since(failTime) < 2*time.Minute {
+	if failTime, failed := c.failedAt[stem]; failed && time.Since(failTime) < 2*time.Minute {
 		c.mu.Unlock()
 		return nil
 	}
-	if cbs, busy := c.inFlight[key]; busy {
+	if cbs, busy := c.inFlight[stem]; busy {
 		if onLoaded != nil {
-			c.inFlight[key] = append(cbs, onLoaded)
+			c.inFlight[stem] = append(cbs, onLoaded)
 		}
 		c.mu.Unlock()
 		return nil
 	}
 	if onLoaded != nil {
-		c.inFlight[key] = []func(fyne.Resource){onLoaded}
+		c.inFlight[stem] = []func(*EmoteAsset){onLoaded}
 	} else {
-		c.inFlight[key] = nil
+		c.inFlight[stem] = nil
 	}
 	c.mu.Unlock()
 
-	go c.fetchAsync(u, key)
+	go c.fetchAsync(u, stem)
 	return nil
 }
 
-func (c *EmoteCache) fetchAsync(rawURL, key string) {
+func (c *EmoteCache) fetchAsync(rawURL, stem string) {
 	c.sem <- struct{}{}
 	defer func() { <-c.sem }()
 
-	pngData, err := c.downloadAndNormalizePNG(rawURL)
+	rawBytes, err := c.downloadEmoteBytes(rawURL)
+	var asset *EmoteAsset
+	var diskExt string
+	var diskBytes []byte
+	if err == nil && len(rawBytes) > 0 {
+		asset, diskExt, diskBytes, err = decodeEmoteAsset(stem, rawBytes)
+	}
 
 	c.mu.Lock()
-	callbacks := c.inFlight[key]
-	delete(c.inFlight, key)
+	callbacks := c.inFlight[stem]
+	delete(c.inFlight, stem)
 
-	if err != nil || len(pngData) == 0 {
-		c.failedAt[key] = time.Now()
+	if err != nil || asset == nil {
+		c.failedAt[stem] = time.Now()
 		c.mu.Unlock()
 		return
 	}
 
-	res := fyne.NewStaticResource(key, pngData)
-	c.mem[key] = res
-	delete(c.failedAt, key)
+	c.storeMemLocked(stem, asset)
+	delete(c.failedAt, stem)
+	cacheDir := c.cacheDir
 	c.mu.Unlock()
 
-	if c.cacheDir != "" {
-		diskPath := filepath.Join(c.cacheDir, key)
+	if cacheDir != "" && diskExt != "" && len(diskBytes) > 0 {
+		diskPath := filepath.Join(cacheDir, stem+"_v2"+diskExt)
 		tmpPath := diskPath + ".tmp"
-		if writeErr := os.WriteFile(tmpPath, pngData, 0o644); writeErr == nil {
+		if writeErr := os.WriteFile(tmpPath, diskBytes, 0o644); writeErr == nil {
 			_ = os.Rename(tmpPath, diskPath)
 		}
 	}
@@ -185,14 +313,14 @@ func (c *EmoteCache) fetchAsync(rawURL, key string) {
 		fyne.Do(func() {
 			for _, cb := range callbacks {
 				if cb != nil {
-					cb(res)
+					cb(asset)
 				}
 			}
 		})
 	}
 }
 
-func (c *EmoteCache) downloadAndNormalizePNG(rawURL string) ([]byte, error) {
+func (c *EmoteCache) downloadEmoteBytes(rawURL string) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
@@ -210,25 +338,11 @@ func (c *EmoteCache) downloadAndNormalizePNG(rawURL string) ([]byte, error) {
 		return nil, io.EOF
 	}
 
-	rawBytes, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	rawBytes, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil || len(rawBytes) == 0 {
 		return nil, io.EOF
 	}
-
-	// Decode any supported image format (PNG, GIF first frame, JPEG, WebP) and re-encode to PNG
-	img, format, decErr := image.Decode(bytes.NewReader(rawBytes))
-	if decErr != nil || img == nil {
-		return nil, decErr
-	}
-	if format == "png" {
-		return rawBytes, nil
-	}
-
-	var buf bytes.Buffer
-	if encErr := png.Encode(&buf, img); encErr != nil {
-		return nil, encErr
-	}
-	return buf.Bytes(), nil
+	return rawBytes, nil
 }
 
 // emoteInlineWidget renders a scaled inline emote image (or a compact :name: fallback while loading)
@@ -237,10 +351,14 @@ type emoteInlineWidget struct {
 	widget.BaseWidget
 	mu sync.RWMutex
 
+	cache    *EmoteCache
 	name     string
 	imageURL string
 	scale    float32
-	res      fyne.Resource
+	asset    *EmoteAsset
+	frameIdx int
+	onScreen bool
+	renderer *emoteInlineRenderer
 	onHover  func(obj fyne.CanvasObject, tip string, hovered bool)
 }
 
@@ -254,6 +372,7 @@ func newScaledEmoteInlineWidget(cache *EmoteCache, name, imageURL string, scale 
 		scale = 1.0
 	}
 	w := &emoteInlineWidget{
+		cache:    cache,
 		name:     name,
 		imageURL: imageURL,
 		scale:    scale,
@@ -261,25 +380,79 @@ func newScaledEmoteInlineWidget(cache *EmoteCache, name, imageURL string, scale 
 	}
 	w.ExtendBaseWidget(w)
 	if imageURL != "" {
-		initialRes := cache.GetOrFetch(imageURL, func(loaded fyne.Resource) {
-			w.setResource(loaded)
+		initialAsset := cache.GetOrFetchAsset(imageURL, func(loaded *EmoteAsset) {
+			if loaded == nil {
+				return
+			}
+			w.mu.Lock()
+			w.asset = loaded
+			w.frameIdx = 0
+			w.mu.Unlock()
+
 			w.Refresh()
+
+			w.mu.Lock()
+			if w.onScreen && loaded.IsAnimated() && w.cache != nil && w.cache.animator != nil {
+				w.cache.animator.SetVisible(w, loaded, true, w.frameIdx)
+			}
+			w.mu.Unlock()
 		})
-		w.setResource(initialRes)
+		w.mu.Lock()
+		w.asset = initialAsset
+		w.mu.Unlock()
 	}
 	return w
 }
 
-func (w *emoteInlineWidget) getResource() fyne.Resource {
+func (w *emoteInlineWidget) hasAsset() bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.res
+	return w.asset != nil && (len(w.asset.Frames) > 0 || w.asset.StaticResource != nil)
 }
 
-func (w *emoteInlineWidget) setResource(res fyne.Resource) {
+func (w *emoteInlineWidget) renderSnapshot() (asset *EmoteAsset, frameIdx int, animEnabled bool) {
+	w.mu.RLock()
+	asset = w.asset
+	frameIdx = w.frameIdx
+	cache := w.cache
+	w.mu.RUnlock()
+	return asset, frameIdx, cache != nil && cache.AnimationEnabled()
+}
+
+// SetOnScreen updates whether this emote widget is currently visible inside an active scroll viewport
+// and registers/unregisters it with the EmoteCache's shared animation coordinator.
+func (w *emoteInlineWidget) SetOnScreen(visible bool) {
+	if w == nil {
+		return
+	}
 	w.mu.Lock()
-	w.res = res
+	if w.onScreen == visible {
+		w.mu.Unlock()
+		return
+	}
+	w.onScreen = visible
+	cache := w.cache
+	asset := w.asset
+	animEnabled := cache != nil && cache.AnimationEnabled()
+	var resetFrame *image.RGBA
+	if visible && !animEnabled && w.frameIdx != 0 && asset != nil && len(asset.Frames) > 0 {
+		w.frameIdx = 0
+		resetFrame = asset.Frames[0]
+	}
+	if cache != nil && cache.animator != nil && asset.IsAnimated() {
+		cache.animator.SetVisible(w, asset, visible, w.frameIdx)
+	}
 	w.mu.Unlock()
+
+	if resetFrame != nil {
+		go func(f *image.RGBA) {
+			fyne.Do(func() {
+				uiRenderMu.Lock()
+				w.applyAnimationFrame(0, f)
+				uiRenderMu.Unlock()
+			})
+		}(resetFrame)
+	}
 }
 
 func (w *emoteInlineWidget) effectiveScale() float32 {
@@ -328,9 +501,10 @@ func (w *emoteInlineWidget) fallbackLabelText() string {
 func (w *emoteInlineWidget) CreateRenderer() fyne.WidgetRenderer {
 	s := w.effectiveScale()
 	sz := emoteInlineSize * s
-	img := canvas.NewImageFromResource(w.getResource())
-	img.FillMode = canvas.ImageFillContain
-	img.ScaleMode = canvas.ImageScaleSmooth
+	img := &canvas.Image{
+		FillMode:  canvas.ImageFillContain,
+		ScaleMode: canvas.ImageScaleFastest,
+	}
 	img.SetMinSize(fyne.NewSize(sz, sz))
 
 	fallback := canvas.NewText(w.fallbackLabelText(), colorSkyBlue)
@@ -342,6 +516,10 @@ func (w *emoteInlineWidget) CreateRenderer() fyne.WidgetRenderer {
 		img:      img,
 		fallback: fallback,
 	}
+	w.mu.Lock()
+	w.renderer = r
+	w.mu.Unlock()
+
 	r.Refresh()
 	return r
 }
@@ -354,7 +532,7 @@ type emoteInlineRenderer struct {
 
 func (r *emoteInlineRenderer) Layout(size fyne.Size) {
 	sz := emoteInlineSize * r.w.effectiveScale()
-	if r.w.getResource() != nil {
+	if r.w.hasAsset() {
 		r.img.Resize(fyne.NewSize(sz, sz))
 		r.img.Move(fyne.NewPos(
 			(size.Width-sz)/2,
@@ -369,7 +547,7 @@ func (r *emoteInlineRenderer) Layout(size fyne.Size) {
 
 func (r *emoteInlineRenderer) MinSize() fyne.Size {
 	sz := emoteInlineSize * r.w.effectiveScale()
-	if r.w.getResource() != nil {
+	if r.w.hasAsset() {
 		return fyne.NewSize(sz, sz)
 	}
 	fbMin := r.fallback.MinSize()
@@ -377,12 +555,26 @@ func (r *emoteInlineRenderer) MinSize() fyne.Size {
 }
 
 func (r *emoteInlineRenderer) Refresh() {
-	if res := r.w.getResource(); res != nil {
-		r.img.Resource = res
+	asset, idx, animEnabled := r.w.renderSnapshot()
+	switch {
+	case asset != nil && len(asset.Frames) > 0:
+		if !animEnabled || idx < 0 || idx >= len(asset.Frames) {
+			idx = 0
+		}
+		r.img.Resource = nil
+		r.img.Image = asset.Frames[idx]
+		r.img.ScaleMode = canvas.ImageScaleFastest
 		r.img.Show()
 		r.fallback.Hide()
 		r.img.Refresh()
-	} else {
+	case asset != nil && asset.StaticResource != nil:
+		r.img.Image = nil
+		r.img.Resource = asset.StaticResource
+		r.img.ScaleMode = canvas.ImageScaleSmooth
+		r.img.Show()
+		r.fallback.Hide()
+		r.img.Refresh()
+	default:
 		r.fallback.Text = r.w.fallbackLabelText()
 		r.fallback.Show()
 		r.img.Hide()
@@ -394,7 +586,14 @@ func (r *emoteInlineRenderer) Objects() []fyne.CanvasObject {
 	return []fyne.CanvasObject{r.img, r.fallback}
 }
 
-func (r *emoteInlineRenderer) Destroy() {}
+func (r *emoteInlineRenderer) Destroy() {
+	r.w.mu.Lock()
+	if r.w.renderer == r {
+		r.w.renderer = nil
+	}
+	r.w.mu.Unlock()
+	r.w.SetOnScreen(false)
+}
 
 // inlineFlowLayout arranges word labels and inline emote widgets left-to-right with automatic word wrapping.
 // Its MinSize().Width is always clamped to 80px so long messages never expand the OS window width.
@@ -553,6 +752,8 @@ func splitWordsForFlow(s string) []inlineToken {
 type emoteMessageCell struct {
 	widget.BaseWidget
 
+	mu         sync.Mutex
+	onScreen   bool
 	cache      *EmoteCache
 	scale      float32
 	onHover    func(obj fyne.CanvasObject, tip string, hovered bool)
@@ -603,13 +804,42 @@ func (c *emoteMessageCell) effectiveScale() float32 {
 	return c.scale
 }
 
+// SetOnScreen propagates viewport visibility to all inline emote widgets in this message cell.
+func (c *emoteMessageCell) SetOnScreen(visible bool) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.onScreen = visible
+	objs := slices.Clone(c.flowBox.Objects)
+	c.mu.Unlock()
+
+	for _, obj := range objs {
+		if ew, ok := obj.(*emoteInlineWidget); ok {
+			ew.SetOnScreen(visible)
+		}
+	}
+}
+
 // SetContent updates the cell to display rawText with inline emotes and an optional tooltip/subtext.
 func (c *emoteMessageCell) SetContent(platform, rawText string, emotes []chat.EmoteSpan, tooltip string, subText string) {
 	s := c.effectiveScale()
 	c.flowLayout.scale = s
 	c.plainLabel.tooltip = tooltip
+
+	c.mu.Lock()
+	prevObjs := slices.Clone(c.flowBox.Objects)
+	c.mu.Unlock()
+	for _, obj := range prevObjs {
+		if ew, ok := obj.(*emoteInlineWidget); ok {
+			ew.SetOnScreen(false)
+		}
+	}
+
 	if len(emotes) == 0 {
+		c.mu.Lock()
 		c.flowBox.Objects = nil
+		c.mu.Unlock()
 		c.flowBox.Hide()
 		full := rawText
 		if subText != "" {
@@ -638,7 +868,17 @@ func (c *emoteMessageCell) SetContent(platform, rawText string, emotes []chat.Em
 			objs = append(objs, lbl)
 		}
 	}
+	c.mu.Lock()
+	onScreen := c.onScreen
 	c.flowBox.Objects = objs
+	c.mu.Unlock()
+	if onScreen {
+		for _, obj := range objs {
+			if ew, ok := obj.(*emoteInlineWidget); ok {
+				ew.SetOnScreen(true)
+			}
+		}
+	}
 	c.flowBox.Show()
 	c.flowBox.Refresh()
 

@@ -124,6 +124,7 @@ type LogsView struct {
 	chatScaleSel         *widget.Select
 	chatScaleCustomEntry *widget.Entry
 	chatScaleCustomBox   *fyne.Container
+	animateEmotesCheck   *widget.Check
 	pruneBtn             *widget.Button
 	addLiveLogBtn        *widget.Button
 	disabledBanner       *fyne.Container
@@ -157,6 +158,7 @@ type LogsView struct {
 	filterDrawer     *fyne.Container
 	filtersExpanded  bool
 	listBox          *fyne.Container
+	listScroll       *container.Scroll
 	subTabs          *container.AppTabs
 	liveLogsCardsBox *fyne.Container
 	openLiveWindows  map[string]*liveLogWindow
@@ -170,10 +172,11 @@ type LogsView struct {
 	showOriginalByID  map[string]bool
 	lastExcludedUsers []string
 
-	onStatus           func(msg string)
-	onAssignVoice      func(platform, username string)
-	onChatScaleChanged func(pct int)
-	onLiveLogsChanged  func()
+	onStatus               func(msg string)
+	onAssignVoice          func(platform, username string)
+	onChatScaleChanged     func(pct int)
+	onAnimateEmotesChanged func(enabled bool)
+	onLiveLogsChanged      func()
 }
 
 type cachedLogRow struct {
@@ -183,11 +186,35 @@ type cachedLogRow struct {
 	rowCols       *fyne.Container
 	rowLayout     *logTableLayout
 	ttsStatusCell *fyne.Container
+	emoteCell     *emoteMessageCell
+}
+
+func (r *cachedLogRow) setEmotesOnScreen(visible bool) {
+	if r != nil && r.emoteCell != nil {
+		r.emoteCell.SetOnScreen(visible)
+	}
+}
+
+func extractEmoteMessageCell(obj fyne.CanvasObject) *emoteMessageCell {
+	if obj == nil {
+		return nil
+	}
+	if ec, ok := obj.(*emoteMessageCell); ok {
+		return ec
+	}
+	if c, ok := obj.(*fyne.Container); ok {
+		for _, child := range c.Objects {
+			if ec, ok := child.(*emoteMessageCell); ok {
+				return ec
+			}
+		}
+	}
+	return nil
 }
 
 // NewLogsView constructs a new LogsView bound to the active Session.
 func NewLogsView(w fyne.Window, session *app.Session) *LogsView {
-	return &LogsView{
+	v := &LogsView{
 		window:            w,
 		session:           session,
 		liveTail:          true,
@@ -197,8 +224,9 @@ func NewLogsView(w fyne.Window, session *app.Session) *LogsView {
 		heldQueueExpanded: true,
 		rowCache:          make(map[string]*cachedLogRow),
 		showOriginalByID:  make(map[string]bool),
-		listBox:           container.NewVBox(),
 	}
+	v.listBox = newNotifyVBoxContainer(v.updateVisibleEmotes)
+	return v
 }
 
 // SetTabActive notifies LogsView whether its containing tab is currently visible in the main window.
@@ -219,6 +247,12 @@ func (v *LogsView) SetTabActive(active bool) {
 	if active && !wasActive && dirty {
 		fyne.Do(func() {
 			v.renderEntries()
+		})
+		return
+	}
+	if wasActive != active {
+		fyne.Do(func() {
+			v.updateVisibleEmotes()
 		})
 	}
 }
@@ -295,6 +329,18 @@ func (v *LogsView) SetOnChatScaleChanged(fn func(pct int)) {
 	v.onChatScaleChanged = fn
 }
 
+// SetOnAnimateEmotesChanged sets the callback invoked when the Animate Emotes setting is toggled.
+func (v *LogsView) SetOnAnimateEmotesChanged(fn func(enabled bool)) {
+	v.onAnimateEmotesChanged = fn
+}
+
+func (v *LogsView) effectiveEmoteCache() *EmoteCache {
+	if v != nil && v.emoteCache != nil {
+		return v.emoteCache
+	}
+	return DefaultEmoteCache()
+}
+
 // SetOnLiveLogsChanged sets the callback invoked whenever saved Live Log presets are added, edited, or deleted.
 func (v *LogsView) SetOnLiveLogsChanged(fn func()) {
 	v.onLiveLogsChanged = fn
@@ -333,8 +379,15 @@ func (v *LogsView) ApplyChatScale() {
 			uiRenderMu.Unlock()
 		}
 		v.mu.Lock()
+		clearedRows := make([]*cachedLogRow, 0, len(v.rowCache))
+		for _, r := range v.rowCache {
+			clearedRows = append(clearedRows, r)
+		}
 		clear(v.rowCache)
 		v.mu.Unlock()
+		for _, r := range clearedRows {
+			r.setEmotesOnScreen(false)
+		}
 		v.renderEntries()
 		v.refreshLiveLogCards()
 
@@ -376,6 +429,9 @@ func (v *LogsView) SyncFromConfig() {
 		} else {
 			v.chatScaleCustomBox.Hide()
 		}
+	}
+	if v.animateEmotesCheck != nil && v.animateEmotesCheck.Checked != cfg.Logging.AnimateEmotes {
+		v.animateEmotesCheck.SetChecked(cfg.Logging.AnimateEmotes)
 	}
 	v.refreshLiveLogCards()
 }
@@ -493,7 +549,15 @@ func (v *LogsView) Close() {
 		}
 	}
 	v.openLiveWindows = nil
+	cachedRows := make([]*cachedLogRow, 0, len(v.rowCache))
+	for _, r := range v.rowCache {
+		cachedRows = append(cachedRows, r)
+	}
+	clear(v.rowCache)
 	v.mu.Unlock()
+	for _, r := range cachedRows {
+		r.setEmotesOnScreen(false)
+	}
 	if unsub != nil {
 		unsub()
 	}
@@ -532,8 +596,12 @@ func (v *LogsView) Build() fyne.CanvasObject {
 	compactTopBar := v.buildPaginationBar()
 	tableHeader := v.buildTableHeader()
 
-	v.listBox = container.NewVBox()
+	v.listBox = newNotifyVBoxContainer(v.updateVisibleEmotes)
 	listScroll := newPanelVScroll(v.listBox)
+	v.listScroll = listScroll
+	listScroll.OnScrolled = func(fyne.Position) {
+		v.updateVisibleEmotes()
+	}
 	if v.userSearchEntry != nil {
 		v.userSearchEntry.SetParentScroll(listScroll)
 	}
@@ -560,7 +628,7 @@ func (v *LogsView) Build() fyne.CanvasObject {
 		nil,
 		nil,
 		nil,
-		listScroll,
+		newResizeNotifyContainer(listScroll, v.updateVisibleEmotes),
 	)
 	v.chatPanelThemeOverride = container.NewThemeOverride(chatPanelBody, NewScaledChatTheme(v.chatScaleFactor()))
 
@@ -576,6 +644,9 @@ func (v *LogsView) Build() fyne.CanvasObject {
 		container.NewTabItemWithIcon("Live Logs", theme.VisibilityIcon(), v.buildLiveLogsTab()),
 		container.NewTabItemWithIcon("Search History", theme.SearchIcon(), searchLayout),
 	)
+	v.subTabs.OnSelected = func(_ *container.TabItem) {
+		v.updateVisibleEmotes()
+	}
 
 	bannerBg := canvas.NewRectangle(color.NRGBA{R: 69, G: 26, B: 3, A: 240})
 	bannerBg.CornerRadius = 4
@@ -923,6 +994,27 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 		v.pruneBtn.Disable()
 	}
 
+	v.animateEmotesCheck = widget.NewCheck("Animate Emotes in Logs & Activity Feed", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		if v.session != nil {
+			_ = v.session.UpdateConfig(func(c *config.Config) {
+				c.Logging.AnimateEmotes = checked
+			})
+		}
+		v.effectiveEmoteCache().SetAnimationEnabled(checked)
+		if v.onAnimateEmotesChanged != nil {
+			v.onAnimateEmotesChanged(checked)
+		}
+		if checked {
+			v.setStatus("✓ Animated emotes enabled.")
+		} else {
+			v.setStatus("✓ Animated emotes disabled.")
+		}
+	})
+	v.animateEmotesCheck.SetChecked(cfg.Logging.AnimateEmotes)
+
 	topRow := container.NewBorder(nil, nil, v.enableLogCheck, v.pruneBtn)
 	ttlRow := container.NewHBox(
 		widget.NewLabel("Chat TTL:"),
@@ -937,7 +1029,7 @@ func (v *LogsView) BuildRetentionCard() *widget.Card {
 		v.chatScaleCustomBox,
 	)
 
-	return widget.NewCard("Log Retention & Storage", "Configure automatic log expiration, storage cleanup, and default chat panel scale", container.NewVBox(topRow, ttlRow, scaleRow))
+	return widget.NewCard("Log Retention & Storage", "Configure automatic log expiration, storage cleanup, and default chat panel scale", container.NewVBox(topRow, ttlRow, scaleRow, v.animateEmotesCheck))
 }
 
 // SyncLoggingState updates retention and live tail controls to reflect whether event logging is enabled.
@@ -2037,8 +2129,15 @@ func (v *LogsView) renderEntries() {
 
 		if len(entries) == 0 {
 			v.mu.Lock()
+			clearedRows := make([]*cachedLogRow, 0, len(v.rowCache))
+			for _, r := range v.rowCache {
+				clearedRows = append(clearedRows, r)
+			}
 			clear(v.rowCache)
 			v.mu.Unlock()
+			for _, r := range clearedRows {
+				r.setEmotesOnScreen(false)
+			}
 			newObjects = append(newObjects, widget.NewLabelWithStyle("No matching log entries found.", fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
 		} else {
 			lastDateKey := ""
@@ -2088,16 +2187,22 @@ func (v *LogsView) renderEntries() {
 
 			// Prune dead rows from cache
 			v.mu.Lock()
-			for id := range v.rowCache {
+			var prunedRows []*cachedLogRow
+			for id, r := range v.rowCache {
 				if !activeIDs[id] {
+					prunedRows = append(prunedRows, r)
 					delete(v.rowCache, id)
 				}
 			}
 			v.mu.Unlock()
+			for _, r := range prunedRows {
+				r.setEmotesOnScreen(false)
+			}
 		}
 
 		v.listBox.Objects = newObjects
 		v.listBox.Refresh()
+		v.updateVisibleEmotes()
 
 		v.mu.Lock()
 		stillDirty := v.renderDirty && v.tabActive && !v.closed
@@ -2235,9 +2340,56 @@ func (v *LogsView) buildLogRowWithRef(rowIdx int, e eventlog.Entry) (fyne.Canvas
 		rowCols:       rowCols,
 		rowLayout:     rowLayout,
 		ttsStatusCell: ttsStatusCell,
+		emoteCell:     extractEmoteMessageCell(msgCell),
 	}
 
 	return root, cached
+}
+
+func (v *LogsView) isLogTableVisible() bool {
+	if v == nil {
+		return false
+	}
+	v.mu.Lock()
+	active := v.tabActive && !v.closed
+	v.mu.Unlock()
+	if !active {
+		return false
+	}
+	return v.subTabs == nil || v.subTabs.SelectedIndex() == 1
+}
+
+func (v *LogsView) updateVisibleEmotes() {
+	if v == nil {
+		return
+	}
+	scroll := v.listScroll
+	tableVisible := v.isLogTableVisible() && scroll != nil && scroll.Size().Height > 0
+	var viewTop, viewBottom float32
+	if tableVisible {
+		viewTop = scroll.Offset.Y
+		viewBottom = viewTop + scroll.Size().Height
+	}
+
+	v.mu.Lock()
+	rows := make([]*cachedLogRow, 0, len(v.rowCache))
+	for _, r := range v.rowCache {
+		if r != nil && r.emoteCell != nil {
+			rows = append(rows, r)
+		}
+	}
+	v.mu.Unlock()
+
+	for _, r := range rows {
+		if !tableVisible || r.root == nil {
+			r.setEmotesOnScreen(false)
+			continue
+		}
+		pos := r.root.Position()
+		sz := r.root.Size()
+		onScreen := sz.Height > 0 && (pos.Y+sz.Height) > viewTop && pos.Y < viewBottom
+		r.setEmotesOnScreen(onScreen)
+	}
 }
 
 func (v *LogsView) buildMessageCell(e eventlog.Entry, s float32) fyne.CanvasObject {
@@ -2326,7 +2478,10 @@ func (v *LogsView) ToggleEntryTranslationView(entryID string, fallbackEntry even
 		if entry.ID == "" {
 			entry = fallbackEntry
 		}
-		cached.rowCols.Objects[3] = v.buildMessageCell(entry, s)
+		cached.setEmotesOnScreen(false)
+		msgCell := v.buildMessageCell(entry, s)
+		cached.emoteCell = extractEmoteMessageCell(msgCell)
+		cached.rowCols.Objects[3] = msgCell
 		if cached.rowLayout != nil {
 			cached.rowLayout.Invalidate()
 		}
@@ -2334,6 +2489,7 @@ func (v *LogsView) ToggleEntryTranslationView(entryID string, fallbackEntry even
 		if v.listBox != nil {
 			v.listBox.Refresh()
 		}
+		v.updateVisibleEmotes()
 		return
 	}
 	v.renderEntries()

@@ -86,6 +86,11 @@ func FormatTTSModeStatusSummary(mode string, speakingActive, userIdle bool, time
 	}
 }
 
+type dashboardActivityRow struct {
+	root      fyne.CanvasObject
+	emoteCell *emoteMessageCell
+}
+
 // DashboardView provides live monitoring, speech status, queue controls, and activity feed.
 type DashboardView struct {
 	window  fyne.Window
@@ -94,9 +99,11 @@ type DashboardView struct {
 	mu            sync.Mutex
 	activities    []ActivityEntry
 	tabActive     bool
+	closed        bool
 	feedDirty     bool
 	ttsEnabled    bool
 	syncingModeUI bool
+	emoteCache    *EmoteCache
 
 	nowPlayingLabel    *wrappedCellLabel
 	queueDepthLabel    *widget.Label
@@ -107,6 +114,8 @@ type DashboardView struct {
 	clearBtn           *widget.Button
 	topSection         *fyne.Container
 	feedContainer      *fyne.Container
+	feedScroll         *container.Scroll
+	feedRows           []dashboardActivityRow
 	onAssignVoice      func(platform, username string)
 	onTTSModeChanged   func(mode string)
 	onStatus           func(msg string)
@@ -184,6 +193,31 @@ func (v *DashboardView) SetOnAssignVoice(fn func(platform, username string)) {
 // SetStatusHandler registers a callback invoked when dashboard actions update status.
 func (v *DashboardView) SetStatusHandler(fn func(msg string)) {
 	v.onStatus = fn
+}
+
+// SetEmoteCache overrides the EmoteCache used for inline emote rendering in the activity feed.
+func (v *DashboardView) SetEmoteCache(cache *EmoteCache) {
+	v.mu.Lock()
+	v.emoteCache = cache
+	v.mu.Unlock()
+}
+
+// Close marks the DashboardView closed and unregisters any active animated emote widgets.
+func (v *DashboardView) Close() {
+	if v == nil {
+		return
+	}
+	v.mu.Lock()
+	v.closed = true
+	rows := v.feedRows
+	v.feedRows = nil
+	v.mu.Unlock()
+
+	for _, row := range rows {
+		if row.emoteCell != nil {
+			row.emoteCell.SetOnScreen(false)
+		}
+	}
 }
 
 // SetOnTTSModeChanged registers a callback invoked when the user switches the TTS Output Mode from the Dashboard.
@@ -346,15 +380,16 @@ func (v *DashboardView) buildControlsCard() *widget.Card {
 }
 
 func (v *DashboardView) buildActivityCard() *widget.Card {
-	v.feedContainer.Objects = nil
+	v.mu.Lock()
+	v.refreshFeedLocked()
+	v.mu.Unlock()
 
-	if len(v.activities) == 0 {
-		v.feedContainer.Add(widget.NewLabelWithStyle("No stream events yet this session.", fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
-	} else {
-		v.refreshFeedLocked()
+	v.feedScroll = newPanelVScroll(v.feedContainer)
+	v.feedScroll.OnScrolled = func(fyne.Position) {
+		v.updateVisibleEmotes()
 	}
 
-	return widget.NewCard("Live Activity Feed", "Recent chatter messages and stream alerts", newPanelVScroll(v.feedContainer))
+	return widget.NewCard("Live Activity Feed", "Recent chatter messages and stream alerts", newResizeNotifyContainer(v.feedScroll, v.updateVisibleEmotes))
 }
 
 // SetTabActive notifies DashboardView whether its tab is currently visible in the main window.
@@ -375,6 +410,44 @@ func (v *DashboardView) SetTabActive(active bool) {
 			v.refreshFeedLocked()
 			v.mu.Unlock()
 		})
+		return
+	}
+	if wasActive != active {
+		fyne.Do(func() {
+			v.updateVisibleEmotes()
+		})
+	}
+}
+
+func (v *DashboardView) updateVisibleEmotes() {
+	if v == nil {
+		return
+	}
+	v.mu.Lock()
+	v.updateVisibleEmotesLocked()
+	v.mu.Unlock()
+}
+
+func (v *DashboardView) updateVisibleEmotesLocked() {
+	scroll := v.feedScroll
+	visible := v.tabActive && !v.closed && scroll != nil && scroll.Size().Height > 0
+	var viewTop, viewBottom float32
+	if visible {
+		viewTop = scroll.Offset.Y
+		viewBottom = viewTop + scroll.Size().Height
+	}
+	for _, row := range v.feedRows {
+		if row.emoteCell == nil {
+			continue
+		}
+		if !visible || row.root == nil {
+			row.emoteCell.SetOnScreen(false)
+			continue
+		}
+		pos := row.root.Position()
+		sz := row.root.Size()
+		onScreen := sz.Height > 0 && (pos.Y+sz.Height) > viewTop && pos.Y < viewBottom
+		row.emoteCell.SetOnScreen(onScreen)
 	}
 }
 
@@ -403,15 +476,33 @@ func (v *DashboardView) AddActivity(entry ActivityEntry) {
 }
 
 func (v *DashboardView) refreshFeedLocked() {
+	for _, oldRow := range v.feedRows {
+		if oldRow.emoteCell != nil {
+			oldRow.emoteCell.SetOnScreen(false)
+		}
+	}
+	v.feedRows = nil
 	v.feedContainer.Objects = nil
-	for idx, entry := range slices.Backward(v.activities) {
-		row := v.buildActivityRow(idx, entry)
-		v.feedContainer.Add(row)
+
+	if len(v.activities) == 0 {
+		v.feedContainer.Add(widget.NewLabelWithStyle("No stream events yet this session.", fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
+	} else {
+		for idx, entry := range slices.Backward(v.activities) {
+			row, ec := v.buildActivityRowWithEmotes(idx, entry)
+			v.feedRows = append(v.feedRows, dashboardActivityRow{root: row, emoteCell: ec})
+			v.feedContainer.Add(row)
+		}
 	}
 	v.feedContainer.Refresh()
+	v.updateVisibleEmotesLocked()
 }
 
 func (v *DashboardView) buildActivityRow(idx int, entry ActivityEntry) fyne.CanvasObject {
+	row, _ := v.buildActivityRowWithEmotes(idx, entry)
+	return row
+}
+
+func (v *DashboardView) buildActivityRowWithEmotes(idx int, entry ActivityEntry) (fyne.CanvasObject, *emoteMessageCell) {
 	timeStr := entry.Timestamp.Format("15:04:05")
 	timeLabel := widget.NewLabelWithStyle("["+timeStr+"]", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
 	platLabel := widget.NewLabelWithStyle("("+entry.Platform+")", fyne.TextAlignLeading, fyne.TextStyle{})
@@ -442,6 +533,7 @@ func (v *DashboardView) buildActivityRow(idx int, entry ActivityEntry) fyne.Canv
 	}
 	nameBox := container.NewHBox(timeLabel, nameObj, platLabel)
 	var msgContent fyne.CanvasObject
+	var emoteCell *emoteMessageCell
 
 	switch {
 	case entry.TranslatedText != "":
@@ -473,8 +565,9 @@ func (v *DashboardView) buildActivityRow(idx int, entry ActivityEntry) fyne.Canv
 			}
 			toggleIcon.ExtendBaseWidget(toggleIcon)
 			if len(entry.Emotes) > 0 {
-				ec := newEmoteMessageCell(nil, nil)
+				ec := newEmoteMessageCell(v.emoteCache, nil)
 				ec.SetContent(entry.Platform, entry.Text, entry.Emotes, "", "")
+				emoteCell = ec
 				body = ec
 			} else {
 				body = newClampedWrapLabel(entry.Text, fyne.TextStyle{})
@@ -492,8 +585,9 @@ func (v *DashboardView) buildActivityRow(idx int, entry ActivityEntry) fyne.Canv
 		}
 		msgContent = container.NewBorder(nil, nil, container.NewCenter(toggleIcon), nil, body)
 	case len(entry.Emotes) > 0:
-		ec := newEmoteMessageCell(nil, nil)
+		ec := newEmoteMessageCell(v.emoteCache, nil)
 		ec.SetContent(entry.Platform, entry.Text, entry.Emotes, "", "")
+		emoteCell = ec
 		msgContent = ec
 	default:
 		msgContent = newClampedWrapLabel(entry.Text, fyne.TextStyle{})
@@ -507,7 +601,7 @@ func (v *DashboardView) buildActivityRow(idx int, entry ActivityEntry) fyne.Canv
 	}
 
 	topRow := container.NewBorder(nil, nil, nameBox, rightCol)
-	return container.NewVBox(topRow, msgContent, widget.NewSeparator())
+	return container.NewVBox(topRow, msgContent, widget.NewSeparator()), emoteCell
 }
 
 func (v *DashboardView) showQuickAssignDialog(platform, username string) {

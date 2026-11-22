@@ -462,7 +462,7 @@ func parseChatMessageEvent(msgID string, eventRaw json.RawMessage, fallbackChann
 			emID := strings.TrimSpace(frag.Emote.ID)
 			var imgURL string
 			if emID != "" {
-				imgURL = "https://static-cdn.jtvnw.net/emoticons/v2/" + emID + "/static/dark/1.0"
+				imgURL = "https://static-cdn.jtvnw.net/emoticons/v2/" + emID + "/default/dark/1.0"
 			}
 			emotes = append(emotes, chat.EmoteSpan{
 				Start: runeOffset,

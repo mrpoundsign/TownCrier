@@ -348,6 +348,7 @@ type LoggingConfig struct {
 	ChatRetentionDays          int             `json:"chat_retention_days"`
 	EventRetentionDays         int             `json:"event_retention_days"`
 	ChatScale                  int             `json:"chat_scale,omitempty"`
+	AnimateEmotes              bool            `json:"animate_emotes"`
 	SessionResumeWindowMinutes int             `json:"session_resume_window_minutes,omitempty"`
 	LiveLogs                   []LiveLogPreset `json:"live_logs,omitempty"`
 }
@@ -947,6 +948,7 @@ func DefaultConfig() *Config {
 			ChatRetentionDays:          30,
 			EventRetentionDays:         90,
 			ChatScale:                  100,
+			AnimateEmotes:              true,
 			SessionResumeWindowMinutes: 60,
 			LiveLogs:                   DefaultLiveLogPresets(),
 		},

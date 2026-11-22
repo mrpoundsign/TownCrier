@@ -35,6 +35,38 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Logging.ChatScale != 100 {
 		t.Errorf("expected Logging.ChatScale 100 by default, got %d", cfg.Logging.ChatScale)
 	}
+	if !cfg.Logging.AnimateEmotes {
+		t.Error("expected Logging.AnimateEmotes to be true by default")
+	}
+}
+
+func TestAnimateEmotesPersistenceAndLegacyDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	legacyPath := filepath.Join(tmpDir, "legacy.json")
+	if err := os.WriteFile(legacyPath, []byte(`{"version": 1, "logging": {"enabled": true}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile legacy config: %v", err)
+	}
+	legacyLoaded, err := Load(legacyPath)
+	if err != nil {
+		t.Fatalf("Load legacy config failed: %v", err)
+	}
+	if !legacyLoaded.Logging.AnimateEmotes {
+		t.Error("expected legacy config missing animate_emotes to default to true")
+	}
+
+	disabledPath := filepath.Join(tmpDir, "disabled.json")
+	cfg := DefaultConfig()
+	cfg.Logging.AnimateEmotes = false
+	if err := Save(disabledPath, cfg); err != nil {
+		t.Fatalf("Save disabled config: %v", err)
+	}
+	disabledLoaded, err := Load(disabledPath)
+	if err != nil {
+		t.Fatalf("Load disabled config failed: %v", err)
+	}
+	if disabledLoaded.Logging.AnimateEmotes {
+		t.Error("expected disabled AnimateEmotes=false to persist across Save/Load")
+	}
 }
 
 func TestChatScalePersistenceAndClamping(t *testing.T) {

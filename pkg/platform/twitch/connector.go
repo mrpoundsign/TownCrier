@@ -844,7 +844,7 @@ func mapEmotes(twitchEmotes []*twitch.Emote) []chat.EmoteSpan {
 		}
 		var imgURL string
 		if em.ID != "" {
-			imgURL = "https://static-cdn.jtvnw.net/emoticons/v2/" + em.ID + "/static/dark/1.0"
+			imgURL = "https://static-cdn.jtvnw.net/emoticons/v2/" + em.ID + "/default/dark/1.0"
 		}
 		for _, pos := range em.Positions {
 			spans = append(spans, chat.EmoteSpan{

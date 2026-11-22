@@ -162,6 +162,9 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	}
 
 	w.SetCloseIntercept(func() {
+		if mw.dashboardTab != nil {
+			mw.dashboardTab.Close()
+		}
 		if mw.chatLogsTab != nil {
 			mw.chatLogsTab.Close()
 		}
@@ -181,6 +184,9 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	})
 
 	w.SetOnClosed(func() {
+		if mw.dashboardTab != nil {
+			mw.dashboardTab.Close()
+		}
 		if mw.chatLogsTab != nil {
 			mw.chatLogsTab.Close()
 		}
@@ -436,6 +442,10 @@ func (mw *MainWindow) initViews() {
 			mw.chatLogsTab.ApplyChatScale()
 		}
 	})
+	DefaultEmoteCache().SetAnimationEnabled(cfg.Logging.AnimateEmotes)
+	mw.settingsTab.SetAnimateEmotesChangedHandler(func(enabled bool) {
+		DefaultEmoteCache().SetAnimationEnabled(enabled)
+	})
 	mw.settingsTab.SetOverlayChangedHandler(func() {
 		if mw.chatLogsTab != nil {
 			mw.chatLogsTab.refreshLiveLogCards()
@@ -466,7 +476,10 @@ func (mw *MainWindow) initViews() {
 			mw.viewersTab.Refresh()
 		}
 	})
-	mw.settingsTab.SetBackupAppliedHandler(func(_ *config.Config, dbRestored bool) {
+	mw.settingsTab.SetBackupAppliedHandler(func(restoredCfg *config.Config, dbRestored bool) {
+		if restoredCfg != nil {
+			DefaultEmoteCache().SetAnimationEnabled(restoredCfg.Logging.AnimateEmotes)
+		}
 		if mw.viewersTab != nil {
 			mw.viewersTab.Refresh()
 		}

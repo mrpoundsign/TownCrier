@@ -93,9 +93,10 @@ type SettingsView struct {
 	prevUseGPU        bool
 	initializing      bool
 
-	onTTSChanged         func(enabled bool)
-	onLoggingChanged     func(enabled bool)
-	onChatScaleChanged   func(pct int)
+	onTTSChanged           func(enabled bool)
+	onLoggingChanged       func(enabled bool)
+	onChatScaleChanged     func(pct int)
+	onAnimateEmotesChanged func(enabled bool)
 	featuresCard         *widget.Card
 	ttsOutputModeCard    *widget.Card
 	ttsOutputModeSelect  *widget.Select
@@ -276,6 +277,14 @@ func (v *SettingsView) SetChatScaleChangedHandler(fn func(pct int)) {
 	v.onChatScaleChanged = fn
 	if v.logsView != nil {
 		v.logsView.SetOnChatScaleChanged(fn)
+	}
+}
+
+// SetAnimateEmotesChangedHandler registers a callback invoked when the Animate Emotes setting is toggled.
+func (v *SettingsView) SetAnimateEmotesChangedHandler(fn func(enabled bool)) {
+	v.onAnimateEmotesChanged = fn
+	if v.logsView != nil {
+		v.logsView.SetOnAnimateEmotesChanged(fn)
 	}
 }
 
@@ -847,6 +856,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	v.logsView.SetStatusHandler(v.setStatus)
 	v.logsView.SetOnAssignVoice(v.onAssignVoice)
 	v.logsView.SetOnChatScaleChanged(v.onChatScaleChanged)
+	v.logsView.SetOnAnimateEmotesChanged(v.onAnimateEmotesChanged)
 
 	rulesTabContent := newPanelVScroll(container.NewVBox(
 		rulesCard,
