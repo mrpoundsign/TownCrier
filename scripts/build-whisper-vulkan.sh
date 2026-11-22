@@ -90,6 +90,12 @@ build_win() {
     if [ -d "$vk_inc/vk_video" ]; then
         cp -rL "$vk_inc/vk_video" "$vk_staged_inc/vk_video"
     fi
+    for spv_root in "$vk_inc" "/usr/include" "/home/linuxbrew/.linuxbrew/include"; do
+        if [ -d "$spv_root/spirv" ]; then
+            cp -rL "$spv_root/spirv" "$vk_staged_inc/spirv"
+            break
+        fi
+    done
 
     # Generate a complete Windows x64 import library for vulkan-1.dll from vulkan_core.h
     python3 - "$vk_staged_inc/vulkan/vulkan_core.h" "$cmake_dir/vulkan-1.def" << 'PY'
