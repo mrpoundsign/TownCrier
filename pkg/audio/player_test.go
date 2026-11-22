@@ -442,3 +442,35 @@ func TestFormatAndMatchDeviceID(t *testing.T) {
 	}
 }
 
+func TestCaptureMonitorOnSamplesClonesDMAFrames(t *testing.T) {
+	mon := NewCaptureMonitor(-35.0, 500*time.Millisecond)
+	var received [][]float32
+	mon.SetOnSamples(func(samples []float32) {
+		received = append(received, samples)
+	})
+
+	dmaBuf := []float32{0.25, -0.5, 0.75, -0.25}
+	mon.ProcessSamples(dmaBuf, time.Now())
+
+	if len(received) != 1 {
+		t.Fatalf("expected 1 sample callback invocation, got %d", len(received))
+	}
+	if len(received[0]) != 4 || received[0][0] != 0.25 || received[0][2] != 0.75 {
+		t.Fatalf("unexpected tapped samples: %v", received[0])
+	}
+
+	// Mutate the caller's DMA slice in-place and ensure tapped slice is unaliased
+	dmaBuf[0] = 99.0
+	dmaBuf[2] = -99.0
+	if received[0][0] != 0.25 || received[0][2] != 0.75 {
+		t.Fatalf("expected tapped samples to be cloned away from DMA buffer, got %v", received[0])
+	}
+
+	// Empty frame should not invoke onSamples
+	mon.ProcessSamples(nil, time.Now())
+	if len(received) != 1 {
+		t.Fatalf("expected empty samples not to invoke onSamples, got %d", len(received))
+	}
+}
+
+

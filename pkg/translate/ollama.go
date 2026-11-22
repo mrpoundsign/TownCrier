@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type openAIChatRequest struct {
@@ -36,6 +37,12 @@ func (s *Service) translateOllama(ctx context.Context, text string, opts Options
 	s.mu.Lock()
 	client := s.client
 	s.mu.Unlock()
+
+	if dl, hasDeadline := ctx.Deadline(); hasDeadline && client.Timeout > 0 && time.Until(dl) > client.Timeout {
+		cloned := *client
+		cloned.Timeout = 0
+		client = &cloned
+	}
 
 	endpoint := strings.TrimSpace(opts.EndpointURL)
 	if endpoint == "" {

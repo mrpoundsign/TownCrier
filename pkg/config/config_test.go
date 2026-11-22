@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -34,6 +35,38 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.Logging.ChatScale != 100 {
 		t.Errorf("expected Logging.ChatScale 100 by default, got %d", cfg.Logging.ChatScale)
+	}
+	if !cfg.Logging.AnimateEmotes {
+		t.Error("expected Logging.AnimateEmotes to be true by default")
+	}
+}
+
+func TestAnimateEmotesPersistenceAndLegacyDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	legacyPath := filepath.Join(tmpDir, "legacy.json")
+	if err := os.WriteFile(legacyPath, []byte(`{"version": 1, "logging": {"enabled": true}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile legacy config: %v", err)
+	}
+	legacyLoaded, err := Load(legacyPath)
+	if err != nil {
+		t.Fatalf("Load legacy config failed: %v", err)
+	}
+	if !legacyLoaded.Logging.AnimateEmotes {
+		t.Error("expected legacy config missing animate_emotes to default to true")
+	}
+
+	disabledPath := filepath.Join(tmpDir, "disabled.json")
+	cfg := DefaultConfig()
+	cfg.Logging.AnimateEmotes = false
+	if err := Save(disabledPath, cfg); err != nil {
+		t.Fatalf("Save disabled config: %v", err)
+	}
+	disabledLoaded, err := Load(disabledPath)
+	if err != nil {
+		t.Fatalf("Load disabled config failed: %v", err)
+	}
+	if disabledLoaded.Logging.AnimateEmotes {
+		t.Error("expected disabled AnimateEmotes=false to persist across Save/Load")
 	}
 }
 
@@ -682,5 +715,72 @@ func TestEffectiveAntiSpamRulesAndOverrides(t *testing.T) {
 		t.Fatalf("expected youtube override window 60, got %d", ytWin)
 	}
 }
+
+func TestVoiceSubtitlesConfigAndOverlayFeatureGating(t *testing.T) {
+	store := NewMemoryStore(nil)
+	cfg, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.VoiceSubtitles.Enabled {
+		t.Fatal("expected VoiceSubtitles.Enabled=false by default")
+	}
+	if !slices.Equal(cfg.VoiceSubtitles.SpokenLanguages, []string{"en", "tl"}) {
+		t.Fatalf("expected default spoken languages [en tl], got %v", cfg.VoiceSubtitles.SpokenLanguages)
+	}
+	if !slices.Equal(cfg.VoiceSubtitles.TargetLanguages, []string{"en", "tl", "ja"}) {
+		t.Fatalf("expected default target languages [en tl ja], got %v", cfg.VoiceSubtitles.TargetLanguages)
+	}
+
+	// Verify EffectiveWebSocketFeatures runs server when ONLY VoiceSubtitles + SubtitlesOverlayEnabled are on
+	cfg.TTS.Enabled = false
+	cfg.Logging.Enabled = false
+	cfg.WebSocket.Enabled = false
+	cfg.WebSocket.SubtitlesOverlayEnabled = true
+	cfg.VoiceSubtitles.Enabled = false
+	if cfg.EffectiveSubtitlesOverlayEnabled() {
+		t.Fatal("expected EffectiveSubtitlesOverlayEnabled()=false while VoiceSubtitles.Enabled=false")
+	}
+	_, _, _, anyOn := cfg.EffectiveWebSocketFeatures()
+	if anyOn {
+		t.Fatal("expected anyEnabled=false when VoiceSubtitles.Enabled=false")
+	}
+
+	cfg.VoiceSubtitles.Enabled = true
+	if !cfg.EffectiveSubtitlesOverlayEnabled() {
+		t.Fatal("expected EffectiveSubtitlesOverlayEnabled()=true when both flags enabled")
+	}
+	_, _, _, anyOn = cfg.EffectiveWebSocketFeatures()
+	if !anyOn {
+		t.Fatal("expected anyEnabled=true when SubtitlesOverlay is active even with TTS & Logging off")
+	}
+
+	// Verify Save + Load round-trip in isolated temp dir preserves custom ordered target & spoken language lists
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	cfg.VoiceSubtitles.SpokenLanguages = []string{"FIL", "en", "tl"}
+	cfg.VoiceSubtitles.TargetLanguages = []string{"tl", "ja"}
+	cfg.VoiceSubtitles.OverlayFadeSeconds = -1 // never fade
+	cfg.VoiceSubtitles.OverlayPosition = "TOP"
+	cfg.VoiceSubtitles.OverlayAlign = "left"
+	if err := Save(cfgPath, cfg); err != nil {
+		t.Fatalf("Save() failed: %v", err)
+	}
+
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if !slices.Equal(loaded.VoiceSubtitles.SpokenLanguages, []string{"tl", "en"}) {
+		t.Fatalf("expected spoken languages [tl en], got %v", loaded.VoiceSubtitles.SpokenLanguages)
+	}
+	if !slices.Equal(loaded.VoiceSubtitles.TargetLanguages, []string{"tl", "ja"}) {
+		t.Fatalf("expected target languages [tl ja] (without re-adding default en), got %v", loaded.VoiceSubtitles.TargetLanguages)
+	}
+	if loaded.VoiceSubtitles.OverlayFadeSeconds != -1 || loaded.VoiceSubtitles.OverlayPosition != "top" || loaded.VoiceSubtitles.OverlayAlign != "left" {
+		t.Fatalf("unexpected overlay properties after round-trip: %+v", loaded.VoiceSubtitles)
+	}
+}
+
 
 

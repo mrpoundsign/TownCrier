@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
 	"github.com/mrpoundsign/TownCrier/pkg/audio"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/stt"
 	"github.com/mrpoundsign/TownCrier/pkg/translate"
 	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
@@ -34,10 +36,11 @@ import (
 type SettingsView struct {
 	window   fyne.Window
 	cfg      *config.Config
-	player   audio.Player
-	engine   tts.Engine
-	session  *app.Session
-	modelDir string
+	player      audio.Player
+	engine      tts.Engine
+	session     *app.Session
+	modelDir    string
+	sttModelDir string
 
 	mu                sync.Mutex
 	reloadSeq         uint64
@@ -51,12 +54,14 @@ type SettingsView struct {
 	onServicesChanged         func()
 	onModelsChanged           func()
 	onAssignVoice             func(platform, username string)
-	subTabs           *container.AppTabs
-	generalTabItem     *container.TabItem
-	ttsTabItem         *container.TabItem
-	translationTabItem *container.TabItem
-	rulesTabItem       *container.TabItem
-	logsTabItem        *container.TabItem
+	subTabs               *container.AppTabs
+	generalTabItem        *container.TabItem
+	obsTabItem            *container.TabItem
+	ttsTabItem            *container.TabItem
+	translationTabItem    *container.TabItem
+	voiceSubtitlesTabItem *container.TabItem
+	rulesTabItem          *container.TabItem
+	logsTabItem           *container.TabItem
 	twitchTab         *TwitchTabView
 	youtubeTab        *YouTubeTabView
 	tiktokTab         *TikTokTabView
@@ -88,14 +93,16 @@ type SettingsView struct {
 	uiScaleSelect     *widget.Select
 	globalVoiceField  *VoiceSpeedField
 	syncTTSControls   func()
+	refreshPackLabels func()
 	prevModels        []string
 	prevPreset        string
 	prevUseGPU        bool
 	initializing      bool
 
-	onTTSChanged         func(enabled bool)
-	onLoggingChanged     func(enabled bool)
-	onChatScaleChanged   func(pct int)
+	onTTSChanged           func(enabled bool)
+	onLoggingChanged       func(enabled bool)
+	onChatScaleChanged     func(pct int)
+	onAnimateEmotesChanged func(enabled bool)
 	featuresCard         *widget.Card
 	ttsOutputModeCard    *widget.Card
 	ttsOutputModeSelect  *widget.Select
@@ -106,34 +113,54 @@ type SettingsView struct {
 	alertBrowseBtn       *widget.Button
 	alertClearBtn        *widget.Button
 	alertTestBtn         *widget.Button
-	wsControlCard         *widget.Card
-	wsTTSOverlayCheck     *widget.Check
-	wsTTSOverlaySection   *fyne.Container
-	wsTTSOverlayPosSelect *widget.Select
-	wsCopyTTSOverlayBtn   *widget.Button
+	wsControlCard             *widget.Card
+	wsOpenDesignerBtn         *widget.Button
+	wsUnifiedSection          *fyne.Container
+	wsUnifiedResSelect        *widget.Select
+	wsUnifiedLink             *widget.Hyperlink
+	wsCopyUnifiedBtn          *widget.Button
+	wsUnifiedLayoutBtn        *widget.Button
+	wsTTSOverlayGroup         *fyne.Container
+	wsTTSOverlayCheck         *widget.Check
+	wsTTSOverlaySection       *fyne.Container
+	wsTTSOverlayPosSelect     *widget.Select
+	wsTTSOverlayLink          *widget.Hyperlink
+	wsCopyTTSOverlayBtn       *widget.Button
+	wsChatOverlayGroup        *fyne.Container
 	wsChatOverlayCheck        *widget.Check
 	wsChatOverlaySection      *fyne.Container
 	wsChatOverlayPresetSelect *widget.Select
 	wsChatOverlaySummaryCheck *widget.Check
 	wsChatOverlayPresetMap    map[string]string
+	wsChatOverlayLink         *widget.Hyperlink
 	wsCopyChatOverlayBtn      *widget.Button
-	wsEnabledCheck        *widget.Check
-	wsControlSection      *fyne.Container
-	wsNetSection          *fyne.Container
-	wsHostEntry           *ScrollPassEntry
-	wsPortEntry           *ScrollPassEntry
-	wsTokenEntry          *ScrollPassEntry
-	wsStatusLabel         *widget.Label
-	streamDeckInstallBtn  *widget.Button
-	streamDeckStatusLabel *widget.Label
-	streamDeckPluginsDir  string
-	onOverlayChanged      func()
-	generalBox            *fyne.Container
+	wsSubtitlesOverlayGroup   *fyne.Container
+	wsSubtitlesOverlayCheck   *widget.Check
+	wsSubtitlesOverlaySection *fyne.Container
+	wsSubtitlesOverlayLink    *widget.Hyperlink
+	wsCopySubtitlesOverlayBtn *widget.Button
+	wsEnabledCheck            *widget.Check
+	wsControlSection          *fyne.Container
+	wsNetSection              *fyne.Container
+	wsHostEntry               *ScrollPassEntry
+	wsPortEntry               *ScrollPassEntry
+	wsTokenEntry              *ScrollPassEntry
+	wsStatusLabel             *widget.Label
+	streamDeckInstallBtn      *widget.Button
+	streamDeckStatusLabel     *widget.Label
+	streamDeckPluginsDir      string
+	onOverlayChanged          func()
+	generalBox                *fyne.Container
+	obsBox                    *fyne.Container
 	ttsBox                *fyne.Container
 	enableTTSCheck            *widget.Check
 	enableLogCheck            *widget.Check
 	enableTranslationCheck    *widget.Check
+	enableVoiceSubtitlesCheck *widget.Check
 	checkUpdatesCheck         *widget.Check
+	chatTranslationLangCard   *widget.Card
+	chatTranslationChimeCard  *widget.Card
+	translationScrollBody     *fyne.Container
 	translationTargetSelect   *widget.Select
 	translationConfSelect     *widget.Select
 	translationRoutingSelect  *widget.Select
@@ -226,9 +253,49 @@ type SettingsView struct {
 	importBackupBtn      *widget.Button
 	schemaSnapshotsBtn   *widget.Button
 	onBackupApplied      func(newCfg *config.Config, dbRestored bool)
-	ttsEnabled           bool
-	loggingEnabled       bool
-	translationEnabled   bool
+	ttsEnabled            bool
+	loggingEnabled        bool
+	translationEnabled    bool
+	voiceSubtitlesEnabled bool
+
+	// Voice Subtitles tab controls (internal/ui/voice_subtitles_tab.go)
+	vsMicDeviceSelect       *widget.Select
+	vsMicRefreshBtn         *widget.Button
+	vsMicLevelBar           *widget.ProgressBar
+	vsSTTStatusLabel        *widget.Label
+	vsModelSelect           *widget.Select
+	vsModelStatusLabel      *widget.Label
+	vsDownloadModelBtn      *widget.Button
+	vsComputeDeviceSelect   *widget.Select
+	vsComputeRefreshBtn     *widget.Button
+	vsComputeDeviceMap      map[string]string
+	vsThreadsSelect         *widget.Select
+	sttGPUEnum              func() ([]stt.GPUDevice, error)
+	vsSilenceSelect         *widget.Select
+	vsSpokenAddSelect       *widget.Select
+	vsAddSpokenBtn          *widget.Button
+	vsSpokenListBox         *fyne.Container
+	vsRefreshSpokenList     func()
+	vsTargetAddSelect       *widget.Select
+	vsAddTargetBtn          *widget.Button
+	vsTargetListBox         *fyne.Container
+	vsRefreshTargetList     func()
+	vsOpenTranslationTabBtn *widget.Button
+	vsOverlayPosSelect      *widget.Select
+	vsOverlayAlignSelect    *widget.Select
+	vsOverlayFadeSelect     *widget.Select
+	vsOverlayScaleSelect    *widget.Select
+	vsCopyOverlayURLBtn     *widget.Button
+	vsCustomizeStyleBtn     *widget.Button
+	vsClearSubtitleBtn      *widget.Button
+	vsTestPhraseEntry       *ScrollPassEntry
+	vsTestSubtitleBtn       *widget.Button
+	vsLivePreviewLabel      *widget.Label
+
+	micUIPending  atomic.Bool
+	micLevelBits  atomic.Uint32
+	micGateActive atomic.Bool
+	lastMicUINano atomic.Int64
 }
 
 // NewSettingsView constructs a SettingsView for configuring audio, TTS hardware, and global rules.
@@ -236,28 +303,40 @@ func NewSettingsView(w fyne.Window, cfg *config.Config, player audio.Player, eng
 	ttsOn := true
 	loggingOn := true
 	translationOn := false
+	voiceSubOn := false
 	if cfg != nil {
 		ttsOn = cfg.TTS.Enabled
 		loggingOn = cfg.Logging.Enabled
 		translationOn = cfg.Translation.Enabled
+		voiceSubOn = cfg.VoiceSubtitles.Enabled
+	}
+	defaultModelDir := tts.DefaultModelDir()
+	defaultSTTModelDir := stt.DefaultSTTModelDir()
+	if testing.Testing() {
+		defaultModelDir = ""
+		defaultSTTModelDir = ""
 	}
 	return &SettingsView{
-		window:             w,
-		cfg:                cfg,
-		player:             player,
-		engine:             engine,
-		modelDir:           tts.DefaultModelDir(),
-		deviceMap:          make(map[string]string),
-		deviceEnum:         audio.EnumeratePlaybackDevices,
-		micDeviceMap:       make(map[string]string),
-		captureDeviceEnum:  audio.EnumerateCaptureDevices,
-		prevModels:         slices.Clone(cfg.TTS.EffectiveEnabledModels()),
-		prevPreset:         cfg.TTS.Preset,
-		prevUseGPU:         cfg.TTS.UseGPU,
-		ttsEnabled:         ttsOn,
-		loggingEnabled:     loggingOn,
-		translationEnabled: translationOn,
-		modelChecks:        make(map[string]*widget.Check),
+		window:                w,
+		cfg:                   cfg,
+		player:                player,
+		engine:                engine,
+		modelDir:              defaultModelDir,
+		sttModelDir:           defaultSTTModelDir,
+		deviceMap:             make(map[string]string),
+		deviceEnum:            audio.EnumeratePlaybackDevices,
+		micDeviceMap:          make(map[string]string),
+		captureDeviceEnum:     audio.EnumerateCaptureDevices,
+		vsComputeDeviceMap:    make(map[string]string),
+		sttGPUEnum:            stt.EnumerateGPUDevices,
+		prevModels:            slices.Clone(cfg.TTS.EffectiveEnabledModels()),
+		prevPreset:            cfg.TTS.Preset,
+		prevUseGPU:            cfg.TTS.UseGPU,
+		ttsEnabled:            ttsOn,
+		loggingEnabled:        loggingOn,
+		translationEnabled:    translationOn,
+		voiceSubtitlesEnabled: voiceSubOn,
+		modelChecks:           make(map[string]*widget.Check),
 	}
 }
 
@@ -276,6 +355,14 @@ func (v *SettingsView) SetChatScaleChangedHandler(fn func(pct int)) {
 	v.onChatScaleChanged = fn
 	if v.logsView != nil {
 		v.logsView.SetOnChatScaleChanged(fn)
+	}
+}
+
+// SetAnimateEmotesChangedHandler registers a callback invoked when the Animate Emotes setting is toggled.
+func (v *SettingsView) SetAnimateEmotesChangedHandler(fn func(enabled bool)) {
+	v.onAnimateEmotesChanged = fn
+	if v.logsView != nil {
+		v.logsView.SetOnAnimateEmotesChanged(fn)
 	}
 }
 
@@ -301,11 +388,20 @@ func (v *SettingsView) SetModelDir(dir string) {
 	v.mu.Unlock()
 }
 
+// SetSTTModelDir overrides the base STT model directory (useful for tests or custom model paths).
+func (v *SettingsView) SetSTTModelDir(dir string) {
+	v.mu.Lock()
+	v.sttModelDir = dir
+	v.mu.Unlock()
+}
+
 // SetSession attaches the application session to coordinate engine reloads.
 func (v *SettingsView) SetSession(s *app.Session) {
 	v.session = s
 	if s != nil {
 		s.SetOnMicLevel(v.SyncMicLevel)
+		s.SetOnVoiceSubtitle(v.SyncVoiceSubtitlePreview)
+		s.SetOnSTTStatus(v.SyncSTTStatus)
 	}
 }
 
@@ -395,13 +491,21 @@ func (v *SettingsView) SyncPlatformTabVisibility() {
 	items := []*container.TabItem{
 		v.generalTabItem,
 	}
+	if v.obsTabItem != nil {
+		items = append(items, v.obsTabItem)
+	}
 
 	if v.ttsEnabled && v.ttsTabItem != nil {
 		items = append(items, v.ttsTabItem)
 	}
-	if v.translationEnabled && v.translationTabItem != nil {
+	if v.voiceSubtitlesEnabled && v.voiceSubtitlesTabItem != nil {
+		items = append(items, v.voiceSubtitlesTabItem)
+	}
+	if (v.translationEnabled || v.voiceSubtitlesEnabled) && v.translationTabItem != nil {
 		items = append(items, v.translationTabItem)
 	}
+	v.syncChatTranslationCardsVisibility()
+	v.refreshWSStatusLabel()
 
 	addIfVisible := func(platform string, item *container.TabItem) {
 		if item == nil {
@@ -737,6 +841,14 @@ func (v *SettingsView) SyncFromConfig() {
 		v.translationEnabled = v.cfg.Translation.Enabled
 		v.enableTranslationCheck.SetChecked(v.cfg.Translation.Enabled)
 	}
+	if v.enableVoiceSubtitlesCheck != nil {
+		v.voiceSubtitlesEnabled = v.cfg.VoiceSubtitles.Enabled
+		v.enableVoiceSubtitlesCheck.SetChecked(v.cfg.VoiceSubtitles.Enabled)
+	}
+	if v.wsSubtitlesOverlayCheck != nil {
+		v.wsSubtitlesOverlayCheck.SetChecked(v.cfg.WebSocket.SubtitlesOverlayEnabled)
+	}
+	v.syncVoiceSubtitlesControlsFromConfig()
 	if v.translationTargetSelect != nil {
 		v.translationTargetSelect.SetSelected(FormatTranslationTargetLangOption(v.cfg.Translation.TargetLang))
 	}
@@ -829,10 +941,14 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	v.generalBox = container.NewVBox(
 		v.featuresCard,
 		servicesCard,
-		v.wsControlCard,
 		displayCard,
 		backupCard,
 	)
+
+	v.obsBox = container.NewVBox(
+		v.wsControlCard,
+	)
+	obsTabContent := newPanelVScroll(v.obsBox)
 
 	v.ttsBox = container.NewVBox(
 		v.globalVoiceCard,
@@ -847,6 +963,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	v.logsView.SetStatusHandler(v.setStatus)
 	v.logsView.SetOnAssignVoice(v.onAssignVoice)
 	v.logsView.SetOnChatScaleChanged(v.onChatScaleChanged)
+	v.logsView.SetOnAnimateEmotesChanged(v.onAnimateEmotesChanged)
 
 	rulesTabContent := newPanelVScroll(container.NewVBox(
 		rulesCard,
@@ -859,7 +976,9 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	))
 
 	v.generalTabItem = container.NewTabItemWithIcon("General", theme.SettingsIcon(), generalTabContent)
+	v.obsTabItem = container.NewTabItemWithIcon("OBS & Overlays", theme.ComputerIcon(), obsTabContent)
 	v.ttsTabItem = container.NewTabItemWithIcon("TTS & Hardware", theme.VolumeUpIcon(), ttsTabContent)
+	v.voiceSubtitlesTabItem = container.NewTabItemWithIcon("Voice Subtitles", theme.MediaRecordIcon(), v.buildVoiceSubtitlesTab())
 	v.translationTabItem = container.NewTabItemWithIcon("Translation", resLogTranslated, v.buildTranslationTab())
 	v.rulesTabItem = container.NewTabItemWithIcon("Rules & Safety", theme.ConfirmIcon(), rulesTabContent)
 	v.logsTabItem = container.NewTabItemWithIcon("Event Logs", theme.DocumentIcon(), logsTabContent)
@@ -895,6 +1014,23 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 			c.TTS.Enabled = checked
 		})
 		v.ttsEnabled = checked
+		if !checked {
+			if v.session != nil {
+				if eng := v.session.Engine(); eng != nil {
+					_ = eng.Close()
+					v.session.SetEngine(nil)
+				}
+				tts.ReclaimOSMemory()
+			}
+			v.setStatus("✓ Text-to-Speech disabled.")
+		} else {
+			v.setStatus("Enabling Text-to-Speech...")
+			if v.session == nil || v.session.Engine() == nil {
+				v.reloadTTSEngine(v.refreshPackLabels)
+			} else {
+				v.setStatus("✓ Text-to-Speech enabled.")
+			}
+		}
 		if v.ttsOutputModeCard != nil {
 			if checked {
 				v.ttsOutputModeCard.Show()
@@ -926,11 +1062,7 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 		if v.onTTSChanged != nil {
 			v.onTTSChanged(checked)
 		}
-		if checked {
-			v.setStatus("✓ Text-to-Speech enabled.")
-		} else {
-			v.setStatus("Text-to-Speech disabled.")
-		}
+		v.SyncTTSState(checked)
 	})
 	v.enableTTSCheck.SetChecked(cfg.TTS.Enabled)
 
@@ -978,6 +1110,34 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 	})
 	v.enableTranslationCheck.SetChecked(cfg.Translation.Enabled)
 
+	v.enableVoiceSubtitlesCheck = widget.NewCheck("Enable Voice Subtitles (Offline Speech-to-Text & Multi-Language OBS Overlay)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.VoiceSubtitles.Enabled = checked
+			if checked && !c.WebSocket.SubtitlesOverlayEnabled {
+				c.WebSocket.SubtitlesOverlayEnabled = true
+			}
+		})
+		v.voiceSubtitlesEnabled = checked
+		prevInit := v.initializing
+		v.initializing = true
+		if v.wsSubtitlesOverlayCheck != nil {
+			v.wsSubtitlesOverlayCheck.SetChecked(v.currentConfig().WebSocket.SubtitlesOverlayEnabled)
+		}
+		v.initializing = prevInit
+		v.refreshWSStatusLabel()
+		v.SyncPlatformTabVisibility()
+		v.refreshVoiceSubtitleModelStatus()
+		if checked {
+			v.setStatus("✓ Voice Subtitles enabled. Configure languages and Whisper model in the Voice Subtitles tab.")
+		} else {
+			v.setStatus("Voice Subtitles disabled.")
+		}
+	})
+	v.enableVoiceSubtitlesCheck.SetChecked(cfg.VoiceSubtitles.Enabled)
+
 	v.checkUpdatesCheck = widget.NewCheck("Automatically check for updates on startup", func(checked bool) {
 		if v.initializing {
 			return
@@ -998,6 +1158,7 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 		v.enableTTSCheck,
 		v.enableLogCheck,
 		v.enableTranslationCheck,
+		v.enableVoiceSubtitlesCheck,
 		updateRow,
 	)
 
@@ -1251,28 +1412,73 @@ func (v *SettingsView) overlayURL(path string, query map[string]string) string {
 	return u.String()
 }
 
+func (v *SettingsView) openOverlayDesignerTab(tab string) {
+	var q map[string]string
+	if strings.TrimSpace(tab) != "" {
+		q = map[string]string{"tab": strings.TrimSpace(tab)}
+	}
+	targetURL := v.overlayURL("/overlay/designer", q)
+	if parsed, err := url.Parse(targetURL); err == nil && fyne.CurrentApp() != nil {
+		_ = fyne.CurrentApp().OpenURL(parsed)
+	}
+	if app := fyne.CurrentApp(); app != nil && app.Clipboard() != nil {
+		app.Clipboard().SetContent(targetURL)
+	}
+	v.setStatus("🎨 Opened OBS Overlay Style Designer: " + targetURL)
+}
+
 func (v *SettingsView) refreshWSStatusLabel() {
 	cfg := v.currentConfig()
-	var controlOn, ttsOverlayOn, chatOverlayOn, anyOn bool
+	var controlOn, ttsOverlayOn, chatOverlayOn, subtitlesOverlayOn, anyOn bool
 	if cfg != nil {
 		controlOn = cfg.WebSocket.Enabled
-		ttsOverlayOn = cfg.WebSocket.TTSOverlayEnabled
-		chatOverlayOn = cfg.WebSocket.ChatOverlayEnabled
-		anyOn = cfg.WebSocket.AnyEnabled()
+		ttsOverlayOn = cfg.WebSocket.TTSOverlayEnabled && v.ttsEnabled
+		chatOverlayOn = cfg.WebSocket.ChatOverlayEnabled && v.loggingEnabled
+		subtitlesOverlayOn = cfg.WebSocket.SubtitlesOverlayEnabled && v.voiceSubtitlesEnabled
+		anyOn = controlOn || ttsOverlayOn || chatOverlayOn || subtitlesOverlayOn
+	}
+
+	if v.wsTTSOverlayGroup != nil {
+		if v.ttsEnabled {
+			v.wsTTSOverlayGroup.Show()
+		} else {
+			v.wsTTSOverlayGroup.Hide()
+		}
+	}
+	if v.wsChatOverlayGroup != nil {
+		if v.loggingEnabled {
+			v.wsChatOverlayGroup.Show()
+		} else {
+			v.wsChatOverlayGroup.Hide()
+		}
+	}
+	if v.wsSubtitlesOverlayGroup != nil {
+		if v.voiceSubtitlesEnabled {
+			v.wsSubtitlesOverlayGroup.Show()
+		} else {
+			v.wsSubtitlesOverlayGroup.Hide()
+		}
 	}
 
 	if v.wsTTSOverlaySection != nil {
-		if ttsOverlayOn {
+		if cfg != nil && cfg.WebSocket.TTSOverlayEnabled {
 			v.wsTTSOverlaySection.Show()
 		} else {
 			v.wsTTSOverlaySection.Hide()
 		}
 	}
 	if v.wsChatOverlaySection != nil {
-		if chatOverlayOn {
+		if cfg != nil && cfg.WebSocket.ChatOverlayEnabled {
 			v.wsChatOverlaySection.Show()
 		} else {
 			v.wsChatOverlaySection.Hide()
+		}
+	}
+	if v.wsSubtitlesOverlaySection != nil {
+		if cfg != nil && cfg.WebSocket.SubtitlesOverlayEnabled {
+			v.wsSubtitlesOverlaySection.Show()
+		} else {
+			v.wsSubtitlesOverlaySection.Hide()
 		}
 	}
 	if v.wsControlSection != nil {
@@ -1289,8 +1495,42 @@ func (v *SettingsView) refreshWSStatusLabel() {
 			v.wsNetSection.Hide()
 		}
 	}
+	anyOverlayOn := ttsOverlayOn || chatOverlayOn || subtitlesOverlayOn
+	if v.wsOpenDesignerBtn != nil {
+		if anyOverlayOn {
+			v.wsOpenDesignerBtn.Enable()
+		} else {
+			v.wsOpenDesignerBtn.Disable()
+		}
+	}
+	if v.wsUnifiedSection != nil {
+		if anyOverlayOn {
+			v.wsUnifiedSection.Show()
+		} else {
+			v.wsUnifiedSection.Hide()
+		}
+	}
+
+	updateOverlayLink := func(link *widget.Hyperlink, path string) {
+		if link == nil {
+			return
+		}
+		raw := v.overlayURL(path, nil)
+		link.SetText(raw)
+		if parsed, err := url.Parse(raw); err == nil {
+			link.SetURL(parsed)
+		}
+	}
+	updateOverlayLink(v.wsUnifiedLink, "/overlay")
+	updateOverlayLink(v.wsTTSOverlayLink, "/overlay/tts")
+	updateOverlayLink(v.wsChatOverlayLink, "/overlay/chat")
+	updateOverlayLink(v.wsSubtitlesOverlayLink, "/overlay/subtitles")
+
 	if v.wsControlCard != nil {
 		v.wsControlCard.Refresh()
+	}
+	if v.obsBox != nil {
+		v.obsBox.Refresh()
 	}
 	if v.generalBox != nil {
 		v.generalBox.Refresh()
@@ -1309,6 +1549,9 @@ func (v *SettingsView) refreshWSStatusLabel() {
 	}
 	if chatOverlayOn {
 		activeFeatures = append(activeFeatures, "Chat Overlay")
+	}
+	if subtitlesOverlayOn {
+		activeFeatures = append(activeFeatures, "Voice Subtitles Overlay")
 	}
 	if controlOn {
 		activeFeatures = append(activeFeatures, "Control API / Stream Deck")
@@ -1437,15 +1680,11 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 		v.wsTTSOverlayPosSelect.SetSelected("Bottom")
 	}
 
-	openOverlayDesigner := func() {
-		targetURL := v.overlayURL("/overlay/designer", nil)
-		if parsed, err := url.Parse(targetURL); err == nil && fyne.CurrentApp() != nil {
-			_ = fyne.CurrentApp().OpenURL(parsed)
-		}
-		if app := fyne.CurrentApp(); app != nil && app.Clipboard() != nil {
-			app.Clipboard().SetContent(targetURL)
-		}
-		v.setStatus("🎨 Opened OBS Overlay Style Designer: " + targetURL)
+	openChatTTSDesigner := func() {
+		v.openOverlayDesignerTab("chat_tts")
+	}
+	openSubtitlesDesigner := func() {
+		v.openOverlayDesignerTab("subtitles")
 	}
 
 	v.wsCopyTTSOverlayBtn = widget.NewButtonWithIcon("📋 Copy Now-Speaking Overlay URL", theme.ContentCopyIcon(), func() {
@@ -1457,7 +1696,89 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 	})
 	v.wsCopyTTSOverlayBtn.Importance = widget.HighImportance
 
-	ttsDesignerBtn := widget.NewButtonWithIcon("🎨 Customize Style", theme.ColorPaletteIcon(), openOverlayDesigner)
+	v.wsOpenDesignerBtn = widget.NewButtonWithIcon("🎨 Open Style Designer", theme.ColorPaletteIcon(), func() {
+		v.openOverlayDesignerTab("")
+	})
+	v.wsOpenDesignerBtn.Importance = widget.HighImportance
+
+	unifiedResOpts := []string{
+		"1920×1080 (1080p)",
+		"1280×720 (720p)",
+		"2560×1440 (1440p)",
+		"3840×2160 (4K)",
+		"1080×1920 (Vertical)",
+	}
+	formatUnifiedRes := func(w, h int) string {
+		cw, ch := config.NormalizeUnifiedOverlaySize(w, h)
+		switch {
+		case cw == 1280 && ch == 720:
+			return "1280×720 (720p)"
+		case cw == 2560 && ch == 1440:
+			return "2560×1440 (1440p)"
+		case cw == 3840 && ch == 2160:
+			return "3840×2160 (4K)"
+		case cw == 1080 && ch == 1920:
+			return "1080×1920 (Vertical)"
+		default:
+			return "1920×1080 (1080p)"
+		}
+	}
+	v.wsUnifiedResSelect = widget.NewSelect(unifiedResOpts, func(selected string) {
+		if v.initializing {
+			return
+		}
+		uw, uh := 1920, 1080
+		switch selected {
+		case "1280×720 (720p)":
+			uw, uh = 1280, 720
+		case "2560×1440 (1440p)":
+			uw, uh = 2560, 1440
+		case "3840×2160 (4K)":
+			uw, uh = 3840, 2160
+		case "1080×1920 (Vertical)":
+			uw, uh = 1080, 1920
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.WebSocket.UnifiedOverlayWidth = uw
+			c.WebSocket.UnifiedOverlayHeight = uh
+		})
+		if v.session != nil && v.session.WSServer() != nil {
+			v.session.WSServer().BroadcastOverlayReload()
+		}
+		v.setStatus(fmt.Sprintf("✓ Unified OBS Canvas resolution set to %d×%d.", uw, uh))
+	})
+	v.wsUnifiedResSelect.SetSelected(formatUnifiedRes(cfg.WebSocket.UnifiedOverlayWidth, cfg.WebSocket.UnifiedOverlayHeight))
+
+	v.wsCopyUnifiedBtn = widget.NewButtonWithIcon("📋 Copy Unified Overlay URL", theme.ContentCopyIcon(), func() {
+		targetURL := v.overlayURL("/overlay", nil)
+		if app := fyne.CurrentApp(); app != nil && app.Clipboard() != nil {
+			app.Clipboard().SetContent(targetURL)
+		}
+		v.setStatus("✓ Copied Unified OBS Canvas Overlay URL: " + targetURL)
+	})
+	v.wsCopyUnifiedBtn.Importance = widget.HighImportance
+
+	v.wsUnifiedLayoutBtn = widget.NewButtonWithIcon("📐 Edit Canvas Layout", theme.GridIcon(), func() {
+		v.openOverlayDesignerTab("layout")
+	})
+
+	v.wsUnifiedLink = widget.NewHyperlink("", nil)
+	unifiedInfo := widget.NewLabelWithStyle(
+		"Single Browser Source (/overlay) combining all enabled overlays at your chosen resolution. Drag and resize each module in the Canvas Layout Designer.",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	unifiedInfo.Wrapping = fyne.TextWrapWord
+
+	v.wsUnifiedSection = container.NewVBox(
+		widget.NewLabelWithStyle("Unified OBS Canvas Overlay (/overlay — All Enabled Modules)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewHBox(widget.NewLabel("Canvas Resolution:"), v.wsUnifiedResSelect, v.wsCopyUnifiedBtn, v.wsUnifiedLayoutBtn),
+		container.NewHBox(widget.NewLabel("URL:"), v.wsUnifiedLink),
+		unifiedInfo,
+		widget.NewSeparator(),
+	)
+
+	ttsDesignerBtn := widget.NewButtonWithIcon("🎨 Customize Style", theme.ColorPaletteIcon(), openChatTTSDesigner)
 
 	ttsOverlayInfo := widget.NewLabelWithStyle(
 		"Add a Browser Source in OBS (recommended: 800×200) and paste this URL. Position and style changes live-update open OBS views automatically.",
@@ -1466,6 +1787,7 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 	)
 	ttsOverlayInfo.Wrapping = fyne.TextWrapWord
 
+	v.wsTTSOverlayLink = widget.NewHyperlink("", nil)
 	ttsOverlayControlsRow := container.NewHBox(
 		v.wsCopyTTSOverlayBtn,
 		widget.NewLabel("Position:"),
@@ -1474,7 +1796,12 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 	)
 	v.wsTTSOverlaySection = container.NewVBox(
 		ttsOverlayControlsRow,
+		container.NewHBox(widget.NewLabel("URL:"), v.wsTTSOverlayLink),
 		ttsOverlayInfo,
+	)
+	v.wsTTSOverlayGroup = container.NewVBox(
+		v.wsTTSOverlayCheck,
+		v.wsTTSOverlaySection,
 	)
 
 	// 2. OBS Live Chat & Alerts Overlay toggle + section
@@ -1541,7 +1868,7 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 	})
 	v.wsCopyChatOverlayBtn.Importance = widget.HighImportance
 
-	chatDesignerBtn := widget.NewButtonWithIcon("🎨 Customize Style", theme.ColorPaletteIcon(), openOverlayDesigner)
+	chatDesignerBtn := widget.NewButtonWithIcon("🎨 Customize Style", theme.ColorPaletteIcon(), openChatTTSDesigner)
 
 	chatOverlayInfo := widget.NewLabelWithStyle(
 		"Add a Browser Source in OBS (recommended: 450×700) and paste this URL. Changing the Live Log, Events Summary, or Style Designer live-updates open OBS views automatically.",
@@ -1550,6 +1877,7 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 	)
 	chatOverlayInfo.Wrapping = fyne.TextWrapWord
 
+	v.wsChatOverlayLink = widget.NewHyperlink("", nil)
 	chatOverlayControlsRow := container.NewHBox(
 		widget.NewLabel("Live Log:"),
 		v.wsChatOverlayPresetSelect,
@@ -1560,7 +1888,60 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 
 	v.wsChatOverlaySection = container.NewVBox(
 		chatOverlayControlsRow,
+		container.NewHBox(widget.NewLabel("URL:"), v.wsChatOverlayLink),
 		chatOverlayInfo,
+	)
+	v.wsChatOverlayGroup = container.NewVBox(
+		v.wsChatOverlayCheck,
+		v.wsChatOverlaySection,
+	)
+
+	// 2b. OBS Multi-Language Voice Subtitles Overlay toggle + section
+	v.wsSubtitlesOverlayCheck = widget.NewCheck("Enable OBS Multi-Language Voice Subtitles Overlay (/overlay/subtitles)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.WebSocket.SubtitlesOverlayEnabled = checked
+		})
+		v.refreshWSStatusLabel()
+		if v.onOverlayChanged != nil {
+			v.onOverlayChanged()
+		}
+		if checked {
+			v.setStatus("✓ OBS Multi-Language Voice Subtitles Overlay enabled.")
+		} else {
+			v.setStatus("OBS Multi-Language Voice Subtitles Overlay disabled.")
+		}
+	})
+	v.wsSubtitlesOverlayCheck.SetChecked(cfg.WebSocket.SubtitlesOverlayEnabled)
+
+	v.wsCopySubtitlesOverlayBtn = widget.NewButtonWithIcon("📋 Copy Subtitles Overlay URL", theme.ContentCopyIcon(), func() {
+		targetURL := v.overlayURL("/overlay/subtitles", nil)
+		if app := fyne.CurrentApp(); app != nil && app.Clipboard() != nil {
+			app.Clipboard().SetContent(targetURL)
+		}
+		v.setStatus("✓ Copied OBS Voice Subtitles Overlay URL: " + targetURL)
+	})
+	v.wsCopySubtitlesOverlayBtn.Importance = widget.HighImportance
+
+	subtitlesDesignerBtn := widget.NewButtonWithIcon("🎨 Customize Style", theme.ColorPaletteIcon(), openSubtitlesDesigner)
+	subtitlesOverlayInfo := widget.NewLabelWithStyle(
+		"Add a Browser Source in OBS (recommended: 1200×350 or 1920×1080) and paste this URL. Displays stacked languages configured in Settings -> Voice Subtitles.",
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true},
+	)
+	subtitlesOverlayInfo.Wrapping = fyne.TextWrapWord
+
+	v.wsSubtitlesOverlayLink = widget.NewHyperlink("", nil)
+	v.wsSubtitlesOverlaySection = container.NewVBox(
+		container.NewHBox(v.wsCopySubtitlesOverlayBtn, subtitlesDesignerBtn),
+		container.NewHBox(widget.NewLabel("URL:"), v.wsSubtitlesOverlayLink),
+		subtitlesOverlayInfo,
+	)
+	v.wsSubtitlesOverlayGroup = container.NewVBox(
+		v.wsSubtitlesOverlayCheck,
+		v.wsSubtitlesOverlaySection,
 	)
 
 	// 3. External Control API & Elgato Stream Deck toggle + section
@@ -1730,17 +2111,21 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 		sdRow,
 	)
 
-	v.refreshWSStatusLabel()
+	designerBar := container.NewBorder(nil, nil, nil, v.wsOpenDesignerBtn, widget.NewLabelWithStyle("OBS Browser Source Overlays & Style Designer", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
 
 	cardContent := container.NewVBox(
-		v.wsTTSOverlayCheck,
-		v.wsTTSOverlaySection,
-		v.wsChatOverlayCheck,
-		v.wsChatOverlaySection,
+		designerBar,
+		widget.NewSeparator(),
+		v.wsUnifiedSection,
+		v.wsTTSOverlayGroup,
+		v.wsChatOverlayGroup,
+		v.wsSubtitlesOverlayGroup,
 		v.wsEnabledCheck,
 		v.wsControlSection,
 		v.wsNetSection,
 	)
+
+	v.refreshWSStatusLabel()
 
 	return widget.NewCard("OBS Overlays & External Control", "OBS Browser Source overlays, Elgato Stream Deck, and WebSocket/HTTP API", cardContent)
 }
@@ -1956,6 +2341,11 @@ func (v *SettingsView) buildAudioCard() *widget.Card {
 			c.Audio.MicDeviceName = selected
 			c.Audio.MicDeviceID = devHex
 		})
+		if v.vsMicDeviceSelect != nil && v.vsMicDeviceSelect.Selected != selected {
+			v.initializing = true
+			v.vsMicDeviceSelect.SetSelected(selected)
+			v.initializing = false
+		}
 		v.setStatus("Active microphone input: " + selected)
 	})
 	v.refreshCaptureDeviceList()
@@ -2184,18 +2574,42 @@ func (v *SettingsView) updateMicGateStatusText(levelDB float32, active bool) {
 }
 
 // SyncMicLevel updates the live microphone input level bar and gate status label on the Fyne UI thread.
+// Coalesces high-frequency (~100 Hz) WASAPI audio callbacks so at most one UI frame (~20 Hz) is queued at a time.
 func (v *SettingsView) SyncMicLevel(levelDB float32, active bool) {
+	prevActive := v.micGateActive.Swap(active)
+	prevDB := math.Float32frombits(v.micLevelBits.Swap(math.Float32bits(levelDB)))
+
+	nowNano := time.Now().UnixNano()
+	lastNano := v.lastMicUINano.Load()
+	if active == prevActive && math.Abs(float64(levelDB-prevDB)) < 0.75 && nowNano-lastNano < int64(250*time.Millisecond) {
+		return
+	}
+	if active == prevActive && nowNano-lastNano < int64(50*time.Millisecond) {
+		return
+	}
+	if !v.micUIPending.CompareAndSwap(false, true) {
+		return
+	}
+	v.lastMicUINano.Store(nowNano)
+
 	fyne.Do(func() {
+		v.micUIPending.Store(false)
+		curDB := math.Float32frombits(v.micLevelBits.Load())
+		curActive := v.micGateActive.Load()
+
+		norm := (float64(curDB) - float64(audio.MinCaptureDBFS)) / (0.0 - float64(audio.MinCaptureDBFS))
+		if norm < 0.0 {
+			norm = 0.0
+		} else if norm > 1.0 {
+			norm = 1.0
+		}
 		if v.micLevelBar != nil {
-			norm := (float64(levelDB) - float64(audio.MinCaptureDBFS)) / (0.0 - float64(audio.MinCaptureDBFS))
-			if norm < 0.0 {
-				norm = 0.0
-			} else if norm > 1.0 {
-				norm = 1.0
-			}
 			v.micLevelBar.SetValue(norm)
 		}
-		v.updateMicGateStatusText(levelDB, active)
+		if v.vsMicLevelBar != nil {
+			v.vsMicLevelBar.SetValue(norm)
+		}
+		v.updateMicGateStatusText(curDB, curActive)
 	})
 }
 
@@ -2226,27 +2640,30 @@ func (v *SettingsView) refreshCaptureDeviceList() {
 	targetID := v.cfg.Audio.MicDeviceID
 	v.mu.Unlock()
 
+	selected := "Default Microphone"
+	if targetName != "" && slices.Contains(options, targetName) {
+		selected = targetName
+	}
+	if selected == "Default Microphone" && targetID != "" && err == nil {
+		for _, dev := range devices {
+			if audio.MatchHexDeviceIDStrings(dev.ID, targetID) {
+				selected = dev.Name
+				break
+			}
+		}
+	}
+
+	prevInit := v.initializing
+	v.initializing = true
 	if v.micDeviceSelect != nil {
 		v.micDeviceSelect.Options = options
-		selected := "Default Microphone"
-		if targetName != "" {
-			for _, opt := range options {
-				if opt == targetName {
-					selected = opt
-					break
-				}
-			}
-		}
-		if selected == "Default Microphone" && targetID != "" && err == nil {
-			for _, dev := range devices {
-				if audio.MatchHexDeviceIDStrings(dev.ID, targetID) {
-					selected = dev.Name
-					break
-				}
-			}
-		}
 		v.micDeviceSelect.SetSelected(selected)
 	}
+	if v.vsMicDeviceSelect != nil {
+		v.vsMicDeviceSelect.Options = options
+		v.vsMicDeviceSelect.SetSelected(selected)
+	}
+	v.initializing = prevInit
 }
 
 func (v *SettingsView) refreshDeviceList() {
@@ -2598,6 +3015,7 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 		}
 		syncModelUpdateControls()
 	}
+	v.refreshPackLabels = refreshPackLabels
 
 	v.checkModelUpdatesBtn = widget.NewButtonWithIcon("Check for Voice Updates", theme.ViewRefreshIcon(), func() {
 		cfg := v.currentConfig()
@@ -2954,33 +3372,6 @@ func (v *SettingsView) buildTTSCard() *widget.Card {
 	}
 
 	syncWidgetsFromConfig()
-
-	v.enableTTSCheck = widget.NewCheck("Enable Text-to-Speech (TTS)", func(checked bool) {
-		if v.initializing || syncingControls {
-			return
-		}
-		v.updateConfig(func(c *config.Config) {
-			c.TTS.Enabled = checked
-		})
-		if !checked {
-			if v.session != nil {
-				if eng := v.session.Engine(); eng != nil {
-					_ = eng.Close()
-					v.session.SetEngine(nil)
-				}
-				tts.ReclaimOSMemory()
-			}
-			v.setStatus("✓ Text-to-Speech disabled.")
-		} else {
-			v.setStatus("Enabling Text-to-Speech...")
-			v.reloadTTSEngine(refreshPackLabels)
-		}
-		if v.onTTSChanged != nil {
-			v.onTTSChanged(checked)
-		}
-		v.SyncTTSState(checked)
-	})
-	v.enableTTSCheck.SetChecked(v.currentConfig().TTS.Enabled)
 
 	presetRow := container.NewBorder(
 		nil,
@@ -4969,14 +5360,13 @@ func (v *SettingsView) buildTranslationTab() fyne.CanvasObject {
 	v.translationRefreshCacheStats()
 	cacheRow := makeFieldRow("Sentence Cache (Spam Protection):", container.NewBorder(nil, nil, nil, v.translationClearCacheBtn, v.translationCacheStatsLbl))
 
-	langCard := widget.NewCard(
-		"Language Detection, Target Language & Sentence Cache",
-		"Choose your target language and manage the two-tier sentence translation cache",
+	v.chatTranslationLangCard = widget.NewCard(
+		"Incoming Chat Translation (Target Language & Detection)",
+		"Choose your chat target language and foreign-message detection sensitivity",
 		container.NewVBox(
 			detectDesc,
-			makeFieldRow("Target Language:", v.translationTargetSelect),
+			makeFieldRow("Chat Target Language:", v.translationTargetSelect),
 			makeFieldRow("Detection Sensitivity:", v.translationConfSelect),
-			cacheRow,
 		),
 	)
 
@@ -5056,9 +5446,9 @@ func (v *SettingsView) buildTranslationTab() fyne.CanvasObject {
 	chimeBtns := container.NewHBox(chimeBrowseBtn, chimeClearBtn, chimeTestBtn)
 	chimeFileRow := container.NewBorder(nil, nil, widget.NewLabel("Translation Sound:"), chimeBtns, chimeEntry)
 
-	chimeCard := widget.NewCard(
-		"Translation Notification Sound",
-		"Audio cue played immediately before a translated foreign message is read aloud",
+	v.chatTranslationChimeCard = widget.NewCard(
+		"Chat Translation Notification Sound",
+		"Audio cue played immediately before a translated foreign chat message is read aloud",
 		container.NewVBox(
 			v.translationChimeCheck,
 			chimeFileRow,
@@ -5469,8 +5859,8 @@ func (v *SettingsView) buildTranslationTab() fyne.CanvasObject {
 	v.translationRefreshNodes()
 
 	providerCard := widget.NewCard(
-		"Translation Provider Chain, Load Balancing & Rate Limits",
-		"Click 'Configure' on any provider row to edit its API key/endpoint and test that service directly",
+		"Shared Translation Service (Providers, Failover & Cache)",
+		"Shared by both Chat Translation and Voice Subtitles — click 'Configure' on any provider to edit API keys or local endpoints",
 		container.NewVBox(
 			routingHeader,
 			chainDesc,
@@ -5478,16 +5868,40 @@ func (v *SettingsView) buildTranslationTab() fyne.CanvasObject {
 			v.translationNodeHoverLbl,
 			v.translationConfigDrawer,
 			widget.NewSeparator(),
+			cacheRow,
 			testRow,
 			v.translationTestResultLbl,
 		),
 	)
 
-	scrollBody := newPanelVScroll(container.NewVBox(
-		langCard,
-		chimeCard,
+	v.translationScrollBody = container.NewVBox(
 		providerCard,
-	))
+		v.chatTranslationLangCard,
+		v.chatTranslationChimeCard,
+	)
+	v.syncChatTranslationCardsVisibility()
+
+	scrollBody := newPanelVScroll(v.translationScrollBody)
 	return container.NewStack(scrollBody, v.translationTooltipLayer)
+}
+
+func (v *SettingsView) syncChatTranslationCardsVisibility() {
+	if v.chatTranslationLangCard != nil {
+		if v.translationEnabled {
+			v.chatTranslationLangCard.Show()
+		} else {
+			v.chatTranslationLangCard.Hide()
+		}
+	}
+	if v.chatTranslationChimeCard != nil {
+		if v.translationEnabled {
+			v.chatTranslationChimeCard.Show()
+		} else {
+			v.chatTranslationChimeCard.Hide()
+		}
+	}
+	if v.translationScrollBody != nil {
+		v.translationScrollBody.Refresh()
+	}
 }
 

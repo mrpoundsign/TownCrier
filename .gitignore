@@ -13,6 +13,8 @@ bin/
 node_modules/
 cmd/launcher/payload/*
 !cmd/launcher/payload/placeholder.txt
+cmd/installer/payload/*
+!cmd/installer/payload/placeholder.txt
 fyne-cross/
 *.pprof
 *.test

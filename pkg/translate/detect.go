@@ -76,14 +76,70 @@ func LanguageName(code string) string {
 	return strings.ToUpper(clean)
 }
 
-// NormalizeLangCode normalizes language tags like "zh-CN", "pt-BR", or "EN" to a 2-letter lowercase code.
+// LanguageBadge returns a compact uppercase display badge for OBS overlays and UI pills (e.g. "FIL" for "tl", "JA" for "ja").
+func LanguageBadge(code string) string {
+	clean := NormalizeLangCode(code)
+	if clean == "tl" {
+		return "FIL"
+	}
+	if clean == "" {
+		return "??"
+	}
+	return strings.ToUpper(clean)
+}
+
+// IsSupportedTargetLang reports whether lang normalizes to one of TargetLanguages.
+func IsSupportedTargetLang(lang string) bool {
+	clean := NormalizeLangCode(lang)
+	for _, tl := range TargetLanguages {
+		if tl.Code == clean {
+			return true
+		}
+	}
+	return false
+}
+
+// NormalizeTargetLangList deduplicates and normalizes target language codes against TargetLanguages,
+// falling back to fallbackDefaults when no valid codes were supplied.
+func NormalizeTargetLangList(langs []string, fallbackDefaults []string) []string {
+	out := make([]string, 0, len(langs))
+	seen := make(map[string]struct{}, len(langs))
+	for _, raw := range langs {
+		code := NormalizeLangCode(raw)
+		if !IsSupportedTargetLang(code) {
+			continue
+		}
+		if _, exists := seen[code]; exists {
+			continue
+		}
+		seen[code] = struct{}{}
+		out = append(out, code)
+	}
+	if len(out) == 0 && len(fallbackDefaults) > 0 {
+		for _, def := range fallbackDefaults {
+			code := NormalizeLangCode(def)
+			if IsSupportedTargetLang(code) {
+				if _, exists := seen[code]; !exists {
+					seen[code] = struct{}{}
+					out = append(out, code)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// NormalizeLangCode normalizes language tags like "zh-CN", "pt-BR", "fil", or "EN" to a 2-letter lowercase code.
 func NormalizeLangCode(code string) string {
 	clean := strings.ToLower(strings.TrimSpace(code))
 	if idx := strings.IndexAny(clean, "-_"); idx > 0 {
 		clean = clean[:idx]
 	}
-	if clean == "iw" {
+	switch clean {
+	case "iw":
 		return "he"
+	case "fil", "tgl", "tagalog", "filipino", "philipino", "philippino":
+		return "tl"
 	}
 	return clean
 }
@@ -306,20 +362,108 @@ var isoToWhatlang = map[string]whatlanggo.Lang{
 	"tl": whatlanggo.Tgl,
 }
 
+func isUnambiguousTagalogToken(w string) bool {
+	if strings.HasPrefix(w, "mag-") || strings.HasPrefix(w, "nag-") || strings.HasPrefix(w, "pag-") {
+		return len(w) > 4
+	}
+	switch w {
+	case "kamusta", "kumusta", "magandang", "salamat", "mabuhay", "opo", "po", "kuya",
+		"mga", "naman", "talaga", "kaibigan", "inyong", "gabi", "umaga", "hapon",
+		"walang", "wala", "ngayon", "bukas", "kahapon", "muna", "kasi", "lang",
+		"ako", "ikaw", "siya", "kami", "tayo", "kayo", "sila", "natin", "namin", "nila",
+		"ito", "iyan", "iyon", "dito", "diyan", "doon", "hindi", "meron", "mayroon",
+		"teka", "sandali", "tara", "masaya":
+		return true
+	}
+	return false
+}
+
+func isUnambiguousSpanishToken(w string) bool {
+	switch w {
+	case "hola", "amigos", "amigo", "gracias", "buenos", "buenas", "noches",
+		"como", "cómo", "estan", "están", "esta", "está", "estoy", "hablando",
+		"espanol", "español", "directo", "increible", "increíble", "muy", "pero",
+		"porque", "cuando", "donde", "dónde", "quien", "quién", "todos", "todas",
+		"vamos", "tenemos", "hacer", "jugando", "partida", "jefe", "ahora", "antes":
+		return true
+	}
+	return false
+}
+
+func isUnambiguousEnglishToken(w string) bool {
+	switch w {
+	case "the", "and", "you", "that", "this", "with", "have", "are", "was",
+		"what", "when", "where", "who", "why", "how", "from", "they", "would",
+		"could", "should", "about", "there", "their", "before", "after", "wait",
+		"testing", "english", "everyone", "guys", "playing", "watching", "awesome",
+		"thanks", "thank", "please", "hello", "world", "today", "tonight", "really",
+		"stream", "game", "first", "boss", "fight", "ready", "welcome", "back":
+		return true
+	}
+	return false
+}
+
+// DetectCodeSwitching checks whether text mixes unambiguous English words with another language
+// in the same utterance (bilingual code-switching such as Spanglish, Taglish, etc.), returning
+// the non-English ISO-639-1 code and true when detected.
+func DetectCodeSwitching(text string) (string, bool) {
+	cleaned := cleanProbeText(text)
+	lower := strings.ToLower(cleaned)
+	if lower == "" {
+		return "", false
+	}
+	tokens := strings.FieldsFunc(lower, func(r rune) bool {
+		return !unicode.IsLetter(r) && r != '-'
+	})
+	var hasEN, hasTL, hasES bool
+	for _, raw := range tokens {
+		tok := strings.Trim(raw, "-")
+		if tok == "" {
+			continue
+		}
+		if isUnambiguousEnglishToken(tok) {
+			hasEN = true
+		}
+		if isUnambiguousTagalogToken(tok) {
+			hasTL = true
+		}
+		if isUnambiguousSpanishToken(tok) {
+			hasES = true
+		}
+	}
+	if !hasEN {
+		return "", false
+	}
+	if hasTL {
+		return "tl", true
+	}
+	if hasES {
+		return "es", true
+	}
+	if nonLatinISO, ok := detectNonLatinISO(cleaned); ok && nonLatinISO != "en" {
+		return nonLatinISO, true
+	}
+	return "", false
+}
+
+// IsMixedTaglish reports whether text is a code-switched English + Tagalog utterance.
+func IsMixedTaglish(text string) bool {
+	lang, ok := DetectCodeSwitching(text)
+	return ok && lang == "tl"
+}
+
 func refineLatinISO(probe, iso string) string {
 	lower := strings.ToLower(probe)
-	words := strings.FieldsFunc(lower, func(r rune) bool { return !unicode.IsLetter(r) })
-	for _, w := range words {
-		switch w {
-		case "kamusta", "kumusta", "magandang", "salamat", "mabuhay", "opo", "kuya", "mga", "naman", "talaga", "kaibigan", "inyong", "gabi", "umaga", "hapon", "walang", "ngayon":
+	hyphenTokens := strings.FieldsFunc(lower, func(r rune) bool { return !unicode.IsLetter(r) && r != '-' })
+	for _, raw := range hyphenTokens {
+		w := strings.Trim(raw, "-")
+		if w != "" && isUnambiguousTagalogToken(w) {
 			return "tl"
 		}
 	}
-	for _, w := range words {
-		switch w {
-		case "the", "and", "you", "that", "this", "with", "have", "are", "was", "what", "when", "where", "who", "why", "how", "from", "they", "would", "could", "should", "about", "there", "their", "testing", "english", "everyone", "guys", "playing", "watching", "awesome", "thanks", "thank", "please", "hello", "world", "today", "tonight", "really", "stream", "game":
-			return "en"
-		}
+	words := strings.FieldsFunc(lower, func(r rune) bool { return !unicode.IsLetter(r) })
+	if slices.ContainsFunc(words, isUnambiguousEnglishToken) {
+		return "en"
 	}
 	if strings.ContainsAny(lower, "ñ¿¡") {
 		return "es"

@@ -6,10 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -250,6 +252,217 @@ func TestSplitIntoSentences(t *testing.T) {
 	abbrGot := SplitIntoSentences(abbr)
 	if len(abbrGot) != 2 || abbrGot[0] != "Dr. Smith and Mr. Jones are here!" || abbrGot[1] != "Welcome to St. Louis." {
 		t.Errorf("unexpected sentence split with abbreviations: %q", abbrGot)
+	}
+
+	ellipsisSent := "Wait... what? \"Hello...\" he said."
+	ellipsisGot := SplitIntoSentences(ellipsisSent)
+	if len(ellipsisGot) != 2 || ellipsisGot[0] != "Wait... what?" || ellipsisGot[1] != "\"Hello...\" he said." {
+		t.Errorf("expected ellipses not to trigger hard sentence splits, got %q", ellipsisGot)
+	}
+}
+
+func TestPauseSegmentationAndNormalization(t *testing.T) {
+	splitCases := []struct {
+		input string
+		want  []string
+	}{
+		{"all...blah", []string{"all", "blah"}},
+		{"all…blah", []string{"all", "blah"}},
+		{"Wait—what", []string{"Wait", "what"}},
+		{"Wait -- what", []string{"Wait", "what"}},
+		{"Wait – what", []string{"Wait", "what"}},
+		{"10–20", []string{"10–20"}},
+		{"well-known", []string{"well-known"}},
+		{"3.14", []string{"3.14"}},
+		{"\"Hello...\" he said.", []string{"\"Hello", "he said."}},
+		{"...", nil},
+		{"—", nil},
+	}
+	for _, tc := range splitCases {
+		got := SplitPauseSegments(tc.input)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("SplitPauseSegments(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+
+	superCases := []struct {
+		input string
+		want  string
+	}{
+		{"all...blah", "all... blah"},
+		{"Wait—what", "Wait... what"},
+		{"Wait -- what", "Wait... what"},
+		{"Wait – what", "Wait... what"},
+		{"Wait, — what", "Wait... what"},
+		{"\"Hello...\" he said.", "\"Hello...\" he said."},
+		{"...wait", "wait"},
+		{"Hello...", "Hello..."},
+		{"Wait—", "Wait..."},
+		{"...", ""},
+		{"—", ""},
+		{"10–20", "10–20"},
+	}
+	for _, tc := range superCases {
+		got := NormalizeSupertonicPausePunctuation(tc.input)
+		if got != tc.want {
+			t.Errorf("NormalizeSupertonicPausePunctuation(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+
+	dotCases := []struct {
+		input string
+		want  string
+	}{
+		{"Wait . what", "Wait. what"},
+		{". what", "what"},
+		{".net", ".net"},
+		{"3.14", "3.14"},
+		{".", ""},
+	}
+	for _, tc := range dotCases {
+		got := CleanEspeakStrayDots(tc.input)
+		if got != tc.want {
+			t.Errorf("CleanEspeakStrayDots(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestPauseSeamTrimmingAndJoin(t *testing.T) {
+	if got := PauseGapDurationMs(0, 1.0); got != DefaultPausePunctuationMs {
+		t.Errorf("PauseGapDurationMs(0, 1.0) = %d, want %d", got, DefaultPausePunctuationMs)
+	}
+	if got := PauseGapDurationMs(DefaultPausePunctuationMs, 1.3); got != 169 {
+		t.Errorf("PauseGapDurationMs(220, 1.3) = %d, want 169", got)
+	}
+	if got := PauseGapDurationMs(DefaultPausePunctuationMs, 0.5); got != maxPausePunctuationMs {
+		t.Errorf("PauseGapDurationMs(220, 0.5) = %d, want %d", got, maxPausePunctuationMs)
+	}
+	if got := PauseGapDurationMs(DefaultPausePunctuationMs, 3.0); got != minPausePunctuationMs {
+		t.Errorf("PauseGapDurationMs(220, 3.0) = %d, want %d", got, minPausePunctuationMs)
+	}
+
+	const sr = 1000 // 1 sample per ms for deterministic math
+	seg1 := make([]float32, 300)
+	for i := range 100 {
+		seg1[i] = 0.5 // 100ms speech + 200ms trailing silence
+	}
+	seg2 := make([]float32, 300)
+	for i := 200; i < 300; i++ {
+		seg2[i] = 0.5 // 200ms leading silence + 100ms speech
+	}
+
+	trimmed1, keptTrail := TrimTrailingSilence(seg1, sr, pauseEdgeKeepMs)
+	if keptTrail != pauseEdgeKeepMs || len(trimmed1) != 100+pauseEdgeKeepMs {
+		t.Fatalf("TrimTrailingSilence: got len=%d keptTrail=%d, want len=%d keptTrail=%d",
+			len(trimmed1), keptTrail, 100+pauseEdgeKeepMs, pauseEdgeKeepMs)
+	}
+	if trimmed1[len(trimmed1)-1] != 0 {
+		t.Errorf("expected faded trailing edge to end at 0.0, got %v", trimmed1[len(trimmed1)-1])
+	}
+
+	trimmed2, keptLead := TrimLeadingSilence(seg2, sr, pauseEdgeKeepMs)
+	if keptLead != pauseEdgeKeepMs || len(trimmed2) != 100+pauseEdgeKeepMs {
+		t.Fatalf("TrimLeadingSilence: got len=%d keptLead=%d, want len=%d keptLead=%d",
+			len(trimmed2), keptLead, 100+pauseEdgeKeepMs, pauseEdgeKeepMs)
+	}
+	if trimmed2[0] != 0 {
+		t.Errorf("expected faded leading edge to start at 0.0, got %v", trimmed2[0])
+	}
+
+	joined := JoinPauseSegments([][]float32{seg1, seg2}, sr, DefaultPausePunctuationMs, 1.0)
+	// Expected total length: 100ms speech1 + 220ms total gap + 100ms speech2 = 420 samples
+	if len(joined) != 420 {
+		t.Fatalf("JoinPauseSegments len = %d, want 420", len(joined))
+	}
+	// Verify the middle 220ms gap is silent and endpoints remain intact
+	if math.Abs(float64(joined[0]-0.5)) > 1e-6 || math.Abs(float64(joined[len(joined)-1]-0.5)) > 1e-6 {
+		t.Errorf("unexpected endpoint amplitude in joined audio: start=%v end=%v", joined[0], joined[len(joined)-1])
+	}
+	for i := 100; i < 320; i++ {
+		if joined[i] != 0 {
+			t.Fatalf("expected silence across gap at index %d, got %v", i, joined[i])
+		}
+	}
+
+	if single := JoinPauseSegments([][]float32{seg1}, sr, DefaultPausePunctuationMs, 1.0); len(single) != len(seg1) {
+		t.Errorf("expected single segment passthrough len %d, got %d", len(seg1), len(single))
+	}
+	if empty := JoinPauseSegments(nil, sr, DefaultPausePunctuationMs, 1.0); empty != nil {
+		t.Errorf("expected nil for empty segments, got len %d", len(empty))
+	}
+}
+
+func TestSherpaEnginePausePunctuation(t *testing.T) {
+	modelDir := DefaultModelDir()
+	if !IsModelInstalled(modelDir) {
+		for _, candidate := range []string{"models/kokoro-en", "../../models/kokoro-en"} {
+			if IsModelInstalled(candidate) {
+				modelDir = candidate
+				break
+			}
+		}
+	}
+	if !IsModelInstalled(modelDir) {
+		t.Skip("local Kokoro model not installed, skipping live pause punctuation test")
+	}
+
+	kokoro, err := NewFamilySherpaEngine(ModelKokoro, modelDir, 2, false)
+	if err != nil {
+		t.Fatalf("NewFamilySherpaEngine(kokoro) failed: %v", err)
+	}
+	defer func() { _ = kokoro.Close() }()
+
+	commaSamples, commaSR, err := kokoro.Synthesize("I thought about it, then walked away.", "af_bella", 1.0)
+	if err != nil || len(commaSamples) == 0 {
+		t.Fatalf("Kokoro comma synthesis failed: err=%v len=%d", err, len(commaSamples))
+	}
+	dashSamples, dashSR, err := kokoro.Synthesize("I thought about it — then walked away.", "af_bella", 1.0)
+	if err != nil || len(dashSamples) == 0 {
+		t.Fatalf("Kokoro em-dash synthesis failed: err=%v len=%d", err, len(dashSamples))
+	}
+	ellipsisSamples, ellipsisSR, err := kokoro.Synthesize("I thought about it... then walked away.", "af_bella", 1.0)
+	if err != nil || len(ellipsisSamples) == 0 {
+		t.Fatalf("Kokoro ellipsis synthesis failed: err=%v len=%d", err, len(ellipsisSamples))
+	}
+
+	commaDur := float64(len(commaSamples)) / float64(commaSR)
+	dashDur := float64(len(dashSamples)) / float64(dashSR)
+	ellipsisDur := float64(len(ellipsisSamples)) / float64(ellipsisSR)
+	if dashDur <= commaDur {
+		t.Errorf("expected Kokoro em-dash duration (%.3fs) > comma duration (%.3fs)", dashDur, commaDur)
+	}
+	if ellipsisDur <= commaDur {
+		t.Errorf("expected Kokoro ellipsis duration (%.3fs) > comma duration (%.3fs)", ellipsisDur, commaDur)
+	}
+
+	for _, phrase := range []string{"all...blah", "all... blah", "..."} {
+		samples, _, synErr := kokoro.Synthesize(phrase, "af_bella", 1.0)
+		if synErr != nil || len(samples) == 0 {
+			t.Errorf("Kokoro synthesis failed for %q: err=%v len=%d", phrase, synErr, len(samples))
+		}
+	}
+
+	if IsModelFamilyInstalled(modelDir, ModelSupertonic, false) {
+		superDir := ModelFamilyDir(modelDir, ModelSupertonic)
+		superEng, sErr := NewFamilySherpaEngine(ModelSupertonic, superDir, 2, false)
+		if sErr != nil {
+			t.Fatalf("NewFamilySherpaEngine(supertonic) failed: %v", sErr)
+		}
+		defer func() { _ = superEng.Close() }()
+
+		for _, phrase := range []string{
+			"I thought about it, then walked away.",
+			"I thought about it — then walked away.",
+			"I thought about it... then walked away.",
+			"all...blah",
+			"all... blah",
+			"...",
+		} {
+			samples, _, synErr := superEng.Synthesize(phrase, "supertonic:f1", 1.0)
+			if synErr != nil || len(samples) == 0 {
+				t.Errorf("Supertonic synthesis failed for %q: err=%v len=%d", phrase, synErr, len(samples))
+			}
+		}
 	}
 }
 

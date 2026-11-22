@@ -90,16 +90,41 @@ func TestRouterVoiceResolutionCaseInsensitive(t *testing.T) {
 func TestRouterSpeedResolution(t *testing.T) {
 	router := NewRouter()
 	cfg := config.DefaultConfig()
-	cfg.GlobalChatRules.DefaultSpeed = 1.0
+	cfg.GlobalChatRules.DefaultSpeed = 1.2
 
 	// 1. Global default
 	event := &Event{Platform: "twitch", Kind: EventKindMessage, Text: "hi"}
 	res := router.Resolve(event, cfg)
-	if res.Speed != 1.0 {
-		t.Errorf("expected default speed 1.0, got %f", res.Speed)
+	if res.Speed != 1.2 {
+		t.Errorf("expected default speed 1.2, got %f", res.Speed)
 	}
 
-	// 2. Platform override
+	// 2. Viewer with default 1.0x multiplier inherits global 1.2x speed
+	cfg.Viewers["twitch:default_user"] = config.ViewerConfig{
+		Platform: "twitch",
+		UserID:   "default_user",
+		Voice:    "af_sarah",
+		Speed:    1.0,
+	}
+	eventDefaultViewer := &Event{Platform: "twitch", UserID: "default_user", Kind: EventKindMessage, Text: "hi"}
+	res = router.Resolve(eventDefaultViewer, cfg)
+	if res.Speed != 1.2 {
+		t.Errorf("expected viewer with 1.0x multiplier to speak at global 1.2x speed, got %f", res.Speed)
+	}
+
+	// 3. Viewer with custom 1.25x multiplier scales relative to global 1.2x speed (1.2 * 1.25 = 1.5)
+	cfg.Viewers["twitch:fast_user"] = config.ViewerConfig{
+		Platform: "twitch",
+		UserID:   "fast_user",
+		Speed:    1.25,
+	}
+	eventViewer := &Event{Platform: "twitch", UserID: "fast_user", Kind: EventKindMessage, Text: "hi"}
+	res = router.Resolve(eventViewer, cfg)
+	if res.Speed < 1.499 || res.Speed > 1.501 {
+		t.Errorf("expected viewer speed 1.5 (1.2 * 1.25), got %f", res.Speed)
+	}
+
+	// 4. Platform override base speed * viewer multiplier (1.1 * 1.25 = 1.375)
 	p := cfg.Platforms["twitch"]
 	p.Overrides.OverrideRules = true
 	p.Overrides.DefaultSpeed = 1.1
@@ -109,17 +134,9 @@ func TestRouterSpeedResolution(t *testing.T) {
 	if res.Speed != 1.1 {
 		t.Errorf("expected platform speed 1.1, got %f", res.Speed)
 	}
-
-	// 3. Viewer speed override
-	cfg.Viewers["twitch:fast_user"] = config.ViewerConfig{
-		Platform: "twitch",
-		UserID:   "fast_user",
-		Speed:    1.25,
-	}
-	eventViewer := &Event{Platform: "twitch", UserID: "fast_user", Kind: EventKindMessage, Text: "hi"}
 	res = router.Resolve(eventViewer, cfg)
-	if res.Speed != 1.25 {
-		t.Errorf("expected viewer speed 1.25, got %f", res.Speed)
+	if res.Speed < 1.374 || res.Speed > 1.376 {
+		t.Errorf("expected platform*viewer speed 1.375 (1.1 * 1.25), got %f", res.Speed)
 	}
 }
 

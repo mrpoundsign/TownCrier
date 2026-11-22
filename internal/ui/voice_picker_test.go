@@ -42,6 +42,13 @@ func TestVoiceSpeedFieldAndSummary(t *testing.T) {
 	if !strings.Contains(field.Label.Text, "Supertonic M2") || !strings.Contains(field.Label.Text, "1.50x") {
 		t.Errorf("unexpected summary label after update: %q", field.Label.Text)
 	}
+
+	// When configured as a per-user multiplier on a 1.20x base speed, 1.00x shows "(1.20x effective)"
+	field.SetVoiceAndSpeed("supertonic:m2", 1.0)
+	field.SetBaseSpeedProvider(func() float32 { return 1.20 })
+	if !strings.Contains(field.Label.Text, "1.00x (1.20x effective)") {
+		t.Errorf("expected effective speed in multiplier summary label, got %q", field.Label.Text)
+	}
 }
 
 func TestBuildVoiceGroupsForModels(t *testing.T) {

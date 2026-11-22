@@ -181,22 +181,53 @@ func maskBlockedWords(text string, blockedWords []string) string {
 
 func isCollapsiblePunct(r rune) bool {
 	switch r {
-	case '?', '!', '.', ',', ':', ';':
+	case '?', '!', ',', ':', ';', '…', '—':
 		return true
 	default:
 		return false
 	}
 }
 
-// collapseRepeatedRunes collapses repeated punctuation, consonant runs ("wwwww"), and character repetitions.
+// collapseRepeatedRunes collapses repeated punctuation, consonant runs ("wwwww"), and character repetitions
+// while preserving ellipsis runs (2+ dots or "…") as a single "…" and double hyphens ("--").
 func collapseRepeatedRunes(text string) string {
 	var b strings.Builder
 	b.Grow(len(text))
 
 	var last rune
+	var lastWritten rune
 	repeatCount := 0
+	dotCount := 0
+
+	flushDots := func() {
+		switch {
+		case dotCount == 1:
+			b.WriteRune('.')
+			lastWritten = '.'
+		case dotCount >= 2:
+			if lastWritten != '…' {
+				b.WriteRune('…')
+				lastWritten = '…'
+			}
+		}
+		dotCount = 0
+	}
 
 	for _, r := range text {
+		if r == '.' {
+			dotCount++
+			last = 0
+			repeatCount = 0
+			continue
+		}
+		flushDots()
+
+		if r == '…' && lastWritten == '…' {
+			last = r
+			repeatCount++
+			continue
+		}
+
 		isPunct := isCollapsiblePunct(r)
 		lowerR := unicode.ToLower(r)
 
@@ -212,7 +243,7 @@ func collapseRepeatedRunes(text string) string {
 			continue
 		}
 
-		// Punctuation spam "?????" or "....." -> collapse to 1
+		// Punctuation spam "?????" or "……" -> collapse to 1
 		if isPunct && repeatCount > 1 {
 			continue
 		}
@@ -223,7 +254,9 @@ func collapseRepeatedRunes(text string) string {
 		}
 
 		b.WriteRune(r)
+		lastWritten = r
 	}
+	flushDots()
 
 	return b.String()
 }
@@ -282,7 +315,7 @@ func deduplicateEmotesAndEmojisPerSentence(text string, knownEmotes map[string]b
 			words := strings.Fields(s)
 			var keptWords []string
 			for _, w := range words {
-				norm := strings.ToLower(strings.Trim(w, ",.!?:;\"'()[]{}~`*-_"))
+				norm := strings.ToLower(strings.Trim(w, ",.!?:;\"'()[]{}~`*-_…—–"))
 				if knownEmotes[norm] {
 					if seenInSentence[norm] {
 						trailing := getSentencePunctuation(w)
@@ -322,7 +355,7 @@ func collapseDuplicateWords(text string, maxConsecutive int) string {
 	repeatCount := 0
 
 	for _, w := range words {
-		norm := strings.ToLower(strings.Trim(w, ",.!?:;\"'()[]{}~`*-_"))
+		norm := strings.ToLower(strings.Trim(w, ",.!?:;\"'()[]{}~`*-_…—–"))
 		if norm == "" {
 			result = append(result, w)
 			lastNorm = ""

@@ -553,3 +553,115 @@ func TestServerOverlayEndpointsAndFeatureGating(t *testing.T) {
 		t.Fatalf("unexpected CustomCSS after save: %q", gotStyle.CustomCSS)
 	}
 }
+
+func TestServerSubtitlesOverlayAndSSE(t *testing.T) {
+	ctrl := newMockController()
+	srv := NewServer(ctrl)
+	// Disable Control API, TTS Overlay, and Chat Overlay -> ONLY Subtitles Overlay enabled
+	srv.SetFeatures(false, false, false)
+	srv.SetSubtitlesOverlayEnabled(true)
+
+	if err := srv.Start("127.0.0.1", 0, ""); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer func() { _ = srv.Stop() }()
+
+	baseURL := "http://" + srv.Addr()
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	// 1. /overlay/subtitles HTML page -> 200 OK
+	resSub, err := client.Get(baseURL + "/overlay/subtitles")
+	if err != nil {
+		t.Fatalf("GET /overlay/subtitles failed: %v", err)
+	}
+	bodySub, _ := io.ReadAll(resSub.Body)
+	_ = resSub.Body.Close()
+	if resSub.StatusCode != http.StatusOK || !strings.Contains(string(bodySub), "TownCrier — Multi-Language Voice Subtitles") {
+		t.Fatalf("unexpected /overlay/subtitles response: status=%d", resSub.StatusCode)
+	}
+
+	// 2. /overlay/designer works when only Subtitles Overlay is enabled
+	resDesigner, err := client.Get(baseURL + "/overlay/designer")
+	if err != nil {
+		t.Fatalf("GET /overlay/designer failed: %v", err)
+	}
+	_ = resDesigner.Body.Close()
+	if resDesigner.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK on /overlay/designer when SubtitlesOverlayEnabled=true, got %d", resDesigner.StatusCode)
+	}
+
+	// 3. /api/overlay/subtitles snapshot -> 200 OK
+	resSnap, err := client.Get(baseURL + "/api/overlay/subtitles")
+	if err != nil {
+		t.Fatalf("GET /api/overlay/subtitles failed: %v", err)
+	}
+	var snap SubtitleOverlaySnapshot
+	if err := json.NewDecoder(resSnap.Body).Decode(&snap); err != nil {
+		_ = resSnap.Body.Close()
+		t.Fatalf("decode SubtitleOverlaySnapshot failed: %v", err)
+	}
+	_ = resSnap.Body.Close()
+	if snap.Position != "bottom" || !slices.Equal(snap.TargetLanguages, []string{"en", "tl", "ja"}) {
+		t.Fatalf("unexpected default SubtitleOverlaySnapshot: %+v", snap)
+	}
+
+	// 4. SSE /api/overlay/subtitles/stream pushes stacked multi-language subtitle events
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	sseReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/overlay/subtitles/stream", nil)
+	sseResp, err := http.DefaultClient.Do(sseReq)
+	if err != nil {
+		t.Fatalf("SSE connect failed: %v", err)
+	}
+	defer func() { _ = sseResp.Body.Close() }()
+
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		srv.BroadcastSubtitleEvent(SubtitleEvent{
+			Kind:         "subtitle",
+			ID:           "sub-1",
+			SourceLang:   "tl",
+			OriginalText: "Magandang gabi po!",
+			Lines: []SubtitleLine{
+				{Lang: "tl", Label: "FIL", Text: "Magandang gabi po!", IsOriginal: true},
+				{Lang: "ja", Label: "JA", Text: "こんばんは！"},
+				{Lang: "en", Label: "EN", Text: "Good evening!"},
+			},
+		})
+	}()
+
+	scanner := bufio.NewScanner(sseResp.Body)
+	var gotSSE string
+	for scanner.Scan() {
+		if after, ok := strings.CutPrefix(scanner.Text(), "data: "); ok {
+			gotSSE = after
+			break
+		}
+	}
+	if !strings.Contains(gotSSE, "こんばんは！") || !strings.Contains(gotSSE, "Good evening!") {
+		t.Fatalf("unexpected subtitle SSE payload: %q", gotSSE)
+	}
+
+	// 5. /overlay unified canvas endpoint + POST /api/overlay/style target="unified"
+	resUni, err := client.Get(baseURL + "/overlay")
+	if err != nil {
+		t.Fatalf("GET /overlay failed: %v", err)
+	}
+	bodyUni, _ := io.ReadAll(resUni.Body)
+	_ = resUni.Body.Close()
+	if resUni.StatusCode != http.StatusOK || !strings.Contains(string(bodyUni), "TownCrier — Unified OBS Canvas Overlay") {
+		t.Fatalf("unexpected /overlay response: status=%d", resUni.StatusCode)
+	}
+
+	// 6. Disabling SubtitlesOverlay returns 404 on both /overlay/subtitles and /overlay
+	srv.SetSubtitlesOverlayEnabled(false)
+	resDisabled, err := client.Get(baseURL + "/overlay/subtitles")
+	if err != nil {
+		t.Fatalf("GET disabled /overlay/subtitles failed: %v", err)
+	}
+	_ = resDisabled.Body.Close()
+	if resDisabled.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 when SubtitlesOverlayEnabled=false, got %d", resDisabled.StatusCode)
+	}
+}
+

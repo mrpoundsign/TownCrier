@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"strings"
 	"time"
 )
 
@@ -38,18 +39,34 @@ type EmoteSpan struct {
 	URL   string `json:"url,omitempty"`
 }
 
+const twitchEmoteCDNPrefix = "https://static-cdn.jtvnw.net/emoticons/v2/"
+
+// NormalizeTwitchEmoteURL upgrades legacy Twitch /static/ emote CDN URLs to /default/
+// so animated emotes return GIFs while static emotes continue returning PNGs.
+func NormalizeTwitchEmoteURL(rawURL string) string {
+	trimmed := strings.TrimSpace(rawURL)
+	if !strings.HasPrefix(trimmed, twitchEmoteCDNPrefix) {
+		return trimmed
+	}
+	rest := trimmed[len(twitchEmoteCDNPrefix):]
+	if idx := strings.Index(rest, "/static/"); idx > 0 {
+		return twitchEmoteCDNPrefix + rest[:idx] + "/default/" + rest[idx+len("/static/"):]
+	}
+	return trimmed
+}
+
 // ImageURL returns the direct image URL for this emote on the given platform,
 // falling back to deterministic platform CDN URLs when URL is not explicitly set.
 func (s EmoteSpan) ImageURL(platform string) string {
 	if s.URL != "" {
-		return s.URL
+		return NormalizeTwitchEmoteURL(s.URL)
 	}
 	if s.ID == "" {
 		return ""
 	}
 	switch platform {
 	case "twitch":
-		return "https://static-cdn.jtvnw.net/emoticons/v2/" + s.ID + "/static/dark/1.0"
+		return twitchEmoteCDNPrefix + s.ID + "/default/dark/1.0"
 	case "kick":
 		return "https://files.kick.com/emotes/" + s.ID + "/fullsize"
 	default:

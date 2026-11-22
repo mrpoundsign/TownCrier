@@ -321,11 +321,15 @@ func (v *LogsView) buildZeroChrome(preset config.LiveLogPreset) fyne.CanvasObjec
 	v.refreshSessionDropdown()
 
 	tableHeader := v.buildTableHeader()
-	v.listBox = container.NewVBox()
+	v.listBox = newNotifyVBoxContainer(v.updateVisibleEmotes)
 	listScroll := newPanelVScroll(v.listBox)
+	v.listScroll = listScroll
+	listScroll.OnScrolled = func(fyne.Position) {
+		v.updateVisibleEmotes()
+	}
 
-	v.applyLivePreset(preset)
 	v.subscribeLiveTail()
+	v.applyLivePreset(preset)
 
 	topSection := container.NewVBox(
 		v.summaryTotalsContainer,
@@ -338,7 +342,7 @@ func (v *LogsView) buildZeroChrome(preset config.LiveLogPreset) fyne.CanvasObjec
 		nil,
 		nil,
 		nil,
-		listScroll,
+		newResizeNotifyContainer(listScroll, v.updateVisibleEmotes),
 	)
 	uiRenderMu.Lock()
 	v.chatPanelThemeOverride = container.NewThemeOverride(mainLayout, NewScaledChatTheme(v.chatScaleFactor()))

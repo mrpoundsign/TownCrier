@@ -27,6 +27,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/pkg/platform/youtube"
 	"github.com/mrpoundsign/TownCrier/pkg/queue"
 	"github.com/mrpoundsign/TownCrier/pkg/secrets"
+	"github.com/mrpoundsign/TownCrier/pkg/stt"
 	"github.com/mrpoundsign/TownCrier/pkg/translate"
 	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
@@ -94,6 +95,26 @@ type Session struct {
 	heldMessages  []twitch.AutoModHoldEvent
 	heldListeners map[uint64]func()
 	heldSubSeq    atomic.Uint64
+
+	sttMu            sync.Mutex
+	sttSyncMu        sync.Mutex
+	sttModelDir      string
+	sttEngine        stt.Engine
+	sttEngineKey     string
+	sttEngineFactory func(family, baseDir string, numThreads int, useGPU bool) (stt.Engine, error)
+	sttSegmenter     stt.Segmenter
+	sttSegKey        string
+	sttSegFactory    func(cfg stt.SegmenterConfig) (stt.Segmenter, error)
+	sttUttCh         chan []float32
+	sttStopCh        chan struct{}
+	sttWg            sync.WaitGroup
+	sttSpeaking      atomic.Bool
+	sttTranscribing  atomic.Bool
+	sttLastDecodeMs  atomic.Int64
+	sttSeq           atomic.Uint64
+	latestSubtitle   *ws.SubtitleEvent
+	onVoiceSubtitle  func(ev ws.SubtitleEvent)
+	onSTTStatus      func(speaking bool, transcribing bool, errText string)
 }
 
 // NewSession creates an application session initialized with configuration, secret store, and config store.
@@ -150,6 +171,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 	s.micMonitor = audio.NewCaptureMonitor(initThresh, time.Duration(initRelMs)*time.Millisecond)
 	s.micMonitor.SetOnActiveChange(s.handleMicGateActiveChange)
 	s.micMonitor.SetOnLevelUpdate(s.handleMicGateLevelUpdate)
+	s.micMonitor.SetOnSamples(s.handleCapturedMicSamples)
 	router.SetVoicePoolProvider(func(c *config.Config) []string {
 		if eng := s.Engine(); eng != nil {
 			if voices := eng.Voices(); len(voices) > 0 {
@@ -289,6 +311,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 	s.wsServer = ws.NewServer(s)
 	initCtrlOn, initTTSOverlayOn, initChatOverlayOn, _ := cfgClone.EffectiveWebSocketFeatures()
 	s.wsServer.SetFeatures(initCtrlOn, initTTSOverlayOn, initChatOverlayOn)
+	s.wsServer.SetSubtitlesOverlayEnabled(cfgClone.EffectiveSubtitlesOverlayEnabled())
 	s.queue.AddOnItemStarted(func(item *queue.Item) {
 		if item == nil {
 			return
@@ -357,6 +380,7 @@ func (s *Session) Start() error {
 	}
 	s.startIdleMonitor()
 	s.EvaluateIdleState()
+	s.syncVoiceSubtitles(cfg)
 	s.syncMicMonitor(cfg)
 	s.syncWSServer(cfg)
 	syncConnectors(cfg, tw, yt, tt, kk)
@@ -384,6 +408,7 @@ func (s *Session) Stop() error {
 	if micMon != nil {
 		micMon.Stop()
 	}
+	s.stopVoiceSubtitles()
 	s.applyMicDucking()
 	if s.wsServer != nil {
 		_ = s.wsServer.Stop()
@@ -433,6 +458,7 @@ func (s *Session) Close() error {
 	if micMon != nil {
 		micMon.Stop()
 	}
+	s.stopVoiceSubtitles()
 	s.applyMicDucking()
 	if wsSrv != nil {
 		_ = wsSrv.Stop()
@@ -530,6 +556,7 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 	if !newCfg.TTS.Enabled && s.router != nil {
 		s.router.ResetSpeaker()
 	}
+	s.syncVoiceSubtitles(cfgSnap)
 	s.syncMicMonitor(cfgSnap)
 	s.EvaluateIdleState()
 	return nil
@@ -1026,7 +1053,9 @@ func (s *Session) syncMicMonitor(cfg *config.Config) {
 	mon.SetParameters(thresh, time.Duration(relMs)*time.Millisecond)
 
 	mode := config.NormalizeMicGateMode(cfg.Audio.MicGateMode)
-	if running && cfg.TTS.Enabled && (mode == config.MicGateModeDuck || mode == config.MicGateModePause) {
+	needMicGate := cfg.TTS.Enabled && (mode == config.MicGateModeDuck || mode == config.MicGateModePause)
+	needVoiceSubtitles := cfg.VoiceSubtitles.Enabled
+	if running && (needMicGate || needVoiceSubtitles) {
 		if err := mon.Start(cfg.Audio.MicDeviceID); err != nil {
 			log.Printf("[Session] Failed to start microphone capture monitor: %v", err)
 		}
@@ -1359,7 +1388,7 @@ func (s *Session) DetectLiveStatus(ctx context.Context) {
 	wg.Wait()
 }
 
-// Panic immediately halts audio playback (<50ms), purges the speech queue, and latches Panic Mode (D28).
+// Panic immediately halts audio playback (<50ms), purges the speech queue, clears voice subtitles, and latches Panic Mode (D28).
 func (s *Session) Panic() {
 	if s.router != nil {
 		s.router.ResetSpeaker()
@@ -1367,6 +1396,7 @@ func (s *Session) Panic() {
 	if s.queue != nil {
 		s.queue.Panic()
 	}
+	s.ClearVoiceSubtitles()
 }
 
 // ClearPanic unlatches Panic Mode and resumes speech processing.
@@ -1385,7 +1415,11 @@ func (s *Session) TogglePanic() bool {
 		s.router.ResetSpeaker()
 	}
 	if s.queue != nil {
-		return s.queue.TogglePanic()
+		panicked := s.queue.TogglePanic()
+		if panicked {
+			s.ClearVoiceSubtitles()
+		}
+		return panicked
 	}
 	return false
 }
@@ -1573,6 +1607,7 @@ func (s *Session) syncWSServer(cfg *config.Config) {
 	}
 	controlOn, ttsOverlayOn, chatOverlayOn, anyOn := cfg.EffectiveWebSocketFeatures()
 	s.wsServer.SetFeatures(controlOn, ttsOverlayOn, chatOverlayOn)
+	s.wsServer.SetSubtitlesOverlayEnabled(cfg.EffectiveSubtitlesOverlayEnabled())
 	s.wsServer.SetAuthToken(cfg.WebSocket.AuthToken)
 	if !anyOn {
 		if s.wsServer.IsRunning() {
@@ -1741,16 +1776,24 @@ func (s *Session) QueryOverlayChat(ctx context.Context, presetID string, limit i
 func (s *Session) GetOverlayStyle() ws.OverlayStyleConfig {
 	cfg := s.Config()
 	if cfg == nil {
-		return ws.OverlayStyleConfig{TTSPosition: "bottom"}
+		return ws.OverlayStyleConfig{
+			TTSPosition:   "bottom",
+			UnifiedWidth:  1920,
+			UnifiedHeight: 1080,
+		}
 	}
 	pos := strings.ToLower(strings.TrimSpace(cfg.WebSocket.TTSOverlayPosition))
 	if pos != "top" {
 		pos = "bottom"
 	}
+	uw, uh := config.NormalizeUnifiedOverlaySize(cfg.WebSocket.UnifiedOverlayWidth, cfg.WebSocket.UnifiedOverlayHeight)
 	return ws.OverlayStyleConfig{
-		CustomCSS:   cfg.WebSocket.OverlayCustomCSS,
-		StyleJSON:   cfg.WebSocket.OverlayStyleJSON,
-		TTSPosition: pos,
+		CustomCSS:         cfg.WebSocket.OverlayCustomCSS,
+		StyleJSON:         cfg.WebSocket.OverlayStyleJSON,
+		TTSPosition:       pos,
+		UnifiedWidth:      uw,
+		UnifiedHeight:     uh,
+		UnifiedLayoutJSON: cfg.WebSocket.UnifiedLayoutJSON,
 	}
 }
 
@@ -1759,6 +1802,16 @@ func (s *Session) SaveOverlayStyle(customCSS, styleJSON string) error {
 	return s.UpdateConfig(func(c *config.Config) {
 		c.WebSocket.OverlayCustomCSS = customCSS
 		c.WebSocket.OverlayStyleJSON = styleJSON
+	})
+}
+
+// SaveUnifiedLayout implements ws.UnifiedLayoutProvider, persisting the Unified OBS Canvas resolution and widget layout.
+func (s *Session) SaveUnifiedLayout(width, height int, layoutJSON string) error {
+	uw, uh := config.NormalizeUnifiedOverlaySize(width, height)
+	return s.UpdateConfig(func(c *config.Config) {
+		c.WebSocket.UnifiedOverlayWidth = uw
+		c.WebSocket.UnifiedOverlayHeight = uh
+		c.WebSocket.UnifiedLayoutJSON = layoutJSON
 	})
 }
 

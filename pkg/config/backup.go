@@ -194,6 +194,8 @@ func ParseBackup(data []byte) (*BackupBundle, error) {
 	cfg.TTS.Preset = ""
 	cfg.TTS.EnabledModels = nil
 	cfg.Translation.Providers = nil
+	cfg.VoiceSubtitles.SpokenLanguages = nil
+	cfg.VoiceSubtitles.TargetLanguages = nil
 	if err := json.Unmarshal(rawCfgBytes, cfg); err != nil {
 		return nil, fmt.Errorf("parse backup config payload: %w", err)
 	}
@@ -346,8 +348,13 @@ func ApplyBackup(current *Config, bundle *BackupBundle, opts ImportOptions) (*Co
 
 	if opts.IncludeTranslation {
 		out.Translation = inc.Translation
+		out.VoiceSubtitles = inc.VoiceSubtitles
+		out.WebSocket.SubtitlesOverlayEnabled = inc.WebSocket.SubtitlesOverlayEnabled
 		if opts.PreserveMachinePaths {
 			out.Translation.ChimeSoundPath = cur.Translation.ChimeSoundPath
+			out.VoiceSubtitles.ComputeDevice = cur.VoiceSubtitles.ComputeDevice
+			out.VoiceSubtitles.UseGPU = cur.VoiceSubtitles.UseGPU
+			out.VoiceSubtitles.NumThreads = cur.VoiceSubtitles.NumThreads
 		}
 		restorePreservedTranslationSecrets(cur, out)
 	}
@@ -398,11 +405,16 @@ func restoreMachineSpecificSettings(cur, out *Config) {
 	}
 	out.Audio.DeviceID = cur.Audio.DeviceID
 	out.Audio.DeviceName = cur.Audio.DeviceName
+	out.Audio.MicDeviceID = cur.Audio.MicDeviceID
+	out.Audio.MicDeviceName = cur.Audio.MicDeviceName
 	out.TTS.ModelPath = cur.TTS.ModelPath
 	out.TTS.UseGPU = cur.TTS.UseGPU
 	out.TTS.NumThreads = cur.TTS.NumThreads
 	out.TTS.Preset = cur.TTS.Preset
 	out.TTS.AlertSoundPath = cur.TTS.AlertSoundPath
+	out.VoiceSubtitles.ComputeDevice = cur.VoiceSubtitles.ComputeDevice
+	out.VoiceSubtitles.UseGPU = cur.VoiceSubtitles.UseGPU
+	out.VoiceSubtitles.NumThreads = cur.VoiceSubtitles.NumThreads
 	out.Translation.ChimeSoundPath = cur.Translation.ChimeSoundPath
 	out.Logging.DBPath = cur.Logging.DBPath
 }

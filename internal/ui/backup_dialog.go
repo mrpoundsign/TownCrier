@@ -973,7 +973,7 @@ func WriteSupportBackupZip(w io.Writer, session *app.Session, opts SupportBackup
 func DefaultBackupZipFilename(now time.Time) string {
 	ver := strings.TrimPrefix(strings.TrimSpace(AppVersion), "v")
 	if ver == "" {
-		ver = "0.0.14"
+		ver = "0.0.15"
 	}
 	return fmt.Sprintf("towncrier-backup-%s-v%s.zip", now.Format("2006-01-02-150405"), ver)
 }
