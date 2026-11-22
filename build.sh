@@ -135,7 +135,7 @@ run_test() {
 
 build_win() {
     fetch_dlls
-    "$ROOT_DIR/scripts/build-whisper-vulkan.sh" win
+    bash "$ROOT_DIR/scripts/build-whisper-vulkan.sh" win
 
     local core_syso="$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso"
     local launcher_syso="$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso"
@@ -198,7 +198,7 @@ build_win() {
 
 build_linux() {
     fetch_linux_libs
-    "$ROOT_DIR/scripts/build-whisper-vulkan.sh" linux
+    bash "$ROOT_DIR/scripts/build-whisper-vulkan.sh" linux
 
     echo "==> Building towncrier-core v${VERSION} (Linux amd64 CGO)..."
     CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
@@ -231,7 +231,7 @@ build_linux() {
 
 build_mac() {
     fetch_mac_libs
-    "$ROOT_DIR/scripts/build-whisper-vulkan.sh" mac
+    bash "$ROOT_DIR/scripts/build-whisper-vulkan.sh" mac
 
     local arch
     arch="$(uname -m)"
