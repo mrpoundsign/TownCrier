@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"fyne.io/fyne/v2/test"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 	"github.com/mrpoundsign/TownCrier/pkg/secrets"
 )
@@ -97,17 +100,134 @@ func TestDashboardTabDeferral(t *testing.T) {
 	if len(dash.activities) != 1 {
 		t.Fatalf("expected 1 activity buffered while inactive, got %d", len(dash.activities))
 	}
-	if !dash.feedDirty {
-		t.Fatal("expected feedDirty=true while inactive")
+	dash.logView.mu.Lock()
+	dirty := dash.logView.renderDirty
+	dash.logView.mu.Unlock()
+	if !dirty {
+		t.Fatal("expected embedded logView renderDirty=true while inactive")
 	}
 
-	// Activate Dashboard tab -> should render the buffered activity and clear feedDirty
+	// Activate Dashboard tab -> should render the buffered activity and clear renderDirty
 	dash.SetTabActive(true)
-	if dash.feedDirty {
-		t.Fatal("expected feedDirty=false after activating tab")
+	dash.logView.mu.Lock()
+	dirty = dash.logView.renderDirty
+	rowCount := len(dash.logView.rowCache)
+	dash.logView.mu.Unlock()
+	if dirty {
+		t.Fatal("expected embedded logView renderDirty=false after activating tab")
 	}
-	if len(dash.feedContainer.Objects) != 1 {
-		t.Fatalf("expected 1 rendered feed row after activating tab, got %d", len(dash.feedContainer.Objects))
+	if rowCount != 1 {
+		t.Fatalf("expected 1 rendered log row after activating tab, got %d", rowCount)
+	}
+}
+
+func TestDashboardLogViewWithEventLogger(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	win := appObj.NewWindow("TestDashEventLogger")
+	defer win.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Logging.Enabled = true
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = session.Close() }()
+
+	dbPath := filepath.Join(t.TempDir(), "dash_events.db")
+	backend, err := eventlog.NewSQLiteBackend(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend failed: %v", err)
+	}
+	mgr := eventlog.NewManager(eventlog.RetentionPolicy{ChatRetentionDays: 30, EventRetentionDays: 90}, backend)
+	defer func() { _ = mgr.Close() }()
+	session.SetEventLogger(mgr)
+
+	dash := NewDashboardView(win, session)
+	defer dash.Close()
+	win.SetContent(dash.Build())
+
+	entry := eventlog.Entry{
+		ID:            "ev-live-1",
+		CreatedAt:     time.Now(),
+		Platform:      "twitch",
+		Kind:          "chat",
+		UserID:        "u-1",
+		UserName:      "alice",
+		DisplayName:   "Alice",
+		RawText:       "hello live logview",
+		PassedFilters: true,
+		Outcome:       eventlog.OutcomeQueued,
+	}
+	if err := mgr.Append(context.Background(), &entry); err != nil {
+		t.Fatalf("mgr.Append failed: %v", err)
+	}
+
+	// Calling AddActivity while EventLogger is enabled must not duplicate the entry
+	dash.AddActivity(ActivityEntry{
+		ID:        "ev-live-1",
+		Timestamp: entry.CreatedAt,
+		Platform:  "twitch",
+		UserName:  "alice",
+		Text:      "hello live logview",
+		Kind:      "chat",
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		dash.logView.mu.Lock()
+		n := len(dash.logView.entries)
+		_, hasRow := dash.logView.rowCache["ev-live-1"]
+		dash.logView.mu.Unlock()
+		if n == 1 && hasRow {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	dash.logView.mu.Lock()
+	defer dash.logView.mu.Unlock()
+	t.Fatalf("expected 1 rendered entry in embedded logView, got entries=%d rowCache=%d", len(dash.logView.entries), len(dash.logView.rowCache))
+}
+
+func TestDashboardLogViewFallbackWhenLoggingDisabled(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+	win := appObj.NewWindow("TestDashLoggingDisabled")
+	defer win.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Logging.Enabled = false
+	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = session.Close() }()
+
+	dbPath := filepath.Join(t.TempDir(), "dash_disabled.db")
+	backend, err := eventlog.NewSQLiteBackend(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteBackend failed: %v", err)
+	}
+	mgr := eventlog.NewManager(eventlog.RetentionPolicy{ChatRetentionDays: 30, EventRetentionDays: 90}, backend)
+	defer func() { _ = mgr.Close() }()
+	session.SetEventLogger(mgr)
+
+	dash := NewDashboardView(win, session)
+	defer dash.Close()
+	win.SetContent(dash.Build())
+
+	dash.AddActivity(ActivityEntry{
+		ID:        "fallback-1",
+		Timestamp: time.Now(),
+		Platform:  "youtube",
+		UserName:  "charlie",
+		Text:      "in-memory fallback message",
+		Kind:      "chat",
+	})
+
+	dash.logView.mu.Lock()
+	defer dash.logView.mu.Unlock()
+	if len(dash.logView.entries) != 1 {
+		t.Fatalf("expected 1 in-memory entry when logging disabled, got %d", len(dash.logView.entries))
+	}
+	if _, ok := dash.logView.rowCache["fallback-1"]; !ok {
+		t.Fatalf("expected rendered logview row 'fallback-1' in rowCache")
 	}
 }
 

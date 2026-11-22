@@ -174,7 +174,9 @@ func TestDashboardActivityClickableProfile(t *testing.T) {
 	session := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
 
 	dash := NewDashboardView(w, session)
-	row := dash.buildActivityRow(0, ActivityEntry{
+	defer dash.Close()
+	w.SetContent(dash.Build())
+	dash.AddActivity(ActivityEntry{
 		ID:        "act-1",
 		Timestamp: time.Now(),
 		Platform:  "kick",
@@ -183,27 +185,16 @@ func TestDashboardActivityClickableProfile(t *testing.T) {
 		Text:      "Hey on Kick!",
 	})
 
-	vbox, ok := row.(*fyne.Container)
-	if !ok || len(vbox.Objects) < 1 {
-		t.Fatalf("expected row to be a container with children")
-	}
-	topRow, ok := vbox.Objects[0].(*fyne.Container)
-	if !ok {
-		t.Fatalf("expected topRow to be a container")
+	dash.logView.mu.Lock()
+	cached := dash.logView.rowCache["act-1"]
+	dash.logView.mu.Unlock()
+	if cached == nil || cached.rowCols == nil || len(cached.rowCols.Objects) < 3 {
+		t.Fatalf("expected cached log row with at least 3 columns, got %+v", cached)
 	}
 
-	// topRow.Objects[0] is nameBox (HBox: [timeLbl, nameObj, platLbl])
-	nameBox, ok := topRow.Objects[0].(*fyne.Container)
+	userLbl, ok := cached.rowCols.Objects[2].(*hoverCellLabel)
 	if !ok {
-		t.Fatalf("expected nameBox to be a container")
-	}
-	if len(nameBox.Objects) < 3 {
-		t.Fatalf("expected nameBox to have at least 3 objects, got %d", len(nameBox.Objects))
-	}
-
-	userLbl, ok := nameBox.Objects[1].(*hoverCellLabel)
-	if !ok {
-		t.Fatalf("expected nameBox.Objects[1] to be *hoverCellLabel, got %T", nameBox.Objects[1])
+		t.Fatalf("expected user cell to be *hoverCellLabel, got %T", cached.rowCols.Objects[2])
 	}
 	if userLbl.onTap == nil {
 		t.Fatalf("expected userLbl.onTap to be non-nil")

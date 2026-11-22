@@ -2038,6 +2038,45 @@ func entryMatchesFilter(e eventlog.Entry, f eventlog.QueryFilter) bool {
 	return eventlog.EntryMatchesFilter(e, f)
 }
 
+// PushInMemoryEntry prepends a synthetic eventlog.Entry directly into the view's live list.
+// Used by DashboardView when disk event logging is disabled or unavailable so the dashboard
+// still renders using the full LogsView table layout, tooltips, and emote gating.
+func (v *LogsView) PushInMemoryEntry(entry eventlog.Entry) {
+	if v == nil {
+		return
+	}
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = time.Now()
+	}
+
+	v.mu.Lock()
+	if v.closed {
+		v.mu.Unlock()
+		return
+	}
+	if entry.ID == "" {
+		v.renderCount++
+		entry.ID = fmt.Sprintf("inmem-%d-%d", entry.CreatedAt.UnixNano(), v.renderCount)
+	}
+	v.entries = append([]eventlog.Entry{entry}, v.entries...)
+	if len(v.entries) > maxLiveTailRows {
+		v.entries = v.entries[:maxLiveTailRows]
+	}
+	v.totalCount++
+	v.summary.AddEntry(entry)
+	if !v.tabActive {
+		v.renderDirty = true
+		v.mu.Unlock()
+		return
+	}
+	v.renderDirty = false
+	v.mu.Unlock()
+
+	fyne.Do(func() {
+		v.renderEntries()
+	})
+}
+
 func (v *LogsView) renderEntries() {
 	uiRenderMu.Lock()
 	defer func() {
@@ -2506,15 +2545,16 @@ func (v *LogsView) showAssignVoiceDialog(platform, username string) {
 	if v.session == nil {
 		return
 	}
-	dash := NewDashboardView(v.window, v.session)
-	dash.SetOnAssignVoice(func(p, u string) {
+	showQuickAssignDialog(v.window, v.session, platform, username, func(p, u string) {
 		if v.onAssignVoice != nil {
 			v.onAssignVoice(p, u)
 		}
-		v.RefreshQuery()
-	})
-	dash.SetStatusHandler(v.onStatus)
-	dash.showQuickAssignDialog(platform, username)
+		if v.session.EventLogger() != nil && v.session.EventLogger().IsEnabled() {
+			v.RefreshQuery()
+		} else {
+			v.renderEntries()
+		}
+	}, v.onStatus)
 }
 
 // showDatePickerDialog opens an interactive Calendar Date Picker modal with month/year navigation,

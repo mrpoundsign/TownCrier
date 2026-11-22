@@ -219,6 +219,13 @@ func (mw *MainWindow) startStartupSchemaRegressionCheck() {
 				mw.chatLogsTab.RefreshQuery()
 			}
 		}
+		if mw.dashboardTab != nil {
+			mw.dashboardTab.ApplyChatScale()
+			mw.dashboardTab.SyncLiveLogPreset()
+			if dbRestored {
+				mw.dashboardTab.RefreshLogs()
+			}
+		}
 		mw.syncServiceVisibility()
 	}, mw.SetStatus)
 }
@@ -441,6 +448,14 @@ func (mw *MainWindow) initViews() {
 		if mw.chatLogsTab != nil {
 			mw.chatLogsTab.ApplyChatScale()
 		}
+		if mw.dashboardTab != nil {
+			mw.dashboardTab.ApplyChatScale()
+		}
+	})
+	mw.chatLogsTab.SetOnChatScaleChanged(func(_ int) {
+		if mw.dashboardTab != nil {
+			mw.dashboardTab.ApplyChatScale()
+		}
 	})
 	DefaultEmoteCache().SetAnimationEnabled(cfg.Logging.AnimateEmotes)
 	mw.settingsTab.SetAnimateEmotesChangedHandler(func(enabled bool) {
@@ -454,6 +469,9 @@ func (mw *MainWindow) initViews() {
 	mw.chatLogsTab.SetOnLiveLogsChanged(func() {
 		if mw.settingsTab != nil {
 			mw.settingsTab.RefreshChatOverlayPresets()
+		}
+		if mw.dashboardTab != nil {
+			mw.dashboardTab.SyncLiveLogPreset()
 		}
 	})
 	mw.settingsTab.SetModelsChangedHandler(func() {
@@ -487,6 +505,13 @@ func (mw *MainWindow) initViews() {
 			mw.chatLogsTab.SyncFromConfig()
 			if dbRestored {
 				mw.chatLogsTab.RefreshQuery()
+			}
+		}
+		if mw.dashboardTab != nil {
+			mw.dashboardTab.ApplyChatScale()
+			mw.dashboardTab.SyncLiveLogPreset()
+			if dbRestored {
+				mw.dashboardTab.RefreshLogs()
 			}
 		}
 	})
@@ -926,6 +951,9 @@ func (mw *MainWindow) syncLoggingState(enabled bool) {
 		}
 		if mw.chatLogsTab != nil {
 			mw.chatLogsTab.SyncLoggingState(enabled)
+		}
+		if mw.dashboardTab != nil {
+			mw.dashboardTab.SyncLoggingState(enabled)
 		}
 		if mw.settingsTab != nil {
 			mw.settingsTab.SyncLoggingState(enabled)

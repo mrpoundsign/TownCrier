@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -15,11 +14,10 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 	"github.com/mrpoundsign/TownCrier/pkg/chat"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
-	"github.com/mrpoundsign/TownCrier/pkg/platform"
 	"github.com/mrpoundsign/TownCrier/pkg/queue"
-	"github.com/mrpoundsign/TownCrier/pkg/translate"
 	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
 
@@ -28,7 +26,9 @@ type ActivityEntry struct {
 	Timestamp      time.Time
 	Platform       string
 	UserName       string
+	DisplayName    string
 	UserID         string
+	Roles          []string
 	Text           string
 	Emotes         []chat.EmoteSpan
 	TranslatedText string
@@ -87,11 +87,6 @@ func FormatTTSModeStatusSummary(mode string, speakingActive, userIdle bool, time
 	}
 }
 
-type dashboardActivityRow struct {
-	root      fyne.CanvasObject
-	emoteCell *emoteMessageCell
-}
-
 // DashboardView provides live monitoring, speech status, queue controls, and activity feed.
 type DashboardView struct {
 	window  fyne.Window
@@ -101,7 +96,7 @@ type DashboardView struct {
 	activities    []ActivityEntry
 	tabActive     bool
 	closed        bool
-	feedDirty     bool
+	logBuilt      bool
 	ttsEnabled    bool
 	syncingModeUI bool
 	emoteCache    *EmoteCache
@@ -114,9 +109,7 @@ type DashboardView struct {
 	skipBtn            *widget.Button
 	clearBtn           *widget.Button
 	topSection         *fyne.Container
-	feedContainer      *fyne.Container
-	feedScroll         *container.Scroll
-	feedRows           []dashboardActivityRow
+	logView            *LogsView
 	onAssignVoice      func(platform, username string)
 	onTTSModeChanged   func(mode string)
 	onStatus           func(msg string)
@@ -129,11 +122,11 @@ func NewDashboardView(w fyne.Window, session *app.Session) *DashboardView {
 		ttsOn = session.Config().TTS.Enabled
 	}
 	v := &DashboardView{
-		window:        w,
-		session:       session,
-		feedContainer: container.NewVBox(),
-		tabActive:     true,
-		ttsEnabled:    ttsOn,
+		window:     w,
+		session:    session,
+		tabActive:  true,
+		ttsEnabled: ttsOn,
+		logView:    NewLogsView(w, session),
 	}
 
 	// Register queue event listeners
@@ -155,7 +148,7 @@ func NewDashboardView(w fyne.Window, session *app.Session) *DashboardView {
 		})
 	}
 
-	// Register live stream event listener
+	// Register live stream event listener (used for in-memory fallback when disk event logging is off)
 	session.SetOnEventDispatched(func(ev *chat.Event, voice string) {
 		if ev == nil {
 			return
@@ -164,16 +157,14 @@ func NewDashboardView(w fyne.Window, session *app.Session) *DashboardView {
 		if ts.IsZero() {
 			ts = time.Now()
 		}
-		name := ev.DisplayName
-		if name == "" {
-			name = ev.UserName
-		}
 		v.AddActivity(ActivityEntry{
 			ID:             ev.ID,
 			Timestamp:      ts,
 			Platform:       ev.Platform,
-			UserName:       name,
+			UserName:       ev.UserName,
+			DisplayName:    ev.DisplayName,
 			UserID:         ev.UserID,
+			Roles:          slices.Clone(ev.Roles),
 			Text:           ev.Text,
 			Emotes:         ev.EmoteSpans,
 			TranslatedText: ev.TranslatedText,
@@ -189,35 +180,42 @@ func NewDashboardView(w fyne.Window, session *app.Session) *DashboardView {
 // SetOnAssignVoice sets a callback for when a voice is assigned to a chatter from the Dashboard.
 func (v *DashboardView) SetOnAssignVoice(fn func(platform, username string)) {
 	v.onAssignVoice = fn
+	if v.logView != nil {
+		v.logView.SetOnAssignVoice(fn)
+	}
 }
 
 // SetStatusHandler registers a callback invoked when dashboard actions update status.
 func (v *DashboardView) SetStatusHandler(fn func(msg string)) {
 	v.onStatus = fn
+	if v.logView != nil {
+		v.logView.SetStatusHandler(fn)
+	}
 }
 
 // SetEmoteCache overrides the EmoteCache used for inline emote rendering in the activity feed.
 func (v *DashboardView) SetEmoteCache(cache *EmoteCache) {
 	v.mu.Lock()
 	v.emoteCache = cache
+	lv := v.logView
 	v.mu.Unlock()
+	if lv != nil {
+		lv.SetEmoteCache(cache)
+	}
 }
 
-// Close marks the DashboardView closed and unregisters any active animated emote widgets.
+// Close marks the DashboardView closed and releases its embedded LogsView subscriptions and animated emotes.
 func (v *DashboardView) Close() {
 	if v == nil {
 		return
 	}
 	v.mu.Lock()
 	v.closed = true
-	rows := v.feedRows
-	v.feedRows = nil
+	lv := v.logView
 	v.mu.Unlock()
 
-	for _, row := range rows {
-		if row.emoteCell != nil {
-			row.emoteCell.SetOnScreen(false)
-		}
+	if lv != nil {
+		lv.Close()
 	}
 }
 
@@ -380,235 +378,162 @@ func (v *DashboardView) buildControlsCard() *widget.Card {
 	return widget.NewCard("Queue & Playback Controls", "Manage live TTS output mode and speech queue", cardContent)
 }
 
+func (v *DashboardView) isEventLoggingActive() bool {
+	return v.session != nil && v.session.EventLogger() != nil && v.session.EventLogger().IsEnabled()
+}
+
+func (v *DashboardView) defaultLiveLogPreset() config.LiveLogPreset {
+	if v.session != nil && v.session.Config() != nil {
+		return v.session.Config().ResolveLiveLogPreset("default-latest-session")
+	}
+	return config.DefaultLiveLogPresets()[0]
+}
+
+func activityEntryToLogEntry(e ActivityEntry) eventlog.Entry {
+	ts := e.Timestamp
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	kind := strings.ToLower(strings.TrimSpace(e.Kind))
+	if kind == "" {
+		kind = "chat"
+	}
+	return eventlog.Entry{
+		ID:             e.ID,
+		CreatedAt:      ts,
+		Platform:       e.Platform,
+		Kind:           kind,
+		UserID:         e.UserID,
+		UserName:       e.UserName,
+		DisplayName:    e.DisplayName,
+		Roles:          slices.Clone(e.Roles),
+		RawText:        e.Text,
+		Emotes:         e.Emotes,
+		TranslatedText: e.TranslatedText,
+		SourceLang:     e.SourceLang,
+		VoiceID:        e.Voice,
+		PassedFilters:  true,
+		Outcome:        eventlog.OutcomeQueued,
+	}
+}
+
 func (v *DashboardView) buildActivityCard() *widget.Card {
 	v.mu.Lock()
-	v.refreshFeedLocked()
+	if v.logView == nil {
+		v.logView = NewLogsView(v.window, v.session)
+		v.logView.SetEmoteCache(v.emoteCache)
+		v.logView.SetStatusHandler(v.onStatus)
+		v.logView.SetOnAssignVoice(v.onAssignVoice)
+	}
+	lv := v.logView
+	tabActive := v.tabActive
+	buffered := slices.Clone(v.activities)
 	v.mu.Unlock()
 
-	v.feedScroll = newPanelVScroll(v.feedContainer)
-	v.feedScroll.OnScrolled = func(fyne.Position) {
-		v.updateVisibleEmotes()
+	preset := v.defaultLiveLogPreset()
+	logContent := lv.buildZeroChrome(preset)
+	lv.SetTabActive(tabActive)
+
+	v.mu.Lock()
+	v.logBuilt = true
+	v.mu.Unlock()
+
+	if !v.isEventLoggingActive() && len(buffered) > 0 {
+		for _, entry := range buffered {
+			lv.PushInMemoryEntry(activityEntryToLogEntry(entry))
+		}
 	}
 
-	return widget.NewCard("Live Activity Feed", "Recent chatter messages and stream alerts", newResizeNotifyContainer(v.feedScroll, v.updateVisibleEmotes))
+	return widget.NewCard("Live Activity Feed", "Recent chatter messages and stream alerts", newWidthClampContainer(logContent))
 }
 
 // SetTabActive notifies DashboardView whether its tab is currently visible in the main window.
-// While inactive, activity feed widget rebuilds are deferred until the tab becomes active again.
+// While inactive, activity feed widget rebuilds and animated emote frames are deferred until the tab becomes active again.
 func (v *DashboardView) SetTabActive(active bool) {
 	v.mu.Lock()
 	wasActive := v.tabActive
 	v.tabActive = active
-	dirty := v.feedDirty
-	if active {
-		v.feedDirty = false
-	}
+	lv := v.logView
+	built := v.logBuilt
 	v.mu.Unlock()
 
-	if active && !wasActive && dirty {
-		fyne.Do(func() {
-			v.mu.Lock()
-			v.refreshFeedLocked()
-			v.mu.Unlock()
-		})
-		return
-	}
-	if wasActive != active {
-		fyne.Do(func() {
-			v.updateVisibleEmotes()
-		})
+	if lv != nil {
+		lv.SetTabActive(active)
+		if active && !wasActive && built && v.isEventLoggingActive() {
+			lv.OnTabSelected()
+		}
 	}
 }
 
-func (v *DashboardView) updateVisibleEmotes() {
-	if v == nil {
+// ApplyChatScale updates the embedded live log's scoped chat scale theme and re-renders rows.
+func (v *DashboardView) ApplyChatScale() {
+	if v == nil || v.logView == nil {
 		return
 	}
+	v.logView.ApplyChatScale()
+}
+
+// SyncLiveLogPreset reapplies the active default Live Log preset settings to the embedded dashboard log view.
+func (v *DashboardView) SyncLiveLogPreset() {
 	v.mu.Lock()
-	v.updateVisibleEmotesLocked()
+	lv := v.logView
+	built := v.logBuilt
 	v.mu.Unlock()
+	if lv == nil || !built {
+		return
+	}
+	lv.applyLivePreset(v.defaultLiveLogPreset())
 }
 
-func (v *DashboardView) updateVisibleEmotesLocked() {
-	scroll := v.feedScroll
-	visible := v.tabActive && !v.closed && scroll != nil && scroll.Size().Height > 0
-	var viewTop, viewBottom float32
-	if visible {
-		viewTop = scroll.Offset.Y
-		viewBottom = viewTop + scroll.Size().Height
+// SyncLoggingState updates the embedded dashboard log view when disk event logging is toggled.
+func (v *DashboardView) SyncLoggingState(enabled bool) {
+	v.mu.Lock()
+	lv := v.logView
+	built := v.logBuilt
+	v.mu.Unlock()
+	if lv == nil || !built {
+		return
 	}
-	for _, row := range v.feedRows {
-		if row.emoteCell == nil {
-			continue
-		}
-		if !visible || row.root == nil {
-			row.emoteCell.SetOnScreen(false)
-			continue
-		}
-		pos := row.root.Position()
-		sz := row.root.Size()
-		onScreen := sz.Height > 0 && (pos.Y+sz.Height) > viewTop && pos.Y < viewBottom
-		row.emoteCell.SetOnScreen(onScreen)
+	if enabled && v.isEventLoggingActive() {
+		lv.RefreshQuery()
 	}
+}
+
+// RefreshLogs re-queries the embedded dashboard log view when SQLite logging is active (e.g., after a backup restore).
+func (v *DashboardView) RefreshLogs() {
+	v.mu.Lock()
+	lv := v.logView
+	built := v.logBuilt
+	v.mu.Unlock()
+	if lv == nil || !built || !v.isEventLoggingActive() {
+		return
+	}
+	lv.RefreshQuery()
 }
 
 // AddActivity appends a new event to the live activity feed (thread-safe).
+// When SQLite event logging is active, the embedded LogsView receives live updates directly from EventLogger.
+// When disk logging is disabled or unavailable, entries are pushed into the embedded LogsView in memory.
 func (v *DashboardView) AddActivity(entry ActivityEntry) {
 	v.mu.Lock()
-
-	// Keep last 50 entries
+	// Keep last 50 entries in the in-memory ring buffer
 	if len(v.activities) >= 50 {
 		v.activities = v.activities[1:]
 	}
 	v.activities = append(v.activities, entry)
-	if !v.tabActive {
-		v.feedDirty = true
-		v.mu.Unlock()
-		return
-	}
-	v.feedDirty = false
+	lv := v.logView
+	built := v.logBuilt
 	v.mu.Unlock()
 
-	fyne.Do(func() {
-		v.mu.Lock()
-		v.refreshFeedLocked()
-		v.mu.Unlock()
-	})
+	if lv != nil && built && !v.isEventLoggingActive() {
+		lv.PushInMemoryEntry(activityEntryToLogEntry(entry))
+	}
 }
 
-func (v *DashboardView) refreshFeedLocked() {
-	for _, oldRow := range v.feedRows {
-		if oldRow.emoteCell != nil {
-			oldRow.emoteCell.SetOnScreen(false)
-		}
-	}
-	v.feedRows = nil
-	v.feedContainer.Objects = nil
-
-	if len(v.activities) == 0 {
-		v.feedContainer.Add(widget.NewLabelWithStyle("No stream events yet this session.", fyne.TextAlignCenter, fyne.TextStyle{Italic: true}))
-	} else {
-		for idx, entry := range slices.Backward(v.activities) {
-			row, ec := v.buildActivityRowWithEmotes(idx, entry)
-			v.feedRows = append(v.feedRows, dashboardActivityRow{root: row, emoteCell: ec})
-			v.feedContainer.Add(row)
-		}
-	}
-	v.feedContainer.Refresh()
-	v.updateVisibleEmotesLocked()
-}
-
-func (v *DashboardView) buildActivityRow(idx int, entry ActivityEntry) fyne.CanvasObject {
-	row, _ := v.buildActivityRowWithEmotes(idx, entry)
-	return row
-}
-
-func (v *DashboardView) buildActivityRowWithEmotes(idx int, entry ActivityEntry) (fyne.CanvasObject, *emoteMessageCell) {
-	timeStr := entry.Timestamp.Format("15:04:05")
-	timeLabel := widget.NewLabelWithStyle("["+timeStr+"]", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
-	platLabel := widget.NewLabelWithStyle("("+entry.Platform+")", fyne.TextAlignLeading, fyne.TextStyle{})
-
-	profURL := platform.ProfileURL(entry.Platform, entry.UserName, entry.UserID)
-	var nameObj fyne.CanvasObject
-	if profURL != "" {
-		tip := fmt.Sprintf("Open @%s profile in browser: %s", entry.UserName, profURL)
-		onTap := func() {
-			if u, err := url.Parse(profURL); err == nil {
-				if appInst := fyne.CurrentApp(); appInst != nil {
-					_ = appInst.OpenURL(u)
-				}
-			}
-		}
-		userLabel := &hoverCellLabel{
-			tooltip:   tip,
-			onTap:     onTap,
-			baseStyle: fyne.TextStyle{Bold: true},
-		}
-		userLabel.Text = entry.UserName
-		userLabel.TextStyle = userLabel.baseStyle
-		userLabel.Truncation = fyne.TextTruncateEllipsis
-		userLabel.ExtendBaseWidget(userLabel)
-		nameObj = userLabel
-	} else {
-		nameObj = widget.NewLabelWithStyle(entry.UserName, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	}
-	nameBox := container.NewHBox(timeLabel, nameObj, platLabel)
-	var msgContent fyne.CanvasObject
-	var emoteCell *emoteMessageCell
-
-	switch {
-	case entry.TranslatedText != "":
-		iconSz := fyne.NewSize(20, 20)
-		srcLang := entry.SourceLang
-		if srcLang == "" {
-			srcLang = "auto"
-		}
-		langName := translate.LanguageName(srcLang)
-		rowIdx := idx
-		toggleTap := func() {
-			v.mu.Lock()
-			if rowIdx >= 0 && rowIdx < len(v.activities) {
-				v.activities[rowIdx].ShowOriginal = !v.activities[rowIdx].ShowOriginal
-			}
-			v.refreshFeedLocked()
-			v.mu.Unlock()
-		}
-
-		var toggleIcon *hoverIconWidget
-		var body fyne.CanvasObject
-		if entry.ShowOriginal {
-			tip := fmt.Sprintf("Showing original %s (%s) • Click 文A to show translation: %s", langName, srcLang, entry.TranslatedText)
-			toggleIcon = &hoverIconWidget{
-				res:     resLogTranslatedOriginal,
-				minSize: iconSz,
-				tooltip: tip,
-				onTap:   toggleTap,
-			}
-			toggleIcon.ExtendBaseWidget(toggleIcon)
-			if len(entry.Emotes) > 0 {
-				ec := newEmoteMessageCell(v.emoteCache, nil)
-				ec.SetContent(entry.Platform, entry.Text, entry.Emotes, "", "")
-				emoteCell = ec
-				body = ec
-			} else {
-				body = newClampedWrapLabel(entry.Text, fyne.TextStyle{})
-			}
-		} else {
-			tip := fmt.Sprintf("Translated from %s (%s) • Click 文A to show original: %s", langName, srcLang, entry.Text)
-			toggleIcon = &hoverIconWidget{
-				res:     resLogTranslated,
-				minSize: iconSz,
-				tooltip: tip,
-				onTap:   toggleTap,
-			}
-			toggleIcon.ExtendBaseWidget(toggleIcon)
-			body = newClampedWrapLabel(entry.TranslatedText, fyne.TextStyle{Italic: true})
-		}
-		msgContent = container.NewBorder(nil, nil, container.NewCenter(toggleIcon), nil, body)
-	case len(entry.Emotes) > 0:
-		ec := newEmoteMessageCell(v.emoteCache, nil)
-		ec.SetContent(entry.Platform, entry.Text, entry.Emotes, "", "")
-		emoteCell = ec
-		msgContent = ec
-	default:
-		msgContent = newClampedWrapLabel(entry.Text, fyne.TextStyle{})
-	}
-
-	var rightCol fyne.CanvasObject
-	if v.ttsEnabled {
-		rightCol = widget.NewButtonWithIcon("Assign Voice", theme.AccountIcon(), func() {
-			v.showQuickAssignDialog(entry.Platform, entry.UserName)
-		})
-	}
-
-	topRow := container.NewBorder(nil, nil, nameBox, rightCol)
-	return container.NewVBox(topRow, msgContent, widget.NewSeparator()), emoteCell
-}
-
-func (v *DashboardView) showQuickAssignDialog(platform, username string) {
+func showQuickAssignDialog(win fyne.Window, session *app.Session, platform, username string, onAssignVoice func(platform, username string), onStatus func(msg string)) {
 	var enabledModels []string
-	if v.session != nil {
-		enabledModels = v.session.Config().TTS.EffectiveEnabledModels()
+	if session != nil {
+		enabledModels = session.Config().TTS.EffectiveEnabledModels()
 	}
 	voiceLabels := tts.VoiceDisplayLabelsForModels(enabledModels)
 	initVoice := tts.DefaultVoiceID
@@ -617,24 +542,24 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 	}
 
 	voiceField := NewVoiceSpeedField(
-		v.window,
-		v.session,
+		win,
+		session,
 		"Select Chatter Voice & Speed",
 		initVoice,
 		1.0,
 		nil,
-		v.onStatus,
+		onStatus,
 	)
 	voiceField.SetBaseSpeedProvider(func() float32 {
-		if v.session == nil || v.session.Config() == nil {
+		if session == nil || session.Config() == nil {
 			return 1.0
 		}
-		_, _, _, _, _, _, spd := v.session.Config().EffectiveChatRules(strings.ToLower(strings.TrimSpace(platform)))
+		_, _, _, _, _, _, spd := session.Config().EffectiveChatRules(strings.ToLower(strings.TrimSpace(platform)))
 		if spd > 0 {
 			return spd
 		}
-		if v.session.Config().GlobalChatRules.DefaultSpeed > 0 {
-			return v.session.Config().GlobalChatRules.DefaultSpeed
+		if session.Config().GlobalChatRules.DefaultSpeed > 0 {
+			return session.Config().GlobalChatRules.DefaultSpeed
 		}
 		return 1.0
 	})
@@ -649,8 +574,8 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 	var matchedVC config.ViewerConfig
 	var hasMatch bool
 
-	if v.session != nil {
-		cfg := v.session.Config()
+	if session != nil {
+		cfg := session.Config()
 		matchedKey, matchedVC, hasMatch = config.LookupViewerWithKey(cfg.Viewers, platform, username, username)
 
 		sortedKeys := make([]string, 0, len(cfg.Viewers))
@@ -693,11 +618,11 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 	}
 
 	linkSelect.OnChanged = func(selected string) {
-		if v.session == nil {
+		if session == nil {
 			return
 		}
 		if k, ok := profileKeyByLabel[selected]; ok {
-			if vc, exists := v.session.Config().Viewers[k]; exists {
+			if vc, exists := session.Config().Viewers[k]; exists {
 				applyViewerToWidgets(vc)
 			}
 		}
@@ -715,7 +640,7 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 		if !confirmed {
 			return
 		}
-		_ = v.session.UpdateConfig(func(cfg *config.Config) {
+		_ = session.UpdateConfig(func(cfg *config.Config) {
 			if cfg.Viewers == nil {
 				cfg.Viewers = make(map[string]config.ViewerConfig)
 			}
@@ -757,13 +682,13 @@ func (v *DashboardView) showQuickAssignDialog(platform, username string) {
 				Ignored:  ignoreCheck.Checked,
 			}
 		})
-		if v.onAssignVoice != nil {
-			v.onAssignVoice(platform, username)
+		if onAssignVoice != nil {
+			onAssignVoice(platform, username)
 		}
-		if v.onStatus != nil {
-			v.onStatus("✓ Assigned voice for " + username)
+		if onStatus != nil {
+			onStatus("✓ Assigned voice for " + username)
 		}
-	}, v.window)
+	}, win)
 }
 
 // SyncTTSState updates the Dashboard controls to reflect whether TTS is enabled or disabled.
@@ -806,9 +731,6 @@ func (v *DashboardView) SyncTTSState(enabled bool) {
 		} else if v.ttsModeSelect != nil {
 			v.ttsModeSelect.Disable()
 		}
-		v.mu.Lock()
-		v.refreshFeedLocked()
-		v.mu.Unlock()
 	})
 }
 
