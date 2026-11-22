@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.0.15 — 2026-11-22
+
+### Added
+- **Offline Voice Subtitles & Multi-Language OBS Overlay (#136, #137, #138, #139)**:
+  - Added a bundled Vulkan-accelerated `whisper.cpp` helper (`towncrier-whisper.exe` on Windows, `towncrier-whisper` on Linux) supporting NVIDIA, AMD (including Ryzen Radeon Vega iGPUs), and Intel (HD/UHD iGPUs) adapters with zero runtime executable downloads, plus `GGML_VK_VISIBLE_DEVICES` isolation so **Integrated iGPU Only** mode never allocates VRAM on a discrete gaming GPU.
+  - Added a shared microphone PCM sample tap (`CaptureMonitor.SetOnSamples`), offline Silero VAD neural speech segmentation, and 4 selectable quantized GGML Whisper models (**Whisper Large-v3-Turbo ~547 MB**, **Whisper Small ~181 MB**, **Whisper Base ~57 MB**, **Whisper Tiny ~31 MB**) with strict fail-closed SHA-256 verification and background upstream update detection via HuggingFace Git-LFS `X-Linked-Etag`.
+  - Added concurrent multi-target translation (`TranslateMulti`) and bilingual/Taglish code-switching detection (`IsMixedTaglish`) so spoken utterances stream live stacked multi-language captions to `GET /overlay/subtitles`.
+  - Added dedicated **OBS & Overlays**, shared **Translation**, and **Voice Subtitles** Settings sub-tabs with a Compute Device selector (locked with a callout until a GPU-ready GGML model is downloaded), CPU thread cap controls, and live subtitle preview.
+- **Unified OBS Canvas Overlay (`/overlay`) & Tabbed Visual Style Designer (`/overlay/designer`)**:
+  - Added `GET /overlay` combining the TTS "Now Speaking" card, Live Chat feed, and Voice Subtitles onto a single transparent OBS Browser Source with interactive drag/resize layout editing and live SSE updates.
+  - Upgraded `GET /overlay/designer` into a module-aware tabbed style designer with per-module scoped CSS and unclipped live status badges.
+- **Animated GIF & WebP Emotes in Event Logs and Dashboard**:
+  - Upgraded Twitch emote URLs to `/default/dark/1.0` (with automatic normalization of legacy `/static/` SQLite entries) and added animated GIF and WebP (`VP8X`/`ANIM`/`ANMF`) decoding into pre-composited RGBA frames with 64px, 120-frame, and 32 MiB LRU caps plus `_v2` disk caching.
+  - Added a single lockstep <=20 FPS animation coordinator strictly gated on viewport intersection, active tab, and pop-out window visibility, controlled by **Animate Emotes** (`Logging.AnimateEmotes`, enabled by default).
+- **Punctuation Pause Handling & Ellipsis Speech Normalization**:
+  - Preserved multi-dot ellipses (`…`) in `Sanitizer` so text like `all...blah` no longer collapses to `all.blah` and speaks `"dot"`.
+  - Added calibrated mid-sentence pause handling for `—`, `…`, `--`, `..`/`...`, and spaced ` – ` across espeak-ng engines (Kokoro, Kitten, Piper) with 5ms fade ramps and speed-scaled 220ms seam pauses, inline `... ` markers for Supertonic, and a 120ms silent fallback for pure-punctuation utterances.
+- **Local Control API Documentation & Live `pprof` Diagnostics**:
+  - Added a Local Control API, WebSocket, and OBS overlay documentation reference for the website (`docs/`).
+  - Exposed `/debug/pprof/*` endpoints (including on-demand mutex and block profiling) on the local HTTP control server.
+
+### Changed
+- **Per-User Voice Speed Multiplier (#140)**:
+  - Changed per-user viewer voice speed overrides from absolute values into multipliers applied on top of the active global/platform default speed so adjusting global speech speed scales custom viewer speeds proportionally.
+- **CI & Developer Workflow**:
+  - Split rolling Go build caches in GitHub Actions, skipped pre-commit Go quality gates on non-Go commits, and configured `.github/workflows/release.yml` to automatically mark hyphenated version tags as GitHub Pre-releases.
+
+### Fixed
+- **UI Responsiveness & Instant Shutdown During Speech Transcription**:
+  - Eliminated Windows `"Not Responding"` freezes after speaking by making `STT.Provider()` lock-free (`atomic.Value`), moving `syncVoiceSubtitles` engine initialization and teardown off the Fyne UI thread, coalescing 100 Hz WASAPI microphone level updates to 20 Hz, and terminating the `towncrier-whisper` helper immediately on `Close()`.
+- **Re-Enabling Text-to-Speech in General Settings**:
+  - Removed a duplicate `enableTTSCheck` widget assignment in `SettingsView` that prevented re-checking **Enable Text-to-Speech (TTS)** on the General tab from initializing the neural TTS engine when TownCrier launched with TTS disabled.
+- **Event Log Query Timestamps**:
+  - Preserved custom `Now` timestamps in `eventlog.Manager.Query` and updated UI log tests to use relative timestamps.
+
+---
+
 ## v0.0.14 — 2026-11-14
 
 ### Added
