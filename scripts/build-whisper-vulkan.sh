@@ -80,8 +80,19 @@ build_win() {
     local cmake_dir="$BUILD_DIR/whisper-build-win"
     mkdir -p "$cmake_dir"
 
+    # Stage ONLY Vulkan headers into an isolated include directory so passing -DVulkan_INCLUDE_DIR
+    # on Linux CI (where libvulkan-dev lives in /usr/include) never adds -isystem /usr/include to
+    # x86_64-w64-mingw32-g++ (which would shadow MinGW's <stdint.h> with Linux glibc headers).
+    local vk_staged_inc="$cmake_dir/vk-include"
+    rm -rf "$vk_staged_inc"
+    mkdir -p "$vk_staged_inc"
+    cp -rL "$vk_inc/vulkan" "$vk_staged_inc/vulkan"
+    if [ -d "$vk_inc/vk_video" ]; then
+        cp -rL "$vk_inc/vk_video" "$vk_staged_inc/vk_video"
+    fi
+
     # Generate a complete Windows x64 import library for vulkan-1.dll from vulkan_core.h
-    python3 - "$vk_inc/vulkan/vulkan_core.h" "$cmake_dir/vulkan-1.def" << 'PY'
+    python3 - "$vk_staged_inc/vulkan/vulkan_core.h" "$cmake_dir/vulkan-1.def" << 'PY'
 import re, sys
 hdr = open(sys.argv[1], "r", encoding="utf-8", errors="ignore").read()
 syms = sorted(set(re.findall(r"VKAPI_CALL\s+(vk[A-Za-z0-9_]+)\s*\(", hdr)))
@@ -120,7 +131,7 @@ EOF
         -DGGML_AVX2=ON \
         -DGGML_FMA=ON \
         -DGGML_F16C=ON \
-        -DVulkan_INCLUDE_DIR="$vk_inc" \
+        -DVulkan_INCLUDE_DIR="$vk_staged_inc" \
         -DVulkan_LIBRARY="$cmake_dir/libvulkan-1.dll.a" \
         -DVulkan_GLSLC_EXECUTABLE="$glslc_bin" \
         "${prefix_args[@]}"
