@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -30,28 +31,43 @@ const (
 	innerTubeClientName   = "WEB"
 	innerTubeClientVer    = "2.20250101.00.00"
 	defaultStreamWaitPoll = 15 * time.Second
+	defaultRediscoverPoll = 45 * time.Second
 	dataAPIStreamMarker   = "__YOUTUBE_DATA_API__"
 )
 
+type broadcastWorker struct {
+	info StreamInfo
+}
+
+type discoveredStream struct {
+	info         StreamInfo
+	apiKey       string
+	continuation string
+}
+
 // Connector manages zero-config YouTube Live stream discovery and InnerTube live chat polling,
+// supporting multiple concurrent broadcasts per channel (e.g. simultaneous horizontal + vertical streams),
 // plus optional OAuth 2.0 moderation actions via YouTube Data API v3.
 type Connector struct {
-	mu               sync.Mutex
-	httpClient       *http.Client
-	baseURL          string // Overrideable for unit tests (defaults to https://www.youtube.com)
-	apiBaseURL       string // Overrideable for unit tests (defaults to https://www.googleapis.com/youtube/v3)
-	oauth            *OAuthManager
-	activeVideoID    string
-	activeLiveChatID string
-	waitInterval     time.Duration
-	target           string
-	status           ConnectionStatus
-	running          bool
-	cancelFn         context.CancelFunc
-	seenIDs          map[string]struct{}
-	onEvent          func(event *chat.Event)
-	onModeration     func(modEvent *chat.ModerationEvent)
-	onStatusChange   func(status ConnectionStatus, detail string)
+	mu                 sync.Mutex
+	httpClient         *http.Client
+	baseURL            string // Overrideable for unit tests (defaults to https://www.youtube.com)
+	apiBaseURL         string // Overrideable for unit tests (defaults to https://www.googleapis.com/youtube/v3)
+	oauth              *OAuthManager
+	activeVideoID      string
+	activeLiveChatID   string
+	activeWorkers      map[string]*broadcastWorker
+	msgVideoID         map[string]string
+	waitInterval       time.Duration
+	rediscoverInterval time.Duration
+	target             string
+	status             ConnectionStatus
+	running            bool
+	cancelFn           context.CancelFunc
+	seenIDs            map[string]struct{}
+	onEvent            func(event *chat.Event)
+	onModeration       func(modEvent *chat.ModerationEvent)
+	onStatusChange     func(status ConnectionStatus, detail string)
 }
 
 // NewConnector creates a new YouTube Live connector.
@@ -64,14 +80,17 @@ func NewConnector(
 		httpClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
-		baseURL:        "https://www.youtube.com",
-		apiBaseURL:     DefaultYouTubeAPIBaseURL,
-		waitInterval:   defaultStreamWaitPoll,
-		status:         StatusDisconnected,
-		seenIDs:        make(map[string]struct{}),
-		onEvent:        onEvent,
-		onModeration:   onModeration,
-		onStatusChange: onStatusChange,
+		baseURL:            "https://www.youtube.com",
+		apiBaseURL:         DefaultYouTubeAPIBaseURL,
+		activeWorkers:      make(map[string]*broadcastWorker),
+		msgVideoID:         make(map[string]string),
+		waitInterval:       defaultStreamWaitPoll,
+		rediscoverInterval: defaultRediscoverPoll,
+		status:             StatusDisconnected,
+		seenIDs:            make(map[string]struct{}),
+		onEvent:            onEvent,
+		onModeration:       onModeration,
+		onStatusChange:     onStatusChange,
 	}
 }
 
@@ -124,6 +143,8 @@ func (c *Connector) Start(target string) error {
 	c.target = trimmed
 	c.running = true
 	c.seenIDs = make(map[string]struct{})
+	c.activeWorkers = make(map[string]*broadcastWorker)
+	c.msgVideoID = make(map[string]string)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c.cancelFn = cancel
@@ -139,6 +160,7 @@ func (c *Connector) Stop() error {
 
 	c.running = false
 	c.stopLoopLocked()
+	c.activeWorkers = make(map[string]*broadcastWorker)
 	c.updateStatusLocked(StatusDisconnected, "Stopped")
 	return nil
 }
@@ -155,6 +177,48 @@ func (c *Connector) Target() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.target
+}
+
+// ActiveStreams returns a deterministic snapshot of all currently connected YouTube broadcasts.
+func (c *Connector) ActiveStreams() []StreamInfo {
+	c.mu.Lock()
+	out := make([]StreamInfo, 0, len(c.activeWorkers))
+	for _, w := range c.activeWorkers {
+		out = append(out, w.info)
+	}
+	c.mu.Unlock()
+
+	orientationRank := func(o StreamOrientation) int {
+		switch o {
+		case OrientationHorizontal:
+			return 0
+		case OrientationVertical:
+			return 1
+		default:
+			return 2
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		ri, rj := orientationRank(out[i].Orientation), orientationRank(out[j].Orientation)
+		if ri != rj {
+			return ri < rj
+		}
+		return out[i].VideoID < out[j].VideoID
+	})
+	return out
+}
+
+// ActiveStreamCount returns the number of currently connected YouTube broadcasts.
+func (c *Connector) ActiveStreamCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.activeWorkers)
+}
+
+func (c *Connector) lookupMessageVideoID(msgID string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.msgVideoID[msgID]
 }
 
 // CheckLiveTarget checks whether the specified YouTube target (or configured target if empty) is live.
@@ -194,8 +258,8 @@ func (c *Connector) CheckLiveTarget(ctx context.Context, target string) (bool, e
 		liveURL = strings.TrimRight(baseURL, "/") + "/" + strings.TrimPrefix(display, "@") + "/live"
 	}
 
-	apiKey, continuation, err := c.discoverStream(ctx, liveURL)
-	if err != nil || apiKey == "" || continuation == "" {
+	streams, err := c.discoverStreams(ctx, target, liveURL)
+	if err != nil || len(streams) == 0 {
 		return false, nil
 	}
 
@@ -233,84 +297,323 @@ func (c *Connector) updateStatusLocked(status ConnectionStatus, detail string) {
 	}
 }
 
+func (c *Connector) effectiveRediscoverInterval() time.Duration {
+	c.mu.Lock()
+	wait := c.waitInterval
+	redisc := c.rediscoverInterval
+	c.mu.Unlock()
+	if wait > 0 && wait < 2*time.Second && redisc == defaultRediscoverPoll {
+		return wait
+	}
+	if redisc <= 0 {
+		return defaultRediscoverPoll
+	}
+	return redisc
+}
+
 func (c *Connector) runLoop(ctx context.Context, target string) {
 	liveURL, display := NormalizeTarget(target)
-	if c.baseURL != "https://www.youtube.com" && !strings.HasPrefix(target, "http") {
-		liveURL = strings.TrimRight(c.baseURL, "/") + "/" + strings.TrimPrefix(display, "@") + "/live"
+	c.mu.Lock()
+	baseURL := c.baseURL
+	c.mu.Unlock()
+	if baseURL != "https://www.youtube.com" && !strings.HasPrefix(target, "http") {
+		liveURL = strings.TrimRight(baseURL, "/") + "/" + strings.TrimPrefix(display, "@") + "/live"
 	}
+
+	workerDoneCh := make(chan struct{}, 8)
+	lastNotifiedCount := -1
 
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 
-		c.updateStatus(StatusWaitingForStream, display)
-		apiKey, continuation, err := c.discoverStream(ctx, liveURL)
-		if err != nil || apiKey == "" || continuation == "" {
-			if ctx.Err() != nil {
+		streams, _ := c.discoverStreams(ctx, target, liveURL)
+		if ctx.Err() != nil {
+			return
+		}
+
+		for _, ds := range streams {
+			key := ds.info.VideoID
+			if key == "" {
+				key = "__default__"
+			}
+
+			c.mu.Lock()
+			if _, exists := c.activeWorkers[key]; exists {
+				// Update metadata if newly enriched
+				if ds.info.LiveChatID != "" && c.activeWorkers[key].info.LiveChatID == "" {
+					c.activeWorkers[key].info.LiveChatID = ds.info.LiveChatID
+				}
+				if ds.info.Title != "" && c.activeWorkers[key].info.Title == "" {
+					c.activeWorkers[key].info.Title = ds.info.Title
+				}
+				if ds.info.Orientation != OrientationUnknown && c.activeWorkers[key].info.Orientation == OrientationUnknown {
+					c.activeWorkers[key].info.Orientation = ds.info.Orientation
+				}
+				c.mu.Unlock()
+				continue
+			}
+
+			// Avoid spawning a second worker if an existing worker already owns this unified liveChatId
+			if ds.info.LiveChatID != "" {
+				dupChat := false
+				for _, w := range c.activeWorkers {
+					if w.info.LiveChatID != "" && w.info.LiveChatID == ds.info.LiveChatID {
+						dupChat = true
+						break
+					}
+				}
+				if dupChat {
+					c.mu.Unlock()
+					continue
+				}
+			}
+
+			c.activeWorkers[key] = &broadcastWorker{info: ds.info}
+			if ds.info.VideoID != "" && c.activeVideoID == "" {
+				c.activeVideoID = ds.info.VideoID
+			}
+			if ds.info.LiveChatID != "" && c.activeLiveChatID == "" {
+				c.activeLiveChatID = ds.info.LiveChatID
+			}
+			c.mu.Unlock()
+
+			log.Printf("[YouTube] Discovered active live chat for %s (video=%s, orientation=%s)", display, ds.info.VideoID, ds.info.Orientation)
+			go c.runWorker(ctx, display, key, ds, workerDoneCh)
+		}
+
+		activeCount := c.ActiveStreamCount()
+		if activeCount > 0 {
+			if lastNotifiedCount != activeCount {
+				lastNotifiedCount = activeCount
+				c.updateStatus(StatusConnected, display)
+			}
+			select {
+			case <-ctx.Done():
 				return
+			case <-workerDoneCh:
+				// Re-evaluate immediately when a stream worker ends
+			case <-time.After(c.effectiveRediscoverInterval()):
+			}
+		} else {
+			if lastNotifiedCount != 0 {
+				lastNotifiedCount = 0
+				c.updateStatus(StatusWaitingForStream, display)
 			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(c.waitInterval):
-				continue
 			}
-		}
-
-		log.Printf("[YouTube] Discovered active live chat for %s", display)
-		c.updateStatus(StatusConnected, display)
-
-		if apiKey == dataAPIStreamMarker {
-			c.streamDataAPILiveChat(ctx, continuation)
-		} else {
-			c.streamLiveChat(ctx, apiKey, continuation)
 		}
 	}
 }
 
-func (c *Connector) discoverStream(ctx context.Context, liveURL string) (string, string, error) {
-	apiKey, continuation, err := c.fetchWatchPageTokens(ctx, liveURL)
-	if err == nil && apiKey != "" && continuation != "" {
-		return apiKey, continuation, nil
-	}
+func (c *Connector) runWorker(ctx context.Context, display, key string, ds discoveredStream, doneCh chan<- struct{}) {
+	defer func() {
+		c.mu.Lock()
+		delete(c.activeWorkers, key)
+		if c.activeVideoID == ds.info.VideoID {
+			c.activeVideoID = ""
+			c.activeLiveChatID = ""
+			for _, w := range c.activeWorkers {
+				c.activeVideoID = w.info.VideoID
+				c.activeLiveChatID = w.info.LiveChatID
+				break
+			}
+		}
+		remaining := len(c.activeWorkers)
+		running := c.running
+		c.mu.Unlock()
 
-	// If OAuth is connected, attempt authenticated broadcast discovery (detects Private streams,
-	// Unlisted streams, testing/preview streams, or scheduled streams transitioning to live).
+		if running && ctx.Err() == nil {
+			if remaining > 0 {
+				c.updateStatus(StatusConnected, display)
+			} else {
+				c.updateStatus(StatusWaitingForStream, display)
+			}
+		}
+		select {
+		case doneCh <- struct{}{}:
+		default:
+		}
+	}()
+
+	if ds.apiKey == dataAPIStreamMarker {
+		c.streamDataAPILiveChat(ctx, ds.info, ds.continuation)
+	} else {
+		c.streamLiveChat(ctx, ds.info, ds.apiKey, ds.continuation)
+	}
+}
+
+func (c *Connector) discoverStreams(ctx context.Context, target, liveURL string) ([]discoveredStream, error) {
 	c.mu.Lock()
 	hasOAuth := c.oauth != nil && c.oauth.HasToken()
 	baseURL := strings.TrimRight(c.baseURL, "/")
+	activeVids := make(map[string]struct{}, len(c.activeWorkers))
+	activeChats := make(map[string]struct{}, len(c.activeWorkers))
+	for k, w := range c.activeWorkers {
+		activeVids[k] = struct{}{}
+		if w.info.VideoID != "" {
+			activeVids[w.info.VideoID] = struct{}{}
+		}
+		if w.info.LiveChatID != "" {
+			activeChats[w.info.LiveChatID] = struct{}{}
+		}
+	}
 	c.mu.Unlock()
 
-	if hasOAuth {
-		if videoID, liveChatID, bErr := c.discoverAuthenticatedBroadcast(ctx); bErr == nil && videoID != "" {
-			c.mu.Lock()
-			c.activeVideoID = videoID
-			if liveChatID != "" {
-				c.activeLiveChatID = liveChatID
-			}
-			c.mu.Unlock()
+	var results []discoveredStream
+	resultIdxByVid := make(map[string]int)
+	seenChats := make(map[string]struct{})
+	var lastErr error
 
-			watchURL := fmt.Sprintf("%s/watch?v=%s", baseURL, videoID)
-			if k, cont, wErr := c.fetchWatchPageTokens(ctx, watchURL); wErr == nil && k != "" && cont != "" {
-				return k, cont, nil
+	addResult := func(ds discoveredStream) {
+		vid := ds.info.VideoID
+		if vid != "" {
+			if idx, ok := resultIdxByVid[vid]; ok {
+				if ds.info.LiveChatID != "" && results[idx].info.LiveChatID == "" {
+					results[idx].info.LiveChatID = ds.info.LiveChatID
+				}
+				if ds.info.Title != "" && results[idx].info.Title == "" {
+					results[idx].info.Title = ds.info.Title
+				}
+				if ds.info.Orientation != OrientationUnknown && results[idx].info.Orientation == OrientationUnknown {
+					results[idx].info.Orientation = ds.info.Orientation
+				}
+				return
 			}
+		}
+		if ds.info.LiveChatID != "" {
+			if _, dup := seenChats[ds.info.LiveChatID]; dup {
+				return
+			}
+			if _, active := activeChats[ds.info.LiveChatID]; active {
+				return
+			}
+			seenChats[ds.info.LiveChatID] = struct{}{}
+		}
+		if vid != "" {
+			resultIdxByVid[vid] = len(results)
+		}
+		results = append(results, ds)
+	}
 
-			// If the watch page could not be scraped unauthenticated (e.g., Private or Testing broadcast
-			// where YouTube returns LOGIN_REQUIRED), fall back to authenticated YouTube Data API v3 liveChat polling.
-			if liveChatID != "" {
-				return dataAPIStreamMarker, liveChatID, nil
+	// Step 1: Channel /streams tab discovery (0 quota; finds simultaneous horizontal + vertical streams)
+	streamsURL, isChannel := NormalizeStreamsTabURL(target)
+	if isChannel && streamsURL != "" {
+		if baseURL != "https://www.youtube.com" && !strings.HasPrefix(target, "http") {
+			_, disp := NormalizeTarget(target)
+			streamsURL = baseURL + "/" + strings.TrimPrefix(disp, "@") + "/streams"
+		}
+		if vids, sErr := c.fetchStreamsTabVideoIDs(ctx, streamsURL); sErr == nil {
+			for _, vid := range vids {
+				if _, active := activeVids[vid]; active {
+					continue
+				}
+				watchURL := fmt.Sprintf("%s/watch?v=%s", baseURL, vid)
+				if k, cont, info, wErr := c.fetchWatchPageTokens(ctx, watchURL); wErr == nil && k != "" && cont != "" {
+					if info.VideoID == "" {
+						info.VideoID = vid
+					}
+					addResult(discoveredStream{info: info, apiKey: k, continuation: cont})
+				}
 			}
 		}
 	}
 
-	return "", "", err
+	// Step 2: Direct liveURL fallback (handles direct video URLs and channels where /streams returned nothing)
+	if !isChannel || (len(results) == 0 && len(activeVids) == 0) {
+		k, cont, info, err := c.fetchWatchPageTokens(ctx, liveURL)
+		if err == nil && k != "" && cont != "" {
+			key := info.VideoID
+			if key == "" {
+				key = "__default__"
+			}
+			if _, active := activeVids[key]; !active {
+				addResult(discoveredStream{info: info, apiKey: k, continuation: cont})
+			}
+		} else if err != nil {
+			lastErr = err
+		}
+	}
+
+	// Step 3: Authenticated OAuth discovery (finds Private/Unlisted/Testing streams and any concurrent broadcast
+	// not yet listed on the public /streams tab)
+	if hasOAuth {
+		if broadcasts, bErr := c.discoverAuthenticatedBroadcasts(ctx); bErr == nil {
+			for _, b := range broadcasts {
+				if b.VideoID == "" {
+					continue
+				}
+				// If already discovered in Step 1/2, enrich its liveChatId/title
+				if idx, ok := resultIdxByVid[b.VideoID]; ok {
+					if b.LiveChatID != "" && results[idx].info.LiveChatID == "" {
+						results[idx].info.LiveChatID = b.LiveChatID
+					}
+					if b.Title != "" && results[idx].info.Title == "" {
+						results[idx].info.Title = b.Title
+					}
+					continue
+				}
+				if _, active := activeVids[b.VideoID]; active {
+					// Enrich already-running worker with liveChatId/title if missing
+					c.mu.Lock()
+					if w, ok := c.activeWorkers[b.VideoID]; ok {
+						if b.LiveChatID != "" && w.info.LiveChatID == "" {
+							w.info.LiveChatID = b.LiveChatID
+						}
+						if b.Title != "" && w.info.Title == "" {
+							w.info.Title = b.Title
+						}
+					}
+					c.mu.Unlock()
+					continue
+				}
+				if b.LiveChatID != "" {
+					if _, active := activeChats[b.LiveChatID]; active {
+						continue
+					}
+				}
+
+				watchURL := fmt.Sprintf("%s/watch?v=%s", baseURL, b.VideoID)
+				if k, cont, info, wErr := c.fetchWatchPageTokens(ctx, watchURL); wErr == nil && k != "" && cont != "" {
+					if info.VideoID == "" {
+						info.VideoID = b.VideoID
+					}
+					if info.LiveChatID == "" {
+						info.LiveChatID = b.LiveChatID
+					}
+					if info.Title == "" {
+						info.Title = b.Title
+					}
+					addResult(discoveredStream{info: info, apiKey: k, continuation: cont})
+					continue
+				}
+
+				// Private/Testing fallback: YouTube Data API v3 liveChat polling
+				if b.LiveChatID != "" {
+					addResult(discoveredStream{
+						info:         b,
+						apiKey:       dataAPIStreamMarker,
+						continuation: b.LiveChatID,
+					})
+				}
+			}
+		}
+	}
+
+	if len(results) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	return results, nil
 }
 
-func (c *Connector) fetchWatchPageTokens(ctx context.Context, liveURL string) (string, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, liveURL, nil)
+func (c *Connector) fetchStreamsTabVideoIDs(ctx context.Context, streamsURL string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, streamsURL, nil)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	req.Header.Set("User-Agent", defaultUserAgent)
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
@@ -318,36 +621,62 @@ func (c *Connector) fetchWatchPageTokens(ctx context.Context, liveURL string) (s
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("unexpected status %d", resp.StatusCode)
+		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 
 	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 8*1024*1024))
 	if err != nil {
-		return "", "", err
+		return nil, err
+	}
+	return ExtractActiveLiveVideoIDs(string(bodyBytes)), nil
+}
+
+func (c *Connector) fetchWatchPageTokens(ctx context.Context, liveURL string) (string, string, StreamInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, liveURL, nil)
+	if err != nil {
+		return "", "", StreamInfo{}, err
+	}
+	req.Header.Set("User-Agent", defaultUserAgent)
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.AddCookie(&http.Cookie{Name: "CONSENT", Value: "YES+cb"})
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", "", StreamInfo{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", StreamInfo{}, fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 8*1024*1024))
+	if err != nil {
+		return "", "", StreamInfo{}, err
 	}
 
 	htmlStr := string(bodyBytes)
 	apiKey, continuation, ok := ExtractBootstrapTokens(htmlStr)
 	if !ok {
-		return "", "", errors.New("stream not currently live or chat disabled")
+		return "", "", StreamInfo{}, errors.New("stream not currently live or chat disabled")
 	}
-	if vid, _, found := ExtractVideoIDAndDetails(htmlStr); found && vid != "" {
+	info, _, _ := ExtractWatchPageMetadata(htmlStr)
+	if info.VideoID != "" {
 		c.mu.Lock()
-		if c.activeVideoID != vid {
-			c.activeVideoID = vid
-			c.activeLiveChatID = ""
+		if c.activeVideoID == "" {
+			c.activeVideoID = info.VideoID
 		}
 		c.mu.Unlock()
 	}
-	return apiKey, continuation, nil
+	return apiKey, continuation, info, nil
 }
 
-func (c *Connector) streamLiveChat(ctx context.Context, apiKey string, initialContinuation string) {
+func (c *Connector) streamLiveChat(ctx context.Context, stream StreamInfo, apiKey string, initialContinuation string) {
 	continuation := initialContinuation
 	isFirstPoll := true
 
@@ -361,11 +690,11 @@ func (c *Connector) streamLiveChat(ctx context.Context, apiKey string, initialCo
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("[YouTube] Live chat poll error: %v", err)
+			log.Printf("[YouTube] Live chat poll error (video=%s): %v", stream.VideoID, err)
 			return
 		}
 
-		c.dispatchPolledBatch(events, modEvents, isFirstPoll)
+		c.dispatchPolledBatch(stream, events, modEvents, isFirstPoll)
 
 		isFirstPoll = false
 		continuation = nextCont
@@ -381,7 +710,7 @@ func (c *Connector) streamLiveChat(ctx context.Context, apiKey string, initialCo
 	}
 }
 
-func (c *Connector) streamDataAPILiveChat(ctx context.Context, liveChatID string) {
+func (c *Connector) streamDataAPILiveChat(ctx context.Context, stream StreamInfo, liveChatID string) {
 	pageToken := ""
 	isFirstPoll := true
 
@@ -392,18 +721,29 @@ func (c *Connector) streamDataAPILiveChat(ctx context.Context, liveChatID string
 
 		// Periodically check if the broadcast became Public/Unlisted so we can seamlessly switch
 		// to 0-quota InnerTube polling without consuming Data API quota.
-		if !isFirstPoll {
+		if !isFirstPoll && stream.VideoID != "" {
 			c.mu.Lock()
-			videoID := c.activeVideoID
 			baseURL := strings.TrimRight(c.baseURL, "/")
 			c.mu.Unlock()
-			if videoID != "" {
-				watchURL := fmt.Sprintf("%s/watch?v=%s", baseURL, videoID)
-				if k, cont, wErr := c.fetchWatchPageTokens(ctx, watchURL); wErr == nil && k != "" && cont != "" {
-					log.Printf("[YouTube] Broadcast %s is now accessible via InnerTube; switching from Data API to InnerTube polling", videoID)
-					c.streamLiveChat(ctx, k, cont)
-					return
+			watchURL := fmt.Sprintf("%s/watch?v=%s", baseURL, stream.VideoID)
+			if k, cont, info, wErr := c.fetchWatchPageTokens(ctx, watchURL); wErr == nil && k != "" && cont != "" {
+				if info.VideoID == "" {
+					info.VideoID = stream.VideoID
 				}
+				if info.LiveChatID == "" {
+					info.LiveChatID = liveChatID
+				}
+				if info.Title == "" {
+					info.Title = stream.Title
+				}
+				c.mu.Lock()
+				if w, ok := c.activeWorkers[stream.VideoID]; ok {
+					w.info = info
+				}
+				c.mu.Unlock()
+				log.Printf("[YouTube] Broadcast %s is now accessible via InnerTube; switching from Data API to InnerTube polling", stream.VideoID)
+				c.streamLiveChat(ctx, info, k, cont)
+				return
 			}
 		}
 
@@ -412,11 +752,11 @@ func (c *Connector) streamDataAPILiveChat(ctx context.Context, liveChatID string
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("[YouTube] Data API live chat poll error: %v", err)
+			log.Printf("[YouTube] Data API live chat poll error (video=%s): %v", stream.VideoID, err)
 			return
 		}
 
-		c.dispatchPolledBatch(events, modEvents, isFirstPoll)
+		c.dispatchPolledBatch(stream, events, modEvents, isFirstPoll)
 
 		isFirstPoll = false
 		if nextToken == "" {
@@ -432,7 +772,7 @@ func (c *Connector) streamDataAPILiveChat(ctx context.Context, liveChatID string
 	}
 }
 
-func (c *Connector) dispatchPolledBatch(events []*chat.Event, modEvents []*chat.ModerationEvent, isFirstPoll bool) {
+func (c *Connector) dispatchPolledBatch(stream StreamInfo, events []*chat.Event, modEvents []*chat.ModerationEvent, isFirstPoll bool) {
 	targetChan := c.Target()
 
 	// Dispatch moderation events immediately
@@ -455,6 +795,15 @@ func (c *Connector) dispatchPolledBatch(events []*chat.Event, modEvents []*chat.
 		if ev.Channel == "" {
 			ev.Channel = targetChan
 		}
+		if ev.StreamID == "" {
+			ev.StreamID = stream.VideoID
+		}
+		if ev.StreamTitle == "" {
+			ev.StreamTitle = stream.Title
+		}
+		if ev.StreamOrientation == "" {
+			ev.StreamOrientation = string(stream.Orientation)
+		}
 		c.mu.Lock()
 		_, alreadySeen := c.seenIDs[ev.ID]
 		if !alreadySeen && ev.ID != "" {
@@ -463,6 +812,12 @@ func (c *Connector) dispatchPolledBatch(events []*chat.Event, modEvents []*chat.
 				c.seenIDs = make(map[string]struct{})
 			}
 			c.seenIDs[ev.ID] = struct{}{}
+			if stream.VideoID != "" {
+				if len(c.msgVideoID) > 5000 {
+					c.msgVideoID = make(map[string]string)
+				}
+				c.msgVideoID[ev.ID] = stream.VideoID
+			}
 		}
 		c.mu.Unlock()
 

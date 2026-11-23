@@ -14,9 +14,9 @@ import (
 )
 
 var (
-	reInnertubeKey  = regexp.MustCompile(`"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"`)
-	reContinuation  = regexp.MustCompile(`"liveChatRenderer"\s*:\s*\{.*?"continuations"\s*:\s*\[\s*\{\s*"(?:timedContinuationData|invalidationContinuationData|reloadContinuationData)"\s*:\s*\{[^}]*?"continuation"\s*:\s*"([^"]+)"`)
-	reReloadCont    = regexp.MustCompile(`"continuation"\s*:\s*"(0ofMyA[^"]+)"`)
+	reInnertubeKey      = regexp.MustCompile(`"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"`)
+	reContinuation      = regexp.MustCompile(`"liveChatRenderer"\s*:\s*\{.*?"continuations"\s*:\s*\[\s*\{\s*"(?:timedContinuationData|invalidationContinuationData|reloadContinuationData)"\s*:\s*\{[^}]*?"continuation"\s*:\s*"([^"]+)"`)
+	reReloadCont        = regexp.MustCompile(`"continuation"\s*:\s*"(0ofMyA[^"]+)"`)
 	reAmountNumbers     = regexp.MustCompile(`([0-9]+(?:[.,][0-9]+)?)`)
 	reMonthsCount       = regexp.MustCompile(`([0-9]+)\s*(?:month|months|mo\b)`)
 	reGiftsCount        = regexp.MustCompile(`([0-9]+)`)
@@ -51,6 +51,23 @@ var knownYouTubeGiftJewels = map[string]float64{
 	"rocket":        200,
 }
 
+// StreamOrientation indicates whether a YouTube Live broadcast is horizontal or vertical.
+type StreamOrientation string
+
+const (
+	OrientationUnknown    StreamOrientation = ""
+	OrientationHorizontal StreamOrientation = "horizontal"
+	OrientationVertical   StreamOrientation = "vertical"
+)
+
+// StreamInfo describes an active YouTube Live broadcast connected by Connector.
+type StreamInfo struct {
+	VideoID     string            `json:"video_id"`
+	LiveChatID  string            `json:"live_chat_id,omitempty"`
+	Title       string            `json:"title,omitempty"`
+	Orientation StreamOrientation `json:"orientation,omitempty"`
+}
+
 // NormalizeTarget converts a YouTube channel name/handle, channel ID (UC...),
 // or full URL into a canonical live page URL and a clean display label.
 func NormalizeTarget(input string) (liveURL string, display string) {
@@ -62,7 +79,7 @@ func NormalizeTarget(input string) (liveURL string, display string) {
 	// Full URL handling
 	lower := strings.ToLower(s)
 	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
-		if strings.Contains(lower, "watch?v=") || strings.Contains(lower, "/live/") {
+		if strings.Contains(lower, "watch?v=") || strings.Contains(lower, "/live/") || strings.Contains(lower, "youtu.be/") || strings.Contains(lower, "/shorts/") {
 			return s, s
 		}
 		trimmed := strings.TrimRight(s, "/")
@@ -87,6 +104,64 @@ func NormalizeTarget(input string) (liveURL string, display string) {
 	return "https://www.youtube.com/@" + clean + "/live", clean
 }
 
+// NormalizeStreamsTabURL returns the channel's /streams tab URL when input targets a channel
+// (handle, channel ID, or channel URL), or ("", false) when input targets a specific video URL.
+func NormalizeStreamsTabURL(input string) (streamsURL string, isChannelTarget bool) {
+	liveURL, _ := NormalizeTarget(input)
+	if liveURL == "" {
+		return "", false
+	}
+	lower := strings.ToLower(liveURL)
+	if strings.Contains(lower, "watch?v=") || strings.Contains(lower, "/live/") || strings.Contains(lower, "youtu.be/") || strings.Contains(lower, "/shorts/") {
+		return "", false
+	}
+	if strings.HasSuffix(lower, "/live") {
+		return liveURL[:len(liveURL)-len("/live")] + "/streams", true
+	}
+	return strings.TrimRight(liveURL, "/") + "/streams", true
+}
+
+// extractBalancedJSONObject locates the first '{' in s and returns the brace-balanced JSON object slice
+// along with the remainder of s after the closing '}'.
+func extractBalancedJSONObject(s string) (obj string, after string, ok bool) {
+	braceIdx := strings.IndexByte(s, '{')
+	if braceIdx == -1 {
+		return "", "", false
+	}
+
+	depth := 0
+	inString := false
+	escape := false
+	for i := braceIdx; i < len(s); i++ {
+		b := s[i]
+		if escape {
+			escape = false
+			continue
+		}
+		if b == '\\' {
+			escape = true
+			continue
+		}
+		if b == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch b {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[braceIdx : i+1], s[i+1:], true
+			}
+		}
+	}
+	return "", "", false
+}
+
 // ExtractVideoDetails parses the videoDetails JSON object from YouTube HTML if present,
 // returning whether the stream is actively live and whether videoDetails was found.
 func ExtractVideoDetails(html string) (isLive bool, found bool) {
@@ -97,67 +172,160 @@ func ExtractVideoDetails(html string) (isLive bool, found bool) {
 // ExtractVideoIDAndDetails parses the videoDetails JSON object from YouTube HTML if present,
 // returning the videoId, whether the stream is actively live, and whether videoDetails was found.
 func ExtractVideoIDAndDetails(html string) (videoID string, isLive bool, found bool) {
+	info, live, ok := ExtractWatchPageMetadata(html)
+	return info.VideoID, live, ok
+}
+
+// ExtractWatchPageMetadata parses videoDetails, streamingData, and playerMicroformatRenderer
+// from a YouTube watch page HTML to return the video ID, title, orientation (vertical vs horizontal),
+// and whether the stream is actively live.
+func ExtractWatchPageMetadata(html string) (info StreamInfo, isLive bool, found bool) {
 	search := html
 	for {
 		idx := strings.Index(search, `"videoDetails"`)
 		if idx == -1 {
-			return "", false, false
+			break
 		}
-
 		rest := search[idx+len(`"videoDetails"`):]
-		braceIdx := strings.IndexByte(rest, '{')
-		if braceIdx == -1 {
-			search = rest
-			continue
+		obj, after, ok := extractBalancedJSONObject(rest)
+		if !ok {
+			break
 		}
+		var details struct {
+			VideoID       string `json:"videoId"`
+			Title         string `json:"title"`
+			IsLive        bool   `json:"isLive"`
+			IsLiveContent bool   `json:"isLiveContent"`
+		}
+		if err := json.Unmarshal([]byte(obj), &details); err == nil {
+			info.VideoID = strings.TrimSpace(details.VideoID)
+			info.Title = strings.TrimSpace(details.Title)
+			isLive = details.IsLive
+			found = true
+			break
+		}
+		search = after
+	}
+	if !found {
+		return StreamInfo{}, false, false
+	}
 
-		start := braceIdx
-		depth := 0
-		inString := false
-		escape := false
-		end := -1
+	info.Orientation = extractWatchPageOrientation(html)
+	return info, isLive, true
+}
 
-		for i := start; i < len(rest); i++ {
-			b := rest[i]
-			if escape {
-				escape = false
-				continue
+func orientationFromDimensions(width, height int) StreamOrientation {
+	if width <= 0 || height <= 0 {
+		return OrientationUnknown
+	}
+	if height > width {
+		return OrientationVertical
+	}
+	return OrientationHorizontal
+}
+
+func extractWatchPageOrientation(html string) StreamOrientation {
+	// Primary: streamingData.adaptiveFormats / streamingData.formats width & height
+	if _, after, ok := strings.Cut(html, `"streamingData"`); ok {
+		if obj, _, ok := extractBalancedJSONObject(after); ok {
+			var sd struct {
+				Formats []struct {
+					Width  int `json:"width"`
+					Height int `json:"height"`
+				} `json:"formats"`
+				AdaptiveFormats []struct {
+					Width  int `json:"width"`
+					Height int `json:"height"`
+				} `json:"adaptiveFormats"`
 			}
-			if b == '\\' {
-				escape = true
-				continue
-			}
-			if b == '"' {
-				inString = !inString
-				continue
-			}
-			if inString {
-				continue
-			}
-			if b == '{' {
-				depth++
-			} else if b == '}' {
-				depth--
-				if depth == 0 {
-					end = i + 1
-					break
+			if err := json.Unmarshal([]byte(obj), &sd); err == nil {
+				for _, f := range sd.AdaptiveFormats {
+					if o := orientationFromDimensions(f.Width, f.Height); o != OrientationUnknown {
+						return o
+					}
+				}
+				for _, f := range sd.Formats {
+					if o := orientationFromDimensions(f.Width, f.Height); o != OrientationUnknown {
+						return o
+					}
 				}
 			}
 		}
+	}
 
-		if end != -1 {
-			var details struct {
-				VideoID       string `json:"videoId"`
-				IsLive        bool   `json:"isLive"`
-				IsLiveContent bool   `json:"isLiveContent"`
+	// Fallback: playerMicroformatRenderer.embed width & height
+	if _, after, ok := strings.Cut(html, `"playerMicroformatRenderer"`); ok {
+		if obj, _, ok := extractBalancedJSONObject(after); ok {
+			var mf struct {
+				Embed *struct {
+					Width  int `json:"width"`
+					Height int `json:"height"`
+				} `json:"embed"`
 			}
-			if err := json.Unmarshal([]byte(rest[start:end]), &details); err == nil {
-				return strings.TrimSpace(details.VideoID), details.IsLive, true
+			if err := json.Unmarshal([]byte(obj), &mf); err == nil && mf.Embed != nil {
+				if o := orientationFromDimensions(mf.Embed.Width, mf.Embed.Height); o != OrientationUnknown {
+					return o
+				}
 			}
 		}
-
-		search = rest
 	}
+
+	return OrientationUnknown
+}
+
+var (
+	reLiveVideoID     = regexp.MustCompile(`"videoId"\s*:\s*"([A-Za-z0-9_-]{6,20})"`)
+	reLiveStyleMarker = regexp.MustCompile(`"(?:style|iconType)"\s*:\s*"(?:LIVE|BADGE_STYLE_TYPE_LIVE_NOW)"`)
+)
+
+// ExtractActiveLiveVideoIDs scans a YouTube channel /streams tab HTML page (ytInitialData)
+// and returns all distinct video IDs currently marked as actively live (both horizontal and vertical).
+func ExtractActiveLiveVideoIDs(html string) []string {
+	rendererKeys := []string{
+		`"videoRenderer"`,
+		`"gridVideoRenderer"`,
+		`"reelItemRenderer"`,
+		`"shortsLockupViewModel"`,
+	}
+
+	seen := make(map[string]struct{})
+	var ids []string
+
+	for _, key := range rendererKeys {
+		search := html
+		for {
+			idx := strings.Index(search, key)
+			if idx == -1 {
+				break
+			}
+			rest := search[idx+len(key):]
+			obj, after, ok := extractBalancedJSONObject(rest)
+			if !ok {
+				break
+			}
+			search = after
+
+			// Skip scheduled/upcoming broadcasts
+			if strings.Contains(obj, `"upcomingEventData"`) {
+				continue
+			}
+			// Require an explicit LIVE marker inside this renderer item
+			if !reLiveStyleMarker.MatchString(obj) {
+				continue
+			}
+			if m := reLiveVideoID.FindStringSubmatch(obj); len(m) > 1 {
+				vid := strings.TrimSpace(m[1])
+				if vid != "" {
+					if _, dup := seen[vid]; !dup {
+						seen[vid] = struct{}{}
+						ids = append(ids, vid)
+					}
+				}
+			}
+		}
+	}
+
+	return ids
 }
 
 // ExtractBootstrapTokens extracts the INNERTUBE_API_KEY and initial liveChat continuation token from a YouTube HTML page.
@@ -254,16 +422,16 @@ type authorBadge struct {
 type chatAction struct {
 	AddChatItemAction *struct {
 		Item struct {
-			LiveChatTextMessageRenderer                            *textMessageRenderer        `json:"liveChatTextMessageRenderer"`
-			LiveChatPaidMessageRenderer                            *paidMessageRenderer        `json:"liveChatPaidMessageRenderer"`
-			LiveChatPaidStickerRenderer                            *paidStickerRenderer        `json:"liveChatPaidStickerRenderer"`
-			LiveChatMembershipItemRenderer                         *membershipItemRenderer     `json:"liveChatMembershipItemRenderer"`
-			LiveChatSponsorshipsGiftPurchaseAnnouncementRenderer   *giftPurchaseRenderer       `json:"liveChatSponsorshipsGiftPurchaseAnnouncementRenderer"`
-			LiveChatSponsorshipsGiftRedemptionAnnouncementRenderer *giftRedemptionRenderer     `json:"liveChatSponsorshipsGiftRedemptionAnnouncementRenderer"`
-			LiveChatDonationAnnouncementRenderer                   *donationRenderer           `json:"liveChatDonationAnnouncementRenderer"`
-			LiveChatViewerEngagementMessageRenderer                *engagementMessageRenderer  `json:"liveChatViewerEngagementMessageRenderer"`
-			LiveChatBannerRedirectRenderer                         *bannerRedirectRenderer     `json:"liveChatBannerRedirectRenderer"`
-			GiftMessageViewModel                                   *giftMessageViewModel       `json:"giftMessageViewModel"`
+			LiveChatTextMessageRenderer                            *textMessageRenderer       `json:"liveChatTextMessageRenderer"`
+			LiveChatPaidMessageRenderer                            *paidMessageRenderer       `json:"liveChatPaidMessageRenderer"`
+			LiveChatPaidStickerRenderer                            *paidStickerRenderer       `json:"liveChatPaidStickerRenderer"`
+			LiveChatMembershipItemRenderer                         *membershipItemRenderer    `json:"liveChatMembershipItemRenderer"`
+			LiveChatSponsorshipsGiftPurchaseAnnouncementRenderer   *giftPurchaseRenderer      `json:"liveChatSponsorshipsGiftPurchaseAnnouncementRenderer"`
+			LiveChatSponsorshipsGiftRedemptionAnnouncementRenderer *giftRedemptionRenderer    `json:"liveChatSponsorshipsGiftRedemptionAnnouncementRenderer"`
+			LiveChatDonationAnnouncementRenderer                   *donationRenderer          `json:"liveChatDonationAnnouncementRenderer"`
+			LiveChatViewerEngagementMessageRenderer                *engagementMessageRenderer `json:"liveChatViewerEngagementMessageRenderer"`
+			LiveChatBannerRedirectRenderer                         *bannerRedirectRenderer    `json:"liveChatBannerRedirectRenderer"`
+			GiftMessageViewModel                                   *giftMessageViewModel      `json:"giftMessageViewModel"`
 		} `json:"item"`
 	} `json:"addChatItemAction"`
 	AddBannerToLiveChatCommand *struct {
@@ -1088,12 +1256,12 @@ type dataAPILiveChatItem struct {
 			UserComment         string `json:"userComment"`
 		} `json:"superChatDetails"`
 		SuperStickerDetails *struct {
-			AmountMicros        string `json:"amountMicros"`
-			Currency            string `json:"currency"`
-			AmountDisplayString string `json:"amountDisplayString"`
+			AmountMicros         string `json:"amountMicros"`
+			Currency             string `json:"currency"`
+			AmountDisplayString  string `json:"amountDisplayString"`
 			SuperStickerMetadata *struct {
-				StickerID  string `json:"stickerId"`
-				AltText    string `json:"altText"`
+				StickerID string `json:"stickerId"`
+				AltText   string `json:"altText"`
 			} `json:"superStickerMetadata"`
 		} `json:"superStickerDetails"`
 		NewSponsorDetails *struct {

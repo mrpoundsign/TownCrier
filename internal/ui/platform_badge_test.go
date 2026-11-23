@@ -1,11 +1,15 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
+
+	"github.com/mrpoundsign/TownCrier/internal/eventlog"
+	"github.com/mrpoundsign/TownCrier/pkg/platform/youtube"
 )
 
 func TestPlatformConnectionBadgeInit(t *testing.T) {
@@ -88,5 +92,51 @@ func TestPlatformConnectionBadgeTap(t *testing.T) {
 	badge.Tapped(&fyne.PointEvent{})
 	if !tapped {
 		t.Error("expected onTap callback to be invoked on tap")
+	}
+}
+
+func TestPlatformConnectionBadgeStreamCount(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+
+	badge := newPlatformConnectionBadge("YouTube", resPlatformYouTube, "⚪", "YouTube: Inactive", nil, nil)
+
+	badge.SetStatusWithCount("🟢", "YouTube: Live (@dual)", 2)
+	if badge.StreamCount() != 2 {
+		t.Errorf("expected stream count 2, got %d", badge.StreamCount())
+	}
+	if !badge.countBadge.Visible() || badge.dotImage.Visible() {
+		t.Errorf("expected numbered green circle visible and plain dot hidden for count=2")
+	}
+	if badge.countText.Text != "2" {
+		t.Errorf("expected count text '2', got %q", badge.countText.Text)
+	}
+
+	badge.SetStatusWithCount("🟢", "YouTube: Live (@dual)", 1)
+	if badge.StreamCount() != 1 {
+		t.Errorf("expected stream count 1, got %d", badge.StreamCount())
+	}
+	if badge.countBadge.Visible() || !badge.dotImage.Visible() {
+		t.Errorf("expected plain green dot visible and numbered circle hidden for count=1")
+	}
+}
+
+func TestFormatYouTubeStreamsTooltipAndEntryIconTip(t *testing.T) {
+	tip := formatYouTubeStreamsTooltip("YouTube: Live (@dual)", []youtube.StreamInfo{
+		{VideoID: "VID_H", Title: "Main 16:9", Orientation: youtube.OrientationHorizontal},
+		{VideoID: "VID_V", Title: "Vertical Shorts", Orientation: youtube.OrientationVertical},
+	})
+	if !strings.Contains(tip, "Horizontal: Main 16:9") || !strings.Contains(tip, "Vertical: Vertical Shorts") {
+		t.Errorf("unexpected multi-stream tooltip: %q", tip)
+	}
+
+	_, entryTip := entryPlatformIconAndTip(eventlog.Entry{
+		Platform:          "youtube",
+		StreamID:          "VID_V",
+		StreamTitle:       "Vertical Shorts",
+		StreamOrientation: "vertical",
+	})
+	if entryTip != "Service: YouTube (Vertical)\nStream: Vertical Shorts (VID_V)" {
+		t.Errorf("unexpected entry platform tooltip: %q", entryTip)
 	}
 }

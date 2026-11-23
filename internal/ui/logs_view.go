@@ -2278,7 +2278,7 @@ func (v *LogsView) buildLogRowWithRef(rowIdx int, e eventlog.Entry) (fyne.Canvas
 	timeCell := v.newTimeCellLabel(localTS, timeTip)
 
 	// [1] Service icon column
-	platRes, platTip := platformIconAndTip(e.Platform)
+	platRes, platTip := entryPlatformIconAndTip(e)
 	svcCell := v.newHoverIcon(platRes, iconSz, platTip, nil)
 
 	// [2] User & Role/Tag icons column

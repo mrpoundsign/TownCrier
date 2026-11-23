@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/platform/youtube"
 )
 
 // Tab index constants for the top-level main window views.
@@ -1166,6 +1168,33 @@ func (mw *MainWindow) resolvePlatformStatus(platform, rawStatus, detail string) 
 	}
 }
 
+func formatYouTubeStreamsTooltip(baseTip string, streams []youtube.StreamInfo) string {
+	if len(streams) == 0 {
+		return baseTip
+	}
+	var b strings.Builder
+	b.WriteString(baseTip)
+	for _, s := range streams {
+		b.WriteString("\n• ")
+		switch s.Orientation {
+		case youtube.OrientationHorizontal:
+			b.WriteString("Horizontal")
+		case youtube.OrientationVertical:
+			b.WriteString("Vertical")
+		default:
+			b.WriteString("Live")
+		}
+		if title := strings.TrimSpace(s.Title); title != "" {
+			b.WriteString(": ")
+			b.WriteString(title)
+		} else if vid := strings.TrimSpace(s.VideoID); vid != "" {
+			b.WriteString(": ")
+			b.WriteString(vid)
+		}
+	}
+	return b.String()
+}
+
 func (mw *MainWindow) updatePlatformBadge(platform, status, detail string) {
 	mw.statusMu.Lock()
 	if mw.platformStatuses == nil {
@@ -1178,6 +1207,12 @@ func (mw *MainWindow) updatePlatformBadge(platform, status, detail string) {
 	mw.statusMu.Unlock()
 
 	dot, tip := mw.resolvePlatformStatus(platform, current.status, current.detail)
+	streamCount := 0
+	if platform == "youtube" && dot == "🟢" && mw.Session != nil && mw.Session.YouTubeConnector() != nil {
+		streams := mw.Session.YouTubeConnector().ActiveStreams()
+		streamCount = len(streams)
+		tip = formatYouTubeStreamsTooltip(tip, streams)
+	}
 
 	fyne.Do(func() {
 		switch platform {
@@ -1187,7 +1222,7 @@ func (mw *MainWindow) updatePlatformBadge(platform, status, detail string) {
 			}
 		case "youtube":
 			if mw.youtubeStatusDot != nil {
-				mw.youtubeStatusDot.SetStatus(dot, tip)
+				mw.youtubeStatusDot.SetStatusWithCount(dot, tip, streamCount)
 			}
 		case "tiktok":
 			if mw.tiktokStatusDot != nil {

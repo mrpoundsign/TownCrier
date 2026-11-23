@@ -307,6 +307,30 @@ func platformIconAndTip(platform string) (fyne.Resource, string) {
 	return res, "Service: " + name
 }
 
+// entryPlatformIconAndTip returns the platform SVG icon and an enriched hover tooltip
+// that includes stream orientation (Vertical/Horizontal), title, and video ID when present.
+func entryPlatformIconAndTip(e eventlog.Entry) (fyne.Resource, string) {
+	res, tip := platformIconAndTip(e.Platform)
+	orient := strings.ToLower(strings.TrimSpace(e.StreamOrientation))
+	switch orient {
+	case "vertical":
+		tip += " (Vertical)"
+	case "horizontal":
+		tip += " (Horizontal)"
+	}
+	title := strings.TrimSpace(e.StreamTitle)
+	sid := strings.TrimSpace(e.StreamID)
+	switch {
+	case title != "" && sid != "":
+		tip += "\nStream: " + title + " (" + sid + ")"
+	case title != "":
+		tip += "\nStream: " + title
+	case sid != "":
+		tip += "\nStream: " + sid
+	}
+	return res, tip
+}
+
 // userRoleIcons returns compact hoverable role/tag icons for a log entry.
 func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 	var icons []fyne.CanvasObject
