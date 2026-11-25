@@ -3289,13 +3289,32 @@ func (s *Session) ListExternalActions() ws.ExternalActionCatalog {
 				if ad == nil {
 					continue
 				}
-				cat.PluginActions = append(cat.PluginActions, ws.ExternalPluginAction{
-					PluginUUID:  p.UUID,
-					PluginName:  p.Name,
-					ActionID:    ad.GetId(),
-					ActionName:  ad.GetName(),
-					Description: ad.GetDescription(),
-				})
+				ext := ws.ExternalPluginAction{
+					PluginUUID:   p.UUID,
+					PluginName:   p.Name,
+					ActionID:     ad.GetId(),
+					ActionName:   ad.GetName(),
+					Description:  ad.GetDescription(),
+					Controllers:  slices.Clone(ad.GetControllers()),
+					DefaultTitle: ad.GetDefaultTitle(),
+					DefaultColor: ad.GetDefaultColor(),
+					DefaultImage: ad.GetDefaultImage(),
+					HideTitle:    ad.GetHideTitle(),
+				}
+				if av := p.ActionVisuals[ad.GetId()]; av != nil {
+					ext.Visual = &ws.ExternalActionVisual{
+						Title:           av.GetTitle(),
+						Subtitle:        av.GetSubtitle(),
+						Color:           av.GetColor(),
+						BackgroundColor: av.GetBackgroundColor(),
+						Image:           av.GetImageDataUri(),
+						State:           int(av.GetState()),
+						HasProgress:     av.GetHasProgress(),
+						ProgressPercent: int(av.GetProgressPercent()),
+						FeedbackValue:   av.GetFeedbackValue(),
+					}
+				}
+				cat.PluginActions = append(cat.PluginActions, ext)
 			}
 		}
 	}

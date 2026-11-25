@@ -76,6 +76,7 @@ type PluginStatus struct {
 	GlobalSchema      []*pluginv1.SettingField
 	ActionCount       int
 	Actions           []*pluginv1.ActionDescriptor
+	ActionVisuals     map[string]*pluginv1.ActionVisualState
 	Triggers          []*pluginv1.TriggerDescriptor
 	Views             []*pluginv1.ViewDescriptor
 	State             RunState

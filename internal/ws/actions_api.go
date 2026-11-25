@@ -16,13 +16,32 @@ type ExternalBotAction struct {
 	QueueID string `json:"queue_id,omitempty"`
 }
 
+// ExternalActionVisual carries live dynamic visual state for a plugin action tile or dial.
+type ExternalActionVisual struct {
+	Title           string `json:"title,omitempty"`
+	Subtitle        string `json:"subtitle,omitempty"`
+	Color           string `json:"color,omitempty"`
+	BackgroundColor string `json:"background_color,omitempty"`
+	Image           string `json:"image,omitempty"`
+	State           int    `json:"state,omitempty"`
+	HasProgress     bool   `json:"has_progress,omitempty"`
+	ProgressPercent int    `json:"progress_percent,omitempty"`
+	FeedbackValue   string `json:"feedback_value,omitempty"`
+}
+
 // ExternalPluginAction describes an exported v1.0.0 action registered by an active TownCrier plugin.
 type ExternalPluginAction struct {
-	PluginUUID  string `json:"plugin_uuid"`
-	PluginName  string `json:"plugin_name"`
-	ActionID    string `json:"action_id"`
-	ActionName  string `json:"action_name"`
-	Description string `json:"description,omitempty"`
+	PluginUUID   string                `json:"plugin_uuid"`
+	PluginName   string                `json:"plugin_name"`
+	ActionID     string                `json:"action_id"`
+	ActionName   string                `json:"action_name"`
+	Description  string                `json:"description,omitempty"`
+	Controllers  []string              `json:"controllers,omitempty"`
+	DefaultTitle string                `json:"default_title,omitempty"`
+	DefaultColor string                `json:"default_color,omitempty"`
+	DefaultImage string                `json:"default_image,omitempty"`
+	HideTitle    bool                  `json:"hide_title,omitempty"`
+	Visual       *ExternalActionVisual `json:"visual,omitempty"`
 }
 
 // ExternalActionCatalog lists all Bot Automation actions and Plugin actions currently runnable.

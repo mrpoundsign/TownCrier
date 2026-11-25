@@ -120,5 +120,6 @@ message PluginEnvelope {
     SetVarRequest set_var = 25;
     EmitTriggerRequest emit_trigger = 26;
     RunBotActionRequest run_bot_action = 27;
+    ActionVisualState update_action_visual = 28;
   }
 }

@@ -668,4 +668,20 @@ func TestRunPluginActionAndBotHostCalls(t *testing.T) {
 		Payload: &pluginv1.PluginEnvelope_RunBotAction{RunBotAction: &pluginv1.RunBotActionRequest{ActionIdOrName: "welcome"}},
 	}).GetOk())
 	require.Equal(t, "welcome", ranAction.GetActionIdOrName())
+
+	require.True(t, mgr.handleHostCall(context.Background(), ent, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_UpdateActionVisual{
+			UpdateActionVisual: &pluginv1.ActionVisualState{
+				ActionId:     "do_thing",
+				Title:        "PLAY",
+				Subtitle:     "PLAYING",
+				Color:        "#22C55E",
+				ImageDataUri: "data:image/svg+xml;utf8,abc",
+			},
+		},
+	}).GetOk())
+	plugins := mgr.Plugins()
+	require.Len(t, plugins, 1)
+	require.NotNil(t, plugins[0].ActionVisuals["do_thing"])
+	require.Equal(t, "PLAYING", plugins[0].ActionVisuals["do_thing"].GetSubtitle())
 }

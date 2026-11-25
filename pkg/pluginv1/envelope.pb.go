@@ -1024,6 +1024,7 @@ type PluginEnvelope struct {
 	//	*PluginEnvelope_SetVar
 	//	*PluginEnvelope_EmitTrigger
 	//	*PluginEnvelope_RunBotAction
+	//	*PluginEnvelope_UpdateActionVisual
 	Payload       isPluginEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1307,6 +1308,15 @@ func (x *PluginEnvelope) GetRunBotAction() *RunBotActionRequest {
 	return nil
 }
 
+func (x *PluginEnvelope) GetUpdateActionVisual() *ActionVisualState {
+	if x != nil {
+		if x, ok := x.Payload.(*PluginEnvelope_UpdateActionVisual); ok {
+			return x.UpdateActionVisual
+		}
+	}
+	return nil
+}
+
 type isPluginEnvelope_Payload interface {
 	isPluginEnvelope_Payload()
 }
@@ -1415,6 +1425,10 @@ type PluginEnvelope_RunBotAction struct {
 	RunBotAction *RunBotActionRequest `protobuf:"bytes,27,opt,name=run_bot_action,json=runBotAction,proto3,oneof"`
 }
 
+type PluginEnvelope_UpdateActionVisual struct {
+	UpdateActionVisual *ActionVisualState `protobuf:"bytes,28,opt,name=update_action_visual,json=updateActionVisual,proto3,oneof"`
+}
+
 func (*PluginEnvelope_Ack) isPluginEnvelope_Payload() {}
 
 func (*PluginEnvelope_Manifest) isPluginEnvelope_Payload() {}
@@ -1466,6 +1480,8 @@ func (*PluginEnvelope_SetVar) isPluginEnvelope_Payload() {}
 func (*PluginEnvelope_EmitTrigger) isPluginEnvelope_Payload() {}
 
 func (*PluginEnvelope_RunBotAction) isPluginEnvelope_Payload() {}
+
+func (*PluginEnvelope_UpdateActionVisual) isPluginEnvelope_Payload() {}
 
 var File_plugin_v1_envelope_proto protoreflect.FileDescriptor
 
@@ -1532,7 +1548,7 @@ const file_plugin_v1_envelope_proto_rawDesc = "" +
 	"\n" +
 	"before_tts\x18\x0e \x01(\v2%.towncrier.plugin.v1.BeforeTTSRequestH\x00R\tbeforeTts\x12Y\n" +
 	"\x11get_overlay_asset\x18\x0f \x01(\v2+.towncrier.plugin.v1.GetOverlayAssetRequestH\x00R\x0fgetOverlayAssetB\t\n" +
-	"\apayload\"\xb1\x0f\n" +
+	"\apayload\"\x8d\x10\n" +
 	"\x0ePluginEnvelope\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\x04R\trequestId\x124\n" +
@@ -1563,7 +1579,8 @@ const file_plugin_v1_envelope_proto_rawDesc = "" +
 	"\aget_var\x18\x18 \x01(\v2\".towncrier.plugin.v1.GetVarRequestH\x00R\x06getVar\x12=\n" +
 	"\aset_var\x18\x19 \x01(\v2\".towncrier.plugin.v1.SetVarRequestH\x00R\x06setVar\x12L\n" +
 	"\femit_trigger\x18\x1a \x01(\v2'.towncrier.plugin.v1.EmitTriggerRequestH\x00R\vemitTrigger\x12P\n" +
-	"\x0erun_bot_action\x18\x1b \x01(\v2(.towncrier.plugin.v1.RunBotActionRequestH\x00R\frunBotActionB\t\n" +
+	"\x0erun_bot_action\x18\x1b \x01(\v2(.towncrier.plugin.v1.RunBotActionRequestH\x00R\frunBotAction\x12Z\n" +
+	"\x14update_action_visual\x18\x1c \x01(\v2&.towncrier.plugin.v1.ActionVisualStateH\x00R\x12updateActionVisualB\t\n" +
 	"\apayloadB8Z6github.com/mrpoundsign/TownCrier/pkg/pluginv1;pluginv1b\x06proto3"
 
 var (
@@ -1632,6 +1649,7 @@ var file_plugin_v1_envelope_proto_goTypes = []any{
 	(*SetVarRequest)(nil),             // 49: towncrier.plugin.v1.SetVarRequest
 	(*EmitTriggerRequest)(nil),        // 50: towncrier.plugin.v1.EmitTriggerRequest
 	(*RunBotActionRequest)(nil),       // 51: towncrier.plugin.v1.RunBotActionRequest
+	(*ActionVisualState)(nil),         // 52: towncrier.plugin.v1.ActionVisualState
 }
 var file_plugin_v1_envelope_proto_depIdxs = []int32{
 	13, // 0: towncrier.plugin.v1.ManifestResponse.manifest:type_name -> towncrier.plugin.v1.Manifest
@@ -1691,11 +1709,12 @@ var file_plugin_v1_envelope_proto_depIdxs = []int32{
 	49, // 54: towncrier.plugin.v1.PluginEnvelope.set_var:type_name -> towncrier.plugin.v1.SetVarRequest
 	50, // 55: towncrier.plugin.v1.PluginEnvelope.emit_trigger:type_name -> towncrier.plugin.v1.EmitTriggerRequest
 	51, // 56: towncrier.plugin.v1.PluginEnvelope.run_bot_action:type_name -> towncrier.plugin.v1.RunBotActionRequest
-	57, // [57:57] is the sub-list for method output_type
-	57, // [57:57] is the sub-list for method input_type
-	57, // [57:57] is the sub-list for extension type_name
-	57, // [57:57] is the sub-list for extension extendee
-	0,  // [0:57] is the sub-list for field type_name
+	52, // 57: towncrier.plugin.v1.PluginEnvelope.update_action_visual:type_name -> towncrier.plugin.v1.ActionVisualState
+	58, // [58:58] is the sub-list for method output_type
+	58, // [58:58] is the sub-list for method input_type
+	58, // [58:58] is the sub-list for extension type_name
+	58, // [58:58] is the sub-list for extension extendee
+	0,  // [0:58] is the sub-list for field type_name
 }
 
 func init() { file_plugin_v1_envelope_proto_init() }
@@ -1762,6 +1781,7 @@ func file_plugin_v1_envelope_proto_init() {
 		(*PluginEnvelope_SetVar)(nil),
 		(*PluginEnvelope_EmitTrigger)(nil),
 		(*PluginEnvelope_RunBotAction)(nil),
+		(*PluginEnvelope_UpdateActionVisual)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

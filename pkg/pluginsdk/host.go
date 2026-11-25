@@ -389,6 +389,23 @@ func (h *Host) RunBotAction(actionIDOrName string, args *pluginv1.ActionArgs, ru
 	return err
 }
 
+// UpdateActionVisual pushes live tile/dial visual state (SVG image data URI, colors, title, subtitle, progress)
+// for one exported plugin action so Stream Deck & PoundControl stay synchronized.
+func (h *Host) UpdateActionVisual(st *pluginv1.ActionVisualState) error {
+	if st == nil {
+		return &APIError{
+			Code:    pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			Message: "nil ActionVisualState",
+		}
+	}
+	_, err := h.call(&pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_UpdateActionVisual{
+			UpdateActionVisual: st,
+		},
+	})
+	return err
+}
+
 // ActionValueString constructs a string ActionValue.
 func ActionValueString(v string) *pluginv1.ActionValue {
 	return &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_StringVal{StringVal: v}}

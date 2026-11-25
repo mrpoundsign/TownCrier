@@ -2538,6 +2538,124 @@ func (x *RunBotActionRequest) GetRunImmediately() bool {
 	return false
 }
 
+// ActionVisualState updates the live visual presentation (icon SVG, colors, status, progress)
+// for one exported plugin ActionDescriptor so external decks can mirror rich tile states.
+type ActionVisualState struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ActionId        string                 `protobuf:"bytes,1,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
+	Title           string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	Subtitle        string                 `protobuf:"bytes,3,opt,name=subtitle,proto3" json:"subtitle,omitempty"`
+	Color           string                 `protobuf:"bytes,4,opt,name=color,proto3" json:"color,omitempty"`
+	BackgroundColor string                 `protobuf:"bytes,5,opt,name=background_color,json=backgroundColor,proto3" json:"background_color,omitempty"`
+	ImageDataUri    string                 `protobuf:"bytes,6,opt,name=image_data_uri,json=imageDataUri,proto3" json:"image_data_uri,omitempty"`
+	State           int32                  `protobuf:"varint,7,opt,name=state,proto3" json:"state,omitempty"`
+	HasProgress     bool                   `protobuf:"varint,8,opt,name=has_progress,json=hasProgress,proto3" json:"has_progress,omitempty"`
+	ProgressPercent int32                  `protobuf:"varint,9,opt,name=progress_percent,json=progressPercent,proto3" json:"progress_percent,omitempty"`
+	FeedbackValue   string                 `protobuf:"bytes,10,opt,name=feedback_value,json=feedbackValue,proto3" json:"feedback_value,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ActionVisualState) Reset() {
+	*x = ActionVisualState{}
+	mi := &file_plugin_v1_bot_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActionVisualState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActionVisualState) ProtoMessage() {}
+
+func (x *ActionVisualState) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_bot_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActionVisualState.ProtoReflect.Descriptor instead.
+func (*ActionVisualState) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *ActionVisualState) GetActionId() string {
+	if x != nil {
+		return x.ActionId
+	}
+	return ""
+}
+
+func (x *ActionVisualState) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *ActionVisualState) GetSubtitle() string {
+	if x != nil {
+		return x.Subtitle
+	}
+	return ""
+}
+
+func (x *ActionVisualState) GetColor() string {
+	if x != nil {
+		return x.Color
+	}
+	return ""
+}
+
+func (x *ActionVisualState) GetBackgroundColor() string {
+	if x != nil {
+		return x.BackgroundColor
+	}
+	return ""
+}
+
+func (x *ActionVisualState) GetImageDataUri() string {
+	if x != nil {
+		return x.ImageDataUri
+	}
+	return ""
+}
+
+func (x *ActionVisualState) GetState() int32 {
+	if x != nil {
+		return x.State
+	}
+	return 0
+}
+
+func (x *ActionVisualState) GetHasProgress() bool {
+	if x != nil {
+		return x.HasProgress
+	}
+	return false
+}
+
+func (x *ActionVisualState) GetProgressPercent() int32 {
+	if x != nil {
+		return x.ProgressPercent
+	}
+	return 0
+}
+
+func (x *ActionVisualState) GetFeedbackValue() string {
+	if x != nil {
+		return x.FeedbackValue
+	}
+	return ""
+}
+
 var File_plugin_v1_bot_proto protoreflect.FileDescriptor
 
 const file_plugin_v1_bot_proto_rawDesc = "" +
@@ -2737,7 +2855,19 @@ const file_plugin_v1_bot_proto_rawDesc = "" +
 	"\x13RunBotActionRequest\x12)\n" +
 	"\x11action_id_or_name\x18\x01 \x01(\tR\x0eactionIdOrName\x123\n" +
 	"\x04args\x18\x02 \x01(\v2\x1f.towncrier.plugin.v1.ActionArgsR\x04args\x12'\n" +
-	"\x0frun_immediately\x18\x03 \x01(\bR\x0erunImmediately*w\n" +
+	"\x0frun_immediately\x18\x03 \x01(\bR\x0erunImmediately\"\xd4\x02\n" +
+	"\x11ActionVisualState\x12\x1b\n" +
+	"\taction_id\x18\x01 \x01(\tR\bactionId\x12\x14\n" +
+	"\x05title\x18\x02 \x01(\tR\x05title\x12\x1a\n" +
+	"\bsubtitle\x18\x03 \x01(\tR\bsubtitle\x12\x14\n" +
+	"\x05color\x18\x04 \x01(\tR\x05color\x12)\n" +
+	"\x10background_color\x18\x05 \x01(\tR\x0fbackgroundColor\x12$\n" +
+	"\x0eimage_data_uri\x18\x06 \x01(\tR\fimageDataUri\x12\x14\n" +
+	"\x05state\x18\a \x01(\x05R\x05state\x12!\n" +
+	"\fhas_progress\x18\b \x01(\bR\vhasProgress\x12)\n" +
+	"\x10progress_percent\x18\t \x01(\x05R\x0fprogressPercent\x12%\n" +
+	"\x0efeedback_value\x18\n" +
+	" \x01(\tR\rfeedbackValue*w\n" +
 	"\bLogLevel\x12\x19\n" +
 	"\x15LOG_LEVEL_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fLOG_LEVEL_DEBUG\x10\x01\x12\x12\n" +
@@ -2763,7 +2893,7 @@ func file_plugin_v1_bot_proto_rawDescGZIP() []byte {
 }
 
 var file_plugin_v1_bot_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_plugin_v1_bot_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
+var file_plugin_v1_bot_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
 var file_plugin_v1_bot_proto_goTypes = []any{
 	(LogLevel)(0),                     // 0: towncrier.plugin.v1.LogLevel
 	(VarScope)(0),                     // 1: towncrier.plugin.v1.VarScope
@@ -2801,24 +2931,25 @@ var file_plugin_v1_bot_proto_goTypes = []any{
 	(*SetVarRequest)(nil),             // 33: towncrier.plugin.v1.SetVarRequest
 	(*EmitTriggerRequest)(nil),        // 34: towncrier.plugin.v1.EmitTriggerRequest
 	(*RunBotActionRequest)(nil),       // 35: towncrier.plugin.v1.RunBotActionRequest
-	nil,                               // 36: towncrier.plugin.v1.ActionArgs.ArgsEntry
-	nil,                               // 37: towncrier.plugin.v1.HTTPRequest.HeadersEntry
-	nil,                               // 38: towncrier.plugin.v1.HTTPResponse.HeadersEntry
-	(*SettingsMap)(nil),               // 39: towncrier.plugin.v1.SettingsMap
-	(*APIError)(nil),                  // 40: towncrier.plugin.v1.APIError
+	(*ActionVisualState)(nil),         // 36: towncrier.plugin.v1.ActionVisualState
+	nil,                               // 37: towncrier.plugin.v1.ActionArgs.ArgsEntry
+	nil,                               // 38: towncrier.plugin.v1.HTTPRequest.HeadersEntry
+	nil,                               // 39: towncrier.plugin.v1.HTTPResponse.HeadersEntry
+	(*SettingsMap)(nil),               // 40: towncrier.plugin.v1.SettingsMap
+	(*APIError)(nil),                  // 41: towncrier.plugin.v1.APIError
 }
 var file_plugin_v1_bot_proto_depIdxs = []int32{
 	2,  // 0: towncrier.plugin.v1.StreamEvent.emote_spans:type_name -> towncrier.plugin.v1.EmoteSpan
-	36, // 1: towncrier.plugin.v1.ActionArgs.args:type_name -> towncrier.plugin.v1.ActionArgs.ArgsEntry
+	37, // 1: towncrier.plugin.v1.ActionArgs.args:type_name -> towncrier.plugin.v1.ActionArgs.ArgsEntry
 	0,  // 2: towncrier.plugin.v1.LogRequest.level:type_name -> towncrier.plugin.v1.LogLevel
-	39, // 3: towncrier.plugin.v1.GetGlobalSettingsResponse.settings:type_name -> towncrier.plugin.v1.SettingsMap
-	39, // 4: towncrier.plugin.v1.SaveGlobalSettingsRequest.settings:type_name -> towncrier.plugin.v1.SettingsMap
-	37, // 5: towncrier.plugin.v1.HTTPRequest.headers:type_name -> towncrier.plugin.v1.HTTPRequest.HeadersEntry
-	38, // 6: towncrier.plugin.v1.HTTPResponse.headers:type_name -> towncrier.plugin.v1.HTTPResponse.HeadersEntry
-	40, // 7: towncrier.plugin.v1.GetOverlayAssetResponse.error:type_name -> towncrier.plugin.v1.APIError
+	40, // 3: towncrier.plugin.v1.GetGlobalSettingsResponse.settings:type_name -> towncrier.plugin.v1.SettingsMap
+	40, // 4: towncrier.plugin.v1.SaveGlobalSettingsRequest.settings:type_name -> towncrier.plugin.v1.SettingsMap
+	38, // 5: towncrier.plugin.v1.HTTPRequest.headers:type_name -> towncrier.plugin.v1.HTTPRequest.HeadersEntry
+	39, // 6: towncrier.plugin.v1.HTTPResponse.headers:type_name -> towncrier.plugin.v1.HTTPResponse.HeadersEntry
+	41, // 7: towncrier.plugin.v1.GetOverlayAssetResponse.error:type_name -> towncrier.plugin.v1.APIError
 	7,  // 8: towncrier.plugin.v1.RunActionRequest.args:type_name -> towncrier.plugin.v1.ActionArgs
 	7,  // 9: towncrier.plugin.v1.RunActionResponse.updated_args:type_name -> towncrier.plugin.v1.ActionArgs
-	40, // 10: towncrier.plugin.v1.RunActionResponse.error:type_name -> towncrier.plugin.v1.APIError
+	41, // 10: towncrier.plugin.v1.RunActionResponse.error:type_name -> towncrier.plugin.v1.APIError
 	3,  // 11: towncrier.plugin.v1.BeforeTTSRequest.event:type_name -> towncrier.plugin.v1.StreamEvent
 	1,  // 12: towncrier.plugin.v1.GetVarRequest.scope:type_name -> towncrier.plugin.v1.VarScope
 	6,  // 13: towncrier.plugin.v1.GetVarResponse.value:type_name -> towncrier.plugin.v1.ActionValue
@@ -2853,7 +2984,7 @@ func file_plugin_v1_bot_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plugin_v1_bot_proto_rawDesc), len(file_plugin_v1_bot_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   37,
+			NumMessages:   38,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

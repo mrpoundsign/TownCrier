@@ -105,6 +105,11 @@ message ActionDescriptor {
   string category = 3;
   string description = 4;
   repeated SettingField params_schema = 5;
+  repeated string controllers = 6;
+  string default_title = 7;
+  string default_color = 8;
+  string default_image = 9;
+  bool hide_title = 10;
 }
 
 // TriggerDescriptor describes a custom trigger event emitted by a plugin.

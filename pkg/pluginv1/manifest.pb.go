@@ -839,6 +839,11 @@ type ActionDescriptor struct {
 	Category      string                 `protobuf:"bytes,3,opt,name=category,proto3" json:"category,omitempty"`
 	Description   string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
 	ParamsSchema  []*SettingField        `protobuf:"bytes,5,rep,name=params_schema,json=paramsSchema,proto3" json:"params_schema,omitempty"`
+	Controllers   []string               `protobuf:"bytes,6,rep,name=controllers,proto3" json:"controllers,omitempty"`
+	DefaultTitle  string                 `protobuf:"bytes,7,opt,name=default_title,json=defaultTitle,proto3" json:"default_title,omitempty"`
+	DefaultColor  string                 `protobuf:"bytes,8,opt,name=default_color,json=defaultColor,proto3" json:"default_color,omitempty"`
+	DefaultImage  string                 `protobuf:"bytes,9,opt,name=default_image,json=defaultImage,proto3" json:"default_image,omitempty"`
+	HideTitle     bool                   `protobuf:"varint,10,opt,name=hide_title,json=hideTitle,proto3" json:"hide_title,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -906,6 +911,41 @@ func (x *ActionDescriptor) GetParamsSchema() []*SettingField {
 		return x.ParamsSchema
 	}
 	return nil
+}
+
+func (x *ActionDescriptor) GetControllers() []string {
+	if x != nil {
+		return x.Controllers
+	}
+	return nil
+}
+
+func (x *ActionDescriptor) GetDefaultTitle() string {
+	if x != nil {
+		return x.DefaultTitle
+	}
+	return ""
+}
+
+func (x *ActionDescriptor) GetDefaultColor() string {
+	if x != nil {
+		return x.DefaultColor
+	}
+	return ""
+}
+
+func (x *ActionDescriptor) GetDefaultImage() string {
+	if x != nil {
+		return x.DefaultImage
+	}
+	return ""
+}
+
+func (x *ActionDescriptor) GetHideTitle() bool {
+	if x != nil {
+		return x.HideTitle
+	}
+	return false
 }
 
 // TriggerDescriptor describes a custom trigger event emitted by a plugin.
@@ -1345,13 +1385,20 @@ const file_plugin_v1_manifest_proto_rawDesc = "" +
 	"\aoptions\x18\b \x03(\v2!.towncrier.plugin.v1.SelectOptionR\aoptions\x12'\n" +
 	"\x0ffile_extensions\x18\t \x03(\tR\x0efileExtensions\x12\x1a\n" +
 	"\brequired\x18\n" +
-	" \x01(\bR\brequired\"\xbc\x01\n" +
+	" \x01(\bR\brequired\"\xec\x02\n" +
 	"\x10ActionDescriptor\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
 	"\bcategory\x18\x03 \x01(\tR\bcategory\x12 \n" +
 	"\vdescription\x18\x04 \x01(\tR\vdescription\x12F\n" +
-	"\rparams_schema\x18\x05 \x03(\v2!.towncrier.plugin.v1.SettingFieldR\fparamsSchema\"u\n" +
+	"\rparams_schema\x18\x05 \x03(\v2!.towncrier.plugin.v1.SettingFieldR\fparamsSchema\x12 \n" +
+	"\vcontrollers\x18\x06 \x03(\tR\vcontrollers\x12#\n" +
+	"\rdefault_title\x18\a \x01(\tR\fdefaultTitle\x12#\n" +
+	"\rdefault_color\x18\b \x01(\tR\fdefaultColor\x12#\n" +
+	"\rdefault_image\x18\t \x01(\tR\fdefaultImage\x12\x1d\n" +
+	"\n" +
+	"hide_title\x18\n" +
+	" \x01(\bR\thideTitle\"u\n" +
 	"\x11TriggerDescriptor\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +

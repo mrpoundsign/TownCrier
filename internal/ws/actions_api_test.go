@@ -56,10 +56,21 @@ func TestHTTPExternalActionsEndpoints(t *testing.T) {
 		catalog: ExternalActionCatalog{
 			BotActions: []ExternalBotAction{{ID: "act-1", Name: "Announce Live", Enabled: true, QueueID: "default"}},
 			PluginActions: []ExternalPluginAction{{
-				PluginUUID: "com.github.mrpoundsign.crowddj",
-				PluginName: "CrowdDJ",
-				ActionID:   "skip",
-				ActionName: "Skip Current Track",
+				PluginUUID:   "com.github.mrpoundsign.crowddj",
+				PluginName:   "CrowdDJ",
+				ActionID:     "skip",
+				ActionName:   "Skip Song",
+				Controllers:  []string{"Keypad"},
+				DefaultTitle: "SKIP",
+				DefaultColor: "#06B6D4",
+				DefaultImage: "data:image/svg+xml;utf8,test",
+				HideTitle:    true,
+				Visual: &ExternalActionVisual{
+					Title:    "SKIP",
+					Subtitle: "Queue: 2",
+					Color:    "#06B6D4",
+					Image:    "data:image/svg+xml;utf8,live",
+				},
 			}},
 		},
 	}
@@ -82,6 +93,9 @@ func TestHTTPExternalActionsEndpoints(t *testing.T) {
 	require.Len(t, cat.BotActions, 1)
 	require.Len(t, cat.PluginActions, 1)
 	require.Equal(t, "skip", cat.PluginActions[0].ActionID)
+	require.True(t, cat.PluginActions[0].HideTitle)
+	require.NotNil(t, cat.PluginActions[0].Visual)
+	require.Equal(t, "Queue: 2", cat.PluginActions[0].Visual.Subtitle)
 
 	botResp, err := http.Post(ts.URL+"/api/bot/run", "application/json", bytes.NewBufferString(`{"action_id":"act-1","args":{"user":"tester"}}`))
 	require.NoError(t, err)

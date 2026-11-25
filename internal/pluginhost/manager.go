@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/mrpoundsign/TownCrier/pkg/chat"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 	"github.com/mrpoundsign/TownCrier/pkg/pluginsdk"
@@ -41,8 +43,9 @@ type pluginEntry struct {
 	path         string
 	binaryPath   string
 	binarySHA256 string
-	manifest     *pluginv1.Manifest
-	state        RunState
+	manifest      *pluginv1.Manifest
+	actionVisuals map[string]*pluginv1.ActionVisualState
+	state         RunState
 	errMsg       string
 	apiErr       *pluginv1.APIError
 	logs         *logBuffer
@@ -474,6 +477,17 @@ func (m *Manager) Plugins() []PluginStatus {
 			views = slices.Clone(ent.manifest.GetViews())
 			apiVer = FormatVersion(ent.manifest.GetApiVersion())
 		}
+		var visuals map[string]*pluginv1.ActionVisualState
+		if len(ent.actionVisuals) > 0 {
+			visuals = make(map[string]*pluginv1.ActionVisualState, len(ent.actionVisuals))
+			for k, av := range ent.actionVisuals {
+				if av != nil {
+					if cloned, ok := proto.Clone(av).(*pluginv1.ActionVisualState); ok {
+						visuals[k] = cloned
+					}
+				}
+			}
+		}
 		out = append(out, PluginStatus{
 			UUID:              ent.uuid,
 			Name:              ent.name,
@@ -491,6 +505,7 @@ func (m *Manager) Plugins() []PluginStatus {
 			GlobalSchema:      schema,
 			ActionCount:       len(actions),
 			Actions:           actions,
+			ActionVisuals:     visuals,
 			Triggers:          triggers,
 			Views:             views,
 			State:             ent.state,
@@ -1201,6 +1216,22 @@ func (m *Manager) handleHostCall(ctx context.Context, ent *pluginEntry, pEnv *pl
 		if err := m.opts.Callbacks.OnRunBotAction(ctx, uuid, pay.RunBotAction); err != nil {
 			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INTERNAL, err.Error())
 		}
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	case *pluginv1.PluginEnvelope_UpdateActionVisual:
+		if pay.UpdateActionVisual == nil || strings.TrimSpace(pay.UpdateActionVisual.GetActionId()) == "" {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing action_id in update_action_visual")
+		}
+		cloned, ok := proto.Clone(pay.UpdateActionVisual).(*pluginv1.ActionVisualState)
+		if !ok {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INTERNAL, "failed cloning action visual state")
+		}
+		ent.mu.Lock()
+		if ent.actionVisuals == nil {
+			ent.actionVisuals = make(map[string]*pluginv1.ActionVisualState)
+		}
+		ent.actionVisuals[strings.TrimSpace(cloned.GetActionId())] = cloned
+		ent.mu.Unlock()
 		return &pluginv1.HostCallResponse{Ok: true}
 
 	default:

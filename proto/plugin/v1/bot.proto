@@ -298,3 +298,18 @@ message RunBotActionRequest {
   ActionArgs args = 2;
   bool run_immediately = 3;
 }
+
+// ActionVisualState updates the live visual presentation (icon SVG, colors, status, progress)
+// for one exported plugin ActionDescriptor so external decks can mirror rich tile states.
+message ActionVisualState {
+  string action_id = 1;
+  string title = 2;
+  string subtitle = 3;
+  string color = 4;
+  string background_color = 5;
+  string image_data_uri = 6;
+  int32 state = 7;
+  bool has_progress = 8;
+  int32 progress_percent = 9;
+  string feedback_value = 10;
+}
