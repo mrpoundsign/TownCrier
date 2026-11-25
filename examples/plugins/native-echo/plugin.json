@@ -1,0 +1,13 @@
+{
+  "uuid": "com.github.mrpoundsign.towncrier.examples.native-echo",
+  "name": "Native Echo",
+  "version": "1.0.0",
+  "author": "TownCrier",
+  "description": "Reference native subprocess plugin demonstrating authenticated loopback TCP Protobuf IPC.",
+  "binaries": {
+    "windows/amd64": "native-echo.exe",
+    "linux/amd64": "native-echo",
+    "darwin/amd64": "native-echo",
+    "darwin/arm64": "native-echo"
+  }
+}

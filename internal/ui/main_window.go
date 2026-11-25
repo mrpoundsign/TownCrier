@@ -170,6 +170,9 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 		if mw.chatLogsTab != nil {
 			mw.chatLogsTab.Close()
 		}
+		if mw.settingsTab != nil && mw.settingsTab.pluginsTab != nil {
+			mw.settingsTab.pluginsTab.Close()
+		}
 		w.Hide()
 		done := make(chan struct{})
 		go func() {

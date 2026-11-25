@@ -1,0 +1,221 @@
+syntax = "proto3";
+
+package towncrier.plugin.v1;
+
+option go_package = "github.com/mrpoundsign/TownCrier/pkg/pluginv1;pluginv1";
+
+import "plugin/v1/manifest.proto";
+import "plugin/v1/version.proto";
+
+// EmoteSpan identifies an emote substring inside StreamEvent.text by rune index.
+message EmoteSpan {
+  int32 start = 1;
+  int32 end = 2;
+  string id = 3;
+  string name = 4;
+  string url = 5;
+}
+
+// StreamEvent mirrors TownCrier's normalized chat.Event across all platforms.
+message StreamEvent {
+  string id = 1;
+  string platform = 2;
+  string channel = 3;
+  string stream_id = 4;
+  string stream_title = 5;
+  string stream_orientation = 6;
+  string kind = 7;
+  int64 timestamp_unix_ms = 8;
+  string user_id = 9;
+  string user_name = 10;
+  string display_name = 11;
+  repeated string roles = 12;
+  int32 fan_club_level = 13;
+  bool is_bot_signal = 14;
+  bool is_reply = 15;
+  string reply_to_user = 16;
+  repeated string mentions = 17;
+  string text = 18;
+  repeated EmoteSpan emote_spans = 19;
+  string translated_text = 20;
+  string source_lang = 21;
+  double amount = 22;
+  double unit_amount = 23;
+  string currency = 24;
+  string item_name = 25;
+  string sub_tier = 26;
+  string recipient = 27;
+  int32 months = 28;
+  int32 count = 29;
+  string reward_id = 30;
+  string reward_title = 31;
+  int64 stream_session_id = 32;
+  bool stream_is_live = 33;
+}
+
+// ModerationEvent mirrors TownCrier's normalized chat.ModerationEvent.
+message ModerationEvent {
+  string platform = 1;
+  string channel = 2;
+  string action = 3;
+  string target_message_id = 4;
+  string target_user_id = 5;
+  int64 timestamp_unix_ms = 6;
+}
+
+// TTSSpeechLifecycleEvent notifies plugins when TTS utterance playback starts or finishes.
+message TTSSpeechLifecycleEvent {
+  string id = 1;
+  string text = 2;
+  string voice_id = 3;
+  string username = 4;
+  string platform = 5;
+  bool finished = 6;
+}
+
+// ActionValue carries a typed argument value passed to/from actions and triggers.
+message ActionValue {
+  oneof kind {
+    string string_val = 1;
+    int64 int_val = 2;
+    double double_val = 3;
+    bool bool_val = 4;
+  }
+}
+
+// ActionArgs maps named argument keys to typed ActionValues.
+message ActionArgs {
+  map<string, ActionValue> args = 1;
+}
+
+// LogLevel identifies log severity for LogRequest.
+enum LogLevel {
+  LOG_LEVEL_UNSPECIFIED = 0;
+  LOG_LEVEL_DEBUG = 1;
+  LOG_LEVEL_INFO = 2;
+  LOG_LEVEL_WARN = 3;
+  LOG_LEVEL_ERROR = 4;
+}
+
+// LogRequest appends a message to the plugin's in-app log buffer.
+message LogRequest {
+  LogLevel level = 1;
+  string message = 2;
+}
+
+// GetGlobalSettingsRequest retrieves the plugin's persisted settings merged with keyring secrets.
+message GetGlobalSettingsRequest {}
+
+// GetGlobalSettingsResponse returns the plugin's persisted settings.
+message GetGlobalSettingsResponse {
+  SettingsMap settings = 1;
+}
+
+// SaveGlobalSettingsRequest atomically saves plugin settings, routing password fields to OS keyring.
+message SaveGlobalSettingsRequest {
+  SettingsMap settings = 1;
+}
+
+// SetTimerRequest creates, updates, or cancels (interval_ms == 0) a named plugin timer.
+message SetTimerRequest {
+  string timer_id = 1;
+  string context = 2;
+  uint32 interval_ms = 3;
+}
+
+// HTTPRequest executes a synchronous or asynchronous outbound HTTP request through the host sandbox.
+message HTTPRequest {
+  string method = 1;
+  string url = 2;
+  map<string, string> headers = 3;
+  bytes body = 4;
+  uint32 timeout_ms = 5;
+  bool async = 6;
+  string async_id = 7;
+}
+
+// HTTPResponse holds the result of a host-executed HTTP request.
+message HTTPResponse {
+  int32 status = 1;
+  map<string, string> headers = 2;
+  bytes body = 3;
+  string error = 4;
+  string async_id = 5;
+}
+
+// SpeakRequest requests TownCrier to synthesize and play TTS audio.
+message SpeakRequest {
+  string text = 1;
+  string voice_id = 2;
+  float speed = 3;
+  int32 priority = 4;
+  string username = 5;
+}
+
+// KVGetRequest reads a namespaced key from plugin SQLite KV storage.
+message KVGetRequest {
+  string key = 1;
+}
+
+// KVGetResponse returns the stored bytes if found.
+message KVGetResponse {
+  bool found = 1;
+  bytes value = 2;
+}
+
+// KVSetRequest stores bytes under a namespaced key in plugin SQLite KV storage.
+message KVSetRequest {
+  string key = 1;
+  bytes value = 2;
+}
+
+// KVDeleteRequest deletes a namespaced key from plugin SQLite KV storage.
+message KVDeleteRequest {
+  string key = 1;
+}
+
+// KVListRequest lists keys matching an optional prefix in plugin SQLite KV storage.
+message KVListRequest {
+  string prefix = 1;
+  uint32 limit = 2;
+}
+
+// KVListResponse returns matching key names.
+message KVListResponse {
+  repeated string keys = 1;
+}
+
+// OverlayBroadcastRequest pushes a JSON event payload to TownCrier's local SSE/WS overlay server.
+message OverlayBroadcastRequest {
+  string event_name = 1;
+  string json_payload = 2;
+}
+
+// RunActionRequest invokes a plugin-defined action (implemented in Milestone 3).
+message RunActionRequest {
+  string action_id = 1;
+  ActionArgs args = 2;
+}
+
+// RunActionResponse returns updated action arguments and chain continuation state.
+message RunActionResponse {
+  bool continue_chain = 1;
+  ActionArgs updated_args = 2;
+  APIError error = 3;
+}
+
+// BeforeTTSRequest allows pre-TTS filtering/rewriting (implemented in Milestone 3).
+message BeforeTTSRequest {
+  StreamEvent event = 1;
+  string proposed_text = 2;
+  string proposed_voice = 3;
+  float proposed_speed = 4;
+}
+
+// BeforeTTSResponse tells the host whether to consume or rewrite an utterance.
+message BeforeTTSResponse {
+  bool consume = 1;
+  string override_text = 2;
+  string override_voice = 3;
+  float override_speed = 4;
+}

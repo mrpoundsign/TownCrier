@@ -9,6 +9,7 @@ set -euo pipefail
 #   ./build.sh mac      # Build macOS GUI executable into build/bin/towncrier
 #   ./build.sh lint     # Run go fix --diff and golangci-lint-v2
 #   ./build.sh test     # Run unit tests
+#   ./build.sh proto    # Regenerate Protobuf Go bindings from proto/
 #   ./build.sh package  # Package zip/tar.gz distributions into dist/
 #   ./build.sh package-mac # Package macOS distribution into dist/
 #   ./build.sh clean    # Clean build and dist outputs
@@ -28,11 +29,18 @@ if command -v git &>/dev/null && [ -d "$ROOT_DIR/.git" ] && [ -d "$ROOT_DIR/.git
     git -C "$ROOT_DIR" config core.hooksPath .githooks 2>/dev/null || true
 fi
 
-for dir in "$HOME/go/bin" "/usr/local/go/bin" "$HOME/.asdf/shims" "$HOME/.asdf/bin" "/home/linuxbrew/.linuxbrew/bin" "/home/linuxbrew/.linuxbrew/sbin"; do
+for dir in "$HOME/.local/bin" "$HOME/go/bin" "/usr/local/go/bin" "$HOME/.asdf/shims" "$HOME/.asdf/bin" "/home/linuxbrew/.linuxbrew/bin" "/home/linuxbrew/.linuxbrew/sbin"; do
     if [ -d "$dir" ] && [[ ":$PATH:" != *":$dir:"* ]]; then
         export PATH="$dir:$PATH"
     fi
 done
+if command -v go &>/dev/null; then
+    for dir in "$(go env GOBIN 2>/dev/null || true)" "$(go env GOPATH 2>/dev/null || true)/bin"; do
+        if [ -n "$dir" ] && [ -d "$dir" ] && [[ ":$PATH:" != *":$dir:"* ]]; then
+            export PATH="$dir:$PATH"
+        fi
+    done
+fi
 
 fetch_dlls() {
     echo "==> Verifying Windows runtime DLLs in $BIN_DIR..."
@@ -409,6 +417,24 @@ with zipfile.ZipFile('$zip_file', 'w', zipfile.ZIP_DEFLATED) as zf:
     echo "✓ Successfully packaged $tar_file"
 }
 
+run_proto() {
+    echo "==> Generating Protobuf Go bindings..."
+    if ! command -v protoc &>/dev/null; then
+        echo "Error: protoc not found in PATH"
+        exit 1
+    fi
+    if ! command -v protoc-gen-go &>/dev/null; then
+        echo "Error: protoc-gen-go not found in PATH"
+        exit 1
+    fi
+    mkdir -p "$ROOT_DIR/internal/ws/controlv1" "$ROOT_DIR/pkg/pluginv1"
+    protoc -I "$ROOT_DIR/proto" \
+        --go_out="$ROOT_DIR" --go_opt=module=github.com/mrpoundsign/TownCrier \
+        "$ROOT_DIR/proto/control/v1/"*.proto \
+        "$ROOT_DIR/proto/plugin/v1/"*.proto
+    echo "✓ Protobuf bindings generated!"
+}
+
 clean() {
     echo "==> Cleaning build artifacts..."
     rm -rf "$BUILD_DIR" "$DIST_DIR"
@@ -438,6 +464,9 @@ case "$TARGET" in
     test)
         run_test
         ;;
+    proto)
+        run_proto
+        ;;
     package)
         package_dist
         ;;
@@ -452,7 +481,7 @@ case "$TARGET" in
         ;;
     *)
         echo "Unknown target: $TARGET"
-        echo "Valid targets: all, win, linux, mac, lint, test, package, package-mac, fetch-dlls, clean"
+        echo "Valid targets: all, win, linux, mac, lint, test, proto, package, package-mac, fetch-dlls, clean"
         exit 1
         ;;
 esac

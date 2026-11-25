@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package towncrier.plugin.v1;
+
+option go_package = "github.com/mrpoundsign/TownCrier/pkg/pluginv1;pluginv1";
+
+import "plugin/v1/bot.proto";
+import "plugin/v1/manifest.proto";
+import "plugin/v1/ui.proto";
+import "plugin/v1/version.proto";
+
+message GetManifestRequest {}
+
+message ManifestResponse {
+  Manifest manifest = 1;
+  APIError error = 2;
+}
+
+message InitRequest {
+  ProtocolVersion host_api_version = 1;
+  string host_app_version = 2;
+  repeated string supported_capabilities = 3;
+  SettingsMap global_settings = 4;
+}
+
+message ShutdownRequest {}
+
+message AckResponse {
+  bool ok = 1;
+  APIError error = 2;
+}
+
+message OnEventRequest {
+  oneof event {
+    StreamEvent stream_event = 1;
+    ModerationEvent moderation_event = 2;
+    TTSSpeechLifecycleEvent tts_lifecycle = 3;
+  }
+}
+
+message OnTimerRequest {
+  string timer_id = 1;
+  string context = 2;
+}
+
+message OnGlobalSettingsRequest {
+  SettingsMap settings = 1;
+}
+
+message OnConfigActionRequest {
+  string action_key = 1;
+  SettingsMap settings = 2;
+}
+
+message OnHTTPResultRequest {
+  string async_id = 1;
+  HTTPResponse response = 2;
+}
+
+message HostCallResponse {
+  bool ok = 1;
+  APIError error = 2;
+  oneof result {
+    GetGlobalSettingsResponse global_settings = 3;
+    HTTPResponse http_response = 4;
+    KVGetResponse kv_get = 5;
+    KVListResponse kv_list = 6;
+  }
+}
+
+// HostEnvelope carries messages from TownCrier (host) to a plugin (WASM or Native).
+message HostEnvelope {
+  uint64 request_id = 1;
+  oneof payload {
+    GetManifestRequest get_manifest = 2;
+    InitRequest init = 3;
+    ShutdownRequest shutdown = 4;
+    OnEventRequest on_event = 5;
+    OnTimerRequest on_timer = 6;
+    OnGlobalSettingsRequest on_global_settings = 7;
+    OnConfigActionRequest on_config_action = 8;
+    OnHTTPResultRequest on_http_result = 9;
+    HostCallResponse host_call_response = 10;
+    RenderViewRequest render_view = 11;
+    UIEvent on_ui_event = 12;
+    RunActionRequest run_action = 13;
+    BeforeTTSRequest before_tts = 14;
+  }
+}
+
+// PluginEnvelope carries messages from a plugin (WASM or Native) to TownCrier (host).
+message PluginEnvelope {
+  uint64 request_id = 1;
+  oneof payload {
+    AckResponse ack = 2;
+    ManifestResponse manifest = 3;
+    LogRequest log = 4;
+    GetGlobalSettingsRequest get_global_settings = 5;
+    SaveGlobalSettingsRequest save_global_settings = 6;
+    SetTimerRequest set_timer = 7;
+    HTTPRequest http_request = 8;
+    SpeakRequest speak = 9;
+    KVGetRequest kv_get = 10;
+    KVSetRequest kv_set = 11;
+    KVDeleteRequest kv_delete = 12;
+    KVListRequest kv_list = 13;
+    OverlayBroadcastRequest overlay_broadcast = 14;
+    UISnapshot ui_snapshot = 15;
+    UIPatchBatch ui_patch = 16;
+    RunActionResponse run_action_response = 17;
+    BeforeTTSResponse before_tts_response = 18;
+  }
+}

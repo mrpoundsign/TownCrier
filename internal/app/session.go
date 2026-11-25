@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
+	"github.com/mrpoundsign/TownCrier/internal/pluginhost"
 	"github.com/mrpoundsign/TownCrier/internal/ws"
 	"github.com/mrpoundsign/TownCrier/internal/ws/controlv1"
 	"github.com/mrpoundsign/TownCrier/pkg/audio"
@@ -25,6 +26,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/pkg/platform/tiktok"
 	"github.com/mrpoundsign/TownCrier/pkg/platform/twitch"
 	"github.com/mrpoundsign/TownCrier/pkg/platform/youtube"
+	"github.com/mrpoundsign/TownCrier/pkg/pluginv1"
 	"github.com/mrpoundsign/TownCrier/pkg/queue"
 	"github.com/mrpoundsign/TownCrier/pkg/secrets"
 	"github.com/mrpoundsign/TownCrier/pkg/stt"
@@ -73,6 +75,7 @@ type Session struct {
 	onTTSModeState    func(mode string, speakingActive bool, userIdle bool)
 	onVolumeChanged   func(vol float32)
 	wsServer          *ws.Server
+	pluginMgr         *pluginhost.Manager
 
 	idleProvider    func() time.Duration
 	userIdle        bool
@@ -88,6 +91,7 @@ type Session struct {
 	streamMu        sync.Mutex
 	livePlatforms   map[string]string
 	activeSessionID int64
+	liveRunID       int64
 	startedAt       time.Time
 	configStore     config.Store
 
@@ -312,6 +316,37 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 	initCtrlOn, initTTSOverlayOn, initChatOverlayOn, _ := cfgClone.EffectiveWebSocketFeatures()
 	s.wsServer.SetFeatures(initCtrlOn, initTTSOverlayOn, initChatOverlayOn)
 	s.wsServer.SetSubtitlesOverlayEnabled(cfgClone.EffectiveSubtitlesOverlayEnabled())
+
+	pluginBaseDir := ""
+	pluginKVPath := ":memory:"
+	if loc := strings.TrimSpace(configStore.Location()); loc != "" && loc != "memory" {
+		pluginBaseDir = filepath.Join(filepath.Dir(loc), "plugins")
+		pluginKVPath = filepath.Join(pluginBaseDir, "plugins_kv.db")
+	}
+	s.pluginMgr = pluginhost.NewManager(pluginhost.Options{
+		BaseDir:  pluginBaseDir,
+		KVDBPath: pluginKVPath,
+		Secrets:  store,
+		Callbacks: pluginhost.HostCallbacks{
+			OnSpeak: func(req pluginhost.SpeakRequest) error {
+				return s.SpeakCustom(ws.SpeakRequest{
+					Text:     req.Text,
+					VoiceID:  req.VoiceID,
+					Speed:    req.Speed,
+					Priority: req.Priority,
+					Username: req.Username,
+				})
+			},
+			OnOverlayBroadcast: func(pluginUUID, eventName, jsonPayload string) {
+				if s.wsServer != nil {
+					s.wsServer.BroadcastPluginEvent(pluginUUID, eventName, jsonPayload)
+				}
+			},
+			GetConfig:    s.Config,
+			UpdateConfig: s.UpdateConfig,
+		},
+	})
+
 	s.queue.AddOnItemStarted(func(item *queue.Item) {
 		if item == nil {
 			return
@@ -321,15 +356,26 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 			user = item.Event.UserName
 			plat = item.Event.Platform
 		}
-		s.wsServer.BroadcastSpeechEvent(&controlv1.SpeechEvent{
+		speechEv := &controlv1.SpeechEvent{
 			Id:       item.ID,
 			Text:     item.Text,
 			VoiceId:  item.VoiceID,
 			Username: user,
 			Platform: plat,
 			Finished: false,
-		})
+		}
+		s.wsServer.BroadcastSpeechEvent(speechEv)
 		s.wsServer.BroadcastState()
+		if s.pluginMgr != nil {
+			s.pluginMgr.DispatchTTSLifecycle(&pluginv1.TTSSpeechLifecycleEvent{
+				Id:       item.ID,
+				Text:     item.Text,
+				VoiceId:  item.VoiceID,
+				Username: user,
+				Platform: plat,
+				Finished: false,
+			})
+		}
 	})
 	s.queue.AddOnItemFinished(func(item *queue.Item) {
 		if item != nil {
@@ -346,6 +392,16 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 				Platform: plat,
 				Finished: true,
 			})
+			if s.pluginMgr != nil {
+				s.pluginMgr.DispatchTTSLifecycle(&pluginv1.TTSSpeechLifecycleEvent{
+					Id:       item.ID,
+					Text:     item.Text,
+					VoiceId:  item.VoiceID,
+					Username: user,
+					Platform: plat,
+					Finished: true,
+				})
+			}
 		}
 		s.wsServer.BroadcastState()
 	})
@@ -383,6 +439,9 @@ func (s *Session) Start() error {
 	s.syncVoiceSubtitles(cfg)
 	s.syncMicMonitor(cfg)
 	s.syncWSServer(cfg)
+	if s.pluginMgr != nil {
+		_ = s.pluginMgr.Start()
+	}
 	syncConnectors(cfg, tw, yt, tt, kk)
 	return nil
 }
@@ -490,7 +549,17 @@ func (s *Session) Close() error {
 	if elog != nil {
 		_ = elog.Close()
 	}
+	if s.pluginMgr != nil {
+		_ = s.pluginMgr.Close()
+	}
 	return nil
+}
+
+// PluginManager returns the dual WASM/Native plugin manager attached to this session.
+func (s *Session) PluginManager() *pluginhost.Manager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pluginMgr
 }
 
 // IsRunning reports whether the session is currently active.
@@ -1204,6 +1273,20 @@ func (s *Session) ActiveSessionID() int64 {
 	return s.activeSessionID
 }
 
+// EffectiveStreamSessionID returns the persisted eventlog stream session ID when available,
+// or an ephemeral live-stream run ID whenever a platform is live without event logging.
+func (s *Session) EffectiveStreamSessionID() int64 {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.activeSessionID > 0 {
+		return s.activeSessionID
+	}
+	if len(s.livePlatforms) > 0 {
+		return s.liveRunID
+	}
+	return 0
+}
+
 // IsStreamLive reports whether any configured streaming platform is currently broadcasting live.
 func (s *Session) IsStreamLive() bool {
 	s.streamMu.Lock()
@@ -1237,6 +1320,9 @@ func (s *Session) UpdatePlatformStreamState(platform, channel string, live bool)
 	if live {
 		prevChan, alreadyLive := s.livePlatforms[platform]
 		s.livePlatforms[platform] = channel
+		if s.liveRunID == 0 {
+			s.liveRunID = time.Now().UTC().UnixNano()
+		}
 		if alreadyLive && prevChan == channel && s.activeSessionID > 0 {
 			return
 		}
@@ -1289,12 +1375,15 @@ func (s *Session) UpdatePlatformStreamState(platform, channel string, live bool)
 		return
 	}
 	delete(s.livePlatforms, platform)
-	if len(s.livePlatforms) == 0 && s.activeSessionID > 0 {
-		sid := s.activeSessionID
-		s.activeSessionID = 0
-		if elog != nil {
-			_ = elog.EndSession(context.Background(), sid, time.Now().UTC())
-			log.Printf("[Session] Ended stream session #%d (all platforms offline)", sid)
+	if len(s.livePlatforms) == 0 {
+		s.liveRunID = 0
+		if s.activeSessionID > 0 {
+			sid := s.activeSessionID
+			s.activeSessionID = 0
+			if elog != nil {
+				_ = elog.EndSession(context.Background(), sid, time.Now().UTC())
+				log.Printf("[Session] Ended stream session #%d (all platforms offline)", sid)
+			}
 		}
 	}
 }
@@ -1307,6 +1396,7 @@ func (s *Session) endActiveStreamSession() {
 	s.streamMu.Lock()
 	sid := s.activeSessionID
 	s.activeSessionID = 0
+	s.liveRunID = 0
 	clear(s.livePlatforms)
 	s.streamMu.Unlock()
 
@@ -2634,6 +2724,10 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	}
 	s.syncAndEnrichFollowerRole(event)
 	rawText, rawEmotes := formatEventLogRawTextAndEmotes(event)
+	if s.pluginMgr != nil {
+		evCopy := *event
+		s.pluginMgr.DispatchStreamEventWithState(&evCopy, s.EffectiveStreamSessionID(), s.IsStreamLive())
+	}
 
 	log.Printf("[Session] DispatchEvent: user=%q platform=%s channel=%q kind=%s text=%q roles=%v", event.UserName, event.Platform, event.Channel, event.Kind, event.Text, event.Roles)
 
@@ -2895,6 +2989,10 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 func (s *Session) DispatchModeration(modEvent *chat.ModerationEvent) {
 	if modEvent == nil || s.queue == nil {
 		return
+	}
+	if s.pluginMgr != nil {
+		modCopy := *modEvent
+		s.pluginMgr.DispatchModerationEvent(&modCopy)
 	}
 
 	cfg := s.Config()

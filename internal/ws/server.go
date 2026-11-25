@@ -224,6 +224,35 @@ func (s *Server) BroadcastSubtitleEvent(ev SubtitleEvent) {
 	}
 }
 
+// BroadcastPluginEvent pushes a plugin overlay broadcast event to all connected /api/overlay/stream SSE subscribers.
+func (s *Server) BroadcastPluginEvent(pluginUUID, eventName, jsonPayload string) {
+	var raw json.RawMessage
+	trimmed := strings.TrimSpace(jsonPayload)
+	if trimmed != "" && json.Valid([]byte(trimmed)) {
+		raw = json.RawMessage(trimmed)
+	} else if trimmed != "" {
+		if b, err := json.Marshal(trimmed); err == nil {
+			raw = b
+		}
+	}
+	ev := OverlayStreamEvent{
+		Kind: "plugin",
+		Plugin: &PluginOverlayEvent{
+			PluginUUID: pluginUUID,
+			EventName:  eventName,
+			Payload:    raw,
+		},
+	}
+	s.overlaySubsMu.Lock()
+	defer s.overlaySubsMu.Unlock()
+	for _, ch := range s.overlaySubs {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+}
+
 // SetSubtitlesOverlayEnabled dynamically enables or disables the /overlay/subtitles endpoints without restarting the listener.
 func (s *Server) SetSubtitlesOverlayEnabled(enabled bool) {
 	s.mu.Lock()

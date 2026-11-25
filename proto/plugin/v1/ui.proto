@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package towncrier.plugin.v1;
+
+option go_package = "github.com/mrpoundsign/TownCrier/pkg/pluginv1;pluginv1";
+
+// Reserved UI protocol stubs (fleshed out in Milestone 2 while locking envelope field numbers for v1.0.0).
+
+message RenderViewRequest {
+  string view_id = 1;
+}
+
+message UISnapshot {
+  string view_id = 1;
+  uint64 revision = 2;
+}
+
+message UIPatchBatch {
+  string view_id = 1;
+  uint64 base_revision = 2;
+  uint64 revision = 3;
+}
+
+message UIEvent {
+  string view_id = 1;
+  string node_id = 2;
+  string kind = 3;
+  string string_value = 4;
+  double number_value = 5;
+  bool bool_value = 6;
+}

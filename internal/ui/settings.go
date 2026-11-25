@@ -57,11 +57,13 @@ type SettingsView struct {
 	subTabs               *container.AppTabs
 	generalTabItem        *container.TabItem
 	obsTabItem            *container.TabItem
+	pluginsTabItem        *container.TabItem
 	ttsTabItem            *container.TabItem
 	translationTabItem    *container.TabItem
 	voiceSubtitlesTabItem *container.TabItem
 	rulesTabItem          *container.TabItem
 	logsTabItem           *container.TabItem
+	pluginsTab            *PluginsTabView
 	twitchTab         *TwitchTabView
 	youtubeTab        *YouTubeTabView
 	tiktokTab         *TikTokTabView
@@ -494,6 +496,9 @@ func (v *SettingsView) SyncPlatformTabVisibility() {
 	if v.obsTabItem != nil {
 		items = append(items, v.obsTabItem)
 	}
+	if v.pluginsTabItem != nil {
+		items = append(items, v.pluginsTabItem)
+	}
 
 	if v.ttsEnabled && v.ttsTabItem != nil {
 		items = append(items, v.ttsTabItem)
@@ -848,6 +853,9 @@ func (v *SettingsView) SyncFromConfig() {
 	if v.wsSubtitlesOverlayCheck != nil {
 		v.wsSubtitlesOverlayCheck.SetChecked(v.cfg.WebSocket.SubtitlesOverlayEnabled)
 	}
+	if v.pluginsTab != nil {
+		v.pluginsTab.Refresh()
+	}
 	v.syncVoiceSubtitlesControlsFromConfig()
 	if v.translationTargetSelect != nil {
 		v.translationTargetSelect.SetSelected(FormatTranslationTargetLangOption(v.cfg.Translation.TargetLang))
@@ -977,6 +985,8 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 
 	v.generalTabItem = container.NewTabItemWithIcon("General", theme.SettingsIcon(), generalTabContent)
 	v.obsTabItem = container.NewTabItemWithIcon("OBS & Overlays", theme.ComputerIcon(), obsTabContent)
+	v.pluginsTab = NewPluginsTabView(v.window, v.session, v.setStatus)
+	v.pluginsTabItem = container.NewTabItemWithIcon("Plugins", theme.StorageIcon(), v.pluginsTab.Build())
 	v.ttsTabItem = container.NewTabItemWithIcon("TTS & Hardware", theme.VolumeUpIcon(), ttsTabContent)
 	v.voiceSubtitlesTabItem = container.NewTabItemWithIcon("Voice Subtitles", theme.MediaRecordIcon(), v.buildVoiceSubtitlesTab())
 	v.translationTabItem = container.NewTabItemWithIcon("Translation", resLogTranslated, v.buildTranslationTab())

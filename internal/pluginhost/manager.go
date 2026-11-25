@@ -1,0 +1,1158 @@
+package pluginhost
+
+import (
+	"cmp"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/mrpoundsign/TownCrier/pkg/chat"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/pluginsdk"
+	"github.com/mrpoundsign/TownCrier/pkg/pluginv1"
+)
+
+const eventQueueSize = 64
+
+type pluginBackend interface {
+	Dispatch(ctx context.Context, env *pluginv1.HostEnvelope) (*pluginv1.PluginEnvelope, error)
+	SetTimer(timerID, ctxStr string, intervalMs uint32) *pluginv1.APIError
+	Close() error
+}
+
+type pluginEntry struct {
+	mu           sync.RWMutex
+	uuid         string
+	name         string
+	version      string
+	author       string
+	description  string
+	runtime      pluginv1.RuntimeKind
+	path         string
+	binaryPath   string
+	binarySHA256 string
+	manifest     *pluginv1.Manifest
+	state        RunState
+	errMsg       string
+	apiErr       *pluginv1.APIError
+	logs         *logBuffer
+	backend      pluginBackend
+
+	eventMu sync.Mutex
+	eventCh chan *pluginv1.OnEventRequest
+	stopEv  chan struct{}
+}
+
+func (e *pluginEntry) setError(apiErr *pluginv1.APIError) {
+	e.mu.Lock()
+	e.state = StatusError
+	e.apiErr = apiErr
+	if apiErr != nil {
+		e.errMsg = apiErr.GetMessage()
+	}
+	e.mu.Unlock()
+}
+
+func (e *pluginEntry) startEventWorker() {
+	e.eventMu.Lock()
+	defer e.eventMu.Unlock()
+	if e.eventCh != nil {
+		return
+	}
+	ch := make(chan *pluginv1.OnEventRequest, eventQueueSize)
+	stop := make(chan struct{})
+	e.eventCh = ch
+	e.stopEv = stop
+
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case ev, ok := <-ch:
+				if !ok || ev == nil {
+					return
+				}
+				e.mu.RLock()
+				be := e.backend
+				st := e.state
+				e.mu.RUnlock()
+				if be == nil || st != StatusRunning {
+					continue
+				}
+				_, err := be.Dispatch(context.Background(), &pluginv1.HostEnvelope{
+					Payload: &pluginv1.HostEnvelope_OnEvent{OnEvent: ev},
+				})
+				if err != nil {
+					e.logs.Append("event dispatch error: " + err.Error())
+				}
+			}
+		}
+	}()
+}
+
+func (e *pluginEntry) stopEventWorker() {
+	e.eventMu.Lock()
+	stop := e.stopEv
+	e.stopEv = nil
+	e.eventCh = nil
+	e.eventMu.Unlock()
+	if stop != nil {
+		close(stop)
+	}
+}
+
+func (e *pluginEntry) enqueueEvent(ev *pluginv1.OnEventRequest) {
+	e.eventMu.Lock()
+	ch := e.eventCh
+	e.eventMu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- ev:
+	default:
+		// Non-blocking drop preserves audio/TTS latency during extreme chat bursts.
+	}
+}
+
+// Manager coordinates discovery, lifecycle, permission checks, and dispatch for WASM and Native plugins.
+type Manager struct {
+	reloadMu sync.Mutex
+	mu       sync.RWMutex
+
+	opts       Options
+	httpClient *http.Client
+	kvStore    *KVStore
+	closed     bool
+
+	entries map[string]*pluginEntry // keyed by UUID (or path on pre-manifest load errors)
+
+	subMu     sync.Mutex
+	subSeq    atomic.Uint64
+	listeners map[uint64]func()
+}
+
+// NewManager creates a plugin Manager. No runtimes or databases are opened until Start/Reload and plugin discovery.
+func NewManager(opts Options) *Manager {
+	kvPath := strings.TrimSpace(opts.KVDBPath)
+	if kvPath == "" && strings.TrimSpace(opts.BaseDir) != "" {
+		kvPath = filepath.Join(opts.BaseDir, "plugins_kv.db")
+	}
+	if kvPath == "" {
+		kvPath = ":memory:"
+	}
+	return &Manager{
+		opts:       opts,
+		httpClient: &http.Client{Timeout: maxHTTPTimeout},
+		kvStore:    NewKVStore(kvPath),
+		entries:    make(map[string]*pluginEntry),
+	}
+}
+
+// BaseDir returns the configured plugins base directory.
+func (m *Manager) BaseDir() string {
+	return m.opts.BaseDir
+}
+
+// Start discovers and starts all enabled, trusted plugins.
+func (m *Manager) Start() error {
+	return m.Reload()
+}
+
+// Reload stops all running plugins and re-discovers plugins from disk and ExtraPaths.
+func (m *Manager) Reload() error {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+
+	m.mu.RLock()
+	if m.closed {
+		m.mu.RUnlock()
+		return errors.New("plugin manager is closed")
+	}
+	m.mu.RUnlock()
+
+	m.stopAllEntries()
+
+	cfg := m.currentConfig()
+	if cfg != nil && !cfg.Plugins.Enabled {
+		m.notifyStatusChange()
+		return nil
+	}
+
+	var extra []string
+	if cfg != nil {
+		extra = cfg.Plugins.ExtraPaths
+	}
+	wasmPaths, nativePaths := discoverPlugins(m.opts.BaseDir, extra)
+	if len(wasmPaths) == 0 && len(nativePaths) == 0 {
+		m.notifyStatusChange()
+		return nil
+	}
+
+	newEntries := make(map[string]*pluginEntry, len(wasmPaths)+len(nativePaths))
+	for _, wp := range wasmPaths {
+		ent := m.loadWasmEntry(wp, cfg)
+		key := ent.uuid
+		if key == "" {
+			key = "err:" + wp
+		}
+		if _, dup := newEntries[key]; dup {
+			ent.stopEventWorker()
+			if ent.backend != nil {
+				_ = ent.backend.Close()
+			}
+			continue
+		}
+		newEntries[key] = ent
+	}
+
+	for _, np := range nativePaths {
+		ent := m.loadNativeEntry(np, cfg)
+		key := ent.uuid
+		if key == "" {
+			key = "err:" + np
+		}
+		if _, dup := newEntries[key]; dup {
+			ent.stopEventWorker()
+			if ent.backend != nil {
+				_ = ent.backend.Close()
+			}
+			continue
+		}
+		newEntries[key] = ent
+	}
+
+	m.mu.Lock()
+	m.entries = newEntries
+	m.mu.Unlock()
+
+	m.notifyStatusChange()
+	return nil
+}
+
+// Close shuts down all plugin runtimes and closes the KV SQLite database.
+func (m *Manager) Close() error {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
+	m.closed = true
+	m.mu.Unlock()
+
+	m.stopAllEntries()
+	return m.kvStore.Close()
+}
+
+func (m *Manager) stopAllEntries() {
+	m.mu.Lock()
+	old := m.entries
+	m.entries = make(map[string]*pluginEntry)
+	m.mu.Unlock()
+
+	for _, ent := range old {
+		ent.stopEventWorker()
+		ent.mu.RLock()
+		be := ent.backend
+		ent.mu.RUnlock()
+		if be != nil {
+			_ = be.Close()
+		}
+	}
+}
+
+func (m *Manager) loadWasmEntry(path string, cfg *config.Config) *pluginEntry {
+	ent := &pluginEntry{
+		name:    filepath.Base(path),
+		runtime: pluginv1.RuntimeKind_RUNTIME_KIND_WASM,
+		path:    path,
+		state:   StatusError,
+		logs:    &logBuffer{},
+	}
+
+	wasmBytes, err := os.ReadFile(path)
+	if err != nil {
+		ent.errMsg = fmt.Sprintf("read wasm file: %v", err)
+		return ent
+	}
+	sum := sha256.Sum256(wasmBytes)
+	ent.binarySHA256 = hex.EncodeToString(sum[:])
+
+	be, manifest, apiErr, err := newWasmBackend(m, ent, path, wasmBytes)
+	if manifest != nil {
+		ent.uuid = strings.TrimSpace(manifest.GetUuid())
+		ent.name = strings.TrimSpace(manifest.GetName())
+		ent.version = strings.TrimSpace(manifest.GetVersion())
+		ent.author = strings.TrimSpace(manifest.GetAuthor())
+		ent.description = strings.TrimSpace(manifest.GetDescription())
+		ent.manifest = manifest
+	}
+	if apiErr != nil || err != nil {
+		if apiErr == nil {
+			apiErr = &pluginv1.APIError{
+				Code:    pluginv1.ErrorCode_ERROR_CODE_INTERNAL,
+				Message: err.Error(),
+			}
+		}
+		ent.setError(apiErr)
+		return ent
+	}
+
+	if isPluginDisabled(cfg, ent.uuid) {
+		_ = be.Close()
+		ent.state = StatusDisabled
+		return ent
+	}
+
+	ent.backend = be
+	if err := m.initBackend(ent, be); err != nil {
+		_ = be.Close()
+		ent.backend = nil
+		ent.setError(&pluginv1.APIError{
+			Code:    pluginv1.ErrorCode_ERROR_CODE_INTERNAL,
+			Message: "Plugin Init failed: " + err.Error(),
+		})
+		return ent
+	}
+
+	ent.state = StatusRunning
+	ent.startEventWorker()
+	return ent
+}
+
+func (m *Manager) loadNativeEntry(jsonPath string, cfg *config.Config) *pluginEntry {
+	ent := &pluginEntry{
+		name:    filepath.Base(filepath.Dir(jsonPath)),
+		runtime: pluginv1.RuntimeKind_RUNTIME_KIND_NATIVE,
+		path:    jsonPath,
+		state:   StatusError,
+		logs:    &logBuffer{},
+	}
+
+	desc, binPath, shaHex, err := parseNativeDescriptor(jsonPath)
+	if desc.UUID != "" {
+		ent.uuid = desc.UUID
+	}
+	if desc.Name != "" {
+		ent.name = desc.Name
+	}
+	ent.version = desc.Version
+	ent.author = desc.Author
+	ent.description = desc.Description
+	ent.binaryPath = binPath
+	ent.binarySHA256 = shaHex
+	if err != nil {
+		ent.setError(&pluginv1.APIError{
+			Code:    pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			Message: err.Error(),
+		})
+		return ent
+	}
+
+	if isPluginDisabled(cfg, ent.uuid) {
+		ent.state = StatusDisabled
+		return ent
+	}
+
+	if !isNativeTrusted(cfg, ent.uuid, shaHex) {
+		ent.state = StatusAwaitingTrust
+		return ent
+	}
+
+	be, manifest, apiErr, err := startNativeBackend(m, ent, desc, binPath)
+	if manifest != nil {
+		ent.manifest = manifest
+		if manifest.GetUuid() != "" {
+			ent.uuid = manifest.GetUuid()
+		}
+		if manifest.GetName() != "" {
+			ent.name = manifest.GetName()
+		}
+		if manifest.GetVersion() != "" {
+			ent.version = manifest.GetVersion()
+		}
+	}
+	if apiErr != nil || err != nil {
+		if apiErr == nil {
+			apiErr = &pluginv1.APIError{
+				Code:    pluginv1.ErrorCode_ERROR_CODE_INTERNAL,
+				Message: err.Error(),
+			}
+		}
+		ent.setError(apiErr)
+		return ent
+	}
+
+	ent.backend = be
+	if err := m.initBackend(ent, be); err != nil {
+		_ = be.Close()
+		ent.backend = nil
+		ent.setError(&pluginv1.APIError{
+			Code:    pluginv1.ErrorCode_ERROR_CODE_INTERNAL,
+			Message: "Plugin Init failed: " + err.Error(),
+		})
+		return ent
+	}
+
+	ent.state = StatusRunning
+	ent.startEventWorker()
+	return ent
+}
+
+func (m *Manager) initBackend(ent *pluginEntry, be pluginBackend) error {
+	appVer := m.opts.Callbacks.AppVersion
+	if appVer == "" {
+		appVer = "dev"
+	}
+	gs := m.GetGlobalSettings(ent.uuid)
+	resp, err := be.Dispatch(context.Background(), &pluginv1.HostEnvelope{
+		Payload: &pluginv1.HostEnvelope_Init{
+			Init: &pluginv1.InitRequest{
+				HostApiVersion: &pluginv1.ProtocolVersion{
+					Major:        HostAPIMajor,
+					Minor:        HostAPIMinor,
+					Patch:        HostAPIPatch,
+					MinHostMinor: HostAPIMinor,
+				},
+				HostAppVersion:        appVer,
+				SupportedCapabilities: slices.Clone(SupportedCapabilities),
+				GlobalSettings:        gs,
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if ack := resp.GetAck(); ack != nil && !ack.GetOk() {
+		if ack.GetError() != nil {
+			return errors.New(ack.GetError().GetMessage())
+		}
+		return errors.New("plugin rejected Init")
+	}
+	return nil
+}
+
+// Plugins returns a sorted snapshot of all discovered plugins and their current state.
+func (m *Manager) Plugins() []PluginStatus {
+	m.mu.RLock()
+	out := make([]PluginStatus, 0, len(m.entries))
+	for _, ent := range m.entries {
+		ent.mu.RLock()
+		var perms *pluginv1.Permissions
+		var allowed []string
+		var schema []*pluginv1.SettingField
+		var actions int
+		apiVer := ""
+		if ent.manifest != nil {
+			perms = ent.manifest.GetPermissions()
+			if perms != nil {
+				allowed = slices.Clone(perms.GetAllowedHosts())
+			}
+			schema = ent.manifest.GetGlobalSettingsSchema()
+			actions = len(ent.manifest.GetActions())
+			apiVer = FormatVersion(ent.manifest.GetApiVersion())
+		}
+		out = append(out, PluginStatus{
+			UUID:              ent.uuid,
+			Name:              ent.name,
+			Version:           ent.version,
+			Author:            ent.author,
+			Description:       ent.description,
+			Runtime:           ent.runtime,
+			Path:              ent.path,
+			BinaryPath:        ent.binaryPath,
+			BinarySHA256:      ent.binarySHA256,
+			APIVersion:        apiVer,
+			Permissions:       perms,
+			AllowedHosts:      allowed,
+			HasGlobalSettings: len(schema) > 0,
+			GlobalSchema:      schema,
+			ActionCount:       actions,
+			State:             ent.state,
+			Error:             ent.errMsg,
+			APIError:          ent.apiErr,
+		})
+		ent.mu.RUnlock()
+	}
+	m.mu.RUnlock()
+
+	slices.SortFunc(out, func(a, b PluginStatus) int {
+		if c := cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Path, b.Path)
+	})
+	return out
+}
+
+// PluginLogs returns the latest buffered log lines for pluginUUID.
+func (m *Manager) PluginLogs(pluginUUID string) []string {
+	m.mu.RLock()
+	ent := m.entries[strings.TrimSpace(pluginUUID)]
+	m.mu.RUnlock()
+	if ent == nil || ent.logs == nil {
+		return nil
+	}
+	return ent.logs.Snapshot()
+}
+
+// SetPluginEnabled enables or disables a plugin in config and reloads the manager.
+func (m *Manager) SetPluginEnabled(pluginUUID string, enabled bool) error {
+	uuid := strings.TrimSpace(pluginUUID)
+	if uuid == "" {
+		return errors.New("plugin UUID cannot be empty")
+	}
+	if m.opts.Callbacks.UpdateConfig != nil {
+		if err := m.opts.Callbacks.UpdateConfig(func(c *config.Config) {
+			filtered := make([]string, 0, len(c.Plugins.DisabledPlugins))
+			for _, id := range c.Plugins.DisabledPlugins {
+				if id != uuid {
+					filtered = append(filtered, id)
+				}
+			}
+			if !enabled {
+				filtered = append(filtered, uuid)
+			}
+			c.Plugins.DisabledPlugins = filtered
+		}); err != nil {
+			return err
+		}
+	}
+	return m.Reload()
+}
+
+// TrustNativePlugin records user approval for a native plugin's current binary SHA-256 and reloads.
+func (m *Manager) TrustNativePlugin(pluginUUID string) error {
+	uuid := strings.TrimSpace(pluginUUID)
+	m.mu.RLock()
+	ent := m.entries[uuid]
+	m.mu.RUnlock()
+	if ent == nil {
+		return fmt.Errorf("unknown plugin %q", uuid)
+	}
+	ent.mu.RLock()
+	rt := ent.runtime
+	hash := ent.binarySHA256
+	binPath := ent.binaryPath
+	ent.mu.RUnlock()
+	if rt != pluginv1.RuntimeKind_RUNTIME_KIND_NATIVE {
+		return errors.New("only native plugins require trust approval")
+	}
+	if hash == "" {
+		return errors.New("native plugin binary hash unavailable")
+	}
+
+	if m.opts.Callbacks.UpdateConfig != nil {
+		if err := m.opts.Callbacks.UpdateConfig(func(c *config.Config) {
+			if c.Plugins.TrustedNative == nil {
+				c.Plugins.TrustedNative = make(map[string]config.TrustedNativePlugin)
+			}
+			c.Plugins.TrustedNative[uuid] = config.TrustedNativePlugin{
+				SHA256:     hash,
+				ApprovedAt: time.Now().UTC().Format(time.RFC3339),
+				BinaryPath: binPath,
+			}
+		}); err != nil {
+			return err
+		}
+	}
+	return m.Reload()
+}
+
+// RevokeNativeTrust removes trust approval for a native plugin and reloads.
+func (m *Manager) RevokeNativeTrust(pluginUUID string) error {
+	uuid := strings.TrimSpace(pluginUUID)
+	if m.opts.Callbacks.UpdateConfig != nil {
+		if err := m.opts.Callbacks.UpdateConfig(func(c *config.Config) {
+			delete(c.Plugins.TrustedNative, uuid)
+		}); err != nil {
+			return err
+		}
+	}
+	return m.Reload()
+}
+
+// InvokeConfigAction dispatches an interactive button action from Settings -> Plugins -> Configure.
+func (m *Manager) InvokeConfigAction(ctx context.Context, pluginUUID, actionKey string, settings *pluginv1.SettingsMap) error {
+	uuid := strings.TrimSpace(pluginUUID)
+	m.mu.RLock()
+	ent := m.entries[uuid]
+	m.mu.RUnlock()
+	if ent == nil {
+		return fmt.Errorf("unknown plugin %q", uuid)
+	}
+	ent.mu.RLock()
+	be := ent.backend
+	st := ent.state
+	ent.mu.RUnlock()
+	if be == nil || st != StatusRunning {
+		return fmt.Errorf("plugin %q is not running", ent.name)
+	}
+	resp, err := be.Dispatch(ctx, &pluginv1.HostEnvelope{
+		Payload: &pluginv1.HostEnvelope_OnConfigAction{
+			OnConfigAction: &pluginv1.OnConfigActionRequest{
+				ActionKey: actionKey,
+				Settings:  settings,
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if ack := resp.GetAck(); ack != nil && !ack.GetOk() {
+		if ack.GetError() != nil {
+			return pluginsdk.FromProto(ack.GetError())
+		}
+		return errors.New("config action failed")
+	}
+	return nil
+}
+
+func (m *Manager) notifyGlobalSettings(pluginUUID string, settings *pluginv1.SettingsMap) error {
+	m.mu.RLock()
+	ent := m.entries[pluginUUID]
+	m.mu.RUnlock()
+	if ent == nil {
+		return nil
+	}
+	ent.mu.RLock()
+	be := ent.backend
+	st := ent.state
+	ent.mu.RUnlock()
+	if be == nil || st != StatusRunning {
+		return nil
+	}
+	resp, err := be.Dispatch(context.Background(), &pluginv1.HostEnvelope{
+		Payload: &pluginv1.HostEnvelope_OnGlobalSettings{
+			OnGlobalSettings: &pluginv1.OnGlobalSettingsRequest{Settings: settings},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if ack := resp.GetAck(); ack != nil && !ack.GetOk() && ack.GetError() != nil {
+		return pluginsdk.FromProto(ack.GetError())
+	}
+	return nil
+}
+
+// DispatchStreamEvent fans out a normalized chat.Event to all running plugins with read_events permission.
+func (m *Manager) DispatchStreamEvent(ev *chat.Event) {
+	m.DispatchStreamEventWithState(ev, 0, false)
+}
+
+// DispatchStreamEventWithState fans out a normalized chat.Event along with active live stream session metadata.
+func (m *Manager) DispatchStreamEventWithState(ev *chat.Event, streamSessionID int64, streamIsLive bool) {
+	if ev == nil {
+		return
+	}
+	pbEv := chatEventToProto(ev)
+	pbEv.StreamSessionId = streamSessionID
+	pbEv.StreamIsLive = streamIsLive
+	req := &pluginv1.OnEventRequest{
+		Event: &pluginv1.OnEventRequest_StreamEvent{StreamEvent: pbEv},
+	}
+
+	m.mu.RLock()
+	for _, ent := range m.entries {
+		ent.mu.RLock()
+		ok := ent.state == StatusRunning && ent.manifest != nil && ent.manifest.GetPermissions().GetReadEvents() &&
+			eventSubscribed(ent.manifest.GetSubscribedEvents(), string(ev.Kind))
+		ent.mu.RUnlock()
+		if ok {
+			ent.enqueueEvent(req)
+		}
+	}
+	m.mu.RUnlock()
+}
+
+// DispatchModerationEvent fans out a moderation sync event to subscribed plugins.
+func (m *Manager) DispatchModerationEvent(ev *chat.ModerationEvent) {
+	if ev == nil {
+		return
+	}
+	req := &pluginv1.OnEventRequest{
+		Event: &pluginv1.OnEventRequest_ModerationEvent{
+			ModerationEvent: &pluginv1.ModerationEvent{
+				Platform:        ev.Platform,
+				Channel:         ev.Channel,
+				Action:          string(ev.Action),
+				TargetMessageId: ev.TargetMessageID,
+				TargetUserId:    ev.TargetUserID,
+				TimestampUnixMs: ev.Timestamp.UnixMilli(),
+			},
+		},
+	}
+	m.mu.RLock()
+	for _, ent := range m.entries {
+		ent.mu.RLock()
+		ok := ent.state == StatusRunning && ent.manifest != nil && ent.manifest.GetPermissions().GetReadEvents() &&
+			eventSubscribed(ent.manifest.GetSubscribedEvents(), "moderation")
+		ent.mu.RUnlock()
+		if ok {
+			ent.enqueueEvent(req)
+		}
+	}
+	m.mu.RUnlock()
+}
+
+// DispatchTTSLifecycle fans out TTS start/finish notifications to subscribed plugins (for music ducking, etc.).
+func (m *Manager) DispatchTTSLifecycle(ev *pluginv1.TTSSpeechLifecycleEvent) {
+	if ev == nil {
+		return
+	}
+	req := &pluginv1.OnEventRequest{
+		Event: &pluginv1.OnEventRequest_TtsLifecycle{TtsLifecycle: ev},
+	}
+	m.mu.RLock()
+	for _, ent := range m.entries {
+		ent.mu.RLock()
+		ok := ent.state == StatusRunning && ent.manifest != nil && ent.manifest.GetPermissions().GetReadEvents() &&
+			eventSubscribed(ent.manifest.GetSubscribedEvents(), "tts_lifecycle")
+		ent.mu.RUnlock()
+		if ok {
+			ent.enqueueEvent(req)
+		}
+	}
+	m.mu.RUnlock()
+}
+
+func eventSubscribed(subs []string, kind string) bool {
+	if len(subs) == 0 {
+		return true
+	}
+	for _, s := range subs {
+		if s == "*" || strings.EqualFold(strings.TrimSpace(s), kind) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) handleHostCall(ctx context.Context, ent *pluginEntry, pEnv *pluginv1.PluginEnvelope) *pluginv1.HostCallResponse {
+	if ent == nil || pEnv == nil {
+		return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "invalid host call")
+	}
+
+	ent.mu.RLock()
+	uuid := ent.uuid
+	manifest := ent.manifest
+	rt := ent.runtime
+	be := ent.backend
+	ent.mu.RUnlock()
+
+	perms := manifest.GetPermissions()
+
+	switch pay := pEnv.Payload.(type) {
+	case *pluginv1.PluginEnvelope_Log:
+		if pay.Log != nil {
+			ent.logs.Append(fmt.Sprintf("[%s] %s", strings.TrimPrefix(pay.Log.GetLevel().String(), "LOG_LEVEL_"), pay.Log.GetMessage()))
+		}
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	case *pluginv1.PluginEnvelope_GetGlobalSettings:
+		return &pluginv1.HostCallResponse{
+			Ok: true,
+			Result: &pluginv1.HostCallResponse_GlobalSettings{
+				GlobalSettings: &pluginv1.GetGlobalSettingsResponse{
+					Settings: m.GetGlobalSettings(uuid),
+				},
+			},
+		}
+
+	case *pluginv1.PluginEnvelope_SaveGlobalSettings:
+		if pay.SaveGlobalSettings == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing save_global_settings payload")
+		}
+		if err := m.SaveGlobalSettings(uuid, pay.SaveGlobalSettings.GetSettings()); err != nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INTERNAL, err.Error())
+		}
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	case *pluginv1.PluginEnvelope_SetTimer:
+		if pay.SetTimer == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing set_timer payload")
+		}
+		if be == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_HOST_NOT_READY, "plugin backend is not active")
+		}
+		if apiErr := be.SetTimer(pay.SetTimer.GetTimerId(), pay.SetTimer.GetContext(), pay.SetTimer.GetIntervalMs()); apiErr != nil {
+			return &pluginv1.HostCallResponse{Ok: false, Error: apiErr}
+		}
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	case *pluginv1.PluginEnvelope_HttpRequest:
+		if pay.HttpRequest == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing http_request payload")
+		}
+		enforce := rt == pluginv1.RuntimeKind_RUNTIME_KIND_WASM || len(perms.GetAllowedHosts()) > 0
+		var allowed []string
+		if perms != nil {
+			allowed = perms.GetAllowedHosts()
+		}
+		if pay.HttpRequest.GetAsync() {
+			if enforce && !IsHostAllowed(pay.HttpRequest.GetUrl(), allowed) {
+				return &pluginv1.HostCallResponse{
+					Ok: false,
+					Error: &pluginv1.APIError{
+						Code:    pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED,
+						Message: fmt.Sprintf("HTTP request to %q blocked by plugin allowed_hosts sandbox", pay.HttpRequest.GetUrl()),
+					},
+				}
+			}
+			reqCopy := pay.HttpRequest
+			go func() {
+				resp, _ := ExecuteHTTP(context.Background(), m.httpClient, allowed, enforce, reqCopy)
+				if be != nil {
+					_, _ = be.Dispatch(context.Background(), &pluginv1.HostEnvelope{
+						Payload: &pluginv1.HostEnvelope_OnHttpResult{
+							OnHttpResult: &pluginv1.OnHTTPResultRequest{
+								AsyncId:  reqCopy.GetAsyncId(),
+								Response: resp,
+							},
+						},
+					})
+				}
+			}()
+			return &pluginv1.HostCallResponse{Ok: true}
+		}
+
+		resp, apiErr := ExecuteHTTP(ctx, m.httpClient, allowed, enforce, pay.HttpRequest)
+		if apiErr != nil {
+			return &pluginv1.HostCallResponse{Ok: false, Error: apiErr}
+		}
+		return &pluginv1.HostCallResponse{
+			Ok:     true,
+			Result: &pluginv1.HostCallResponse_HttpResponse{HttpResponse: resp},
+		}
+
+	case *pluginv1.PluginEnvelope_Speak:
+		if !perms.GetSpeakTts() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare speak_tts permission")
+		}
+		if pay.Speak == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing speak payload")
+		}
+		if m.opts.Callbacks.OnSpeak == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_HOST_NOT_READY, "TTS speak callback unavailable")
+		}
+		err := m.opts.Callbacks.OnSpeak(SpeakRequest{
+			PluginUUID: uuid,
+			Text:       pay.Speak.GetText(),
+			VoiceID:    pay.Speak.GetVoiceId(),
+			Speed:      pay.Speak.GetSpeed(),
+			Priority:   int(pay.Speak.GetPriority()),
+			Username:   pay.Speak.GetUsername(),
+		})
+		if err != nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_HOST_NOT_READY, err.Error())
+		}
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	case *pluginv1.PluginEnvelope_KvGet:
+		if !perms.GetKvStorage() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare kv_storage permission")
+		}
+		if pay.KvGet == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing kv_get payload")
+		}
+		val, found, apiErr := m.kvStore.Get(ctx, uuid, pay.KvGet.GetKey())
+		if apiErr != nil {
+			return &pluginv1.HostCallResponse{Ok: false, Error: apiErr}
+		}
+		return &pluginv1.HostCallResponse{
+			Ok:     true,
+			Result: &pluginv1.HostCallResponse_KvGet{KvGet: &pluginv1.KVGetResponse{Found: found, Value: val}},
+		}
+
+	case *pluginv1.PluginEnvelope_KvSet:
+		if !perms.GetKvStorage() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare kv_storage permission")
+		}
+		if pay.KvSet == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing kv_set payload")
+		}
+		if apiErr := m.kvStore.Set(ctx, uuid, pay.KvSet.GetKey(), pay.KvSet.GetValue()); apiErr != nil {
+			return &pluginv1.HostCallResponse{Ok: false, Error: apiErr}
+		}
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	case *pluginv1.PluginEnvelope_KvDelete:
+		if !perms.GetKvStorage() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare kv_storage permission")
+		}
+		if pay.KvDelete == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing kv_delete payload")
+		}
+		if apiErr := m.kvStore.Delete(ctx, uuid, pay.KvDelete.GetKey()); apiErr != nil {
+			return &pluginv1.HostCallResponse{Ok: false, Error: apiErr}
+		}
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	case *pluginv1.PluginEnvelope_KvList:
+		if !perms.GetKvStorage() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare kv_storage permission")
+		}
+		if pay.KvList == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing kv_list payload")
+		}
+		keys, apiErr := m.kvStore.List(ctx, uuid, pay.KvList.GetPrefix(), pay.KvList.GetLimit())
+		if apiErr != nil {
+			return &pluginv1.HostCallResponse{Ok: false, Error: apiErr}
+		}
+		return &pluginv1.HostCallResponse{
+			Ok:     true,
+			Result: &pluginv1.HostCallResponse_KvList{KvList: &pluginv1.KVListResponse{Keys: keys}},
+		}
+
+	case *pluginv1.PluginEnvelope_OverlayBroadcast:
+		if !perms.GetOverlayBroadcast() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare overlay_broadcast permission")
+		}
+		if pay.OverlayBroadcast == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing overlay_broadcast payload")
+		}
+		if m.opts.Callbacks.OnOverlayBroadcast != nil {
+			m.opts.Callbacks.OnOverlayBroadcast(uuid, pay.OverlayBroadcast.GetEventName(), pay.OverlayBroadcast.GetJsonPayload())
+		}
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	default:
+		return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_UNSUPPORTED_CAPABILITY, fmt.Sprintf("unsupported host call %T in API v%s", pEnv.Payload, HostVersionString()))
+	}
+}
+
+func hostErrResp(code pluginv1.ErrorCode, msg string) *pluginv1.HostCallResponse {
+	return &pluginv1.HostCallResponse{
+		Ok: false,
+		Error: &pluginv1.APIError{
+			Code:    code,
+			Message: msg,
+		},
+	}
+}
+
+func (m *Manager) currentConfig() *config.Config {
+	if m.opts.Callbacks.GetConfig != nil {
+		return m.opts.Callbacks.GetConfig()
+	}
+	return nil
+}
+
+// RestartPlugin restarts plugins cleanly (currently delegates to Reload).
+func (m *Manager) RestartPlugin(_ string) error {
+	return m.Reload()
+}
+
+// SubscribeStatusChange registers a listener invoked whenever plugin state or settings change.
+func (m *Manager) SubscribeStatusChange(fn func()) func() {
+	if fn == nil {
+		return func() {}
+	}
+	id := m.subSeq.Add(1)
+	m.subMu.Lock()
+	if m.listeners == nil {
+		m.listeners = make(map[uint64]func())
+	}
+	m.listeners[id] = fn
+	m.subMu.Unlock()
+	return func() {
+		m.subMu.Lock()
+		delete(m.listeners, id)
+		m.subMu.Unlock()
+	}
+}
+
+func (m *Manager) notifyStatusChange() {
+	if m.opts.Callbacks.OnStatusChange != nil {
+		m.opts.Callbacks.OnStatusChange()
+	}
+	m.subMu.Lock()
+	fns := make([]func(), 0, len(m.listeners))
+	for _, fn := range m.listeners {
+		if fn != nil {
+			fns = append(fns, fn)
+		}
+	}
+	m.subMu.Unlock()
+	for _, fn := range fns {
+		fn()
+	}
+}
+
+func isPluginDisabled(cfg *config.Config, uuid string) bool {
+	if cfg == nil || uuid == "" {
+		return false
+	}
+	return slices.Contains(cfg.Plugins.DisabledPlugins, uuid)
+}
+
+func isNativeTrusted(cfg *config.Config, uuid, shaHex string) bool {
+	if cfg == nil || uuid == "" || shaHex == "" {
+		return false
+	}
+	t, ok := cfg.Plugins.TrustedNative[uuid]
+	return ok && strings.EqualFold(strings.TrimSpace(t.SHA256), shaHex)
+}
+
+func discoverPlugins(baseDir string, extraPaths []string) (wasmPaths, nativePaths []string) {
+	seenWasm := make(map[string]bool)
+	seenNative := make(map[string]bool)
+
+	addWasm := func(p string) {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			abs = p
+		}
+		if !seenWasm[abs] {
+			seenWasm[abs] = true
+			wasmPaths = append(wasmPaths, abs)
+		}
+	}
+	addNative := func(p string) {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			abs = p
+		}
+		if !seenNative[abs] {
+			seenNative[abs] = true
+			nativePaths = append(nativePaths, abs)
+		}
+	}
+
+	scanWasmDir := func(dir string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, ent := range entries {
+			full := filepath.Join(dir, ent.Name())
+			if !ent.IsDir() {
+				if strings.HasSuffix(strings.ToLower(ent.Name()), ".wasm") {
+					addWasm(full)
+				}
+				continue
+			}
+			sub, subErr := os.ReadDir(full)
+			if subErr != nil {
+				continue
+			}
+			for _, se := range sub {
+				if !se.IsDir() && strings.HasSuffix(strings.ToLower(se.Name()), ".wasm") {
+					addWasm(filepath.Join(full, se.Name()))
+				}
+			}
+		}
+	}
+
+	scanNativeDir := func(dir string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, ent := range entries {
+			full := filepath.Join(dir, ent.Name())
+			if !ent.IsDir() {
+				if strings.EqualFold(ent.Name(), "plugin.json") {
+					addNative(full)
+				}
+				continue
+			}
+			cand := filepath.Join(full, "plugin.json")
+			if st, statErr := os.Stat(cand); statErr == nil && !st.IsDir() {
+				addNative(cand)
+			}
+		}
+	}
+
+	if strings.TrimSpace(baseDir) != "" {
+		scanWasmDir(filepath.Join(baseDir, "wasm"))
+		scanNativeDir(filepath.Join(baseDir, "native"))
+	}
+	for _, raw := range extraPaths {
+		p := strings.TrimSpace(raw)
+		if p == "" {
+			continue
+		}
+		info, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if !info.IsDir() {
+			low := strings.ToLower(filepath.Base(p))
+			switch {
+			case strings.HasSuffix(low, ".wasm"):
+				addWasm(p)
+			case low == "plugin.json":
+				addNative(p)
+			}
+			continue
+		}
+		scanWasmDir(p)
+		scanNativeDir(p)
+	}
+
+	slices.Sort(wasmPaths)
+	slices.Sort(nativePaths)
+	return wasmPaths, nativePaths
+}
+
+func chatEventToProto(ev *chat.Event) *pluginv1.StreamEvent {
+	spans := make([]*pluginv1.EmoteSpan, 0, len(ev.EmoteSpans))
+	for _, sp := range ev.EmoteSpans {
+		spans = append(spans, &pluginv1.EmoteSpan{
+			Start: int32(sp.Start),
+			End:   int32(sp.End),
+			Id:    sp.ID,
+			Name:  sp.Name,
+			Url:   sp.URL,
+		})
+	}
+	return &pluginv1.StreamEvent{
+		Id:                ev.ID,
+		Platform:          ev.Platform,
+		Channel:           ev.Channel,
+		StreamId:          ev.StreamID,
+		StreamTitle:       ev.StreamTitle,
+		StreamOrientation: ev.StreamOrientation,
+		Kind:              string(ev.Kind),
+		TimestampUnixMs:   ev.Timestamp.UnixMilli(),
+		UserId:            ev.UserID,
+		UserName:          ev.UserName,
+		DisplayName:       ev.DisplayName,
+		Roles:             slices.Clone(ev.Roles),
+		FanClubLevel:      int32(ev.FanClubLevel),
+		IsBotSignal:       ev.IsBotSignal,
+		IsReply:           ev.IsReply,
+		ReplyToUser:       ev.ReplyToUser,
+		Mentions:          slices.Clone(ev.Mentions),
+		Text:              ev.Text,
+		EmoteSpans:        spans,
+		TranslatedText:    ev.TranslatedText,
+		SourceLang:        ev.SourceLang,
+		Amount:            ev.Amount,
+		UnitAmount:        ev.UnitAmount,
+		Currency:          ev.Currency,
+		ItemName:          ev.ItemName,
+		SubTier:           ev.SubTier,
+		Recipient:         ev.Recipient,
+		Months:            int32(ev.Months),
+		Count:             int32(ev.Count),
+		RewardId:          ev.RewardID,
+		RewardTitle:       ev.RewardTitle,
+	}
+}
