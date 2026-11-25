@@ -35,6 +35,16 @@ type OverlayAssetPlugin interface {
 	GetOverlayAsset(assetPath string) (contentType string, body []byte, found bool, err error)
 }
 
+// BeforeTTSPlugin is an optional interface implemented by plugins that intercept or rewrite TTS utterances ("bot.before_tts.v1").
+type BeforeTTSPlugin interface {
+	BeforeTTS(req *pluginv1.BeforeTTSRequest) (*pluginv1.BeforeTTSResponse, error)
+}
+
+// ActionPlugin is an optional interface implemented by plugins that expose automatable actions ("bot.actions.v1").
+type ActionPlugin interface {
+	RunAction(req *pluginv1.RunActionRequest) (*pluginv1.RunActionResponse, error)
+}
+
 func (BasePlugin) Init(_ *Host) error                                    { return nil }
 func (BasePlugin) OnEvent(_ *pluginv1.StreamEvent) error                 { return nil }
 func (BasePlugin) OnModeration(_ *pluginv1.ModerationEvent) error        { return nil }
@@ -261,6 +271,68 @@ func dispatchEnvelope(p Plugin, host *Host, env *pluginv1.HostEnvelope) *pluginv
 					ContentType: ct,
 					Body:        body,
 				},
+			},
+		}
+
+	case *pluginv1.HostEnvelope_BeforeTts:
+		bp, ok := p.(BeforeTTSPlugin)
+		if !ok {
+			return &pluginv1.PluginEnvelope{
+				RequestId: reqID,
+				Payload: &pluginv1.PluginEnvelope_BeforeTtsResponse{
+					BeforeTtsResponse: &pluginv1.BeforeTTSResponse{},
+				},
+			}
+		}
+		resp, err := bp.BeforeTTS(payload.BeforeTts)
+		if err != nil {
+			return ackError(reqID, err)
+		}
+		if resp == nil {
+			resp = &pluginv1.BeforeTTSResponse{}
+		}
+		return &pluginv1.PluginEnvelope{
+			RequestId: reqID,
+			Payload: &pluginv1.PluginEnvelope_BeforeTtsResponse{
+				BeforeTtsResponse: resp,
+			},
+		}
+
+	case *pluginv1.HostEnvelope_RunAction:
+		ap, ok := p.(ActionPlugin)
+		if !ok {
+			return &pluginv1.PluginEnvelope{
+				RequestId: reqID,
+				Payload: &pluginv1.PluginEnvelope_RunActionResponse{
+					RunActionResponse: &pluginv1.RunActionResponse{
+						ContinueChain: true,
+						Error: &pluginv1.APIError{
+							Code:    pluginv1.ErrorCode_ERROR_CODE_UNSUPPORTED_CAPABILITY,
+							Message: "plugin does not implement RunAction",
+						},
+					},
+				},
+			}
+		}
+		resp, err := ap.RunAction(payload.RunAction)
+		if err != nil {
+			return &pluginv1.PluginEnvelope{
+				RequestId: reqID,
+				Payload: &pluginv1.PluginEnvelope_RunActionResponse{
+					RunActionResponse: &pluginv1.RunActionResponse{
+						ContinueChain: false,
+						Error:         ToProto(err),
+					},
+				},
+			}
+		}
+		if resp == nil {
+			resp = &pluginv1.RunActionResponse{ContinueChain: true}
+		}
+		return &pluginv1.PluginEnvelope{
+			RequestId: reqID,
+			Payload: &pluginv1.PluginEnvelope_RunActionResponse{
+				RunActionResponse: resp,
 			},
 		}
 

@@ -232,3 +232,69 @@ message BeforeTTSResponse {
   string override_voice = 3;
   float override_speed = 4;
 }
+
+// VarScope identifies the storage lifetime and keyspace for a bot variable.
+enum VarScope {
+  VAR_SCOPE_UNSPECIFIED = 0;
+  VAR_SCOPE_GLOBAL_PERSISTENT = 1;
+  VAR_SCOPE_GLOBAL_EPHEMERAL = 2;
+  VAR_SCOPE_USER_PERSISTENT = 3;
+}
+
+// SendChatRequest sends an outbound chat message or announcement via a connected platform.
+message SendChatRequest {
+  string platform = 1;
+  string channel = 2;
+  string text = 3;
+  string reply_to_message_id = 4;
+  bool as_announcement = 5;
+  string send_as = 6; // "", "auto", "bot", "broadcaster"
+}
+
+// ModerateRequest performs an outbound moderation action (delete, timeout, ban, unban) on a platform.
+message ModerateRequest {
+  string platform = 1;
+  string action = 2;
+  string user_id = 3;
+  string user_name = 4;
+  string message_id = 5;
+  int32 duration_seconds = 6;
+  string reason = 7;
+}
+
+// GetVarRequest retrieves a bot variable from global persistent/ephemeral or user persistent storage.
+message GetVarRequest {
+  VarScope scope = 1;
+  string platform = 2;
+  string user_id = 3;
+  string key = 4;
+}
+
+// GetVarResponse returns the variable value if present.
+message GetVarResponse {
+  bool found = 1;
+  ActionValue value = 2;
+}
+
+// SetVarRequest sets or deletes a bot variable in global persistent/ephemeral or user persistent storage.
+message SetVarRequest {
+  VarScope scope = 1;
+  string platform = 2;
+  string user_id = 3;
+  string key = 4;
+  ActionValue value = 5;
+  bool delete = 6;
+}
+
+// EmitTriggerRequest fires a plugin-declared custom trigger into TownCrier's bot automation engine.
+message EmitTriggerRequest {
+  string trigger_id = 1;
+  ActionArgs args = 2;
+}
+
+// RunBotActionRequest invokes a TownCrier bot action by ID or name.
+message RunBotActionRequest {
+  string action_id_or_name = 1;
+  ActionArgs args = 2;
+  bool run_immediately = 3;
+}

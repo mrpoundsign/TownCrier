@@ -65,6 +65,7 @@ message HostCallResponse {
     HTTPResponse http_response = 4;
     KVGetResponse kv_get = 5;
     KVListResponse kv_list = 6;
+    GetVarResponse get_var = 7;
   }
 }
 
@@ -113,5 +114,11 @@ message PluginEnvelope {
     GetOverlayAssetResponse get_overlay_asset_response = 19;
     UISnapshot push_ui_snapshot = 20;
     UIPatchBatch push_ui_patch = 21;
+    SendChatRequest send_chat = 22;
+    ModerateRequest moderate = 23;
+    GetVarRequest get_var = 24;
+    SetVarRequest set_var = 25;
+    EmitTriggerRequest emit_trigger = 26;
+    RunBotActionRequest run_bot_action = 27;
   }
 }

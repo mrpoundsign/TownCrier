@@ -1,6 +1,7 @@
 package pluginhost
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"time"
@@ -33,7 +34,7 @@ type SpeakRequest struct {
 	Username   string
 }
 
-// HostCallbacks integrates pluginhost with TownCrier's Session, Config, Secrets, and WebSocket server.
+// HostCallbacks integrates pluginhost with TownCrier's Session, Config, Secrets, Bot Engine, and WebSocket server.
 type HostCallbacks struct {
 	AppVersion         string
 	OnSpeak            func(req SpeakRequest) error
@@ -41,6 +42,12 @@ type HostCallbacks struct {
 	OnStatusChange     func()
 	GetConfig          func() *config.Config
 	UpdateConfig       func(fn func(c *config.Config)) error
+	OnSendChat         func(ctx context.Context, pluginUUID string, req *pluginv1.SendChatRequest) error
+	OnModerate         func(ctx context.Context, pluginUUID string, req *pluginv1.ModerateRequest) error
+	OnGetVar           func(ctx context.Context, pluginUUID string, req *pluginv1.GetVarRequest) (*pluginv1.ActionValue, bool, error)
+	OnSetVar           func(ctx context.Context, pluginUUID string, req *pluginv1.SetVarRequest) error
+	OnEmitTrigger      func(ctx context.Context, pluginUUID string, req *pluginv1.EmitTriggerRequest) error
+	OnRunBotAction     func(ctx context.Context, pluginUUID string, req *pluginv1.RunBotActionRequest) error
 }
 
 // Options configures a pluginhost.Manager.
@@ -68,6 +75,8 @@ type PluginStatus struct {
 	HasGlobalSettings bool
 	GlobalSchema      []*pluginv1.SettingField
 	ActionCount       int
+	Actions           []*pluginv1.ActionDescriptor
+	Triggers          []*pluginv1.TriggerDescriptor
 	Views             []*pluginv1.ViewDescriptor
 	State             RunState
 	Error             string

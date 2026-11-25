@@ -2266,12 +2266,12 @@ var require_websocket = __commonJS({
     "use strict";
     var EventEmitter = require("events");
     var https = require("https");
-    var http = require("http");
+    var http2 = require("http");
     var net = require("net");
     var tls = require("tls");
     var { randomBytes, createHash } = require("crypto");
     var { Duplex, Readable } = require("stream");
-    var { URL } = require("url");
+    var { URL: URL2 } = require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
     var Receiver2 = require_receiver();
     var Sender2 = require_sender();
@@ -2785,11 +2785,11 @@ var require_websocket = __commonJS({
         );
       }
       let parsedUrl;
-      if (address instanceof URL) {
+      if (address instanceof URL2) {
         parsedUrl = address;
       } else {
         try {
-          parsedUrl = new URL(address);
+          parsedUrl = new URL2(address);
         } catch {
           throw new SyntaxError(`Invalid URL: ${address}`);
         }
@@ -2821,7 +2821,7 @@ var require_websocket = __commonJS({
       }
       const defaultPort = isSecure ? 443 : 80;
       const key = randomBytes(16).toString("base64");
-      const request = isSecure ? https.request : http.request;
+      const request = isSecure ? https.request : http2.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
       opts.createConnection = opts.createConnection || (isSecure ? tlsConnect : netConnect);
@@ -2926,7 +2926,7 @@ var require_websocket = __commonJS({
           req.abort();
           let addr;
           try {
-            addr = new URL(location, address);
+            addr = new URL2(location, address);
           } catch (e) {
             const err = new SyntaxError(`Invalid URL: ${location}`);
             emitErrorAndClose(websocket, err);
@@ -3317,7 +3317,7 @@ var require_websocket_server = __commonJS({
   "node_modules/ws/lib/websocket-server.js"(exports2, module2) {
     "use strict";
     var EventEmitter = require("events");
-    var http = require("http");
+    var http2 = require("http");
     var { Duplex } = require("stream");
     var { createHash } = require("crypto");
     var extension2 = require_extension();
@@ -3398,8 +3398,8 @@ var require_websocket_server = __commonJS({
           );
         }
         if (options.port != null) {
-          this._server = http.createServer((req, res) => {
-            const body = http.STATUS_CODES[426];
+          this._server = http2.createServer((req, res) => {
+            const body = http2.STATUS_CODES[426];
             res.writeHead(426, {
               "Content-Length": body.length,
               "Content-Type": "text/plain"
@@ -3688,7 +3688,7 @@ var require_websocket_server = __commonJS({
       this.destroy();
     }
     function abortHandshake(socket, code, message, headers) {
-      message = message || http.STATUS_CODES[code];
+      message = message || http2.STATUS_CODES[code];
       headers = {
         Connection: "close",
         "Content-Type": "text/html",
@@ -3697,7 +3697,7 @@ var require_websocket_server = __commonJS({
       };
       socket.once("finish", socket.destroy);
       socket.end(
-        `HTTP/1.1 ${code} ${http.STATUS_CODES[code]}\r
+        `HTTP/1.1 ${code} ${http2.STATUS_CODES[code]}\r
 ` + Object.keys(headers).map((h) => `${h}: ${headers[h]}`).join("\r\n") + "\r\n\r\n" + message
       );
     }
@@ -3719,6 +3719,7 @@ __export(plugin_exports, {
   TownCrierStreamDeckPlugin: () => TownCrierStreamDeckPlugin
 });
 module.exports = __toCommonJS(plugin_exports);
+var import_node_http = __toESM(require("node:http"));
 
 // node_modules/ws/wrapper.mjs
 var import_stream = __toESM(require_stream(), 1);
@@ -4062,6 +4063,7 @@ var ACTION_PANIC = "com.github.mrpoundsign.towncrier.panic";
 var ACTION_QUEUE = "com.github.mrpoundsign.towncrier.queue";
 var ACTION_SPEAK = "com.github.mrpoundsign.towncrier.speak";
 var ACTION_VOLUME = "com.github.mrpoundsign.towncrier.volume";
+var ACTION_DYNAMIC = "com.github.mrpoundsign.towncrier.action";
 function escapeXml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
@@ -4101,6 +4103,9 @@ function renderIconSvg(kind, accent) {
     case "volume":
       return `<circle cx="72" cy="46" r="17" stroke="${accent}" stroke-width="5" fill="none"/>
               <line x1="72" y1="46" x2="82" y2="36" stroke="#F8FAFC" stroke-width="4" stroke-linecap="round"/>`;
+    case "action":
+      return `<polygon points="56,30 94,46 56,62" fill="${accent}"/>
+              <circle cx="96" cy="30" r="5" fill="#F8FAFC"/>`;
   }
 }
 function svgDataUri(bg, border, icon, labelTop, labelBottom, accent) {
@@ -4464,6 +4469,91 @@ var TownCrierStreamDeckPlugin = class {
         );
         break;
       }
+      case ACTION_DYNAMIC: {
+        void this.triggerDynamicAction(inst);
+        break;
+      }
+    }
+  }
+  postTownCrierJSON(path, bodyObj) {
+    return new Promise((resolve, reject) => {
+      let host = this.globalSettings.host || "127.0.0.1";
+      let port = this.globalSettings.port || 8765;
+      if (this.globalSettings.towncrierWsUrl) {
+        try {
+          const u = new URL(this.globalSettings.towncrierWsUrl);
+          if (u.hostname) host = u.hostname;
+          if (u.port) port = Number(u.port);
+        } catch {
+        }
+      }
+      const raw = JSON.stringify(bodyObj);
+      const headers = {
+        "Content-Type": "application/json",
+        "Content-Length": String(Buffer.byteLength(raw))
+      };
+      if (this.globalSettings.token) {
+        headers.Authorization = `Bearer ${this.globalSettings.token}`;
+      }
+      const req = import_node_http.default.request(
+        {
+          hostname: host,
+          port,
+          path,
+          method: "POST",
+          headers
+        },
+        (res) => {
+          const chunks = [];
+          res.on("data", (c) => chunks.push(c));
+          res.on("end", () => {
+            if ((res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300) {
+              resolve();
+            } else {
+              reject(new Error(`HTTP ${res.statusCode}: ${Buffer.concat(chunks).toString("utf8")}`));
+            }
+          });
+        }
+      );
+      req.on("error", reject);
+      req.write(raw);
+      req.end();
+    });
+  }
+  async triggerDynamicAction(inst) {
+    const targetType = String(inst.settings.targetType ?? "plugin").trim().toLowerCase();
+    const pluginUuid = String(inst.settings.pluginUuid ?? "").trim();
+    const actionId = String(inst.settings.actionId ?? "").trim();
+    let args;
+    const rawArgs = String(inst.settings.argsJson ?? "").trim();
+    if (rawArgs.length > 0) {
+      try {
+        const parsed = JSON.parse(rawArgs);
+        args = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          args[k] = String(v ?? "");
+        }
+      } catch {
+        this.sendToSD({ event: "showAlert", context: inst.context });
+        return;
+      }
+    }
+    try {
+      if (targetType === "bot") {
+        await this.postTownCrierJSON("/api/bot/run", {
+          action_id: actionId,
+          args
+        });
+      } else {
+        await this.postTownCrierJSON("/api/plugins/run", {
+          plugin_uuid: pluginUuid,
+          action_id: actionId,
+          args
+        });
+      }
+      this.sendToSD({ event: "showOk", context: inst.context });
+    } catch {
+      this.sendToSD({ event: "showAlert", context: inst.context });
     }
   }
   handleDialRotate(inst, ticks) {
@@ -4577,6 +4667,20 @@ var TownCrierStreamDeckPlugin = class {
             value: `${volPct}%`,
             indicator: { value: volPct }
           }
+        });
+        break;
+      }
+      case ACTION_DYNAMIC: {
+        const targetType = String(inst.settings.targetType ?? "plugin").toUpperCase();
+        const rawLabel = String(inst.settings.label ?? inst.settings.actionId ?? "").trim();
+        const bottom = rawLabel.length > 0 ? rawLabel.slice(0, 12) : "ACTION";
+        const top = targetType === "BOT" ? "BOT ACTION" : "PLUGIN";
+        const accent = targetType === "BOT" ? "#A855F7" : "#34D399";
+        const image = svgDataUri("#0F172A", accent, "action", top, bottom, accent);
+        this.sendToSD({
+          event: "setImage",
+          context: inst.context,
+          payload: { image, target: 0 }
         });
         break;
       }

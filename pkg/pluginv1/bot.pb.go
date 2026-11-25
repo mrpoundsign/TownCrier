@@ -77,6 +77,59 @@ func (LogLevel) EnumDescriptor() ([]byte, []int) {
 	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{0}
 }
 
+// VarScope identifies the storage lifetime and keyspace for a bot variable.
+type VarScope int32
+
+const (
+	VarScope_VAR_SCOPE_UNSPECIFIED       VarScope = 0
+	VarScope_VAR_SCOPE_GLOBAL_PERSISTENT VarScope = 1
+	VarScope_VAR_SCOPE_GLOBAL_EPHEMERAL  VarScope = 2
+	VarScope_VAR_SCOPE_USER_PERSISTENT   VarScope = 3
+)
+
+// Enum value maps for VarScope.
+var (
+	VarScope_name = map[int32]string{
+		0: "VAR_SCOPE_UNSPECIFIED",
+		1: "VAR_SCOPE_GLOBAL_PERSISTENT",
+		2: "VAR_SCOPE_GLOBAL_EPHEMERAL",
+		3: "VAR_SCOPE_USER_PERSISTENT",
+	}
+	VarScope_value = map[string]int32{
+		"VAR_SCOPE_UNSPECIFIED":       0,
+		"VAR_SCOPE_GLOBAL_PERSISTENT": 1,
+		"VAR_SCOPE_GLOBAL_EPHEMERAL":  2,
+		"VAR_SCOPE_USER_PERSISTENT":   3,
+	}
+)
+
+func (x VarScope) Enum() *VarScope {
+	p := new(VarScope)
+	*p = x
+	return p
+}
+
+func (x VarScope) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (VarScope) Descriptor() protoreflect.EnumDescriptor {
+	return file_plugin_v1_bot_proto_enumTypes[1].Descriptor()
+}
+
+func (VarScope) Type() protoreflect.EnumType {
+	return &file_plugin_v1_bot_proto_enumTypes[1]
+}
+
+func (x VarScope) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use VarScope.Descriptor instead.
+func (VarScope) EnumDescriptor() ([]byte, []int) {
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{1}
+}
+
 // EmoteSpan identifies an emote substring inside StreamEvent.text by rune index.
 type EmoteSpan struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1986,6 +2039,505 @@ func (x *BeforeTTSResponse) GetOverrideSpeed() float32 {
 	return 0
 }
 
+// SendChatRequest sends an outbound chat message or announcement via a connected platform.
+type SendChatRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Platform         string                 `protobuf:"bytes,1,opt,name=platform,proto3" json:"platform,omitempty"`
+	Channel          string                 `protobuf:"bytes,2,opt,name=channel,proto3" json:"channel,omitempty"`
+	Text             string                 `protobuf:"bytes,3,opt,name=text,proto3" json:"text,omitempty"`
+	ReplyToMessageId string                 `protobuf:"bytes,4,opt,name=reply_to_message_id,json=replyToMessageId,proto3" json:"reply_to_message_id,omitempty"`
+	AsAnnouncement   bool                   `protobuf:"varint,5,opt,name=as_announcement,json=asAnnouncement,proto3" json:"as_announcement,omitempty"`
+	SendAs           string                 `protobuf:"bytes,6,opt,name=send_as,json=sendAs,proto3" json:"send_as,omitempty"` // "", "auto", "bot", "broadcaster"
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *SendChatRequest) Reset() {
+	*x = SendChatRequest{}
+	mi := &file_plugin_v1_bot_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendChatRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendChatRequest) ProtoMessage() {}
+
+func (x *SendChatRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_bot_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendChatRequest.ProtoReflect.Descriptor instead.
+func (*SendChatRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *SendChatRequest) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
+func (x *SendChatRequest) GetChannel() string {
+	if x != nil {
+		return x.Channel
+	}
+	return ""
+}
+
+func (x *SendChatRequest) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *SendChatRequest) GetReplyToMessageId() string {
+	if x != nil {
+		return x.ReplyToMessageId
+	}
+	return ""
+}
+
+func (x *SendChatRequest) GetAsAnnouncement() bool {
+	if x != nil {
+		return x.AsAnnouncement
+	}
+	return false
+}
+
+func (x *SendChatRequest) GetSendAs() string {
+	if x != nil {
+		return x.SendAs
+	}
+	return ""
+}
+
+// ModerateRequest performs an outbound moderation action (delete, timeout, ban, unban) on a platform.
+type ModerateRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Platform        string                 `protobuf:"bytes,1,opt,name=platform,proto3" json:"platform,omitempty"`
+	Action          string                 `protobuf:"bytes,2,opt,name=action,proto3" json:"action,omitempty"`
+	UserId          string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	UserName        string                 `protobuf:"bytes,4,opt,name=user_name,json=userName,proto3" json:"user_name,omitempty"`
+	MessageId       string                 `protobuf:"bytes,5,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	DurationSeconds int32                  `protobuf:"varint,6,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`
+	Reason          string                 `protobuf:"bytes,7,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ModerateRequest) Reset() {
+	*x = ModerateRequest{}
+	mi := &file_plugin_v1_bot_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModerateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModerateRequest) ProtoMessage() {}
+
+func (x *ModerateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_bot_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModerateRequest.ProtoReflect.Descriptor instead.
+func (*ModerateRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *ModerateRequest) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
+func (x *ModerateRequest) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *ModerateRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *ModerateRequest) GetUserName() string {
+	if x != nil {
+		return x.UserName
+	}
+	return ""
+}
+
+func (x *ModerateRequest) GetMessageId() string {
+	if x != nil {
+		return x.MessageId
+	}
+	return ""
+}
+
+func (x *ModerateRequest) GetDurationSeconds() int32 {
+	if x != nil {
+		return x.DurationSeconds
+	}
+	return 0
+}
+
+func (x *ModerateRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// GetVarRequest retrieves a bot variable from global persistent/ephemeral or user persistent storage.
+type GetVarRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Scope         VarScope               `protobuf:"varint,1,opt,name=scope,proto3,enum=towncrier.plugin.v1.VarScope" json:"scope,omitempty"`
+	Platform      string                 `protobuf:"bytes,2,opt,name=platform,proto3" json:"platform,omitempty"`
+	UserId        string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Key           string                 `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetVarRequest) Reset() {
+	*x = GetVarRequest{}
+	mi := &file_plugin_v1_bot_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetVarRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetVarRequest) ProtoMessage() {}
+
+func (x *GetVarRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_bot_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetVarRequest.ProtoReflect.Descriptor instead.
+func (*GetVarRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *GetVarRequest) GetScope() VarScope {
+	if x != nil {
+		return x.Scope
+	}
+	return VarScope_VAR_SCOPE_UNSPECIFIED
+}
+
+func (x *GetVarRequest) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
+func (x *GetVarRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *GetVarRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+// GetVarResponse returns the variable value if present.
+type GetVarResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	Value         *ActionValue           `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetVarResponse) Reset() {
+	*x = GetVarResponse{}
+	mi := &file_plugin_v1_bot_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetVarResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetVarResponse) ProtoMessage() {}
+
+func (x *GetVarResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_bot_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetVarResponse.ProtoReflect.Descriptor instead.
+func (*GetVarResponse) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *GetVarResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *GetVarResponse) GetValue() *ActionValue {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+// SetVarRequest sets or deletes a bot variable in global persistent/ephemeral or user persistent storage.
+type SetVarRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Scope         VarScope               `protobuf:"varint,1,opt,name=scope,proto3,enum=towncrier.plugin.v1.VarScope" json:"scope,omitempty"`
+	Platform      string                 `protobuf:"bytes,2,opt,name=platform,proto3" json:"platform,omitempty"`
+	UserId        string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Key           string                 `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`
+	Value         *ActionValue           `protobuf:"bytes,5,opt,name=value,proto3" json:"value,omitempty"`
+	Delete        bool                   `protobuf:"varint,6,opt,name=delete,proto3" json:"delete,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetVarRequest) Reset() {
+	*x = SetVarRequest{}
+	mi := &file_plugin_v1_bot_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetVarRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetVarRequest) ProtoMessage() {}
+
+func (x *SetVarRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_bot_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetVarRequest.ProtoReflect.Descriptor instead.
+func (*SetVarRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *SetVarRequest) GetScope() VarScope {
+	if x != nil {
+		return x.Scope
+	}
+	return VarScope_VAR_SCOPE_UNSPECIFIED
+}
+
+func (x *SetVarRequest) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
+func (x *SetVarRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *SetVarRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *SetVarRequest) GetValue() *ActionValue {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *SetVarRequest) GetDelete() bool {
+	if x != nil {
+		return x.Delete
+	}
+	return false
+}
+
+// EmitTriggerRequest fires a plugin-declared custom trigger into TownCrier's bot automation engine.
+type EmitTriggerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TriggerId     string                 `protobuf:"bytes,1,opt,name=trigger_id,json=triggerId,proto3" json:"trigger_id,omitempty"`
+	Args          *ActionArgs            `protobuf:"bytes,2,opt,name=args,proto3" json:"args,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EmitTriggerRequest) Reset() {
+	*x = EmitTriggerRequest{}
+	mi := &file_plugin_v1_bot_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmitTriggerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmitTriggerRequest) ProtoMessage() {}
+
+func (x *EmitTriggerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_bot_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmitTriggerRequest.ProtoReflect.Descriptor instead.
+func (*EmitTriggerRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *EmitTriggerRequest) GetTriggerId() string {
+	if x != nil {
+		return x.TriggerId
+	}
+	return ""
+}
+
+func (x *EmitTriggerRequest) GetArgs() *ActionArgs {
+	if x != nil {
+		return x.Args
+	}
+	return nil
+}
+
+// RunBotActionRequest invokes a TownCrier bot action by ID or name.
+type RunBotActionRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ActionIdOrName string                 `protobuf:"bytes,1,opt,name=action_id_or_name,json=actionIdOrName,proto3" json:"action_id_or_name,omitempty"`
+	Args           *ActionArgs            `protobuf:"bytes,2,opt,name=args,proto3" json:"args,omitempty"`
+	RunImmediately bool                   `protobuf:"varint,3,opt,name=run_immediately,json=runImmediately,proto3" json:"run_immediately,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *RunBotActionRequest) Reset() {
+	*x = RunBotActionRequest{}
+	mi := &file_plugin_v1_bot_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunBotActionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunBotActionRequest) ProtoMessage() {}
+
+func (x *RunBotActionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_bot_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunBotActionRequest.ProtoReflect.Descriptor instead.
+func (*RunBotActionRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *RunBotActionRequest) GetActionIdOrName() string {
+	if x != nil {
+		return x.ActionIdOrName
+	}
+	return ""
+}
+
+func (x *RunBotActionRequest) GetArgs() *ActionArgs {
+	if x != nil {
+		return x.Args
+	}
+	return nil
+}
+
+func (x *RunBotActionRequest) GetRunImmediately() bool {
+	if x != nil {
+		return x.RunImmediately
+	}
+	return false
+}
+
 var File_plugin_v1_bot_proto protoreflect.FileDescriptor
 
 const file_plugin_v1_bot_proto_rawDesc = "" +
@@ -2146,13 +2698,57 @@ const file_plugin_v1_bot_proto_rawDesc = "" +
 	"\aconsume\x18\x01 \x01(\bR\aconsume\x12#\n" +
 	"\roverride_text\x18\x02 \x01(\tR\foverrideText\x12%\n" +
 	"\x0eoverride_voice\x18\x03 \x01(\tR\roverrideVoice\x12%\n" +
-	"\x0eoverride_speed\x18\x04 \x01(\x02R\roverrideSpeed*w\n" +
+	"\x0eoverride_speed\x18\x04 \x01(\x02R\roverrideSpeed\"\xcc\x01\n" +
+	"\x0fSendChatRequest\x12\x1a\n" +
+	"\bplatform\x18\x01 \x01(\tR\bplatform\x12\x18\n" +
+	"\achannel\x18\x02 \x01(\tR\achannel\x12\x12\n" +
+	"\x04text\x18\x03 \x01(\tR\x04text\x12-\n" +
+	"\x13reply_to_message_id\x18\x04 \x01(\tR\x10replyToMessageId\x12'\n" +
+	"\x0fas_announcement\x18\x05 \x01(\bR\x0easAnnouncement\x12\x17\n" +
+	"\asend_as\x18\x06 \x01(\tR\x06sendAs\"\xdd\x01\n" +
+	"\x0fModerateRequest\x12\x1a\n" +
+	"\bplatform\x18\x01 \x01(\tR\bplatform\x12\x16\n" +
+	"\x06action\x18\x02 \x01(\tR\x06action\x12\x17\n" +
+	"\auser_id\x18\x03 \x01(\tR\x06userId\x12\x1b\n" +
+	"\tuser_name\x18\x04 \x01(\tR\buserName\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x05 \x01(\tR\tmessageId\x12)\n" +
+	"\x10duration_seconds\x18\x06 \x01(\x05R\x0fdurationSeconds\x12\x16\n" +
+	"\x06reason\x18\a \x01(\tR\x06reason\"\x8b\x01\n" +
+	"\rGetVarRequest\x123\n" +
+	"\x05scope\x18\x01 \x01(\x0e2\x1d.towncrier.plugin.v1.VarScopeR\x05scope\x12\x1a\n" +
+	"\bplatform\x18\x02 \x01(\tR\bplatform\x12\x17\n" +
+	"\auser_id\x18\x03 \x01(\tR\x06userId\x12\x10\n" +
+	"\x03key\x18\x04 \x01(\tR\x03key\"^\n" +
+	"\x0eGetVarResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x126\n" +
+	"\x05value\x18\x02 \x01(\v2 .towncrier.plugin.v1.ActionValueR\x05value\"\xdb\x01\n" +
+	"\rSetVarRequest\x123\n" +
+	"\x05scope\x18\x01 \x01(\x0e2\x1d.towncrier.plugin.v1.VarScopeR\x05scope\x12\x1a\n" +
+	"\bplatform\x18\x02 \x01(\tR\bplatform\x12\x17\n" +
+	"\auser_id\x18\x03 \x01(\tR\x06userId\x12\x10\n" +
+	"\x03key\x18\x04 \x01(\tR\x03key\x126\n" +
+	"\x05value\x18\x05 \x01(\v2 .towncrier.plugin.v1.ActionValueR\x05value\x12\x16\n" +
+	"\x06delete\x18\x06 \x01(\bR\x06delete\"h\n" +
+	"\x12EmitTriggerRequest\x12\x1d\n" +
+	"\n" +
+	"trigger_id\x18\x01 \x01(\tR\ttriggerId\x123\n" +
+	"\x04args\x18\x02 \x01(\v2\x1f.towncrier.plugin.v1.ActionArgsR\x04args\"\x9e\x01\n" +
+	"\x13RunBotActionRequest\x12)\n" +
+	"\x11action_id_or_name\x18\x01 \x01(\tR\x0eactionIdOrName\x123\n" +
+	"\x04args\x18\x02 \x01(\v2\x1f.towncrier.plugin.v1.ActionArgsR\x04args\x12'\n" +
+	"\x0frun_immediately\x18\x03 \x01(\bR\x0erunImmediately*w\n" +
 	"\bLogLevel\x12\x19\n" +
 	"\x15LOG_LEVEL_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fLOG_LEVEL_DEBUG\x10\x01\x12\x12\n" +
 	"\x0eLOG_LEVEL_INFO\x10\x02\x12\x12\n" +
 	"\x0eLOG_LEVEL_WARN\x10\x03\x12\x13\n" +
-	"\x0fLOG_LEVEL_ERROR\x10\x04B8Z6github.com/mrpoundsign/TownCrier/pkg/pluginv1;pluginv1b\x06proto3"
+	"\x0fLOG_LEVEL_ERROR\x10\x04*\x85\x01\n" +
+	"\bVarScope\x12\x19\n" +
+	"\x15VAR_SCOPE_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bVAR_SCOPE_GLOBAL_PERSISTENT\x10\x01\x12\x1e\n" +
+	"\x1aVAR_SCOPE_GLOBAL_EPHEMERAL\x10\x02\x12\x1d\n" +
+	"\x19VAR_SCOPE_USER_PERSISTENT\x10\x03B8Z6github.com/mrpoundsign/TownCrier/pkg/pluginv1;pluginv1b\x06proto3"
 
 var (
 	file_plugin_v1_bot_proto_rawDescOnce sync.Once
@@ -2166,62 +2762,76 @@ func file_plugin_v1_bot_proto_rawDescGZIP() []byte {
 	return file_plugin_v1_bot_proto_rawDescData
 }
 
-var file_plugin_v1_bot_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_plugin_v1_bot_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_plugin_v1_bot_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_plugin_v1_bot_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
 var file_plugin_v1_bot_proto_goTypes = []any{
 	(LogLevel)(0),                     // 0: towncrier.plugin.v1.LogLevel
-	(*EmoteSpan)(nil),                 // 1: towncrier.plugin.v1.EmoteSpan
-	(*StreamEvent)(nil),               // 2: towncrier.plugin.v1.StreamEvent
-	(*ModerationEvent)(nil),           // 3: towncrier.plugin.v1.ModerationEvent
-	(*TTSSpeechLifecycleEvent)(nil),   // 4: towncrier.plugin.v1.TTSSpeechLifecycleEvent
-	(*ActionValue)(nil),               // 5: towncrier.plugin.v1.ActionValue
-	(*ActionArgs)(nil),                // 6: towncrier.plugin.v1.ActionArgs
-	(*LogRequest)(nil),                // 7: towncrier.plugin.v1.LogRequest
-	(*GetGlobalSettingsRequest)(nil),  // 8: towncrier.plugin.v1.GetGlobalSettingsRequest
-	(*GetGlobalSettingsResponse)(nil), // 9: towncrier.plugin.v1.GetGlobalSettingsResponse
-	(*SaveGlobalSettingsRequest)(nil), // 10: towncrier.plugin.v1.SaveGlobalSettingsRequest
-	(*SetTimerRequest)(nil),           // 11: towncrier.plugin.v1.SetTimerRequest
-	(*HTTPRequest)(nil),               // 12: towncrier.plugin.v1.HTTPRequest
-	(*HTTPResponse)(nil),              // 13: towncrier.plugin.v1.HTTPResponse
-	(*SpeakRequest)(nil),              // 14: towncrier.plugin.v1.SpeakRequest
-	(*KVGetRequest)(nil),              // 15: towncrier.plugin.v1.KVGetRequest
-	(*KVGetResponse)(nil),             // 16: towncrier.plugin.v1.KVGetResponse
-	(*KVSetRequest)(nil),              // 17: towncrier.plugin.v1.KVSetRequest
-	(*KVDeleteRequest)(nil),           // 18: towncrier.plugin.v1.KVDeleteRequest
-	(*KVListRequest)(nil),             // 19: towncrier.plugin.v1.KVListRequest
-	(*KVListResponse)(nil),            // 20: towncrier.plugin.v1.KVListResponse
-	(*OverlayBroadcastRequest)(nil),   // 21: towncrier.plugin.v1.OverlayBroadcastRequest
-	(*GetOverlayAssetRequest)(nil),    // 22: towncrier.plugin.v1.GetOverlayAssetRequest
-	(*GetOverlayAssetResponse)(nil),   // 23: towncrier.plugin.v1.GetOverlayAssetResponse
-	(*RunActionRequest)(nil),          // 24: towncrier.plugin.v1.RunActionRequest
-	(*RunActionResponse)(nil),         // 25: towncrier.plugin.v1.RunActionResponse
-	(*BeforeTTSRequest)(nil),          // 26: towncrier.plugin.v1.BeforeTTSRequest
-	(*BeforeTTSResponse)(nil),         // 27: towncrier.plugin.v1.BeforeTTSResponse
-	nil,                               // 28: towncrier.plugin.v1.ActionArgs.ArgsEntry
-	nil,                               // 29: towncrier.plugin.v1.HTTPRequest.HeadersEntry
-	nil,                               // 30: towncrier.plugin.v1.HTTPResponse.HeadersEntry
-	(*SettingsMap)(nil),               // 31: towncrier.plugin.v1.SettingsMap
-	(*APIError)(nil),                  // 32: towncrier.plugin.v1.APIError
+	(VarScope)(0),                     // 1: towncrier.plugin.v1.VarScope
+	(*EmoteSpan)(nil),                 // 2: towncrier.plugin.v1.EmoteSpan
+	(*StreamEvent)(nil),               // 3: towncrier.plugin.v1.StreamEvent
+	(*ModerationEvent)(nil),           // 4: towncrier.plugin.v1.ModerationEvent
+	(*TTSSpeechLifecycleEvent)(nil),   // 5: towncrier.plugin.v1.TTSSpeechLifecycleEvent
+	(*ActionValue)(nil),               // 6: towncrier.plugin.v1.ActionValue
+	(*ActionArgs)(nil),                // 7: towncrier.plugin.v1.ActionArgs
+	(*LogRequest)(nil),                // 8: towncrier.plugin.v1.LogRequest
+	(*GetGlobalSettingsRequest)(nil),  // 9: towncrier.plugin.v1.GetGlobalSettingsRequest
+	(*GetGlobalSettingsResponse)(nil), // 10: towncrier.plugin.v1.GetGlobalSettingsResponse
+	(*SaveGlobalSettingsRequest)(nil), // 11: towncrier.plugin.v1.SaveGlobalSettingsRequest
+	(*SetTimerRequest)(nil),           // 12: towncrier.plugin.v1.SetTimerRequest
+	(*HTTPRequest)(nil),               // 13: towncrier.plugin.v1.HTTPRequest
+	(*HTTPResponse)(nil),              // 14: towncrier.plugin.v1.HTTPResponse
+	(*SpeakRequest)(nil),              // 15: towncrier.plugin.v1.SpeakRequest
+	(*KVGetRequest)(nil),              // 16: towncrier.plugin.v1.KVGetRequest
+	(*KVGetResponse)(nil),             // 17: towncrier.plugin.v1.KVGetResponse
+	(*KVSetRequest)(nil),              // 18: towncrier.plugin.v1.KVSetRequest
+	(*KVDeleteRequest)(nil),           // 19: towncrier.plugin.v1.KVDeleteRequest
+	(*KVListRequest)(nil),             // 20: towncrier.plugin.v1.KVListRequest
+	(*KVListResponse)(nil),            // 21: towncrier.plugin.v1.KVListResponse
+	(*OverlayBroadcastRequest)(nil),   // 22: towncrier.plugin.v1.OverlayBroadcastRequest
+	(*GetOverlayAssetRequest)(nil),    // 23: towncrier.plugin.v1.GetOverlayAssetRequest
+	(*GetOverlayAssetResponse)(nil),   // 24: towncrier.plugin.v1.GetOverlayAssetResponse
+	(*RunActionRequest)(nil),          // 25: towncrier.plugin.v1.RunActionRequest
+	(*RunActionResponse)(nil),         // 26: towncrier.plugin.v1.RunActionResponse
+	(*BeforeTTSRequest)(nil),          // 27: towncrier.plugin.v1.BeforeTTSRequest
+	(*BeforeTTSResponse)(nil),         // 28: towncrier.plugin.v1.BeforeTTSResponse
+	(*SendChatRequest)(nil),           // 29: towncrier.plugin.v1.SendChatRequest
+	(*ModerateRequest)(nil),           // 30: towncrier.plugin.v1.ModerateRequest
+	(*GetVarRequest)(nil),             // 31: towncrier.plugin.v1.GetVarRequest
+	(*GetVarResponse)(nil),            // 32: towncrier.plugin.v1.GetVarResponse
+	(*SetVarRequest)(nil),             // 33: towncrier.plugin.v1.SetVarRequest
+	(*EmitTriggerRequest)(nil),        // 34: towncrier.plugin.v1.EmitTriggerRequest
+	(*RunBotActionRequest)(nil),       // 35: towncrier.plugin.v1.RunBotActionRequest
+	nil,                               // 36: towncrier.plugin.v1.ActionArgs.ArgsEntry
+	nil,                               // 37: towncrier.plugin.v1.HTTPRequest.HeadersEntry
+	nil,                               // 38: towncrier.plugin.v1.HTTPResponse.HeadersEntry
+	(*SettingsMap)(nil),               // 39: towncrier.plugin.v1.SettingsMap
+	(*APIError)(nil),                  // 40: towncrier.plugin.v1.APIError
 }
 var file_plugin_v1_bot_proto_depIdxs = []int32{
-	1,  // 0: towncrier.plugin.v1.StreamEvent.emote_spans:type_name -> towncrier.plugin.v1.EmoteSpan
-	28, // 1: towncrier.plugin.v1.ActionArgs.args:type_name -> towncrier.plugin.v1.ActionArgs.ArgsEntry
+	2,  // 0: towncrier.plugin.v1.StreamEvent.emote_spans:type_name -> towncrier.plugin.v1.EmoteSpan
+	36, // 1: towncrier.plugin.v1.ActionArgs.args:type_name -> towncrier.plugin.v1.ActionArgs.ArgsEntry
 	0,  // 2: towncrier.plugin.v1.LogRequest.level:type_name -> towncrier.plugin.v1.LogLevel
-	31, // 3: towncrier.plugin.v1.GetGlobalSettingsResponse.settings:type_name -> towncrier.plugin.v1.SettingsMap
-	31, // 4: towncrier.plugin.v1.SaveGlobalSettingsRequest.settings:type_name -> towncrier.plugin.v1.SettingsMap
-	29, // 5: towncrier.plugin.v1.HTTPRequest.headers:type_name -> towncrier.plugin.v1.HTTPRequest.HeadersEntry
-	30, // 6: towncrier.plugin.v1.HTTPResponse.headers:type_name -> towncrier.plugin.v1.HTTPResponse.HeadersEntry
-	32, // 7: towncrier.plugin.v1.GetOverlayAssetResponse.error:type_name -> towncrier.plugin.v1.APIError
-	6,  // 8: towncrier.plugin.v1.RunActionRequest.args:type_name -> towncrier.plugin.v1.ActionArgs
-	6,  // 9: towncrier.plugin.v1.RunActionResponse.updated_args:type_name -> towncrier.plugin.v1.ActionArgs
-	32, // 10: towncrier.plugin.v1.RunActionResponse.error:type_name -> towncrier.plugin.v1.APIError
-	2,  // 11: towncrier.plugin.v1.BeforeTTSRequest.event:type_name -> towncrier.plugin.v1.StreamEvent
-	5,  // 12: towncrier.plugin.v1.ActionArgs.ArgsEntry.value:type_name -> towncrier.plugin.v1.ActionValue
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	39, // 3: towncrier.plugin.v1.GetGlobalSettingsResponse.settings:type_name -> towncrier.plugin.v1.SettingsMap
+	39, // 4: towncrier.plugin.v1.SaveGlobalSettingsRequest.settings:type_name -> towncrier.plugin.v1.SettingsMap
+	37, // 5: towncrier.plugin.v1.HTTPRequest.headers:type_name -> towncrier.plugin.v1.HTTPRequest.HeadersEntry
+	38, // 6: towncrier.plugin.v1.HTTPResponse.headers:type_name -> towncrier.plugin.v1.HTTPResponse.HeadersEntry
+	40, // 7: towncrier.plugin.v1.GetOverlayAssetResponse.error:type_name -> towncrier.plugin.v1.APIError
+	7,  // 8: towncrier.plugin.v1.RunActionRequest.args:type_name -> towncrier.plugin.v1.ActionArgs
+	7,  // 9: towncrier.plugin.v1.RunActionResponse.updated_args:type_name -> towncrier.plugin.v1.ActionArgs
+	40, // 10: towncrier.plugin.v1.RunActionResponse.error:type_name -> towncrier.plugin.v1.APIError
+	3,  // 11: towncrier.plugin.v1.BeforeTTSRequest.event:type_name -> towncrier.plugin.v1.StreamEvent
+	1,  // 12: towncrier.plugin.v1.GetVarRequest.scope:type_name -> towncrier.plugin.v1.VarScope
+	6,  // 13: towncrier.plugin.v1.GetVarResponse.value:type_name -> towncrier.plugin.v1.ActionValue
+	1,  // 14: towncrier.plugin.v1.SetVarRequest.scope:type_name -> towncrier.plugin.v1.VarScope
+	6,  // 15: towncrier.plugin.v1.SetVarRequest.value:type_name -> towncrier.plugin.v1.ActionValue
+	7,  // 16: towncrier.plugin.v1.EmitTriggerRequest.args:type_name -> towncrier.plugin.v1.ActionArgs
+	7,  // 17: towncrier.plugin.v1.RunBotActionRequest.args:type_name -> towncrier.plugin.v1.ActionArgs
+	6,  // 18: towncrier.plugin.v1.ActionArgs.ArgsEntry.value:type_name -> towncrier.plugin.v1.ActionValue
+	19, // [19:19] is the sub-list for method output_type
+	19, // [19:19] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_plugin_v1_bot_proto_init() }
@@ -2242,8 +2852,8 @@ func file_plugin_v1_bot_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plugin_v1_bot_proto_rawDesc), len(file_plugin_v1_bot_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   30,
+			NumEnums:      2,
+			NumMessages:   37,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

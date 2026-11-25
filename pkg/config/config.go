@@ -35,6 +35,7 @@ type Config struct {
 	Translation     TranslationConfig         `json:"translation"`
 	VoiceSubtitles  VoiceSubtitlesConfig      `json:"voice_subtitles"`
 	Plugins         PluginsConfig             `json:"plugins"`
+	Bot             BotAutomationConfig       `json:"bot"`
 	GlobalChatRules GlobalChatRules           `json:"global_chat_rules"`
 	Viewers         map[string]ViewerConfig   `json:"viewers"`
 	Platforms       map[string]PlatformConfig `json:"platforms"`
@@ -1234,6 +1235,7 @@ func DefaultConfig() *Config {
 			TrustedNative:  make(map[string]TrustedNativePlugin),
 			PluginSettings: make(map[string]map[string]any),
 		},
+		Bot: DefaultBotAutomationConfig(),
 		GlobalChatRules: GlobalChatRules{
 			SpeakNames:                        true,
 			NaturalizeNames:                   true,
@@ -1910,6 +1912,7 @@ func (c *Config) Clone() *Config {
 			clone.Plugins.PluginSettings[k] = maps.Clone(ps)
 		}
 	}
+	clone.Bot = cloneBotAutomationConfig(c.Bot)
 
 	if c.Viewers != nil {
 		clone.Viewers = make(map[string]ViewerConfig, len(c.Viewers))
@@ -2311,6 +2314,7 @@ func migrate(cfg *Config) error {
 	if cfg.Plugins.PluginSettings == nil {
 		cfg.Plugins.PluginSettings = make(map[string]map[string]any)
 	}
+	NormalizeBotAutomationConfig(&cfg.Bot)
 
 	return nil
 }

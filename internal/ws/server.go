@@ -365,6 +365,9 @@ func (s *Server) Start(host string, port int, authToken string) error {
 	mux.Handle("/api/panic", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPPanic))))
 	mux.Handle("/api/queue", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPQueue))))
 	mux.Handle("/api/volume", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPVolume))))
+	mux.Handle("/api/actions", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPListActions))))
+	mux.Handle("/api/bot/run", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPRunBotAction))))
+	mux.Handle("/api/plugins/run", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPRunPluginAction))))
 
 	// OBS Browser Source Overlay endpoints
 	mux.Handle("/overlay", s.withCORSAndAuth(http.HandlerFunc(s.handleOverlayUnified)))

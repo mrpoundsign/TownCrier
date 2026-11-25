@@ -3,6 +3,7 @@ package pluginsdk
 import (
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/mrpoundsign/TownCrier/pkg/pluginv1"
 )
@@ -273,6 +274,259 @@ func (h *Host) SendUIPatch(batch *pluginv1.UIPatchBatch) error {
 		},
 	})
 	return err
+}
+
+// SendChat sends an outbound chat message or announcement on a connected platform.
+func (h *Host) SendChat(req *pluginv1.SendChatRequest) error {
+	if req == nil {
+		return &APIError{
+			Code:    pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			Message: "nil SendChatRequest",
+		}
+	}
+	_, err := h.call(&pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_SendChat{
+			SendChat: req,
+		},
+	})
+	return err
+}
+
+// Moderate performs an outbound moderation action (delete, timeout, ban) on a connected platform.
+func (h *Host) Moderate(req *pluginv1.ModerateRequest) error {
+	if req == nil {
+		return &APIError{
+			Code:    pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			Message: "nil ModerateRequest",
+		}
+	}
+	_, err := h.call(&pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_Moderate{
+			Moderate: req,
+		},
+	})
+	return err
+}
+
+// GetVar retrieves a global or user bot variable from TownCrier.
+func (h *Host) GetVar(scope pluginv1.VarScope, platform, userID, key string) (*pluginv1.ActionValue, bool, error) {
+	resp, err := h.call(&pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_GetVar{
+			GetVar: &pluginv1.GetVarRequest{
+				Scope:    scope,
+				Platform: platform,
+				UserId:   userID,
+				Key:      key,
+			},
+		},
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	gv := resp.GetGetVar()
+	if gv == nil {
+		return nil, false, nil
+	}
+	return gv.GetValue(), gv.GetFound(), nil
+}
+
+// SetVar stores a global or user bot variable in TownCrier.
+func (h *Host) SetVar(scope pluginv1.VarScope, platform, userID, key string, val *pluginv1.ActionValue) error {
+	_, err := h.call(&pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_SetVar{
+			SetVar: &pluginv1.SetVarRequest{
+				Scope:    scope,
+				Platform: platform,
+				UserId:   userID,
+				Key:      key,
+				Value:    val,
+			},
+		},
+	})
+	return err
+}
+
+// DeleteVar deletes a global or user bot variable in TownCrier.
+func (h *Host) DeleteVar(scope pluginv1.VarScope, platform, userID, key string) error {
+	_, err := h.call(&pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_SetVar{
+			SetVar: &pluginv1.SetVarRequest{
+				Scope:    scope,
+				Platform: platform,
+				UserId:   userID,
+				Key:      key,
+				Delete:   true,
+			},
+		},
+	})
+	return err
+}
+
+// EmitTrigger fires a custom trigger event into TownCrier's bot automation engine.
+func (h *Host) EmitTrigger(triggerID string, args *pluginv1.ActionArgs) error {
+	_, err := h.call(&pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_EmitTrigger{
+			EmitTrigger: &pluginv1.EmitTriggerRequest{
+				TriggerId: triggerID,
+				Args:      args,
+			},
+		},
+	})
+	return err
+}
+
+// RunBotAction invokes a configured TownCrier bot action by ID or name.
+func (h *Host) RunBotAction(actionIDOrName string, args *pluginv1.ActionArgs, runImmediately bool) error {
+	_, err := h.call(&pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_RunBotAction{
+			RunBotAction: &pluginv1.RunBotActionRequest{
+				ActionIdOrName: actionIDOrName,
+				Args:           args,
+				RunImmediately: runImmediately,
+			},
+		},
+	})
+	return err
+}
+
+// ActionValueString constructs a string ActionValue.
+func ActionValueString(v string) *pluginv1.ActionValue {
+	return &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_StringVal{StringVal: v}}
+}
+
+// ActionValueInt constructs an int64 ActionValue.
+func ActionValueInt(v int64) *pluginv1.ActionValue {
+	return &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_IntVal{IntVal: v}}
+}
+
+// ActionValueFloat constructs a float64 ActionValue.
+func ActionValueFloat(v float64) *pluginv1.ActionValue {
+	return &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_DoubleVal{DoubleVal: v}}
+}
+
+// ActionValueBool constructs a bool ActionValue.
+func ActionValueBool(v bool) *pluginv1.ActionValue {
+	return &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_BoolVal{BoolVal: v}}
+}
+
+// ActionArgsFromMap converts a Go map[string]any into a protobuf ActionArgs message.
+func ActionArgsFromMap(m map[string]any) *pluginv1.ActionArgs {
+	out := &pluginv1.ActionArgs{Args: make(map[string]*pluginv1.ActionValue, len(m))}
+	for k, v := range m {
+		switch tv := v.(type) {
+		case string:
+			out.Args[k] = ActionValueString(tv)
+		case int:
+			out.Args[k] = ActionValueInt(int64(tv))
+		case int64:
+			out.Args[k] = ActionValueInt(tv)
+		case int32:
+			out.Args[k] = ActionValueInt(int64(tv))
+		case float64:
+			out.Args[k] = ActionValueFloat(tv)
+		case float32:
+			out.Args[k] = ActionValueFloat(float64(tv))
+		case bool:
+			out.Args[k] = ActionValueBool(tv)
+		case *pluginv1.ActionValue:
+			if tv != nil {
+				out.Args[k] = tv
+			}
+		default:
+			if tv != nil {
+				out.Args[k] = ActionValueString(fmt.Sprint(tv))
+			}
+		}
+	}
+	return out
+}
+
+// ActionArgsToMap converts a protobuf ActionArgs message into a Go map[string]any.
+func ActionArgsToMap(a *pluginv1.ActionArgs) map[string]any {
+	if a == nil || len(a.GetArgs()) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(a.GetArgs()))
+	for k, v := range a.GetArgs() {
+		if v == nil {
+			continue
+		}
+		switch tv := v.Kind.(type) {
+		case *pluginv1.ActionValue_StringVal:
+			out[k] = tv.StringVal
+		case *pluginv1.ActionValue_IntVal:
+			out[k] = tv.IntVal
+		case *pluginv1.ActionValue_DoubleVal:
+			out[k] = tv.DoubleVal
+		case *pluginv1.ActionValue_BoolVal:
+			out[k] = tv.BoolVal
+		}
+	}
+	return out
+}
+
+// GetArgString reads a string argument from ActionArgs with fallback.
+func GetArgString(a *pluginv1.ActionArgs, key, fallback string) string {
+	if a == nil || a.Args == nil {
+		return fallback
+	}
+	av := a.Args[key]
+	if av == nil {
+		return fallback
+	}
+	switch v := av.Kind.(type) {
+	case *pluginv1.ActionValue_StringVal:
+		return v.StringVal
+	case *pluginv1.ActionValue_IntVal:
+		return strconv.FormatInt(v.IntVal, 10)
+	case *pluginv1.ActionValue_DoubleVal:
+		return fmt.Sprintf("%g", v.DoubleVal)
+	case *pluginv1.ActionValue_BoolVal:
+		if v.BoolVal {
+			return "true"
+		}
+		return "false"
+	}
+	return fallback
+}
+
+// EnsureActionArgs initializes args (and its map) if nil and returns it.
+func EnsureActionArgs(a *pluginv1.ActionArgs) *pluginv1.ActionArgs {
+	if a == nil {
+		return &pluginv1.ActionArgs{Args: make(map[string]*pluginv1.ActionValue)}
+	}
+	if a.Args == nil {
+		a.Args = make(map[string]*pluginv1.ActionValue)
+	}
+	return a
+}
+
+// SetArgString sets a string argument inside ActionArgs.
+func SetArgString(a *pluginv1.ActionArgs, key, val string) *pluginv1.ActionArgs {
+	a = EnsureActionArgs(a)
+	a.Args[key] = &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_StringVal{StringVal: val}}
+	return a
+}
+
+// SetArgInt sets an int64 argument inside ActionArgs.
+func SetArgInt(a *pluginv1.ActionArgs, key string, val int64) *pluginv1.ActionArgs {
+	a = EnsureActionArgs(a)
+	a.Args[key] = &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_IntVal{IntVal: val}}
+	return a
+}
+
+// SetArgFloat sets a float64 argument inside ActionArgs.
+func SetArgFloat(a *pluginv1.ActionArgs, key string, val float64) *pluginv1.ActionArgs {
+	a = EnsureActionArgs(a)
+	a.Args[key] = &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_DoubleVal{DoubleVal: val}}
+	return a
+}
+
+// SetArgBool sets a bool argument inside ActionArgs.
+func SetArgBool(a *pluginv1.ActionArgs, key string, val bool) *pluginv1.ActionArgs {
+	a = EnsureActionArgs(a)
+	a.Args[key] = &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_BoolVal{BoolVal: val}}
+	return a
 }
 
 // EnsureSettingsMap initializes m (and its map) if nil and returns it.

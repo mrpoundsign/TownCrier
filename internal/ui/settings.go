@@ -109,6 +109,8 @@ type SettingsView struct {
 
 	onTTSChanged           func(enabled bool)
 	onLoggingChanged       func(enabled bool)
+	onBotChanged           func(enabled bool)
+	onPluginOpenTab        func(viewKey string)
 	onChatScaleChanged     func(pct int)
 	onAnimateEmotesChanged func(enabled bool)
 	featuresCard         *widget.Card
@@ -163,6 +165,7 @@ type SettingsView struct {
 	ttsBox                *fyne.Container
 	enableTTSCheck            *widget.Check
 	enableLogCheck            *widget.Check
+	enableBotCheck            *widget.Check
 	enableTranslationCheck    *widget.Check
 	enableVoiceSubtitlesCheck *widget.Check
 	checkUpdatesCheck         *widget.Check
@@ -263,6 +266,7 @@ type SettingsView struct {
 	onBackupApplied      func(newCfg *config.Config, dbRestored bool)
 	ttsEnabled            bool
 	loggingEnabled        bool
+	botEnabled            bool
 	translationEnabled    bool
 	voiceSubtitlesEnabled bool
 
@@ -356,6 +360,19 @@ func (v *SettingsView) SetTTSChangedHandler(fn func(enabled bool)) {
 // SetLoggingChangedHandler registers a callback invoked when Event Logging is enabled or disabled from Settings.
 func (v *SettingsView) SetLoggingChangedHandler(fn func(enabled bool)) {
 	v.onLoggingChanged = fn
+}
+
+// SetBotChangedHandler registers a callback invoked when the Bot Automation Engine is enabled or disabled.
+func (v *SettingsView) SetBotChangedHandler(fn func(enabled bool)) {
+	v.onBotChanged = fn
+}
+
+// SetPluginOpenTabHandler registers a callback invoked when the user clicks "Open <View>" on a running plugin card.
+func (v *SettingsView) SetPluginOpenTabHandler(fn func(viewKey string)) {
+	v.onPluginOpenTab = fn
+	if v.pluginsTab != nil {
+		v.pluginsTab.SetOnOpenTab(fn)
+	}
 }
 
 // SetChatScaleChangedHandler registers a callback invoked when the default chat panel scale is updated in Settings.
@@ -1089,6 +1106,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	v.generalTabItem = container.NewTabItemWithIcon("General", theme.SettingsIcon(), generalTabContent)
 	v.obsTabItem = container.NewTabItemWithIcon("OBS & Overlays", theme.ComputerIcon(), obsTabContent)
 	v.pluginsTab = NewPluginsTabView(v.window, v.session, v.setStatus)
+	v.pluginsTab.SetOnOpenTab(v.onPluginOpenTab)
 	v.pluginsTabItem = container.NewTabItemWithIcon("Plugins", theme.StorageIcon(), v.pluginsTab.Build())
 	v.ttsTabItem = container.NewTabItemWithIcon("TTS & Hardware", theme.VolumeUpIcon(), ttsTabContent)
 	v.voiceSubtitlesTabItem = container.NewTabItemWithIcon("Voice Subtitles", theme.MediaRecordIcon(), v.buildVoiceSubtitlesTab())
@@ -1210,6 +1228,26 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 	})
 	v.enableLogCheck.SetChecked(cfg.Logging.Enabled)
 
+	v.enableBotCheck = widget.NewCheck("Enable Bot Automation Engine (Commands, Actions, Timers, OBS, Voice Triggers)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.Bot.Enabled = checked
+		})
+		v.botEnabled = checked
+		if v.onBotChanged != nil {
+			v.onBotChanged(checked)
+		}
+		if checked {
+			v.setStatus("✓ Bot Automation Engine enabled. Open the Bot tab in the top navigation bar.")
+		} else {
+			v.setStatus("Bot Automation Engine disabled.")
+		}
+	})
+	v.enableBotCheck.SetChecked(cfg.Bot.Enabled)
+	v.botEnabled = cfg.Bot.Enabled
+
 	v.enableTranslationCheck = widget.NewCheck("Enable Chat Translation (Auto-Detect & Translate Foreign Chat)", func(checked bool) {
 		if v.initializing {
 			return
@@ -1275,6 +1313,7 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 	cardContent := container.NewVBox(
 		v.enableTTSCheck,
 		v.enableLogCheck,
+		v.enableBotCheck,
 		v.enableTranslationCheck,
 		v.enableVoiceSubtitlesCheck,
 		updateRow,

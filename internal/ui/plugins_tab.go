@@ -23,9 +23,10 @@ import (
 
 // PluginsTabView renders the Settings -> Plugins management view.
 type PluginsTabView struct {
-	window   fyne.Window
-	session  *app.Session
-	onStatus func(string)
+	window    fyne.Window
+	session   *app.Session
+	onStatus  func(string)
+	onOpenTab func(string)
 
 	enabledCheck *widget.Check
 	reloadBtn    *widget.Button
@@ -44,6 +45,11 @@ func NewPluginsTabView(win fyne.Window, sess *app.Session, onStatus func(string)
 		session:  sess,
 		onStatus: onStatus,
 	}
+}
+
+// SetOnOpenTab registers a callback invoked when the user clicks "Open <View>" on a running plugin card.
+func (v *PluginsTabView) SetOnOpenTab(fn func(string)) {
+	v.onOpenTab = fn
 }
 
 // Build constructs the Fyne canvas hierarchy for Settings -> Plugins.
@@ -327,6 +333,23 @@ func (v *PluginsTabView) buildPluginCard(mgr *pluginhost.Manager, p pluginhost.P
 		})
 		cfgBtn.Importance = widget.HighImportance
 		actions = append(actions, cfgBtn)
+	}
+
+	if p.State == pluginhost.StatusRunning && v.onOpenTab != nil {
+		for _, vd := range p.Views {
+			if vd == nil || vd.GetPlacement() != pluginv1.ViewPlacement_VIEW_PLACEMENT_MAIN_TAB {
+				continue
+			}
+			viewTitle := strings.TrimSpace(vd.GetTitle())
+			if viewTitle == "" {
+				viewTitle = p.Name
+			}
+			viewKey := p.UUID + ":" + vd.GetId()
+			openViewBtn := widget.NewButtonWithIcon("Open "+viewTitle, theme.NavigateNextIcon(), func() {
+				v.onOpenTab(viewKey)
+			})
+			actions = append(actions, openViewBtn)
+		}
 	}
 
 	if p.State == pluginhost.StatusError && p.UUID != "" {

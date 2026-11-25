@@ -459,7 +459,8 @@ func (m *Manager) Plugins() []PluginStatus {
 		var perms *pluginv1.Permissions
 		var allowed []string
 		var schema []*pluginv1.SettingField
-		var actions int
+		var actions []*pluginv1.ActionDescriptor
+		var triggers []*pluginv1.TriggerDescriptor
 		var views []*pluginv1.ViewDescriptor
 		apiVer := ""
 		if ent.manifest != nil {
@@ -468,7 +469,8 @@ func (m *Manager) Plugins() []PluginStatus {
 				allowed = slices.Clone(perms.GetAllowedHosts())
 			}
 			schema = ent.manifest.GetGlobalSettingsSchema()
-			actions = len(ent.manifest.GetActions())
+			actions = slices.Clone(ent.manifest.GetActions())
+			triggers = slices.Clone(ent.manifest.GetTriggers())
 			views = slices.Clone(ent.manifest.GetViews())
 			apiVer = FormatVersion(ent.manifest.GetApiVersion())
 		}
@@ -487,7 +489,9 @@ func (m *Manager) Plugins() []PluginStatus {
 			AllowedHosts:      allowed,
 			HasGlobalSettings: len(schema) > 0,
 			GlobalSchema:      schema,
-			ActionCount:       actions,
+			ActionCount:       len(actions),
+			Actions:           actions,
+			Triggers:          triggers,
 			Views:             views,
 			State:             ent.state,
 			Error:             ent.errMsg,
@@ -750,6 +754,145 @@ func eventSubscribed(subs []string, kind string) bool {
 	return false
 }
 
+func subscribesBeforeTTS(man *pluginv1.Manifest) bool {
+	if man == nil {
+		return false
+	}
+	for _, s := range man.GetSubscribedEvents() {
+		if strings.EqualFold(strings.TrimSpace(s), "before_tts") || s == "*" {
+			return true
+		}
+	}
+	return slices.Contains(man.GetRequiredCapabilities(), "bot.before_tts.v1")
+}
+
+// InvokeBeforeTTS runs synchronous pre-TTS middleware across subscribed plugins within a strict <= 500ms budget.
+// Any plugin returning consume=true halts the pipeline and suppresses TTS for the utterance.
+func (m *Manager) InvokeBeforeTTS(
+	ctx context.Context,
+	ev *chat.Event,
+	proposedText string,
+	proposedVoice string,
+	proposedSpeed float32,
+	streamSessionID int64,
+	streamIsLive bool,
+) (consume bool, finalText string, finalVoice string, finalSpeed float32) {
+	finalText = proposedText
+	finalVoice = proposedVoice
+	finalSpeed = proposedSpeed
+	if ev == nil {
+		return false, finalText, finalVoice, finalSpeed
+	}
+
+	type target struct {
+		ent *pluginEntry
+		be  pluginBackend
+	}
+	var targets []target
+	m.mu.RLock()
+	for _, ent := range m.entries {
+		ent.mu.RLock()
+		ok := ent.state == StatusRunning && ent.backend != nil && subscribesBeforeTTS(ent.manifest)
+		be := ent.backend
+		ent.mu.RUnlock()
+		if ok {
+			targets = append(targets, target{ent: ent, be: be})
+		}
+	}
+	m.mu.RUnlock()
+	if len(targets) == 0 {
+		return false, finalText, finalVoice, finalSpeed
+	}
+
+	budgetCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	pbEv := chatEventToProto(ev)
+	pbEv.StreamSessionId = streamSessionID
+	pbEv.StreamIsLive = streamIsLive
+
+	for _, t := range targets {
+		if budgetCtx.Err() != nil {
+			break
+		}
+		resp, err := t.be.Dispatch(budgetCtx, &pluginv1.HostEnvelope{
+			Payload: &pluginv1.HostEnvelope_BeforeTts{
+				BeforeTts: &pluginv1.BeforeTTSRequest{
+					Event:         pbEv,
+					ProposedText:  finalText,
+					ProposedVoice: finalVoice,
+					ProposedSpeed: finalSpeed,
+				},
+			},
+		})
+		if err != nil {
+			if t.ent != nil && t.ent.logs != nil {
+				t.ent.logs.Append("before_tts error: " + err.Error())
+			}
+			continue
+		}
+		if bResp := resp.GetBeforeTtsResponse(); bResp != nil {
+			if txt := bResp.GetOverrideText(); txt != "" {
+				finalText = txt
+			}
+			if v := strings.TrimSpace(bResp.GetOverrideVoice()); v != "" {
+				finalVoice = v
+			}
+			if sp := bResp.GetOverrideSpeed(); sp > 0 {
+				finalSpeed = sp
+			}
+			if bResp.GetConsume() {
+				return true, finalText, finalVoice, finalSpeed
+			}
+		}
+	}
+	return false, finalText, finalVoice, finalSpeed
+}
+
+// RunPluginAction invokes an action declared by pluginUUID and returns updated arguments and continuation flag.
+func (m *Manager) RunPluginAction(ctx context.Context, pluginUUID, actionID string, args *pluginv1.ActionArgs) (bool, *pluginv1.ActionArgs, error) {
+	_, be, man, err := m.runningBackend(pluginUUID)
+	if err != nil {
+		return false, args, err
+	}
+	hasCap := slices.Contains(man.GetRequiredCapabilities(), "bot.actions.v1")
+	if len(man.GetActions()) == 0 && !hasCap {
+		return false, args, pluginsdk.FromProto(&pluginv1.APIError{
+			Code:    pluginv1.ErrorCode_ERROR_CODE_UNSUPPORTED_CAPABILITY,
+			Message: "plugin does not declare any automatable actions",
+		})
+	}
+	resp, err := be.Dispatch(ctx, &pluginv1.HostEnvelope{
+		Payload: &pluginv1.HostEnvelope_RunAction{
+			RunAction: &pluginv1.RunActionRequest{
+				ActionId: actionID,
+				Args:     args,
+			},
+		},
+	})
+	if err != nil {
+		return false, args, err
+	}
+	if ack := resp.GetAck(); ack != nil {
+		if !ack.GetOk() && ack.GetError() != nil {
+			return false, args, pluginsdk.FromProto(ack.GetError())
+		}
+		return ack.GetOk(), args, nil
+	}
+	ra := resp.GetRunActionResponse()
+	if ra == nil {
+		return false, args, errors.New("plugin returned unexpected response for RunAction")
+	}
+	if ra.GetError() != nil {
+		return false, ra.GetUpdatedArgs(), pluginsdk.FromProto(ra.GetError())
+	}
+	updated := ra.GetUpdatedArgs()
+	if updated == nil {
+		updated = args
+	}
+	return ra.GetContinueChain(), updated, nil
+}
+
 func (m *Manager) handleHostCall(ctx context.Context, ent *pluginEntry, pEnv *pluginv1.PluginEnvelope) *pluginv1.HostCallResponse {
 	if ent == nil || pEnv == nil {
 		return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "invalid host call")
@@ -964,6 +1107,100 @@ func (m *Manager) handleHostCall(ctx context.Context, ent *pluginEntry, pEnv *pl
 			ViewID:     pay.PushUiPatch.GetViewId(),
 			Patch:      pay.PushUiPatch,
 		})
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	case *pluginv1.PluginEnvelope_SendChat:
+		if !perms.GetSendChat() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare send_chat permission")
+		}
+		if pay.SendChat == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing send_chat payload")
+		}
+		if m.opts.Callbacks.OnSendChat == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_HOST_NOT_READY, "send_chat callback unavailable")
+		}
+		if err := m.opts.Callbacks.OnSendChat(ctx, uuid, pay.SendChat); err != nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INTERNAL, err.Error())
+		}
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	case *pluginv1.PluginEnvelope_Moderate:
+		if !perms.GetModerate() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare moderate permission")
+		}
+		if pay.Moderate == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing moderate payload")
+		}
+		if m.opts.Callbacks.OnModerate == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_HOST_NOT_READY, "moderate callback unavailable")
+		}
+		if err := m.opts.Callbacks.OnModerate(ctx, uuid, pay.Moderate); err != nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INTERNAL, err.Error())
+		}
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	case *pluginv1.PluginEnvelope_GetVar:
+		if !perms.GetKvStorage() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare kv_storage permission")
+		}
+		if pay.GetVar == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing get_var payload")
+		}
+		if m.opts.Callbacks.OnGetVar == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_HOST_NOT_READY, "get_var callback unavailable")
+		}
+		val, found, err := m.opts.Callbacks.OnGetVar(ctx, uuid, pay.GetVar)
+		if err != nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INTERNAL, err.Error())
+		}
+		return &pluginv1.HostCallResponse{
+			Ok:     true,
+			Result: &pluginv1.HostCallResponse_GetVar{GetVar: &pluginv1.GetVarResponse{Found: found, Value: val}},
+		}
+
+	case *pluginv1.PluginEnvelope_SetVar:
+		if !perms.GetKvStorage() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare kv_storage permission")
+		}
+		if pay.SetVar == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing set_var payload")
+		}
+		if m.opts.Callbacks.OnSetVar == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_HOST_NOT_READY, "set_var callback unavailable")
+		}
+		if err := m.opts.Callbacks.OnSetVar(ctx, uuid, pay.SetVar); err != nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INTERNAL, err.Error())
+		}
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	case *pluginv1.PluginEnvelope_EmitTrigger:
+		if !perms.GetRunActions() && !perms.GetReadEvents() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare run_actions or read_events permission")
+		}
+		if pay.EmitTrigger == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing emit_trigger payload")
+		}
+		if m.opts.Callbacks.OnEmitTrigger == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_HOST_NOT_READY, "emit_trigger callback unavailable")
+		}
+		if err := m.opts.Callbacks.OnEmitTrigger(ctx, uuid, pay.EmitTrigger); err != nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INTERNAL, err.Error())
+		}
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	case *pluginv1.PluginEnvelope_RunBotAction:
+		if !perms.GetRunActions() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare run_actions permission")
+		}
+		if pay.RunBotAction == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing run_bot_action payload")
+		}
+		if m.opts.Callbacks.OnRunBotAction == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_HOST_NOT_READY, "run_bot_action callback unavailable")
+		}
+		if err := m.opts.Callbacks.OnRunBotAction(ctx, uuid, pay.RunBotAction); err != nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INTERNAL, err.Error())
+		}
 		return &pluginv1.HostCallResponse{Ok: true}
 
 	default:

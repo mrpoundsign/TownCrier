@@ -573,6 +573,7 @@ type HostCallResponse struct {
 	//	*HostCallResponse_HttpResponse
 	//	*HostCallResponse_KvGet
 	//	*HostCallResponse_KvList
+	//	*HostCallResponse_GetVar
 	Result        isHostCallResponse_Result `protobuf_oneof:"result"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -665,6 +666,15 @@ func (x *HostCallResponse) GetKvList() *KVListResponse {
 	return nil
 }
 
+func (x *HostCallResponse) GetGetVar() *GetVarResponse {
+	if x != nil {
+		if x, ok := x.Result.(*HostCallResponse_GetVar); ok {
+			return x.GetVar
+		}
+	}
+	return nil
+}
+
 type isHostCallResponse_Result interface {
 	isHostCallResponse_Result()
 }
@@ -685,6 +695,10 @@ type HostCallResponse_KvList struct {
 	KvList *KVListResponse `protobuf:"bytes,6,opt,name=kv_list,json=kvList,proto3,oneof"`
 }
 
+type HostCallResponse_GetVar struct {
+	GetVar *GetVarResponse `protobuf:"bytes,7,opt,name=get_var,json=getVar,proto3,oneof"`
+}
+
 func (*HostCallResponse_GlobalSettings) isHostCallResponse_Result() {}
 
 func (*HostCallResponse_HttpResponse) isHostCallResponse_Result() {}
@@ -692,6 +706,8 @@ func (*HostCallResponse_HttpResponse) isHostCallResponse_Result() {}
 func (*HostCallResponse_KvGet) isHostCallResponse_Result() {}
 
 func (*HostCallResponse_KvList) isHostCallResponse_Result() {}
+
+func (*HostCallResponse_GetVar) isHostCallResponse_Result() {}
 
 // HostEnvelope carries messages from TownCrier (host) to a plugin (WASM or Native).
 type HostEnvelope struct {
@@ -1002,6 +1018,12 @@ type PluginEnvelope struct {
 	//	*PluginEnvelope_GetOverlayAssetResponse
 	//	*PluginEnvelope_PushUiSnapshot
 	//	*PluginEnvelope_PushUiPatch
+	//	*PluginEnvelope_SendChat
+	//	*PluginEnvelope_Moderate
+	//	*PluginEnvelope_GetVar
+	//	*PluginEnvelope_SetVar
+	//	*PluginEnvelope_EmitTrigger
+	//	*PluginEnvelope_RunBotAction
 	Payload       isPluginEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1231,6 +1253,60 @@ func (x *PluginEnvelope) GetPushUiPatch() *UIPatchBatch {
 	return nil
 }
 
+func (x *PluginEnvelope) GetSendChat() *SendChatRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PluginEnvelope_SendChat); ok {
+			return x.SendChat
+		}
+	}
+	return nil
+}
+
+func (x *PluginEnvelope) GetModerate() *ModerateRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PluginEnvelope_Moderate); ok {
+			return x.Moderate
+		}
+	}
+	return nil
+}
+
+func (x *PluginEnvelope) GetGetVar() *GetVarRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PluginEnvelope_GetVar); ok {
+			return x.GetVar
+		}
+	}
+	return nil
+}
+
+func (x *PluginEnvelope) GetSetVar() *SetVarRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PluginEnvelope_SetVar); ok {
+			return x.SetVar
+		}
+	}
+	return nil
+}
+
+func (x *PluginEnvelope) GetEmitTrigger() *EmitTriggerRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PluginEnvelope_EmitTrigger); ok {
+			return x.EmitTrigger
+		}
+	}
+	return nil
+}
+
+func (x *PluginEnvelope) GetRunBotAction() *RunBotActionRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PluginEnvelope_RunBotAction); ok {
+			return x.RunBotAction
+		}
+	}
+	return nil
+}
+
 type isPluginEnvelope_Payload interface {
 	isPluginEnvelope_Payload()
 }
@@ -1315,6 +1391,30 @@ type PluginEnvelope_PushUiPatch struct {
 	PushUiPatch *UIPatchBatch `protobuf:"bytes,21,opt,name=push_ui_patch,json=pushUiPatch,proto3,oneof"`
 }
 
+type PluginEnvelope_SendChat struct {
+	SendChat *SendChatRequest `protobuf:"bytes,22,opt,name=send_chat,json=sendChat,proto3,oneof"`
+}
+
+type PluginEnvelope_Moderate struct {
+	Moderate *ModerateRequest `protobuf:"bytes,23,opt,name=moderate,proto3,oneof"`
+}
+
+type PluginEnvelope_GetVar struct {
+	GetVar *GetVarRequest `protobuf:"bytes,24,opt,name=get_var,json=getVar,proto3,oneof"`
+}
+
+type PluginEnvelope_SetVar struct {
+	SetVar *SetVarRequest `protobuf:"bytes,25,opt,name=set_var,json=setVar,proto3,oneof"`
+}
+
+type PluginEnvelope_EmitTrigger struct {
+	EmitTrigger *EmitTriggerRequest `protobuf:"bytes,26,opt,name=emit_trigger,json=emitTrigger,proto3,oneof"`
+}
+
+type PluginEnvelope_RunBotAction struct {
+	RunBotAction *RunBotActionRequest `protobuf:"bytes,27,opt,name=run_bot_action,json=runBotAction,proto3,oneof"`
+}
+
 func (*PluginEnvelope_Ack) isPluginEnvelope_Payload() {}
 
 func (*PluginEnvelope_Manifest) isPluginEnvelope_Payload() {}
@@ -1355,6 +1455,18 @@ func (*PluginEnvelope_PushUiSnapshot) isPluginEnvelope_Payload() {}
 
 func (*PluginEnvelope_PushUiPatch) isPluginEnvelope_Payload() {}
 
+func (*PluginEnvelope_SendChat) isPluginEnvelope_Payload() {}
+
+func (*PluginEnvelope_Moderate) isPluginEnvelope_Payload() {}
+
+func (*PluginEnvelope_GetVar) isPluginEnvelope_Payload() {}
+
+func (*PluginEnvelope_SetVar) isPluginEnvelope_Payload() {}
+
+func (*PluginEnvelope_EmitTrigger) isPluginEnvelope_Payload() {}
+
+func (*PluginEnvelope_RunBotAction) isPluginEnvelope_Payload() {}
+
 var File_plugin_v1_envelope_proto protoreflect.FileDescriptor
 
 const file_plugin_v1_envelope_proto_rawDesc = "" +
@@ -1389,14 +1501,15 @@ const file_plugin_v1_envelope_proto_rawDesc = "" +
 	"\bsettings\x18\x02 \x01(\v2 .towncrier.plugin.v1.SettingsMapR\bsettings\"o\n" +
 	"\x13OnHTTPResultRequest\x12\x19\n" +
 	"\basync_id\x18\x01 \x01(\tR\aasyncId\x12=\n" +
-	"\bresponse\x18\x02 \x01(\v2!.towncrier.plugin.v1.HTTPResponseR\bresponse\"\x83\x03\n" +
+	"\bresponse\x18\x02 \x01(\v2!.towncrier.plugin.v1.HTTPResponseR\bresponse\"\xc3\x03\n" +
 	"\x10HostCallResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x123\n" +
 	"\x05error\x18\x02 \x01(\v2\x1d.towncrier.plugin.v1.APIErrorR\x05error\x12Y\n" +
 	"\x0fglobal_settings\x18\x03 \x01(\v2..towncrier.plugin.v1.GetGlobalSettingsResponseH\x00R\x0eglobalSettings\x12H\n" +
 	"\rhttp_response\x18\x04 \x01(\v2!.towncrier.plugin.v1.HTTPResponseH\x00R\fhttpResponse\x12;\n" +
 	"\x06kv_get\x18\x05 \x01(\v2\".towncrier.plugin.v1.KVGetResponseH\x00R\x05kvGet\x12>\n" +
-	"\akv_list\x18\x06 \x01(\v2#.towncrier.plugin.v1.KVListResponseH\x00R\x06kvListB\b\n" +
+	"\akv_list\x18\x06 \x01(\v2#.towncrier.plugin.v1.KVListResponseH\x00R\x06kvList\x12>\n" +
+	"\aget_var\x18\a \x01(\v2#.towncrier.plugin.v1.GetVarResponseH\x00R\x06getVarB\b\n" +
 	"\x06result\"\xdb\b\n" +
 	"\fHostEnvelope\x12\x1d\n" +
 	"\n" +
@@ -1419,7 +1532,7 @@ const file_plugin_v1_envelope_proto_rawDesc = "" +
 	"\n" +
 	"before_tts\x18\x0e \x01(\v2%.towncrier.plugin.v1.BeforeTTSRequestH\x00R\tbeforeTts\x12Y\n" +
 	"\x11get_overlay_asset\x18\x0f \x01(\v2+.towncrier.plugin.v1.GetOverlayAssetRequestH\x00R\x0fgetOverlayAssetB\t\n" +
-	"\apayload\"\x8a\f\n" +
+	"\apayload\"\xb1\x0f\n" +
 	"\x0ePluginEnvelope\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\x04R\trequestId\x124\n" +
@@ -1444,7 +1557,13 @@ const file_plugin_v1_envelope_proto_rawDesc = "" +
 	"\x13before_tts_response\x18\x12 \x01(\v2&.towncrier.plugin.v1.BeforeTTSResponseH\x00R\x11beforeTtsResponse\x12k\n" +
 	"\x1aget_overlay_asset_response\x18\x13 \x01(\v2,.towncrier.plugin.v1.GetOverlayAssetResponseH\x00R\x17getOverlayAssetResponse\x12K\n" +
 	"\x10push_ui_snapshot\x18\x14 \x01(\v2\x1f.towncrier.plugin.v1.UISnapshotH\x00R\x0epushUiSnapshot\x12G\n" +
-	"\rpush_ui_patch\x18\x15 \x01(\v2!.towncrier.plugin.v1.UIPatchBatchH\x00R\vpushUiPatchB\t\n" +
+	"\rpush_ui_patch\x18\x15 \x01(\v2!.towncrier.plugin.v1.UIPatchBatchH\x00R\vpushUiPatch\x12C\n" +
+	"\tsend_chat\x18\x16 \x01(\v2$.towncrier.plugin.v1.SendChatRequestH\x00R\bsendChat\x12B\n" +
+	"\bmoderate\x18\x17 \x01(\v2$.towncrier.plugin.v1.ModerateRequestH\x00R\bmoderate\x12=\n" +
+	"\aget_var\x18\x18 \x01(\v2\".towncrier.plugin.v1.GetVarRequestH\x00R\x06getVar\x12=\n" +
+	"\aset_var\x18\x19 \x01(\v2\".towncrier.plugin.v1.SetVarRequestH\x00R\x06setVar\x12L\n" +
+	"\femit_trigger\x18\x1a \x01(\v2'.towncrier.plugin.v1.EmitTriggerRequestH\x00R\vemitTrigger\x12P\n" +
+	"\x0erun_bot_action\x18\x1b \x01(\v2(.towncrier.plugin.v1.RunBotActionRequestH\x00R\frunBotActionB\t\n" +
 	"\apayloadB8Z6github.com/mrpoundsign/TownCrier/pkg/pluginv1;pluginv1b\x06proto3"
 
 var (
@@ -1485,27 +1604,34 @@ var file_plugin_v1_envelope_proto_goTypes = []any{
 	(*GetGlobalSettingsResponse)(nil), // 21: towncrier.plugin.v1.GetGlobalSettingsResponse
 	(*KVGetResponse)(nil),             // 22: towncrier.plugin.v1.KVGetResponse
 	(*KVListResponse)(nil),            // 23: towncrier.plugin.v1.KVListResponse
-	(*RenderViewRequest)(nil),         // 24: towncrier.plugin.v1.RenderViewRequest
-	(*UIEvent)(nil),                   // 25: towncrier.plugin.v1.UIEvent
-	(*RunActionRequest)(nil),          // 26: towncrier.plugin.v1.RunActionRequest
-	(*BeforeTTSRequest)(nil),          // 27: towncrier.plugin.v1.BeforeTTSRequest
-	(*GetOverlayAssetRequest)(nil),    // 28: towncrier.plugin.v1.GetOverlayAssetRequest
-	(*LogRequest)(nil),                // 29: towncrier.plugin.v1.LogRequest
-	(*GetGlobalSettingsRequest)(nil),  // 30: towncrier.plugin.v1.GetGlobalSettingsRequest
-	(*SaveGlobalSettingsRequest)(nil), // 31: towncrier.plugin.v1.SaveGlobalSettingsRequest
-	(*SetTimerRequest)(nil),           // 32: towncrier.plugin.v1.SetTimerRequest
-	(*HTTPRequest)(nil),               // 33: towncrier.plugin.v1.HTTPRequest
-	(*SpeakRequest)(nil),              // 34: towncrier.plugin.v1.SpeakRequest
-	(*KVGetRequest)(nil),              // 35: towncrier.plugin.v1.KVGetRequest
-	(*KVSetRequest)(nil),              // 36: towncrier.plugin.v1.KVSetRequest
-	(*KVDeleteRequest)(nil),           // 37: towncrier.plugin.v1.KVDeleteRequest
-	(*KVListRequest)(nil),             // 38: towncrier.plugin.v1.KVListRequest
-	(*OverlayBroadcastRequest)(nil),   // 39: towncrier.plugin.v1.OverlayBroadcastRequest
-	(*UISnapshot)(nil),                // 40: towncrier.plugin.v1.UISnapshot
-	(*UIPatchBatch)(nil),              // 41: towncrier.plugin.v1.UIPatchBatch
-	(*RunActionResponse)(nil),         // 42: towncrier.plugin.v1.RunActionResponse
-	(*BeforeTTSResponse)(nil),         // 43: towncrier.plugin.v1.BeforeTTSResponse
-	(*GetOverlayAssetResponse)(nil),   // 44: towncrier.plugin.v1.GetOverlayAssetResponse
+	(*GetVarResponse)(nil),            // 24: towncrier.plugin.v1.GetVarResponse
+	(*RenderViewRequest)(nil),         // 25: towncrier.plugin.v1.RenderViewRequest
+	(*UIEvent)(nil),                   // 26: towncrier.plugin.v1.UIEvent
+	(*RunActionRequest)(nil),          // 27: towncrier.plugin.v1.RunActionRequest
+	(*BeforeTTSRequest)(nil),          // 28: towncrier.plugin.v1.BeforeTTSRequest
+	(*GetOverlayAssetRequest)(nil),    // 29: towncrier.plugin.v1.GetOverlayAssetRequest
+	(*LogRequest)(nil),                // 30: towncrier.plugin.v1.LogRequest
+	(*GetGlobalSettingsRequest)(nil),  // 31: towncrier.plugin.v1.GetGlobalSettingsRequest
+	(*SaveGlobalSettingsRequest)(nil), // 32: towncrier.plugin.v1.SaveGlobalSettingsRequest
+	(*SetTimerRequest)(nil),           // 33: towncrier.plugin.v1.SetTimerRequest
+	(*HTTPRequest)(nil),               // 34: towncrier.plugin.v1.HTTPRequest
+	(*SpeakRequest)(nil),              // 35: towncrier.plugin.v1.SpeakRequest
+	(*KVGetRequest)(nil),              // 36: towncrier.plugin.v1.KVGetRequest
+	(*KVSetRequest)(nil),              // 37: towncrier.plugin.v1.KVSetRequest
+	(*KVDeleteRequest)(nil),           // 38: towncrier.plugin.v1.KVDeleteRequest
+	(*KVListRequest)(nil),             // 39: towncrier.plugin.v1.KVListRequest
+	(*OverlayBroadcastRequest)(nil),   // 40: towncrier.plugin.v1.OverlayBroadcastRequest
+	(*UISnapshot)(nil),                // 41: towncrier.plugin.v1.UISnapshot
+	(*UIPatchBatch)(nil),              // 42: towncrier.plugin.v1.UIPatchBatch
+	(*RunActionResponse)(nil),         // 43: towncrier.plugin.v1.RunActionResponse
+	(*BeforeTTSResponse)(nil),         // 44: towncrier.plugin.v1.BeforeTTSResponse
+	(*GetOverlayAssetResponse)(nil),   // 45: towncrier.plugin.v1.GetOverlayAssetResponse
+	(*SendChatRequest)(nil),           // 46: towncrier.plugin.v1.SendChatRequest
+	(*ModerateRequest)(nil),           // 47: towncrier.plugin.v1.ModerateRequest
+	(*GetVarRequest)(nil),             // 48: towncrier.plugin.v1.GetVarRequest
+	(*SetVarRequest)(nil),             // 49: towncrier.plugin.v1.SetVarRequest
+	(*EmitTriggerRequest)(nil),        // 50: towncrier.plugin.v1.EmitTriggerRequest
+	(*RunBotActionRequest)(nil),       // 51: towncrier.plugin.v1.RunBotActionRequest
 }
 var file_plugin_v1_envelope_proto_depIdxs = []int32{
 	13, // 0: towncrier.plugin.v1.ManifestResponse.manifest:type_name -> towncrier.plugin.v1.Manifest
@@ -1524,45 +1650,52 @@ var file_plugin_v1_envelope_proto_depIdxs = []int32{
 	20, // 13: towncrier.plugin.v1.HostCallResponse.http_response:type_name -> towncrier.plugin.v1.HTTPResponse
 	22, // 14: towncrier.plugin.v1.HostCallResponse.kv_get:type_name -> towncrier.plugin.v1.KVGetResponse
 	23, // 15: towncrier.plugin.v1.HostCallResponse.kv_list:type_name -> towncrier.plugin.v1.KVListResponse
-	0,  // 16: towncrier.plugin.v1.HostEnvelope.get_manifest:type_name -> towncrier.plugin.v1.GetManifestRequest
-	2,  // 17: towncrier.plugin.v1.HostEnvelope.init:type_name -> towncrier.plugin.v1.InitRequest
-	3,  // 18: towncrier.plugin.v1.HostEnvelope.shutdown:type_name -> towncrier.plugin.v1.ShutdownRequest
-	5,  // 19: towncrier.plugin.v1.HostEnvelope.on_event:type_name -> towncrier.plugin.v1.OnEventRequest
-	6,  // 20: towncrier.plugin.v1.HostEnvelope.on_timer:type_name -> towncrier.plugin.v1.OnTimerRequest
-	7,  // 21: towncrier.plugin.v1.HostEnvelope.on_global_settings:type_name -> towncrier.plugin.v1.OnGlobalSettingsRequest
-	8,  // 22: towncrier.plugin.v1.HostEnvelope.on_config_action:type_name -> towncrier.plugin.v1.OnConfigActionRequest
-	9,  // 23: towncrier.plugin.v1.HostEnvelope.on_http_result:type_name -> towncrier.plugin.v1.OnHTTPResultRequest
-	10, // 24: towncrier.plugin.v1.HostEnvelope.host_call_response:type_name -> towncrier.plugin.v1.HostCallResponse
-	24, // 25: towncrier.plugin.v1.HostEnvelope.render_view:type_name -> towncrier.plugin.v1.RenderViewRequest
-	25, // 26: towncrier.plugin.v1.HostEnvelope.on_ui_event:type_name -> towncrier.plugin.v1.UIEvent
-	26, // 27: towncrier.plugin.v1.HostEnvelope.run_action:type_name -> towncrier.plugin.v1.RunActionRequest
-	27, // 28: towncrier.plugin.v1.HostEnvelope.before_tts:type_name -> towncrier.plugin.v1.BeforeTTSRequest
-	28, // 29: towncrier.plugin.v1.HostEnvelope.get_overlay_asset:type_name -> towncrier.plugin.v1.GetOverlayAssetRequest
-	4,  // 30: towncrier.plugin.v1.PluginEnvelope.ack:type_name -> towncrier.plugin.v1.AckResponse
-	1,  // 31: towncrier.plugin.v1.PluginEnvelope.manifest:type_name -> towncrier.plugin.v1.ManifestResponse
-	29, // 32: towncrier.plugin.v1.PluginEnvelope.log:type_name -> towncrier.plugin.v1.LogRequest
-	30, // 33: towncrier.plugin.v1.PluginEnvelope.get_global_settings:type_name -> towncrier.plugin.v1.GetGlobalSettingsRequest
-	31, // 34: towncrier.plugin.v1.PluginEnvelope.save_global_settings:type_name -> towncrier.plugin.v1.SaveGlobalSettingsRequest
-	32, // 35: towncrier.plugin.v1.PluginEnvelope.set_timer:type_name -> towncrier.plugin.v1.SetTimerRequest
-	33, // 36: towncrier.plugin.v1.PluginEnvelope.http_request:type_name -> towncrier.plugin.v1.HTTPRequest
-	34, // 37: towncrier.plugin.v1.PluginEnvelope.speak:type_name -> towncrier.plugin.v1.SpeakRequest
-	35, // 38: towncrier.plugin.v1.PluginEnvelope.kv_get:type_name -> towncrier.plugin.v1.KVGetRequest
-	36, // 39: towncrier.plugin.v1.PluginEnvelope.kv_set:type_name -> towncrier.plugin.v1.KVSetRequest
-	37, // 40: towncrier.plugin.v1.PluginEnvelope.kv_delete:type_name -> towncrier.plugin.v1.KVDeleteRequest
-	38, // 41: towncrier.plugin.v1.PluginEnvelope.kv_list:type_name -> towncrier.plugin.v1.KVListRequest
-	39, // 42: towncrier.plugin.v1.PluginEnvelope.overlay_broadcast:type_name -> towncrier.plugin.v1.OverlayBroadcastRequest
-	40, // 43: towncrier.plugin.v1.PluginEnvelope.ui_snapshot:type_name -> towncrier.plugin.v1.UISnapshot
-	41, // 44: towncrier.plugin.v1.PluginEnvelope.ui_patch:type_name -> towncrier.plugin.v1.UIPatchBatch
-	42, // 45: towncrier.plugin.v1.PluginEnvelope.run_action_response:type_name -> towncrier.plugin.v1.RunActionResponse
-	43, // 46: towncrier.plugin.v1.PluginEnvelope.before_tts_response:type_name -> towncrier.plugin.v1.BeforeTTSResponse
-	44, // 47: towncrier.plugin.v1.PluginEnvelope.get_overlay_asset_response:type_name -> towncrier.plugin.v1.GetOverlayAssetResponse
-	40, // 48: towncrier.plugin.v1.PluginEnvelope.push_ui_snapshot:type_name -> towncrier.plugin.v1.UISnapshot
-	41, // 49: towncrier.plugin.v1.PluginEnvelope.push_ui_patch:type_name -> towncrier.plugin.v1.UIPatchBatch
-	50, // [50:50] is the sub-list for method output_type
-	50, // [50:50] is the sub-list for method input_type
-	50, // [50:50] is the sub-list for extension type_name
-	50, // [50:50] is the sub-list for extension extendee
-	0,  // [0:50] is the sub-list for field type_name
+	24, // 16: towncrier.plugin.v1.HostCallResponse.get_var:type_name -> towncrier.plugin.v1.GetVarResponse
+	0,  // 17: towncrier.plugin.v1.HostEnvelope.get_manifest:type_name -> towncrier.plugin.v1.GetManifestRequest
+	2,  // 18: towncrier.plugin.v1.HostEnvelope.init:type_name -> towncrier.plugin.v1.InitRequest
+	3,  // 19: towncrier.plugin.v1.HostEnvelope.shutdown:type_name -> towncrier.plugin.v1.ShutdownRequest
+	5,  // 20: towncrier.plugin.v1.HostEnvelope.on_event:type_name -> towncrier.plugin.v1.OnEventRequest
+	6,  // 21: towncrier.plugin.v1.HostEnvelope.on_timer:type_name -> towncrier.plugin.v1.OnTimerRequest
+	7,  // 22: towncrier.plugin.v1.HostEnvelope.on_global_settings:type_name -> towncrier.plugin.v1.OnGlobalSettingsRequest
+	8,  // 23: towncrier.plugin.v1.HostEnvelope.on_config_action:type_name -> towncrier.plugin.v1.OnConfigActionRequest
+	9,  // 24: towncrier.plugin.v1.HostEnvelope.on_http_result:type_name -> towncrier.plugin.v1.OnHTTPResultRequest
+	10, // 25: towncrier.plugin.v1.HostEnvelope.host_call_response:type_name -> towncrier.plugin.v1.HostCallResponse
+	25, // 26: towncrier.plugin.v1.HostEnvelope.render_view:type_name -> towncrier.plugin.v1.RenderViewRequest
+	26, // 27: towncrier.plugin.v1.HostEnvelope.on_ui_event:type_name -> towncrier.plugin.v1.UIEvent
+	27, // 28: towncrier.plugin.v1.HostEnvelope.run_action:type_name -> towncrier.plugin.v1.RunActionRequest
+	28, // 29: towncrier.plugin.v1.HostEnvelope.before_tts:type_name -> towncrier.plugin.v1.BeforeTTSRequest
+	29, // 30: towncrier.plugin.v1.HostEnvelope.get_overlay_asset:type_name -> towncrier.plugin.v1.GetOverlayAssetRequest
+	4,  // 31: towncrier.plugin.v1.PluginEnvelope.ack:type_name -> towncrier.plugin.v1.AckResponse
+	1,  // 32: towncrier.plugin.v1.PluginEnvelope.manifest:type_name -> towncrier.plugin.v1.ManifestResponse
+	30, // 33: towncrier.plugin.v1.PluginEnvelope.log:type_name -> towncrier.plugin.v1.LogRequest
+	31, // 34: towncrier.plugin.v1.PluginEnvelope.get_global_settings:type_name -> towncrier.plugin.v1.GetGlobalSettingsRequest
+	32, // 35: towncrier.plugin.v1.PluginEnvelope.save_global_settings:type_name -> towncrier.plugin.v1.SaveGlobalSettingsRequest
+	33, // 36: towncrier.plugin.v1.PluginEnvelope.set_timer:type_name -> towncrier.plugin.v1.SetTimerRequest
+	34, // 37: towncrier.plugin.v1.PluginEnvelope.http_request:type_name -> towncrier.plugin.v1.HTTPRequest
+	35, // 38: towncrier.plugin.v1.PluginEnvelope.speak:type_name -> towncrier.plugin.v1.SpeakRequest
+	36, // 39: towncrier.plugin.v1.PluginEnvelope.kv_get:type_name -> towncrier.plugin.v1.KVGetRequest
+	37, // 40: towncrier.plugin.v1.PluginEnvelope.kv_set:type_name -> towncrier.plugin.v1.KVSetRequest
+	38, // 41: towncrier.plugin.v1.PluginEnvelope.kv_delete:type_name -> towncrier.plugin.v1.KVDeleteRequest
+	39, // 42: towncrier.plugin.v1.PluginEnvelope.kv_list:type_name -> towncrier.plugin.v1.KVListRequest
+	40, // 43: towncrier.plugin.v1.PluginEnvelope.overlay_broadcast:type_name -> towncrier.plugin.v1.OverlayBroadcastRequest
+	41, // 44: towncrier.plugin.v1.PluginEnvelope.ui_snapshot:type_name -> towncrier.plugin.v1.UISnapshot
+	42, // 45: towncrier.plugin.v1.PluginEnvelope.ui_patch:type_name -> towncrier.plugin.v1.UIPatchBatch
+	43, // 46: towncrier.plugin.v1.PluginEnvelope.run_action_response:type_name -> towncrier.plugin.v1.RunActionResponse
+	44, // 47: towncrier.plugin.v1.PluginEnvelope.before_tts_response:type_name -> towncrier.plugin.v1.BeforeTTSResponse
+	45, // 48: towncrier.plugin.v1.PluginEnvelope.get_overlay_asset_response:type_name -> towncrier.plugin.v1.GetOverlayAssetResponse
+	41, // 49: towncrier.plugin.v1.PluginEnvelope.push_ui_snapshot:type_name -> towncrier.plugin.v1.UISnapshot
+	42, // 50: towncrier.plugin.v1.PluginEnvelope.push_ui_patch:type_name -> towncrier.plugin.v1.UIPatchBatch
+	46, // 51: towncrier.plugin.v1.PluginEnvelope.send_chat:type_name -> towncrier.plugin.v1.SendChatRequest
+	47, // 52: towncrier.plugin.v1.PluginEnvelope.moderate:type_name -> towncrier.plugin.v1.ModerateRequest
+	48, // 53: towncrier.plugin.v1.PluginEnvelope.get_var:type_name -> towncrier.plugin.v1.GetVarRequest
+	49, // 54: towncrier.plugin.v1.PluginEnvelope.set_var:type_name -> towncrier.plugin.v1.SetVarRequest
+	50, // 55: towncrier.plugin.v1.PluginEnvelope.emit_trigger:type_name -> towncrier.plugin.v1.EmitTriggerRequest
+	51, // 56: towncrier.plugin.v1.PluginEnvelope.run_bot_action:type_name -> towncrier.plugin.v1.RunBotActionRequest
+	57, // [57:57] is the sub-list for method output_type
+	57, // [57:57] is the sub-list for method input_type
+	57, // [57:57] is the sub-list for extension type_name
+	57, // [57:57] is the sub-list for extension extendee
+	0,  // [0:57] is the sub-list for field type_name
 }
 
 func init() { file_plugin_v1_envelope_proto_init() }
@@ -1584,6 +1717,7 @@ func file_plugin_v1_envelope_proto_init() {
 		(*HostCallResponse_HttpResponse)(nil),
 		(*HostCallResponse_KvGet)(nil),
 		(*HostCallResponse_KvList)(nil),
+		(*HostCallResponse_GetVar)(nil),
 	}
 	file_plugin_v1_envelope_proto_msgTypes[11].OneofWrappers = []any{
 		(*HostEnvelope_GetManifest)(nil),
@@ -1622,6 +1756,12 @@ func file_plugin_v1_envelope_proto_init() {
 		(*PluginEnvelope_GetOverlayAssetResponse)(nil),
 		(*PluginEnvelope_PushUiSnapshot)(nil),
 		(*PluginEnvelope_PushUiPatch)(nil),
+		(*PluginEnvelope_SendChat)(nil),
+		(*PluginEnvelope_Moderate)(nil),
+		(*PluginEnvelope_GetVar)(nil),
+		(*PluginEnvelope_SetVar)(nil),
+		(*PluginEnvelope_EmitTrigger)(nil),
+		(*PluginEnvelope_RunBotAction)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

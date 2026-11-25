@@ -7,10 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/mrpoundsign/TownCrier/pkg/chat"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/pluginsdk"
 	"github.com/mrpoundsign/TownCrier/pkg/pluginv1"
 	"github.com/mrpoundsign/TownCrier/pkg/secrets"
 )
@@ -287,4 +290,382 @@ func TestPushUIUpdateHostCallAndSubscription(t *testing.T) {
 	require.Len(t, got, 2)
 	require.NotNil(t, got[0].Snapshot)
 	require.NotNil(t, got[1].Patch)
+}
+
+type fakeBotBackend struct {
+	dispatchFn func(ctx context.Context, env *pluginv1.HostEnvelope) (*pluginv1.PluginEnvelope, error)
+}
+
+func (f *fakeBotBackend) Dispatch(ctx context.Context, env *pluginv1.HostEnvelope) (*pluginv1.PluginEnvelope, error) {
+	return f.dispatchFn(ctx, env)
+}
+
+func (f *fakeBotBackend) SetTimer(_, _ string, _ uint32) *pluginv1.APIError { return nil }
+func (f *fakeBotBackend) Close() error                                      { return nil }
+
+func TestBeforeTTSAndRunPluginActionAndBotHostCalls(t *testing.T) {
+	var sentChat *pluginv1.SendChatRequest
+	var modReq *pluginv1.ModerateRequest
+	var setVarReq *pluginv1.SetVarRequest
+	var emittedTrig *pluginv1.EmitTriggerRequest
+	var ranAction *pluginv1.RunBotActionRequest
+
+	mgr := NewManager(Options{
+		KVDBPath: ":memory:",
+		Secrets:  secrets.NewMemoryStore(),
+		Callbacks: HostCallbacks{
+			OnSendChat: func(_ context.Context, _ string, req *pluginv1.SendChatRequest) error {
+				sentChat = req
+				return nil
+			},
+			OnModerate: func(_ context.Context, _ string, req *pluginv1.ModerateRequest) error {
+				modReq = req
+				return nil
+			},
+			OnGetVar: func(_ context.Context, _ string, req *pluginv1.GetVarRequest) (*pluginv1.ActionValue, bool, error) {
+				if req.GetKey() == "points" {
+					return &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_IntVal{IntVal: 77}}, true, nil
+				}
+				return nil, false, nil
+			},
+			OnSetVar: func(_ context.Context, _ string, req *pluginv1.SetVarRequest) error {
+				setVarReq = req
+				return nil
+			},
+			OnEmitTrigger: func(_ context.Context, _ string, req *pluginv1.EmitTriggerRequest) error {
+				emittedTrig = req
+				return nil
+			},
+			OnRunBotAction: func(_ context.Context, _ string, req *pluginv1.RunBotActionRequest) error {
+				ranAction = req
+				return nil
+			},
+		},
+	})
+	defer func() { _ = mgr.Close() }()
+
+	ent := &pluginEntry{
+		uuid:  "com.example.bot",
+		name:  "Bot Plugin",
+		state: StatusRunning,
+		manifest: &pluginv1.Manifest{
+			Uuid:             "com.example.bot",
+			Name:             "Bot Plugin",
+			SubscribedEvents: []string{"before_tts"},
+			Permissions: &pluginv1.Permissions{
+				ReadEvents: true,
+				SendChat:   true,
+				Moderate:   true,
+				KvStorage:  true,
+				RunActions: true,
+			},
+			Actions: []*pluginv1.ActionDescriptor{
+				{Id: "shout", Name: "Shout"},
+			},
+		},
+		logs: &logBuffer{},
+		backend: &fakeBotBackend{
+			dispatchFn: func(_ context.Context, env *pluginv1.HostEnvelope) (*pluginv1.PluginEnvelope, error) {
+				switch p := env.Payload.(type) {
+				case *pluginv1.HostEnvelope_BeforeTts:
+					if p.BeforeTts.GetProposedText() == "secret command" {
+						return &pluginv1.PluginEnvelope{
+							Payload: &pluginv1.PluginEnvelope_BeforeTtsResponse{
+								BeforeTtsResponse: &pluginv1.BeforeTTSResponse{Consume: true},
+							},
+						}, nil
+					}
+					return &pluginv1.PluginEnvelope{
+						Payload: &pluginv1.PluginEnvelope_BeforeTtsResponse{
+							BeforeTtsResponse: &pluginv1.BeforeTTSResponse{
+								OverrideText:  "rewritten text",
+								OverrideVoice: "af_heart",
+								OverrideSpeed: 1.25,
+							},
+						},
+					}, nil
+				case *pluginv1.HostEnvelope_RunAction:
+					return &pluginv1.PluginEnvelope{
+						Payload: &pluginv1.PluginEnvelope_RunActionResponse{
+							RunActionResponse: &pluginv1.RunActionResponse{
+								ContinueChain: true,
+								UpdatedArgs: &pluginv1.ActionArgs{
+									Args: map[string]*pluginv1.ActionValue{
+										"result": {Kind: &pluginv1.ActionValue_StringVal{StringVal: "ok-" + p.RunAction.GetActionId()}},
+									},
+								},
+							},
+						},
+					}, nil
+				}
+				return &pluginv1.PluginEnvelope{}, nil
+			},
+		},
+	}
+	mgr.entries[ent.uuid] = ent
+
+	// InvokeBeforeTTS rewrite + consume paths
+	consume, outTxt, outVoice, outSpd := mgr.InvokeBeforeTTS(context.Background(), &chat.Event{UserName: "alice"}, "hello", "af_bella", 1.0, 1, true)
+	require.False(t, consume)
+	require.Equal(t, "rewritten text", outTxt)
+	require.Equal(t, "af_heart", outVoice)
+	require.InDelta(t, 1.25, outSpd, 0.01)
+
+	consume, _, _, _ = mgr.InvokeBeforeTTS(context.Background(), &chat.Event{UserName: "alice"}, "secret command", "af_bella", 1.0, 1, true)
+	require.True(t, consume)
+
+	// RunPluginAction
+	cont, updatedArgs, err := mgr.RunPluginAction(context.Background(), ent.uuid, "shout", nil)
+	require.NoError(t, err)
+	require.True(t, cont)
+	require.Equal(t, "ok-shout", updatedArgs.GetArgs()["result"].GetStringVal())
+
+	// Bot Host calls permitted
+	ctx := context.Background()
+	require.True(t, mgr.handleHostCall(ctx, ent, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_SendChat{SendChat: &pluginv1.SendChatRequest{Platform: "twitch", Text: "hi"}},
+	}).GetOk())
+	require.Equal(t, "hi", sentChat.GetText())
+
+	require.True(t, mgr.handleHostCall(ctx, ent, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_Moderate{Moderate: &pluginv1.ModerateRequest{Platform: "twitch", Action: "timeout", UserName: "troll", DurationSeconds: 60}},
+	}).GetOk())
+	require.Equal(t, "troll", modReq.GetUserName())
+
+	gvResp := mgr.handleHostCall(ctx, ent, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_GetVar{GetVar: &pluginv1.GetVarRequest{Key: "points"}},
+	})
+	require.True(t, gvResp.GetOk())
+	require.True(t, gvResp.GetGetVar().GetFound())
+	require.Equal(t, int64(77), gvResp.GetGetVar().GetValue().GetIntVal())
+
+	require.True(t, mgr.handleHostCall(ctx, ent, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_SetVar{SetVar: &pluginv1.SetVarRequest{Key: "points", Value: &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_IntVal{IntVal: 80}}}},
+	}).GetOk())
+	require.Equal(t, int64(80), setVarReq.GetValue().GetIntVal())
+
+	require.True(t, mgr.handleHostCall(ctx, ent, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_EmitTrigger{EmitTrigger: &pluginv1.EmitTriggerRequest{TriggerId: "on_custom"}},
+	}).GetOk())
+	require.Equal(t, "on_custom", emittedTrig.GetTriggerId())
+
+	require.True(t, mgr.handleHostCall(ctx, ent, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_RunBotAction{RunBotAction: &pluginv1.RunBotActionRequest{ActionIdOrName: "act1", RunImmediately: true}},
+	}).GetOk())
+	require.Equal(t, "act1", ranAction.GetActionIdOrName())
+
+	// Permission denied check
+	entNoPerm := &pluginEntry{
+		uuid:     "com.example.denied",
+		manifest: &pluginv1.Manifest{Uuid: "com.example.denied", Permissions: &pluginv1.Permissions{}},
+	}
+	denyResp := mgr.handleHostCall(ctx, entNoPerm, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_SendChat{SendChat: &pluginv1.SendChatRequest{Text: "hi"}},
+	})
+	require.False(t, denyResp.GetOk())
+	require.Equal(t, pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, denyResp.GetError().GetCode())
+}
+
+type stubBackend struct {
+	dispatchFn func(ctx context.Context, env *pluginv1.HostEnvelope) (*pluginv1.PluginEnvelope, error)
+}
+
+func (s *stubBackend) Dispatch(ctx context.Context, env *pluginv1.HostEnvelope) (*pluginv1.PluginEnvelope, error) {
+	return s.dispatchFn(ctx, env)
+}
+
+func (s *stubBackend) SetTimer(_, _ string, _ uint32) *pluginv1.APIError { return nil }
+func (s *stubBackend) Close() error                                        { return nil }
+
+func TestBeforeTTSMiddlewareAndTimeoutBudget(t *testing.T) {
+	mgr := NewManager(Options{KVDBPath: ":memory:", Secrets: secrets.NewMemoryStore()})
+	defer func() { _ = mgr.Close() }()
+
+	mgr.entries["com.example.rewriter"] = &pluginEntry{
+		uuid:  "com.example.rewriter",
+		name:  "Rewriter",
+		state: StatusRunning,
+		manifest: &pluginv1.Manifest{
+			Uuid:                 "com.example.rewriter",
+			Name:                 "Rewriter",
+			RequiredCapabilities: []string{"bot.before_tts.v1"},
+			SubscribedEvents:     []string{"before_tts"},
+			Permissions:          &pluginv1.Permissions{ReadEvents: true},
+		},
+		backend: &stubBackend{
+			dispatchFn: func(_ context.Context, env *pluginv1.HostEnvelope) (*pluginv1.PluginEnvelope, error) {
+				req := env.GetBeforeTts()
+				return &pluginv1.PluginEnvelope{
+					Payload: &pluginv1.PluginEnvelope_BeforeTtsResponse{
+						BeforeTtsResponse: &pluginv1.BeforeTTSResponse{
+							Consume:       req.GetEvent().GetText() == "suppress me",
+							OverrideText:  "Rewritten: " + req.GetProposedText(),
+							OverrideVoice: "bf_emma",
+							OverrideSpeed: 1.25,
+						},
+					},
+				}, nil
+			},
+		},
+	}
+
+	ev := &chat.Event{Platform: "twitch", Kind: chat.EventKindMessage, UserName: "alice", Text: "hello world"}
+	consume, text, voice, speed := mgr.InvokeBeforeTTS(context.Background(), ev, "hello world", "af_heart", 1.0, 7, true)
+	require.False(t, consume)
+	require.Equal(t, "Rewritten: hello world", text)
+	require.Equal(t, "bf_emma", voice)
+	require.InDelta(t, 1.25, speed, 0.001)
+
+	evSuppress := &chat.Event{Platform: "twitch", Kind: chat.EventKindMessage, UserName: "alice", Text: "suppress me"}
+	consume, _, _, _ = mgr.InvokeBeforeTTS(context.Background(), evSuppress, "suppress me", "af_heart", 1.0, 7, true)
+	require.True(t, consume)
+
+	// Slow plugin must respect <= 500ms budget without blocking caller indefinitely.
+	mgr.entries["com.example.rewriter"].backend = &stubBackend{
+		dispatchFn: func(ctx context.Context, _ *pluginv1.HostEnvelope) (*pluginv1.PluginEnvelope, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	start := time.Now()
+	consume, text, _, _ = mgr.InvokeBeforeTTS(context.Background(), ev, "original", "af_heart", 1.0, 7, true)
+	require.False(t, consume)
+	require.Equal(t, "original", text)
+	require.Less(t, time.Since(start), 900*time.Millisecond)
+}
+
+func TestRunPluginActionAndBotHostCalls(t *testing.T) {
+	var sentChat *pluginv1.SendChatRequest
+	var modReq *pluginv1.ModerateRequest
+	var emitted *pluginv1.EmitTriggerRequest
+	var ranAction *pluginv1.RunBotActionRequest
+	vars := map[string]*pluginv1.ActionValue{}
+
+	mgr := NewManager(Options{
+		KVDBPath: ":memory:",
+		Secrets:  secrets.NewMemoryStore(),
+		Callbacks: HostCallbacks{
+			OnSendChat: func(_ context.Context, _ string, req *pluginv1.SendChatRequest) error {
+				sentChat = req
+				return nil
+			},
+			OnModerate: func(_ context.Context, _ string, req *pluginv1.ModerateRequest) error {
+				modReq = req
+				return nil
+			},
+			OnGetVar: func(_ context.Context, _ string, req *pluginv1.GetVarRequest) (*pluginv1.ActionValue, bool, error) {
+				v, ok := vars[req.GetKey()]
+				return v, ok, nil
+			},
+			OnSetVar: func(_ context.Context, _ string, req *pluginv1.SetVarRequest) error {
+				if req.GetDelete() {
+					delete(vars, req.GetKey())
+				} else {
+					vars[req.GetKey()] = req.GetValue()
+				}
+				return nil
+			},
+			OnEmitTrigger: func(_ context.Context, _ string, req *pluginv1.EmitTriggerRequest) error {
+				emitted = req
+				return nil
+			},
+			OnRunBotAction: func(_ context.Context, _ string, req *pluginv1.RunBotActionRequest) error {
+				ranAction = req
+				return nil
+			},
+		},
+	})
+	defer func() { _ = mgr.Close() }()
+
+	entNoPerm := &pluginEntry{
+		uuid:  "com.example.locked",
+		name:  "Locked",
+		state: StatusRunning,
+		manifest: &pluginv1.Manifest{
+			Uuid:        "com.example.locked",
+			Permissions: &pluginv1.Permissions{},
+		},
+	}
+	require.Equal(t, pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, mgr.handleHostCall(context.Background(), entNoPerm, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_SendChat{SendChat: &pluginv1.SendChatRequest{Platform: "twitch", Text: "hi"}},
+	}).GetError().GetCode())
+	require.Equal(t, pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, mgr.handleHostCall(context.Background(), entNoPerm, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_Moderate{Moderate: &pluginv1.ModerateRequest{Platform: "twitch", Action: "timeout"}},
+	}).GetError().GetCode())
+	require.Equal(t, pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, mgr.handleHostCall(context.Background(), entNoPerm, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_SetVar{SetVar: &pluginv1.SetVarRequest{Key: "x"}},
+	}).GetError().GetCode())
+	require.Equal(t, pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, mgr.handleHostCall(context.Background(), entNoPerm, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_RunBotAction{RunBotAction: &pluginv1.RunBotActionRequest{ActionIdOrName: "act1"}},
+	}).GetError().GetCode())
+
+	ent := &pluginEntry{
+		uuid:  "com.example.botplug",
+		name:  "BotPlugin",
+		state: StatusRunning,
+		manifest: &pluginv1.Manifest{
+			Uuid:                 "com.example.botplug",
+			Name:                 "BotPlugin",
+			RequiredCapabilities: []string{"bot.actions.v1", "bot.chat.v1", "bot.moderate.v1", "bot.variables.v1"},
+			Permissions: &pluginv1.Permissions{
+				SendChat:   true,
+				Moderate:   true,
+				KvStorage:  true,
+				RunActions: true,
+			},
+			Actions: []*pluginv1.ActionDescriptor{{Id: "do_thing", Name: "Do Thing"}},
+		},
+		backend: &stubBackend{
+			dispatchFn: func(_ context.Context, env *pluginv1.HostEnvelope) (*pluginv1.PluginEnvelope, error) {
+				ra := env.GetRunAction()
+				return &pluginv1.PluginEnvelope{
+					Payload: &pluginv1.PluginEnvelope_RunActionResponse{
+						RunActionResponse: &pluginv1.RunActionResponse{
+							ContinueChain: true,
+							UpdatedArgs: pluginsdk.ActionArgsFromMap(map[string]any{
+								"in":  pluginsdk.GetArgString(ra.GetArgs(), "in", ""),
+								"out": "done",
+							}),
+						},
+					},
+				}, nil
+			},
+		},
+	}
+	mgr.entries[ent.uuid] = ent
+
+	cont, outArgs, err := mgr.RunPluginAction(context.Background(), ent.uuid, "do_thing", pluginsdk.ActionArgsFromMap(map[string]any{"in": "abc"}))
+	require.NoError(t, err)
+	require.True(t, cont)
+	require.Equal(t, "done", pluginsdk.GetArgString(outArgs, "out", ""))
+
+	require.True(t, mgr.handleHostCall(context.Background(), ent, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_SendChat{SendChat: &pluginv1.SendChatRequest{Platform: "twitch", Text: "yo"}},
+	}).GetOk())
+	require.Equal(t, "yo", sentChat.GetText())
+
+	require.True(t, mgr.handleHostCall(context.Background(), ent, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_Moderate{Moderate: &pluginv1.ModerateRequest{Platform: "twitch", Action: "delete", MessageId: "m1"}},
+	}).GetOk())
+	require.Equal(t, "m1", modReq.GetMessageId())
+
+	require.True(t, mgr.handleHostCall(context.Background(), ent, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_SetVar{SetVar: &pluginv1.SetVarRequest{Scope: pluginv1.VarScope_VAR_SCOPE_GLOBAL_PERSISTENT, Key: "score", Value: pluginsdk.ActionValueInt(99)}},
+	}).GetOk())
+	gvResp := mgr.handleHostCall(context.Background(), ent, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_GetVar{GetVar: &pluginv1.GetVarRequest{Scope: pluginv1.VarScope_VAR_SCOPE_GLOBAL_PERSISTENT, Key: "score"}},
+	})
+	require.True(t, gvResp.GetOk())
+	require.True(t, gvResp.GetGetVar().GetFound())
+	require.Equal(t, int64(99), gvResp.GetGetVar().GetValue().GetIntVal())
+
+	require.True(t, mgr.handleHostCall(context.Background(), ent, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_EmitTrigger{EmitTrigger: &pluginv1.EmitTriggerRequest{TriggerId: "custom_ev"}},
+	}).GetOk())
+	require.Equal(t, "custom_ev", emitted.GetTriggerId())
+
+	require.True(t, mgr.handleHostCall(context.Background(), ent, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_RunBotAction{RunBotAction: &pluginv1.RunBotActionRequest{ActionIdOrName: "welcome"}},
+	}).GetOk())
+	require.Equal(t, "welcome", ranAction.GetActionIdOrName())
 }

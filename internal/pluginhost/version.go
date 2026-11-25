@@ -27,6 +27,12 @@ var SupportedCapabilities = []string{
 	"overlay.v1",
 	"ui.v1",
 	"overlay.routes.v1",
+	"bot.events.v1",
+	"bot.before_tts.v1",
+	"bot.chat.v1",
+	"bot.moderate.v1",
+	"bot.variables.v1",
+	"bot.actions.v1",
 }
 
 // HostVersionString returns the formatted host plugin API version (e.g. "1.0.0").

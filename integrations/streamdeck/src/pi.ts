@@ -12,6 +12,22 @@ interface GlobalSettings {
   token?: string;
 }
 
+interface ActionCatalogResponse {
+  bot_actions?: Array<{
+    id: string;
+    name: string;
+    enabled: boolean;
+    queue_id?: string;
+  }>;
+  plugin_actions?: Array<{
+    plugin_uuid: string;
+    plugin_name: string;
+    action_id: string;
+    action_name: string;
+    description?: string;
+  }>;
+}
+
 class PropertyInspector {
   private ws: WebSocket | null = null;
   private uuid = '';
@@ -60,6 +76,9 @@ class PropertyInspector {
             ...(msg.payload?.settings as GlobalSettings),
           };
           this.populateGlobalFields();
+          if (this.actionInfo?.action === 'com.github.mrpoundsign.towncrier.action') {
+            void this.refreshActionCatalog();
+          }
         } else if (msg.event === 'didReceiveSettings') {
           this.settings = msg.payload?.settings ?? {};
           this.populateFields();
@@ -103,6 +122,64 @@ class PropertyInspector {
     });
   }
 
+  private persistSettings(): void {
+    this.send({
+      event: 'setSettings',
+      context: this.uuid,
+      payload: this.settings,
+    });
+  }
+
+  private async refreshActionCatalog(): Promise<void> {
+    const picker = document.getElementById('tc-action-picker') as HTMLSelectElement | null;
+    if (!picker) return;
+
+    const host = this.globalSettings.host || '127.0.0.1';
+    const port = this.globalSettings.port || 8765;
+    const token = this.globalSettings.token || '';
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    picker.innerHTML = '<option value="">Loading live actions...</option>';
+    try {
+      const resp = await fetch(`http://${host}:${port}/api/actions`, { headers });
+      if (!resp.ok) {
+        picker.innerHTML = `<option value="">TownCrier API error (HTTP ${resp.status})</option>`;
+        return;
+      }
+      const cat = (await resp.json()) as ActionCatalogResponse;
+      picker.innerHTML = '<option value="">-- Select a Bot or Plugin action --</option>';
+
+      for (const pa of cat.plugin_actions ?? []) {
+        const opt = document.createElement('option');
+        opt.value = JSON.stringify({
+          targetType: 'plugin',
+          pluginUuid: pa.plugin_uuid,
+          actionId: pa.action_id,
+          label: pa.action_name,
+        });
+        opt.textContent = `[${pa.plugin_name}] ${pa.action_name} (${pa.action_id})`;
+        picker.appendChild(opt);
+      }
+
+      for (const ba of cat.bot_actions ?? []) {
+        const opt = document.createElement('option');
+        opt.value = JSON.stringify({
+          targetType: 'bot',
+          pluginUuid: '',
+          actionId: ba.id,
+          label: ba.name || ba.id,
+        });
+        opt.textContent = `[Bot] ${ba.name || ba.id}`;
+        picker.appendChild(opt);
+      }
+    } catch {
+      picker.innerHTML = '<option value="">TownCrier unreachable — verify host/port</option>';
+    }
+  }
+
   private bindInputListeners(): void {
     const inputs = document.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-setting]');
     inputs.forEach((el) => {
@@ -110,14 +187,36 @@ class PropertyInspector {
         const key = el.dataset.setting;
         if (!key) return;
         this.settings[key] = el.type === 'number' ? Number(el.value) : el.value;
-        this.send({
-          event: 'setSettings',
-          context: this.uuid,
-          payload: this.settings,
-        });
+        this.persistSettings();
       };
       el.addEventListener('input', persist);
       el.addEventListener('change', persist);
+    });
+
+    const picker = document.getElementById('tc-action-picker') as HTMLSelectElement | null;
+    picker?.addEventListener('change', () => {
+      if (!picker.value) return;
+      try {
+        const picked = JSON.parse(picker.value) as {
+          targetType: string;
+          pluginUuid: string;
+          actionId: string;
+          label: string;
+        };
+        this.settings.targetType = picked.targetType;
+        this.settings.pluginUuid = picked.pluginUuid;
+        this.settings.actionId = picked.actionId;
+        this.settings.label = picked.label;
+        this.populateFields();
+        this.persistSettings();
+      } catch {
+        // ignore
+      }
+    });
+
+    const refreshBtn = document.getElementById('tc-refresh-actions');
+    refreshBtn?.addEventListener('click', () => {
+      void this.refreshActionCatalog();
     });
 
     const saveGlobal = () => {
