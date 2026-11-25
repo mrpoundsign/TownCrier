@@ -1620,6 +1620,120 @@ func (x *OverlayBroadcastRequest) GetJsonPayload() string {
 	return ""
 }
 
+// GetOverlayAssetRequest retrieves a plugin-scoped OBS browser overlay asset (HTML/CSS/JS/image).
+type GetOverlayAssetRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetOverlayAssetRequest) Reset() {
+	*x = GetOverlayAssetRequest{}
+	mi := &file_plugin_v1_bot_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetOverlayAssetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetOverlayAssetRequest) ProtoMessage() {}
+
+func (x *GetOverlayAssetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_bot_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetOverlayAssetRequest.ProtoReflect.Descriptor instead.
+func (*GetOverlayAssetRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *GetOverlayAssetRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+// GetOverlayAssetResponse returns the raw bytes and Content-Type for a plugin overlay asset.
+type GetOverlayAssetResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	ContentType   string                 `protobuf:"bytes,2,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	Body          []byte                 `protobuf:"bytes,3,opt,name=body,proto3" json:"body,omitempty"`
+	Error         *APIError              `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetOverlayAssetResponse) Reset() {
+	*x = GetOverlayAssetResponse{}
+	mi := &file_plugin_v1_bot_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetOverlayAssetResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetOverlayAssetResponse) ProtoMessage() {}
+
+func (x *GetOverlayAssetResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_bot_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetOverlayAssetResponse.ProtoReflect.Descriptor instead.
+func (*GetOverlayAssetResponse) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *GetOverlayAssetResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *GetOverlayAssetResponse) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *GetOverlayAssetResponse) GetBody() []byte {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+func (x *GetOverlayAssetResponse) GetError() *APIError {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
 // RunActionRequest invokes a plugin-defined action (implemented in Milestone 3).
 type RunActionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1631,7 +1745,7 @@ type RunActionRequest struct {
 
 func (x *RunActionRequest) Reset() {
 	*x = RunActionRequest{}
-	mi := &file_plugin_v1_bot_proto_msgTypes[21]
+	mi := &file_plugin_v1_bot_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1643,7 +1757,7 @@ func (x *RunActionRequest) String() string {
 func (*RunActionRequest) ProtoMessage() {}
 
 func (x *RunActionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_v1_bot_proto_msgTypes[21]
+	mi := &file_plugin_v1_bot_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1656,7 +1770,7 @@ func (x *RunActionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunActionRequest.ProtoReflect.Descriptor instead.
 func (*RunActionRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{21}
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *RunActionRequest) GetActionId() string {
@@ -1685,7 +1799,7 @@ type RunActionResponse struct {
 
 func (x *RunActionResponse) Reset() {
 	*x = RunActionResponse{}
-	mi := &file_plugin_v1_bot_proto_msgTypes[22]
+	mi := &file_plugin_v1_bot_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1697,7 +1811,7 @@ func (x *RunActionResponse) String() string {
 func (*RunActionResponse) ProtoMessage() {}
 
 func (x *RunActionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_v1_bot_proto_msgTypes[22]
+	mi := &file_plugin_v1_bot_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1710,7 +1824,7 @@ func (x *RunActionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunActionResponse.ProtoReflect.Descriptor instead.
 func (*RunActionResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{22}
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RunActionResponse) GetContinueChain() bool {
@@ -1747,7 +1861,7 @@ type BeforeTTSRequest struct {
 
 func (x *BeforeTTSRequest) Reset() {
 	*x = BeforeTTSRequest{}
-	mi := &file_plugin_v1_bot_proto_msgTypes[23]
+	mi := &file_plugin_v1_bot_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1759,7 +1873,7 @@ func (x *BeforeTTSRequest) String() string {
 func (*BeforeTTSRequest) ProtoMessage() {}
 
 func (x *BeforeTTSRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_v1_bot_proto_msgTypes[23]
+	mi := &file_plugin_v1_bot_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1772,7 +1886,7 @@ func (x *BeforeTTSRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BeforeTTSRequest.ProtoReflect.Descriptor instead.
 func (*BeforeTTSRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{23}
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *BeforeTTSRequest) GetEvent() *StreamEvent {
@@ -1816,7 +1930,7 @@ type BeforeTTSResponse struct {
 
 func (x *BeforeTTSResponse) Reset() {
 	*x = BeforeTTSResponse{}
-	mi := &file_plugin_v1_bot_proto_msgTypes[24]
+	mi := &file_plugin_v1_bot_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1828,7 +1942,7 @@ func (x *BeforeTTSResponse) String() string {
 func (*BeforeTTSResponse) ProtoMessage() {}
 
 func (x *BeforeTTSResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_v1_bot_proto_msgTypes[24]
+	mi := &file_plugin_v1_bot_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1841,7 +1955,7 @@ func (x *BeforeTTSResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BeforeTTSResponse.ProtoReflect.Descriptor instead.
 func (*BeforeTTSResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{24}
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *BeforeTTSResponse) GetConsume() bool {
@@ -2008,7 +2122,14 @@ const file_plugin_v1_bot_proto_rawDesc = "" +
 	"\x17OverlayBroadcastRequest\x12\x1d\n" +
 	"\n" +
 	"event_name\x18\x01 \x01(\tR\teventName\x12!\n" +
-	"\fjson_payload\x18\x02 \x01(\tR\vjsonPayload\"d\n" +
+	"\fjson_payload\x18\x02 \x01(\tR\vjsonPayload\",\n" +
+	"\x16GetOverlayAssetRequest\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"\x9b\x01\n" +
+	"\x17GetOverlayAssetResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x12!\n" +
+	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x12\n" +
+	"\x04body\x18\x03 \x01(\fR\x04body\x123\n" +
+	"\x05error\x18\x04 \x01(\v2\x1d.towncrier.plugin.v1.APIErrorR\x05error\"d\n" +
 	"\x10RunActionRequest\x12\x1b\n" +
 	"\taction_id\x18\x01 \x01(\tR\bactionId\x123\n" +
 	"\x04args\x18\x02 \x01(\v2\x1f.towncrier.plugin.v1.ActionArgsR\x04args\"\xb3\x01\n" +
@@ -2046,7 +2167,7 @@ func file_plugin_v1_bot_proto_rawDescGZIP() []byte {
 }
 
 var file_plugin_v1_bot_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_plugin_v1_bot_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_plugin_v1_bot_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_plugin_v1_bot_proto_goTypes = []any{
 	(LogLevel)(0),                     // 0: towncrier.plugin.v1.LogLevel
 	(*EmoteSpan)(nil),                 // 1: towncrier.plugin.v1.EmoteSpan
@@ -2070,34 +2191,37 @@ var file_plugin_v1_bot_proto_goTypes = []any{
 	(*KVListRequest)(nil),             // 19: towncrier.plugin.v1.KVListRequest
 	(*KVListResponse)(nil),            // 20: towncrier.plugin.v1.KVListResponse
 	(*OverlayBroadcastRequest)(nil),   // 21: towncrier.plugin.v1.OverlayBroadcastRequest
-	(*RunActionRequest)(nil),          // 22: towncrier.plugin.v1.RunActionRequest
-	(*RunActionResponse)(nil),         // 23: towncrier.plugin.v1.RunActionResponse
-	(*BeforeTTSRequest)(nil),          // 24: towncrier.plugin.v1.BeforeTTSRequest
-	(*BeforeTTSResponse)(nil),         // 25: towncrier.plugin.v1.BeforeTTSResponse
-	nil,                               // 26: towncrier.plugin.v1.ActionArgs.ArgsEntry
-	nil,                               // 27: towncrier.plugin.v1.HTTPRequest.HeadersEntry
-	nil,                               // 28: towncrier.plugin.v1.HTTPResponse.HeadersEntry
-	(*SettingsMap)(nil),               // 29: towncrier.plugin.v1.SettingsMap
-	(*APIError)(nil),                  // 30: towncrier.plugin.v1.APIError
+	(*GetOverlayAssetRequest)(nil),    // 22: towncrier.plugin.v1.GetOverlayAssetRequest
+	(*GetOverlayAssetResponse)(nil),   // 23: towncrier.plugin.v1.GetOverlayAssetResponse
+	(*RunActionRequest)(nil),          // 24: towncrier.plugin.v1.RunActionRequest
+	(*RunActionResponse)(nil),         // 25: towncrier.plugin.v1.RunActionResponse
+	(*BeforeTTSRequest)(nil),          // 26: towncrier.plugin.v1.BeforeTTSRequest
+	(*BeforeTTSResponse)(nil),         // 27: towncrier.plugin.v1.BeforeTTSResponse
+	nil,                               // 28: towncrier.plugin.v1.ActionArgs.ArgsEntry
+	nil,                               // 29: towncrier.plugin.v1.HTTPRequest.HeadersEntry
+	nil,                               // 30: towncrier.plugin.v1.HTTPResponse.HeadersEntry
+	(*SettingsMap)(nil),               // 31: towncrier.plugin.v1.SettingsMap
+	(*APIError)(nil),                  // 32: towncrier.plugin.v1.APIError
 }
 var file_plugin_v1_bot_proto_depIdxs = []int32{
 	1,  // 0: towncrier.plugin.v1.StreamEvent.emote_spans:type_name -> towncrier.plugin.v1.EmoteSpan
-	26, // 1: towncrier.plugin.v1.ActionArgs.args:type_name -> towncrier.plugin.v1.ActionArgs.ArgsEntry
+	28, // 1: towncrier.plugin.v1.ActionArgs.args:type_name -> towncrier.plugin.v1.ActionArgs.ArgsEntry
 	0,  // 2: towncrier.plugin.v1.LogRequest.level:type_name -> towncrier.plugin.v1.LogLevel
-	29, // 3: towncrier.plugin.v1.GetGlobalSettingsResponse.settings:type_name -> towncrier.plugin.v1.SettingsMap
-	29, // 4: towncrier.plugin.v1.SaveGlobalSettingsRequest.settings:type_name -> towncrier.plugin.v1.SettingsMap
-	27, // 5: towncrier.plugin.v1.HTTPRequest.headers:type_name -> towncrier.plugin.v1.HTTPRequest.HeadersEntry
-	28, // 6: towncrier.plugin.v1.HTTPResponse.headers:type_name -> towncrier.plugin.v1.HTTPResponse.HeadersEntry
-	6,  // 7: towncrier.plugin.v1.RunActionRequest.args:type_name -> towncrier.plugin.v1.ActionArgs
-	6,  // 8: towncrier.plugin.v1.RunActionResponse.updated_args:type_name -> towncrier.plugin.v1.ActionArgs
-	30, // 9: towncrier.plugin.v1.RunActionResponse.error:type_name -> towncrier.plugin.v1.APIError
-	2,  // 10: towncrier.plugin.v1.BeforeTTSRequest.event:type_name -> towncrier.plugin.v1.StreamEvent
-	5,  // 11: towncrier.plugin.v1.ActionArgs.ArgsEntry.value:type_name -> towncrier.plugin.v1.ActionValue
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	31, // 3: towncrier.plugin.v1.GetGlobalSettingsResponse.settings:type_name -> towncrier.plugin.v1.SettingsMap
+	31, // 4: towncrier.plugin.v1.SaveGlobalSettingsRequest.settings:type_name -> towncrier.plugin.v1.SettingsMap
+	29, // 5: towncrier.plugin.v1.HTTPRequest.headers:type_name -> towncrier.plugin.v1.HTTPRequest.HeadersEntry
+	30, // 6: towncrier.plugin.v1.HTTPResponse.headers:type_name -> towncrier.plugin.v1.HTTPResponse.HeadersEntry
+	32, // 7: towncrier.plugin.v1.GetOverlayAssetResponse.error:type_name -> towncrier.plugin.v1.APIError
+	6,  // 8: towncrier.plugin.v1.RunActionRequest.args:type_name -> towncrier.plugin.v1.ActionArgs
+	6,  // 9: towncrier.plugin.v1.RunActionResponse.updated_args:type_name -> towncrier.plugin.v1.ActionArgs
+	32, // 10: towncrier.plugin.v1.RunActionResponse.error:type_name -> towncrier.plugin.v1.APIError
+	2,  // 11: towncrier.plugin.v1.BeforeTTSRequest.event:type_name -> towncrier.plugin.v1.StreamEvent
+	5,  // 12: towncrier.plugin.v1.ActionArgs.ArgsEntry.value:type_name -> towncrier.plugin.v1.ActionValue
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_plugin_v1_bot_proto_init() }
@@ -2119,7 +2243,7 @@ func file_plugin_v1_bot_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plugin_v1_bot_proto_rawDesc), len(file_plugin_v1_bot_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   28,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

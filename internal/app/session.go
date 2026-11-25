@@ -562,6 +562,15 @@ func (s *Session) PluginManager() *pluginhost.Manager {
 	return s.pluginMgr
 }
 
+// GetPluginOverlayAsset delegates OBS browser overlay asset requests to a running plugin.
+func (s *Session) GetPluginOverlayAsset(ctx context.Context, pluginUUID, assetPath string) (string, []byte, bool, error) {
+	mgr := s.PluginManager()
+	if mgr == nil {
+		return "", nil, false, errors.New("plugin manager unavailable")
+	}
+	return mgr.GetOverlayAsset(ctx, pluginUUID, assetPath)
+}
+
 // IsRunning reports whether the session is currently active.
 func (s *Session) IsRunning() bool {
 	s.mu.RLock()

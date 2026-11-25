@@ -85,6 +85,7 @@ message HostEnvelope {
     UIEvent on_ui_event = 12;
     RunActionRequest run_action = 13;
     BeforeTTSRequest before_tts = 14;
+    GetOverlayAssetRequest get_overlay_asset = 15;
   }
 }
 
@@ -109,5 +110,8 @@ message PluginEnvelope {
     UIPatchBatch ui_patch = 16;
     RunActionResponse run_action_response = 17;
     BeforeTTSResponse before_tts_response = 18;
+    GetOverlayAssetResponse get_overlay_asset_response = 19;
+    UISnapshot push_ui_snapshot = 20;
+    UIPatchBatch push_ui_patch = 21;
   }
 }

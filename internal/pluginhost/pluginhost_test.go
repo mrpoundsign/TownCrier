@@ -212,3 +212,79 @@ func TestNativeTrustGateAndTamperDetection(t *testing.T) {
 	require.Equal(t, StatusAwaitingTrust, list[0].State)
 	require.NotEqual(t, origHash, list[0].BinarySHA256)
 }
+
+func TestValidateManifestUIViewsPermission(t *testing.T) {
+	apiErr := ValidateManifest(&pluginv1.Manifest{
+		Uuid: "com.example.noui",
+		Name: "No UI Perm",
+		Views: []*pluginv1.ViewDescriptor{
+			{Id: "main", Title: "Main", Placement: pluginv1.ViewPlacement_VIEW_PLACEMENT_MAIN_TAB},
+		},
+	})
+	require.NotNil(t, apiErr)
+	require.Equal(t, pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, apiErr.GetCode())
+
+	require.Nil(t, ValidateManifest(&pluginv1.Manifest{
+		Uuid: "com.example.ui",
+		Name: "UI Perm",
+		Permissions: &pluginv1.Permissions{
+			UiViews: true,
+		},
+		Views: []*pluginv1.ViewDescriptor{
+			{Id: "main", Title: "Main", Placement: pluginv1.ViewPlacement_VIEW_PLACEMENT_MAIN_TAB},
+		},
+	}))
+}
+
+func TestPushUIUpdateHostCallAndSubscription(t *testing.T) {
+	mgr := NewManager(Options{KVDBPath: ":memory:", Secrets: secrets.NewMemoryStore()})
+	defer func() { _ = mgr.Close() }()
+
+	var got []PluginUIUpdate
+	unsub := mgr.SubscribeUIUpdate(func(u PluginUIUpdate) {
+		got = append(got, u)
+	})
+	defer unsub()
+
+	entNoPerm := &pluginEntry{
+		uuid: "com.example.noperm",
+		manifest: &pluginv1.Manifest{
+			Uuid: "com.example.noperm",
+			Permissions: &pluginv1.Permissions{
+				UiViews: false,
+			},
+		},
+	}
+	resp := mgr.handleHostCall(context.Background(), entNoPerm, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_PushUiPatch{
+			PushUiPatch: &pluginv1.UIPatchBatch{ViewId: "main", BaseRevision: 1, Revision: 2},
+		},
+	})
+	require.False(t, resp.GetOk())
+	require.Equal(t, pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, resp.GetError().GetCode())
+
+	entOK := &pluginEntry{
+		uuid: "com.example.ui",
+		manifest: &pluginv1.Manifest{
+			Uuid: "com.example.ui",
+			Permissions: &pluginv1.Permissions{
+				UiViews: true,
+			},
+		},
+	}
+	resp = mgr.handleHostCall(context.Background(), entOK, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_PushUiSnapshot{
+			PushUiSnapshot: &pluginv1.UISnapshot{ViewId: "main", Revision: 1},
+		},
+	})
+	require.True(t, resp.GetOk())
+	resp = mgr.handleHostCall(context.Background(), entOK, &pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_PushUiPatch{
+			PushUiPatch: &pluginv1.UIPatchBatch{ViewId: "main", BaseRevision: 1, Revision: 2},
+		},
+	})
+	require.True(t, resp.GetOk())
+	require.Len(t, got, 2)
+	require.NotNil(t, got[0].Snapshot)
+	require.NotNil(t, got[1].Patch)
+}

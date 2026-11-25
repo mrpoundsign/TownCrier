@@ -25,6 +25,8 @@ var SupportedCapabilities = []string{
 	"http.v1",
 	"tts.v1",
 	"overlay.v1",
+	"ui.v1",
+	"overlay.routes.v1",
 }
 
 // HostVersionString returns the formatted host plugin API version (e.g. "1.0.0").
@@ -93,6 +95,24 @@ func CheckCapabilities(required []string) *pluginv1.APIError {
 				RequiredMinor:     HostAPIMinor,
 				MissingCapability: capName,
 			}
+		}
+	}
+	return nil
+}
+
+// ValidateManifest checks manifest invariants and declared permission consistency.
+func ValidateManifest(manifest *pluginv1.Manifest) *pluginv1.APIError {
+	if manifest == nil {
+		return &pluginv1.APIError{
+			Code:    pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			Message: "Plugin returned nil manifest",
+		}
+	}
+	if len(manifest.GetViews()) > 0 && !manifest.GetPermissions().GetUiViews() {
+		return &pluginv1.APIError{
+			Code:              pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED,
+			Message:           "Plugin declares declarative UI views without permissions.ui_views",
+			MissingCapability: "ui.v1",
 		}
 	}
 	return nil

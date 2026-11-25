@@ -141,6 +141,10 @@ type Manager struct {
 	subMu     sync.Mutex
 	subSeq    atomic.Uint64
 	listeners map[uint64]func()
+
+	uiSubMu     sync.Mutex
+	uiSubSeq    atomic.Uint64
+	uiListeners map[uint64]func(PluginUIUpdate)
 }
 
 // NewManager creates a plugin Manager. No runtimes or databases are opened until Start/Reload and plugin discovery.
@@ -456,6 +460,7 @@ func (m *Manager) Plugins() []PluginStatus {
 		var allowed []string
 		var schema []*pluginv1.SettingField
 		var actions int
+		var views []*pluginv1.ViewDescriptor
 		apiVer := ""
 		if ent.manifest != nil {
 			perms = ent.manifest.GetPermissions()
@@ -464,6 +469,7 @@ func (m *Manager) Plugins() []PluginStatus {
 			}
 			schema = ent.manifest.GetGlobalSettingsSchema()
 			actions = len(ent.manifest.GetActions())
+			views = slices.Clone(ent.manifest.GetViews())
 			apiVer = FormatVersion(ent.manifest.GetApiVersion())
 		}
 		out = append(out, PluginStatus{
@@ -482,6 +488,7 @@ func (m *Manager) Plugins() []PluginStatus {
 			HasGlobalSettings: len(schema) > 0,
 			GlobalSchema:      schema,
 			ActionCount:       actions,
+			Views:             views,
 			State:             ent.state,
 			Error:             ent.errMsg,
 			APIError:          ent.apiErr,
@@ -931,6 +938,34 @@ func (m *Manager) handleHostCall(ctx context.Context, ent *pluginEntry, pEnv *pl
 		}
 		return &pluginv1.HostCallResponse{Ok: true}
 
+	case *pluginv1.PluginEnvelope_PushUiSnapshot:
+		if !perms.GetUiViews() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare ui_views permission")
+		}
+		if pay.PushUiSnapshot == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing push_ui_snapshot payload")
+		}
+		m.notifyUIUpdate(PluginUIUpdate{
+			PluginUUID: uuid,
+			ViewID:     pay.PushUiSnapshot.GetViewId(),
+			Snapshot:   pay.PushUiSnapshot,
+		})
+		return &pluginv1.HostCallResponse{Ok: true}
+
+	case *pluginv1.PluginEnvelope_PushUiPatch:
+		if !perms.GetUiViews() {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, "plugin does not declare ui_views permission")
+		}
+		if pay.PushUiPatch == nil {
+			return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "missing push_ui_patch payload")
+		}
+		m.notifyUIUpdate(PluginUIUpdate{
+			PluginUUID: uuid,
+			ViewID:     pay.PushUiPatch.GetViewId(),
+			Patch:      pay.PushUiPatch,
+		})
+		return &pluginv1.HostCallResponse{Ok: true}
+
 	default:
 		return hostErrResp(pluginv1.ErrorCode_ERROR_CODE_UNSUPPORTED_CAPABILITY, fmt.Sprintf("unsupported host call %T in API v%s", pEnv.Payload, HostVersionString()))
 	}
@@ -956,6 +991,184 @@ func (m *Manager) currentConfig() *config.Config {
 // RestartPlugin restarts plugins cleanly (currently delegates to Reload).
 func (m *Manager) RestartPlugin(_ string) error {
 	return m.Reload()
+}
+
+// AllowedHostsForPlugin returns the configured allowed_hosts list and whether host allowlist enforcement applies.
+func (m *Manager) AllowedHostsForPlugin(pluginUUID string) ([]string, bool) {
+	uuid := strings.TrimSpace(pluginUUID)
+	m.mu.RLock()
+	ent := m.entries[uuid]
+	m.mu.RUnlock()
+	if ent == nil {
+		return nil, false
+	}
+	ent.mu.RLock()
+	defer ent.mu.RUnlock()
+	var allowed []string
+	if ent.manifest != nil && ent.manifest.GetPermissions() != nil {
+		allowed = slices.Clone(ent.manifest.GetPermissions().GetAllowedHosts())
+	}
+	enforce := ent.runtime == pluginv1.RuntimeKind_RUNTIME_KIND_WASM || len(allowed) > 0
+	return allowed, enforce
+}
+
+func (m *Manager) runningBackend(pluginUUID string) (*pluginEntry, pluginBackend, *pluginv1.Manifest, error) {
+	uuid := strings.TrimSpace(pluginUUID)
+	m.mu.RLock()
+	ent := m.entries[uuid]
+	m.mu.RUnlock()
+	if ent == nil {
+		return nil, nil, nil, fmt.Errorf("unknown plugin %q", uuid)
+	}
+	ent.mu.RLock()
+	be := ent.backend
+	st := ent.state
+	man := ent.manifest
+	name := ent.name
+	ent.mu.RUnlock()
+	if be == nil || st != StatusRunning {
+		return ent, nil, man, fmt.Errorf("plugin %q is not running (state=%s)", name, st)
+	}
+	return ent, be, man, nil
+}
+
+// RenderView requests an initial or resync UISnapshot for viewID from a running plugin.
+func (m *Manager) RenderView(ctx context.Context, pluginUUID, viewID string) (*pluginv1.UISnapshot, error) {
+	_, be, man, err := m.runningBackend(pluginUUID)
+	if err != nil {
+		return nil, err
+	}
+	if !man.GetPermissions().GetUiViews() {
+		return nil, pluginsdk.FromProto(&pluginv1.APIError{
+			Code:    pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED,
+			Message: "plugin does not declare ui_views permission",
+		})
+	}
+	resp, err := be.Dispatch(ctx, &pluginv1.HostEnvelope{
+		Payload: &pluginv1.HostEnvelope_RenderView{
+			RenderView: &pluginv1.RenderViewRequest{ViewId: viewID},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if ack := resp.GetAck(); ack != nil {
+		if !ack.GetOk() {
+			if ack.GetError() != nil {
+				return nil, pluginsdk.FromProto(ack.GetError())
+			}
+			return nil, errors.New("plugin rejected RenderView")
+		}
+		return nil, errors.New("plugin returned empty snapshot for RenderView")
+	}
+	snap := resp.GetUiSnapshot()
+	if snap == nil {
+		return nil, errors.New("plugin returned unexpected response for RenderView")
+	}
+	return snap, nil
+}
+
+// SendUIEvent forwards a user interaction event from TownCrier's UI reconciler to a running plugin.
+func (m *Manager) SendUIEvent(ctx context.Context, pluginUUID string, ev *pluginv1.UIEvent) (*pluginv1.UISnapshot, *pluginv1.UIPatchBatch, error) {
+	if ev == nil {
+		return nil, nil, errors.New("nil UIEvent")
+	}
+	_, be, man, err := m.runningBackend(pluginUUID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !man.GetPermissions().GetUiViews() {
+		return nil, nil, pluginsdk.FromProto(&pluginv1.APIError{
+			Code:    pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED,
+			Message: "plugin does not declare ui_views permission",
+		})
+	}
+	resp, err := be.Dispatch(ctx, &pluginv1.HostEnvelope{
+		Payload: &pluginv1.HostEnvelope_OnUiEvent{OnUiEvent: ev},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if ack := resp.GetAck(); ack != nil {
+		if !ack.GetOk() {
+			if ack.GetError() != nil {
+				return nil, nil, pluginsdk.FromProto(ack.GetError())
+			}
+			return nil, nil, errors.New("plugin rejected UIEvent")
+		}
+		return nil, nil, nil
+	}
+	return resp.GetUiSnapshot(), resp.GetUiPatch(), nil
+}
+
+// GetOverlayAsset requests a plugin-served OBS browser overlay asset (HTML/CSS/JS/image).
+func (m *Manager) GetOverlayAsset(ctx context.Context, pluginUUID, assetPath string) (string, []byte, bool, error) {
+	_, be, man, err := m.runningBackend(pluginUUID)
+	if err != nil {
+		return "", nil, false, err
+	}
+	hasCap := slices.Contains(man.GetRequiredCapabilities(), "overlay.routes.v1")
+	if !man.GetPermissions().GetOverlayBroadcast() && !hasCap {
+		return "", nil, false, pluginsdk.FromProto(&pluginv1.APIError{
+			Code:    pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED,
+			Message: "plugin does not declare overlay_broadcast or overlay.routes.v1",
+		})
+	}
+	resp, err := be.Dispatch(ctx, &pluginv1.HostEnvelope{
+		Payload: &pluginv1.HostEnvelope_GetOverlayAsset{
+			GetOverlayAsset: &pluginv1.GetOverlayAssetRequest{Path: assetPath},
+		},
+	})
+	if err != nil {
+		return "", nil, false, err
+	}
+	if ack := resp.GetAck(); ack != nil {
+		if !ack.GetOk() && ack.GetError() != nil {
+			return "", nil, false, pluginsdk.FromProto(ack.GetError())
+		}
+		return "", nil, false, errors.New("plugin returned unexpected ack for GetOverlayAsset")
+	}
+	assetResp := resp.GetGetOverlayAssetResponse()
+	if assetResp == nil {
+		return "", nil, false, errors.New("plugin returned empty GetOverlayAsset response")
+	}
+	if assetResp.GetError() != nil {
+		return "", nil, false, pluginsdk.FromProto(assetResp.GetError())
+	}
+	return assetResp.GetContentType(), assetResp.GetBody(), assetResp.GetFound(), nil
+}
+
+// SubscribeUIUpdate registers a listener invoked whenever a plugin pushes a UI snapshot or patch batch.
+func (m *Manager) SubscribeUIUpdate(fn func(PluginUIUpdate)) func() {
+	if fn == nil {
+		return func() {}
+	}
+	id := m.uiSubSeq.Add(1)
+	m.uiSubMu.Lock()
+	if m.uiListeners == nil {
+		m.uiListeners = make(map[uint64]func(PluginUIUpdate))
+	}
+	m.uiListeners[id] = fn
+	m.uiSubMu.Unlock()
+	return func() {
+		m.uiSubMu.Lock()
+		delete(m.uiListeners, id)
+		m.uiSubMu.Unlock()
+	}
+}
+
+func (m *Manager) notifyUIUpdate(upd PluginUIUpdate) {
+	m.uiSubMu.Lock()
+	fns := make([]func(PluginUIUpdate), 0, len(m.uiListeners))
+	for _, fn := range m.uiListeners {
+		if fn != nil {
+			fns = append(fns, fn)
+		}
+	}
+	m.uiSubMu.Unlock()
+	for _, fn := range fns {
+		fn(upd)
+	}
 }
 
 // SubscribeStatusChange registers a listener invoked whenever plugin state or settings change.

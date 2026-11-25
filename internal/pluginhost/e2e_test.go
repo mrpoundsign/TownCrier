@@ -358,3 +358,81 @@ func TestVersionMismatchHandshakeError(t *testing.T) {
 	require.Equal(t, pluginv1.ErrorCode_ERROR_CODE_UNSUPPORTED_API_VERSION, resp.GetError().GetCode())
 	require.Contains(t, resp.GetError().GetMessage(), "API v2")
 }
+
+func TestEndToEndNativeUIAndOverlayAssetPlugin(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Go compiler e2e plugin build in -short mode")
+	}
+
+	root := repoRootFromPluginHost(t)
+	baseDir := t.TempDir()
+	plugDir := filepath.Join(baseDir, "native", "ui-demo")
+	require.NoError(t, os.MkdirAll(plugDir, 0o755))
+
+	binName := "ui-demo"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	binOut := filepath.Join(plugDir, binName)
+	buildCmd := exec.Command("go", "build", "-o", binOut, "./examples/plugins/ui-demo")
+	buildCmd.Dir = root
+	out, err := buildCmd.CombinedOutput()
+	require.NoError(t, err, "build ui-demo failed: %s", string(out))
+
+	pjBytes, err := os.ReadFile(filepath.Join(root, "examples", "plugins", "ui-demo", "plugin.json"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(plugDir, "plugin.json"), pjBytes, 0o644))
+
+	cfg := config.DefaultConfig()
+	mgr := NewManager(Options{
+		BaseDir:  baseDir,
+		KVDBPath: ":memory:",
+		Secrets:  secrets.NewMemoryStore(),
+		Callbacks: HostCallbacks{
+			GetConfig: func() *config.Config { return cfg.Clone() },
+			UpdateConfig: func(fn func(c *config.Config)) error {
+				fn(cfg)
+				return nil
+			},
+		},
+	})
+	defer func() { _ = mgr.Close() }()
+
+	var pushed []PluginUIUpdate
+	var pmu sync.Mutex
+	unsub := mgr.SubscribeUIUpdate(func(u PluginUIUpdate) {
+		pmu.Lock()
+		pushed = append(pushed, u)
+		pmu.Unlock()
+	})
+	defer unsub()
+
+	require.NoError(t, mgr.Start())
+	require.NoError(t, mgr.TrustNativePlugin("com.example.uidemo"))
+
+	snap, err := mgr.RenderView(context.Background(), "com.example.uidemo", "main")
+	require.NoError(t, err)
+	require.Equal(t, "main", snap.GetViewId())
+	require.Equal(t, uint64(1), snap.GetRevision())
+
+	_, patch, err := mgr.SendUIEvent(context.Background(), "com.example.uidemo", &pluginv1.UIEvent{
+		ViewId: "main",
+		NodeId: "inc",
+		Kind:   pluginv1.UIEventKind_UI_EVENT_KIND_CLICK,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, patch)
+	require.Equal(t, uint64(2), patch.GetRevision())
+
+	require.Eventually(t, func() bool {
+		pmu.Lock()
+		defer pmu.Unlock()
+		return len(pushed) >= 1
+	}, 3*time.Second, 25*time.Millisecond)
+
+	ct, body, found, err := mgr.GetOverlayAsset(context.Background(), "com.example.uidemo", "index.html")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Contains(t, ct, "text/html")
+	require.Equal(t, "<h1>Demo</h1>", string(body))
+}

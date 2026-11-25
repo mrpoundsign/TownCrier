@@ -191,6 +191,19 @@ message OverlayBroadcastRequest {
   string json_payload = 2;
 }
 
+// GetOverlayAssetRequest retrieves a plugin-scoped OBS browser overlay asset (HTML/CSS/JS/image).
+message GetOverlayAssetRequest {
+  string path = 1;
+}
+
+// GetOverlayAssetResponse returns the raw bytes and Content-Type for a plugin overlay asset.
+message GetOverlayAssetResponse {
+  bool found = 1;
+  string content_type = 2;
+  bytes body = 3;
+  APIError error = 4;
+}
+
 // RunActionRequest invokes a plugin-defined action (implemented in Milestone 3).
 message RunActionRequest {
   string action_id = 1;

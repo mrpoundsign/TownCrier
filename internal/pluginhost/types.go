@@ -68,9 +68,18 @@ type PluginStatus struct {
 	HasGlobalSettings bool
 	GlobalSchema      []*pluginv1.SettingField
 	ActionCount       int
+	Views             []*pluginv1.ViewDescriptor
 	State             RunState
 	Error             string
 	APIError          *pluginv1.APIError
+}
+
+// PluginUIUpdate delivers a plugin-initiated snapshot or incremental patch for an active view.
+type PluginUIUpdate struct {
+	PluginUUID string
+	ViewID     string
+	Snapshot   *pluginv1.UISnapshot
+	Patch      *pluginv1.UIPatchBatch
 }
 
 type logBuffer struct {

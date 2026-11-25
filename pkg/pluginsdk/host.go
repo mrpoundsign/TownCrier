@@ -243,6 +243,38 @@ func (h *Host) OverlayBroadcast(eventName, jsonPayload string) error {
 	return err
 }
 
+// SendUISnapshot pushes a full declarative UI view snapshot to TownCrier.
+func (h *Host) SendUISnapshot(snap *pluginv1.UISnapshot) error {
+	if snap == nil {
+		return &APIError{
+			Code:    pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			Message: "nil UISnapshot",
+		}
+	}
+	_, err := h.call(&pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_PushUiSnapshot{
+			PushUiSnapshot: snap,
+		},
+	})
+	return err
+}
+
+// SendUIPatch pushes incremental UI mutations to an active declarative view in TownCrier.
+func (h *Host) SendUIPatch(batch *pluginv1.UIPatchBatch) error {
+	if batch == nil {
+		return &APIError{
+			Code:    pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			Message: "nil UIPatchBatch",
+		}
+	}
+	_, err := h.call(&pluginv1.PluginEnvelope{
+		Payload: &pluginv1.PluginEnvelope_PushUiPatch{
+			PushUiPatch: batch,
+		},
+	})
+	return err
+}
+
 // EnsureSettingsMap initializes m (and its map) if nil and returns it.
 func EnsureSettingsMap(m *pluginv1.SettingsMap) *pluginv1.SettingsMap {
 	if m == nil {

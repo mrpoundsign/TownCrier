@@ -24,9 +24,11 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/pluginhost"
 	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
 	"github.com/mrpoundsign/TownCrier/pkg/audio"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/pluginv1"
 	"github.com/mrpoundsign/TownCrier/pkg/stt"
 	"github.com/mrpoundsign/TownCrier/pkg/translate"
 	"github.com/mrpoundsign/TownCrier/pkg/tts"
@@ -64,7 +66,11 @@ type SettingsView struct {
 	rulesTabItem          *container.TabItem
 	logsTabItem           *container.TabItem
 	pluginsTab            *PluginsTabView
-	twitchTab         *TwitchTabView
+	pluginSubTabs         map[string]*mountedPluginSettingsTab
+	pluginSubOrder        []string
+	pluginSubImageCache   *PluginImageCache
+	pluginSubUnsub        func()
+	twitchTab             *TwitchTabView
 	youtubeTab        *YouTubeTabView
 	tiktokTab         *TikTokTabView
 	kickTab           *KickTabView
@@ -533,7 +539,104 @@ func (v *SettingsView) SyncPlatformTabVisibility() {
 	if v.loggingEnabled && v.logsTabItem != nil {
 		items = append(items, v.logsTabItem)
 	}
+	items = append(items, v.syncPluginSettingsSubTabs()...)
 	v.subTabs.SetItems(items)
+}
+
+type mountedPluginSettingsTab struct {
+	key  string
+	host *PluginTabHost
+	item *container.TabItem
+}
+
+func (v *SettingsView) syncPluginSettingsSubTabs() []*container.TabItem {
+	if v.session == nil || v.session.PluginManager() == nil {
+		return nil
+	}
+	mgr := v.session.PluginManager()
+	if v.pluginSubTabs == nil {
+		v.pluginSubTabs = make(map[string]*mountedPluginSettingsTab)
+	}
+	if v.pluginSubImageCache == nil {
+		v.pluginSubImageCache = NewPluginImageCache(nil)
+	}
+
+	type wantSub struct {
+		key        string
+		pluginUUID string
+		pluginName string
+		desc       *pluginv1.ViewDescriptor
+	}
+	var desired []wantSub
+	desiredSet := make(map[string]bool)
+	for _, st := range mgr.Plugins() {
+		if st.State == pluginhost.StatusDisabled || st.State == pluginhost.StatusAwaitingTrust {
+			continue
+		}
+		for _, vd := range st.Views {
+			if vd == nil || vd.GetPlacement() != pluginv1.ViewPlacement_VIEW_PLACEMENT_SETTINGS_SUBTAB {
+				continue
+			}
+			k := st.UUID + ":" + vd.GetId()
+			desired = append(desired, wantSub{
+				key:        k,
+				pluginUUID: st.UUID,
+				pluginName: st.Name,
+				desc:       vd,
+			})
+			desiredSet[k] = true
+		}
+	}
+
+	for key, ps := range v.pluginSubTabs {
+		if !desiredSet[key] {
+			if ps.host != nil {
+				ps.host.Close()
+			}
+			delete(v.pluginSubTabs, key)
+		}
+	}
+
+	out := make([]*container.TabItem, 0, len(desired))
+	var order []string
+	for _, wv := range desired {
+		ps := v.pluginSubTabs[wv.key]
+		if ps == nil {
+			title := strings.TrimSpace(wv.desc.GetTitle())
+			if title == "" {
+				title = wv.pluginName
+			}
+			host := NewPluginTabHost(mgr, v.window, v.pluginSubImageCache, wv.pluginUUID, wv.pluginName, wv.desc.GetId(), v.setStatus)
+			iconRes := resolvePluginIcon(wv.desc.GetIconName())
+			var item *container.TabItem
+			if iconRes != nil {
+				item = container.NewTabItemWithIcon(title, iconRes, host.Root())
+			} else {
+				item = container.NewTabItem(title, host.Root())
+			}
+			ps = &mountedPluginSettingsTab{key: wv.key, host: host, item: item}
+			v.pluginSubTabs[wv.key] = ps
+		}
+		order = append(order, wv.key)
+		out = append(out, ps.item)
+	}
+	v.pluginSubOrder = order
+	return out
+}
+
+// closePluginSubTabs releases all mounted plugin Settings sub-tabs and status subscriptions.
+func (v *SettingsView) closePluginSubTabs() {
+	if v.pluginSubUnsub != nil {
+		v.pluginSubUnsub()
+		v.pluginSubUnsub = nil
+	}
+	for _, ps := range v.pluginSubTabs {
+		if ps.host != nil {
+			ps.host.Close()
+		}
+	}
+	clear(v.pluginSubTabs)
+	v.pluginSubOrder = nil
 }
 
 func (v *SettingsView) currentConfig() *config.Config {
@@ -1007,6 +1110,11 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	}
 
 	v.subTabs = container.NewAppTabs(v.generalTabItem, v.ttsTabItem, v.rulesTabItem, v.logsTabItem)
+	if v.session != nil && v.session.PluginManager() != nil && v.pluginSubUnsub == nil {
+		v.pluginSubUnsub = v.session.PluginManager().SubscribeStatusChange(func() {
+			fyne.Do(v.SyncPlatformTabVisibility)
+		})
+	}
 	v.SyncPlatformTabVisibility()
 	v.SyncTTSState(v.ttsEnabled)
 

@@ -189,6 +189,9 @@ func (b *wasmBackend) instantiateWithMemory(memoryMB uint32) (*pluginv1.Manifest
 	if apiErr := CheckCapabilities(manifest.GetRequiredCapabilities()); apiErr != nil {
 		return manifest, apiErr, errors.New(apiErr.GetMessage())
 	}
+	if apiErr := ValidateManifest(manifest); apiErr != nil {
+		return manifest, apiErr, errors.New(apiErr.GetMessage())
+	}
 
 	return manifest, nil, nil
 }

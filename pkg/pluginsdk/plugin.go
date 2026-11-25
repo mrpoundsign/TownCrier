@@ -24,6 +24,17 @@ type Plugin interface {
 // BasePlugin provides safe no-op default implementations for optional Plugin callbacks.
 type BasePlugin struct{}
 
+// UIPlugin is an optional interface implemented by plugins that expose declarative Fyne UI views ("ui.v1").
+type UIPlugin interface {
+	RenderView(viewID string) (*pluginv1.UISnapshot, error)
+	OnUIEvent(ev *pluginv1.UIEvent) (*pluginv1.UIPatchBatch, error)
+}
+
+// OverlayAssetPlugin is an optional interface implemented by plugins serving OBS browser overlay assets ("overlay.routes.v1").
+type OverlayAssetPlugin interface {
+	GetOverlayAsset(assetPath string) (contentType string, body []byte, found bool, err error)
+}
+
 func (BasePlugin) Init(_ *Host) error                                    { return nil }
 func (BasePlugin) OnEvent(_ *pluginv1.StreamEvent) error                 { return nil }
 func (BasePlugin) OnModeration(_ *pluginv1.ModerationEvent) error        { return nil }
@@ -159,6 +170,99 @@ func dispatchEnvelope(p Plugin, host *Host, env *pluginv1.HostEnvelope) *pluginv
 			}
 		}
 		return ackOK(reqID)
+
+	case *pluginv1.HostEnvelope_RenderView:
+		up, ok := p.(UIPlugin)
+		if !ok {
+			return ackError(reqID, &APIError{
+				Code:    pluginv1.ErrorCode_ERROR_CODE_UNSUPPORTED_CAPABILITY,
+				Message: "plugin does not implement declarative UI views",
+			})
+		}
+		viewID := ""
+		if payload.RenderView != nil {
+			viewID = payload.RenderView.GetViewId()
+		}
+		snap, err := up.RenderView(viewID)
+		if err != nil {
+			return ackError(reqID, err)
+		}
+		if snap == nil {
+			return ackError(reqID, &APIError{
+				Code:    pluginv1.ErrorCode_ERROR_CODE_INTERNAL,
+				Message: "plugin returned nil UISnapshot",
+			})
+		}
+		if snap.GetViewId() == "" {
+			snap.ViewId = viewID
+		}
+		return &pluginv1.PluginEnvelope{
+			RequestId: reqID,
+			Payload:   &pluginv1.PluginEnvelope_UiSnapshot{UiSnapshot: snap},
+		}
+
+	case *pluginv1.HostEnvelope_OnUiEvent:
+		up, ok := p.(UIPlugin)
+		if !ok {
+			return ackError(reqID, &APIError{
+				Code:    pluginv1.ErrorCode_ERROR_CODE_UNSUPPORTED_CAPABILITY,
+				Message: "plugin does not implement declarative UI views",
+			})
+		}
+		batch, err := up.OnUIEvent(payload.OnUiEvent)
+		if err != nil {
+			return ackError(reqID, err)
+		}
+		if batch != nil {
+			return &pluginv1.PluginEnvelope{
+				RequestId: reqID,
+				Payload:   &pluginv1.PluginEnvelope_UiPatch{UiPatch: batch},
+			}
+		}
+		return ackOK(reqID)
+
+	case *pluginv1.HostEnvelope_GetOverlayAsset:
+		op, ok := p.(OverlayAssetPlugin)
+		if !ok {
+			return &pluginv1.PluginEnvelope{
+				RequestId: reqID,
+				Payload: &pluginv1.PluginEnvelope_GetOverlayAssetResponse{
+					GetOverlayAssetResponse: &pluginv1.GetOverlayAssetResponse{
+						Found: false,
+						Error: &pluginv1.APIError{
+							Code:    pluginv1.ErrorCode_ERROR_CODE_UNSUPPORTED_CAPABILITY,
+							Message: "plugin does not expose OBS overlay routes",
+						},
+					},
+				},
+			}
+		}
+		assetPath := ""
+		if payload.GetOverlayAsset != nil {
+			assetPath = payload.GetOverlayAsset.GetPath()
+		}
+		ct, body, found, err := op.GetOverlayAsset(assetPath)
+		if err != nil {
+			return &pluginv1.PluginEnvelope{
+				RequestId: reqID,
+				Payload: &pluginv1.PluginEnvelope_GetOverlayAssetResponse{
+					GetOverlayAssetResponse: &pluginv1.GetOverlayAssetResponse{
+						Found: false,
+						Error: ToProto(err),
+					},
+				},
+			}
+		}
+		return &pluginv1.PluginEnvelope{
+			RequestId: reqID,
+			Payload: &pluginv1.PluginEnvelope_GetOverlayAssetResponse{
+				GetOverlayAssetResponse: &pluginv1.GetOverlayAssetResponse{
+					Found:       found,
+					ContentType: ct,
+					Body:        body,
+				},
+			},
+		}
 
 	default:
 		return ackError(reqID, &APIError{

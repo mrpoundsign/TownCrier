@@ -268,6 +268,10 @@ func startNativeBackend(mgr *Manager, entry *pluginEntry, desc NativeDescriptor,
 		_ = b.Close()
 		return nil, manifest, apiErr, errors.New(apiErr.GetMessage())
 	}
+	if apiErr := ValidateManifest(manifest); apiErr != nil {
+		_ = b.Close()
+		return nil, manifest, apiErr, errors.New(apiErr.GetMessage())
+	}
 
 	return b, manifest, nil, nil
 }
@@ -297,7 +301,8 @@ func (b *nativeBackend) readLoop() {
 			*pluginv1.PluginEnvelope_UiSnapshot,
 			*pluginv1.PluginEnvelope_UiPatch,
 			*pluginv1.PluginEnvelope_RunActionResponse,
-			*pluginv1.PluginEnvelope_BeforeTtsResponse:
+			*pluginv1.PluginEnvelope_BeforeTtsResponse,
+			*pluginv1.PluginEnvelope_GetOverlayAssetResponse:
 			b.pendMu.Lock()
 			ch, ok := b.pending[pEnv.GetRequestId()]
 			if ok {

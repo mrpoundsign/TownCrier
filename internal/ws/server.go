@@ -377,6 +377,7 @@ func (s *Server) Start(host string, port int, authToken string) error {
 	mux.Handle("/api/overlay/subtitles", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlaySubtitles)))
 	mux.Handle("/api/overlay/subtitles/stream", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlaySubtitlesStream)))
 	mux.Handle("/api/overlay/style", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlayStyle)))
+	mux.Handle("/plugins/", s.withCORSAndAuth(http.HandlerFunc(s.handlePluginRoutes)))
 
 	// Local pprof diagnostic endpoints (http://127.0.0.1:8765/debug/pprof/)
 	mux.Handle("/debug/pprof/", s.withCORSAndAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
