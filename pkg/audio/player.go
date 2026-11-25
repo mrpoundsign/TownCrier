@@ -3,14 +3,18 @@ package audio
 import (
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/gen2brain/malgo"
 )
+
+const defaultPlaybackStallTimeout = 2 * time.Second
 
 var (
 	ErrDeviceClosed = errors.New("audio device is closed")
@@ -65,10 +69,43 @@ type DevicePlayer struct {
 	paused             atomic.Bool
 	aborted            atomic.Bool
 	closed             bool
+	closedAtomic       atomic.Bool
 	volumeBits         atomic.Uint32
 	duckSet            atomic.Bool
 	duckBits           atomic.Uint32
 	fallbackFunc       func(reason string)
+
+	lastCallbackNano atomic.Int64
+	playStartedNano  atomic.Int64
+	deviceStopped    atomic.Bool
+	intentionalStop  atomic.Bool
+	recovering       atomic.Bool
+	recoveryAttempts atomic.Int32
+	stallTimeoutDur  time.Duration
+	nowFn            func() time.Time
+	reinitFn         func() error
+}
+
+func (p *DevicePlayer) now() time.Time {
+	if p.nowFn != nil {
+		return p.nowFn()
+	}
+	return time.Now()
+}
+
+func (p *DevicePlayer) stallTimeout() time.Duration {
+	if p.stallTimeoutDur > 0 {
+		return p.stallTimeoutDur
+	}
+	return defaultPlaybackStallTimeout
+}
+
+func (p *DevicePlayer) handleUnexpectedStop() {
+	if p.intentionalStop.Load() || p.closedAtomic.Load() {
+		return
+	}
+	p.deviceStopped.Store(true)
+	log.Printf("[Audio] Playback device stopped unexpectedly; will attempt recovery")
 }
 
 // NewDevicePlayer creates an audio player targeting the specified device ID (empty for system default).
@@ -128,9 +165,7 @@ func (p *DevicePlayer) initDevice(deviceIDHex string, isFallback bool) error {
 
 	callbacks := malgo.DeviceCallbacks{
 		Data: p.onAudioCallback,
-		Stop: func() {
-			// Callback when device stops
-		},
+		Stop: p.handleUnexpectedStop,
 	}
 
 	device, err := malgo.InitDevice(p.ctx.Context, deviceConfig, callbacks)
@@ -178,6 +213,8 @@ func (p *DevicePlayer) SetFallbackListener(fn func(reason string)) {
 
 // onAudioCallback handles miniaudio PCM buffer requests in the real-time audio thread.
 func (p *DevicePlayer) onAudioCallback(pOutput, pInput []byte, frameCount uint32) {
+	p.lastCallbackNano.Store(p.now().UnixNano())
+
 	numFrames := int(frameCount)
 	if numFrames <= 0 || len(pOutput) < numFrames*4 {
 		return
@@ -202,11 +239,13 @@ func (p *DevicePlayer) onAudioCallback(pOutput, pInput []byte, frameCount uint32
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	advanced := false
 	if channels == 2 {
 		for i := range numSamples {
 			if p.cursor < len(p.buffer) {
 				outSamples[i] = p.buffer[p.cursor] * vol
 				p.cursor++
+				advanced = true
 			} else {
 				outSamples[i] = 0
 			}
@@ -219,13 +258,18 @@ func (p *DevicePlayer) onAudioCallback(pOutput, pInput []byte, frameCount uint32
 				r := p.buffer[p.cursor+1]
 				outSamples[i] = 0.5 * (l + r) * vol
 				p.cursor += 2
+				advanced = true
 			case p.cursor < len(p.buffer):
 				outSamples[i] = p.buffer[p.cursor] * vol
 				p.cursor++
+				advanced = true
 			default:
 				outSamples[i] = 0
 			}
 		}
+	}
+	if advanced {
+		p.recoveryAttempts.Store(0)
 	}
 
 	// Reclaim buffer memory if all queued audio has finished playing
@@ -299,6 +343,13 @@ func (p *DevicePlayer) clearIfFinishedLocked() {
 	}
 }
 
+func (p *DevicePlayer) flushBufferLocked() {
+	p.buffer = p.buffer[:0]
+	p.cursor = 0
+	p.sentenceBoundaries = p.sentenceBoundaries[:0]
+	p.pendingBoundary = false
+}
+
 // Play queues PCM float32 samples into the player at center pan and unity gain,
 // automatically resampling if sampleRate differs from device sampleRate.
 func (p *DevicePlayer) Play(samples []float32, sampleRate int) error {
@@ -308,6 +359,17 @@ func (p *DevicePlayer) Play(samples []float32, sampleRate int) error {
 // PlayWithOptions queues mono PCM float32 samples into the player with per-utterance gain and stereo panning,
 // automatically resampling if sampleRate differs from device sampleRate.
 func (p *DevicePlayer) PlayWithOptions(samples []float32, sampleRate int, opts PlayOptions) error {
+	if p.deviceStopped.Load() && (p.ctx != nil || p.reinitFn != nil) {
+		if p.recovering.CompareAndSwap(false, true) {
+			if err := p.reinitPlaybackDevice(); err != nil {
+				log.Printf("[Audio] Playback device reinit before Play failed: %v", err)
+			} else {
+				p.deviceStopped.Store(false)
+			}
+			p.recovering.Store(false)
+		}
+	}
+
 	if sampleRate > 0 && p.sampleRate > 0 && sampleRate != int(p.sampleRate) {
 		samples = ResamplePCM(samples, sampleRate, int(p.sampleRate))
 	}
@@ -322,7 +384,11 @@ func (p *DevicePlayer) PlayWithOptions(samples []float32, sampleRate int, opts P
 	}
 
 	p.aborted.Store(false)
+	p.recoveryAttempts.Store(0)
 	p.clearIfFinishedLocked()
+	if len(p.buffer) == 0 {
+		p.playStartedNano.Store(p.now().UnixNano())
+	}
 	if p.pendingBoundary {
 		boundary := len(p.buffer)
 		if len(p.sentenceBoundaries) == 0 || p.sentenceBoundaries[len(p.sentenceBoundaries)-1] != boundary {
@@ -354,6 +420,7 @@ func (p *DevicePlayer) Pause() {
 
 // Resume unpauses audio playback from the current cursor position.
 func (p *DevicePlayer) Resume() {
+	p.playStartedNano.Store(p.now().UnixNano())
 	p.paused.Store(false)
 }
 
@@ -373,6 +440,7 @@ func (p *DevicePlayer) ResumeFromSentenceStart() {
 		p.cursor = targetBoundary
 	}
 	p.mu.Unlock()
+	p.playStartedNano.Store(p.now().UnixNano())
 	p.paused.Store(false)
 }
 
@@ -452,14 +520,100 @@ func (p *DevicePlayer) DuckMultiplier() float32 {
 	return math.Float32frombits(p.duckBits.Load())
 }
 
+func (p *DevicePlayer) reinitPlaybackDevice() error {
+	if p.reinitFn != nil {
+		return p.reinitFn()
+	}
+
+	p.mu.Lock()
+	if p.closed || p.ctx == nil {
+		p.mu.Unlock()
+		return ErrDeviceClosed
+	}
+	oldDev := p.device
+	p.device = nil
+	target := p.targetDevHex
+	p.mu.Unlock()
+
+	if oldDev != nil {
+		p.intentionalStop.Store(true)
+		_ = oldDev.Stop()
+		oldDev.Uninit()
+		p.intentionalStop.Store(false)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed || p.ctx == nil {
+		return ErrDeviceClosed
+	}
+	return p.initDevice(target, false)
+}
+
+func (p *DevicePlayer) handlePlaybackStall(stopped bool) bool {
+	if !p.recovering.CompareAndSwap(false, true) {
+		return true
+	}
+	defer p.recovering.Store(false)
+
+	attempt := p.recoveryAttempts.Add(1)
+	if attempt > 1 {
+		log.Printf("[Audio] Playback device stalled again after recovery; flushing stuck buffer to unblock queue")
+		p.mu.Lock()
+		p.flushBufferLocked()
+		p.mu.Unlock()
+		return false
+	}
+
+	log.Printf("[Audio] Playback device stalled (stopped=%v); attempting automatic recovery...", stopped)
+	if err := p.reinitPlaybackDevice(); err != nil {
+		log.Printf("[Audio] Playback device recovery failed (%v); flushing stuck buffer to unblock queue", err)
+		p.mu.Lock()
+		p.flushBufferLocked()
+		p.mu.Unlock()
+		return false
+	}
+
+	p.deviceStopped.Store(false)
+	nowNano := p.now().UnixNano()
+	p.playStartedNano.Store(nowNano)
+	p.lastCallbackNano.Store(nowNano)
+	p.notifyFallback("Audio playback device stalled; automatically reinitialized")
+	return true
+}
+
 // IsPlaying returns true if audio is actively being played from the buffer.
+// If the audio device stopped unexpectedly or callbacks have stalled while unpaused,
+// it attempts automatic recovery once and flushes the stuck buffer if recovery fails
+// or stalls again so the speech queue never deadlocks.
 func (p *DevicePlayer) IsPlaying() bool {
 	if p.aborted.Load() {
 		return false
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.cursor < len(p.buffer)
+	playing := p.cursor < len(p.buffer)
+	hasBackend := p.device != nil || p.reinitFn != nil
+	hasCustomTimeout := p.stallTimeoutDur > 0
+	p.mu.Unlock()
+	if !playing {
+		return false
+	}
+	if p.paused.Load() {
+		return true
+	}
+
+	stopped := p.deviceStopped.Load()
+	stalled := false
+	if !stopped && (hasBackend || hasCustomTimeout) {
+		refNano := max(p.lastCallbackNano.Load(), p.playStartedNano.Load())
+		if refNano > 0 && p.now().Sub(time.Unix(0, refNano)) >= p.stallTimeout() {
+			stalled = true
+		}
+	}
+	if stopped || stalled {
+		return p.handlePlaybackStall(stopped)
+	}
+	return true
 }
 
 // NewPlayer creates an audio player targeting the specified device ID with default 24000Hz Kokoro sample rate.
@@ -470,19 +624,29 @@ func NewPlayer(targetDeviceIDHex string) (*DevicePlayer, error) {
 // SwitchDevice re-initializes playback on a new device ID.
 func (p *DevicePlayer) SwitchDevice(targetDeviceIDHex string) error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	if p.closed {
+		p.mu.Unlock()
+		return ErrDeviceClosed
+	}
+	oldDev := p.device
+	p.device = nil
+	p.targetDevHex = targetDeviceIDHex
+	p.mu.Unlock()
 
+	if oldDev != nil {
+		p.intentionalStop.Store(true)
+		_ = oldDev.Stop()
+		oldDev.Uninit()
+		p.intentionalStop.Store(false)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.closed {
 		return ErrDeviceClosed
 	}
-
-	if p.device != nil {
-		_ = p.device.Stop()
-		p.device.Uninit()
-		p.device = nil
-	}
-
-	p.targetDevHex = targetDeviceIDHex
+	p.deviceStopped.Store(false)
+	p.recoveryAttempts.Store(0)
 	return p.initDevice(targetDeviceIDHex, false)
 }
 
@@ -505,19 +669,24 @@ func (p *DevicePlayer) Close() error {
 		return nil
 	}
 	p.closed = true
+	p.closedAtomic.Store(true)
+	dev := p.device
+	p.device = nil
+	ctx := p.ctx
+	p.ctx = nil
 	p.mu.Unlock()
 
 	p.Stop()
 
-	if p.device != nil {
-		_ = p.device.Stop()
-		p.device.Uninit()
-		p.device = nil
+	if dev != nil {
+		p.intentionalStop.Store(true)
+		_ = dev.Stop()
+		dev.Uninit()
+		p.intentionalStop.Store(false)
 	}
-	if p.ctx != nil {
-		_ = p.ctx.Uninit()
-		p.ctx.Free()
-		p.ctx = nil
+	if ctx != nil {
+		_ = ctx.Uninit()
+		ctx.Free()
 	}
 	return nil
 }

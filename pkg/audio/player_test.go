@@ -2,6 +2,7 @@ package audio
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -470,6 +471,202 @@ func TestCaptureMonitorOnSamplesClonesDMAFrames(t *testing.T) {
 	mon.ProcessSamples(nil, time.Now())
 	if len(received) != 1 {
 		t.Fatalf("expected empty samples not to invoke onSamples, got %d", len(received))
+	}
+}
+
+func TestPlayerStallAutoRecovery(t *testing.T) {
+	var clockMu sync.Mutex
+	curTime := time.Unix(1_700_000_000, 0)
+	nowFn := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return curTime
+	}
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		curTime = curTime.Add(d)
+		clockMu.Unlock()
+	}
+
+	var reinitCalls atomic.Int32
+	var fallbackCh = make(chan string, 1)
+
+	p := &DevicePlayer{
+		sampleRate:      24000,
+		stallTimeoutDur: 2 * time.Second,
+		nowFn:           nowFn,
+		reinitFn: func() error {
+			reinitCalls.Add(1)
+			return nil
+		},
+	}
+	p.SetVolume(1.0)
+	p.SetFallbackListener(func(reason string) {
+		select {
+		case fallbackCh <- reason:
+		default:
+		}
+	})
+
+	samples := make([]float32, 100)
+	for i := range samples {
+		samples[i] = 0.5
+	}
+	if err := p.Play(samples, 24000); err != nil {
+		t.Fatalf("Play failed: %v", err)
+	}
+
+	// Before stall timeout elapses, IsPlaying should remain true without triggering recovery
+	advance(1 * time.Second)
+	if !p.IsPlaying() {
+		t.Fatal("expected IsPlaying to be true before stall timeout")
+	}
+	if reinitCalls.Load() != 0 {
+		t.Fatalf("expected 0 reinit calls before timeout, got %d", reinitCalls.Load())
+	}
+
+	// Advance past stall timeout -> IsPlaying triggers automatic recovery once and stays true
+	advance(2 * time.Second)
+	if !p.IsPlaying() {
+		t.Fatal("expected IsPlaying to remain true after successful recovery")
+	}
+	if reinitCalls.Load() != 1 {
+		t.Fatalf("expected 1 reinit call after stall, got %d", reinitCalls.Load())
+	}
+
+	select {
+	case <-fallbackCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("expected fallback listener notification on stall recovery")
+	}
+
+	// Subsequent audio callback drains the recovered buffer to completion
+	buf := make([]byte, len(samples)*2*4)
+	p.onAudioCallback(buf, nil, uint32(len(samples)))
+	if p.IsPlaying() {
+		t.Fatal("expected IsPlaying to be false after buffer drains following recovery")
+	}
+}
+
+func TestPlayerStallFlushesOnReinitErrorAndRepeatedStall(t *testing.T) {
+	t.Run("reinit error flushes stuck buffer", func(t *testing.T) {
+		curTime := time.Unix(1_700_000_000, 0)
+		p := &DevicePlayer{
+			sampleRate:      24000,
+			stallTimeoutDur: 2 * time.Second,
+			nowFn:           func() time.Time { return curTime },
+			reinitFn: func() error {
+				return errors.New("simulated WASAPI open failure")
+			},
+		}
+		p.SetVolume(1.0)
+
+		if err := p.Play(make([]float32, 100), 24000); err != nil {
+			t.Fatalf("Play failed: %v", err)
+		}
+
+		curTime = curTime.Add(3 * time.Second)
+		if p.IsPlaying() {
+			t.Fatal("expected IsPlaying to flush buffer and return false when reinit fails")
+		}
+	})
+
+	t.Run("repeated stall after recovery flushes stuck buffer", func(t *testing.T) {
+		curTime := time.Unix(1_700_000_000, 0)
+		var reinitCalls atomic.Int32
+		p := &DevicePlayer{
+			sampleRate:      24000,
+			stallTimeoutDur: 2 * time.Second,
+			nowFn:           func() time.Time { return curTime },
+			reinitFn: func() error {
+				reinitCalls.Add(1)
+				return nil
+			},
+		}
+		p.SetVolume(1.0)
+
+		if err := p.Play(make([]float32, 100), 24000); err != nil {
+			t.Fatalf("Play failed: %v", err)
+		}
+
+		// First stall triggers reinit
+		curTime = curTime.Add(3 * time.Second)
+		if !p.IsPlaying() {
+			t.Fatal("expected IsPlaying to stay true after first recovery")
+		}
+		if reinitCalls.Load() != 1 {
+			t.Fatalf("expected 1 reinit call, got %d", reinitCalls.Load())
+		}
+
+		// Second stall without any audio callbacks must flush instead of looping forever
+		curTime = curTime.Add(3 * time.Second)
+		if p.IsPlaying() {
+			t.Fatal("expected IsPlaying to flush buffer and return false on repeated stall")
+		}
+		if reinitCalls.Load() != 1 {
+			t.Fatalf("expected no second reinit attempt, got %d", reinitCalls.Load())
+		}
+	})
+}
+
+func TestPlayerUnexpectedStopCallbackAndPausedNoFalseStall(t *testing.T) {
+	curTime := time.Unix(1_700_000_000, 0)
+	var reinitCalls atomic.Int32
+	p := &DevicePlayer{
+		sampleRate:      24000,
+		stallTimeoutDur: 2 * time.Second,
+		nowFn:           func() time.Time { return curTime },
+		reinitFn: func() error {
+			reinitCalls.Add(1)
+			return nil
+		},
+	}
+	p.SetVolume(1.0)
+
+	if err := p.Play(make([]float32, 100), 24000); err != nil {
+		t.Fatalf("Play failed: %v", err)
+	}
+
+	// Paused for much longer than stallTimeoutDur must NOT trigger stall recovery
+	p.Pause()
+	curTime = curTime.Add(1 * time.Minute)
+	if !p.IsPlaying() {
+		t.Fatal("expected IsPlaying to remain true while paused")
+	}
+	if reinitCalls.Load() != 0 {
+		t.Fatalf("expected 0 reinit calls while paused, got %d", reinitCalls.Load())
+	}
+
+	// Resume resets playStartedNano so it does not immediately false-trigger a stall
+	p.Resume()
+	if !p.IsPlaying() {
+		t.Fatal("expected IsPlaying to be true right after Resume")
+	}
+	if reinitCalls.Load() != 0 {
+		t.Fatalf("expected 0 reinit calls right after Resume, got %d", reinitCalls.Load())
+	}
+
+	// Intentional stop does not mark deviceStopped
+	p.intentionalStop.Store(true)
+	p.handleUnexpectedStop()
+	p.intentionalStop.Store(false)
+	if p.deviceStopped.Load() {
+		t.Fatal("expected intentional stop not to set deviceStopped")
+	}
+
+	// Unexpected stop callback sets deviceStopped and triggers recovery on IsPlaying
+	p.handleUnexpectedStop()
+	if !p.deviceStopped.Load() {
+		t.Fatal("expected handleUnexpectedStop to set deviceStopped")
+	}
+	if !p.IsPlaying() {
+		t.Fatal("expected IsPlaying to recover and remain true after unexpected stop")
+	}
+	if reinitCalls.Load() != 1 {
+		t.Fatalf("expected 1 reinit call after unexpected stop, got %d", reinitCalls.Load())
+	}
+	if p.deviceStopped.Load() {
+		t.Fatal("expected deviceStopped to be cleared after successful recovery")
 	}
 }
 
