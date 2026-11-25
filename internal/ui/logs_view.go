@@ -2204,7 +2204,12 @@ func (v *LogsView) renderEntries() {
 					if cached.entry.Spoken != entry.Spoken || cached.entry.Outcome != entry.Outcome || cached.entry.OutcomeDetail != entry.OutcomeDetail || cached.entry.Speed != entry.Speed {
 						cached.entry = entry
 						if cached.rowCols != nil && len(cached.rowCols.Objects) > 4 {
-							cached.rowCols.Objects[4] = v.ttsStatusIcons(entry)
+							ttsCell := v.ttsStatusIcons(entry)
+							cached.ttsStatusCell = ttsCell
+							cached.rowCols.Objects[4] = ttsCell
+							if cached.rowLayout != nil {
+								cached.rowLayout.Invalidate()
+							}
 							cached.rowCols.Refresh()
 						}
 					}

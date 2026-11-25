@@ -5,8 +5,10 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/widget"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
@@ -201,5 +203,133 @@ func TestDashboardActivityClickableProfile(t *testing.T) {
 	}
 	if userLbl.Cursor() != desktop.PointerCursor {
 		t.Fatalf("expected PointerCursor for kick activity row")
+	}
+}
+
+func TestLogTableLayoutSwappedChildAndScaleChange(t *testing.T) {
+	testApp := test.NewApp()
+	defer testApp.Quit()
+
+	scale := float32(1.0)
+	const rowWidth float32 = 1000
+	const rowHeight float32 = 36
+
+	layout := &logTableLayout{
+		getWidth: func() float32 { return rowWidth },
+		getScale: func() float32 { return scale },
+	}
+
+	ttsOrig := container.NewCenter(container.NewHBox(widget.NewLabel("A")))
+	rowCols := container.New(layout,
+		widget.NewLabel("time"),
+		widget.NewLabel("svc"),
+		widget.NewLabel("user"),
+		widget.NewLabel("msg"),
+		ttsOrig,
+		widget.NewLabel("mod"),
+	)
+	rowCols.Resize(fyne.NewSize(rowWidth, rowHeight))
+
+	expectedTTSX := func(s float32) float32 {
+		msgW := computeMsgColWidth(rowWidth, s)
+		return (colWidthTime+colWidthService+colWidthUser+4*colGap)*s + msgW
+	}
+
+	wantX := expectedTTSX(1.0)
+	if got := rowCols.Objects[4].Position(); got.X != wantX || got.Y != 0 {
+		t.Fatalf("initial TTS column pos = %v, want (%v, 0)", got, wantX)
+	}
+	if got := rowCols.Objects[4].Size(); got.Width != colWidthTTSStatus || got.Height != rowHeight {
+		t.Fatalf("initial TTS column size = %v, want (%v, %v)", got, colWidthTTSStatus, rowHeight)
+	}
+
+	// Swap Objects[4] without calling layout.Invalidate(), then Refresh().
+	ttsSwapped := container.NewCenter(container.NewHBox(widget.NewLabel("B")))
+	rowCols.Objects[4] = ttsSwapped
+	rowCols.Refresh()
+
+	if got := rowCols.Objects[4].Position(); got.X != wantX || got.Y != 0 {
+		t.Fatalf("after swap without Invalidate, TTS column pos = %v, want (%v, 0)", got, wantX)
+	}
+	if got := rowCols.Objects[4].Size(); got.Width != colWidthTTSStatus || got.Height != rowHeight {
+		t.Fatalf("after swap without Invalidate, TTS column size = %v, want (%v, %v)", got, colWidthTTSStatus, rowHeight)
+	}
+
+	// Change scale, call MinSize() first, then Layout() with the exact same outer size.
+	scale = 1.25
+	_ = layout.MinSize(rowCols.Objects)
+	layout.Layout(rowCols.Objects, fyne.NewSize(rowWidth, rowHeight))
+
+	wantScaledX := expectedTTSX(1.25)
+	wantScaledW := colWidthTTSStatus * 1.25
+	if got := rowCols.Objects[4].Position(); got.X != wantScaledX || got.Y != 0 {
+		t.Fatalf("after scale change + MinSize, TTS column pos = %v, want (%v, 0)", got, wantScaledX)
+	}
+	if got := rowCols.Objects[4].Size(); got.Width != wantScaledW || got.Height != rowHeight {
+		t.Fatalf("after scale change + MinSize, TTS column size = %v, want (%v, %v)", got, wantScaledW, rowHeight)
+	}
+}
+
+func TestLogsViewInPlaceTTSStatusUpdateMaintainsColumnPosition(t *testing.T) {
+	testApp := test.NewApp()
+	defer testApp.Quit()
+
+	w := testApp.NewWindow("Test Logs")
+	defer w.Close()
+
+	v := NewLogsView(w, nil)
+	w.SetContent(v.listBox)
+	w.Resize(fyne.NewSize(1000, 600))
+
+	v.mu.Lock()
+	v.entries = []eventlog.Entry{
+		{
+			ID:        "evt-tts-1",
+			CreatedAt: time.Now(),
+			Platform:  "twitch",
+			UserName:  "alice",
+			RawText:   "hello",
+			Spoken:    false,
+		},
+	}
+	v.totalCount = 1
+	v.mu.Unlock()
+
+	v.renderEntries()
+
+	v.mu.Lock()
+	cached := v.rowCache["evt-tts-1"]
+	v.mu.Unlock()
+	if cached == nil || cached.rowCols == nil || len(cached.rowCols.Objects) <= 4 {
+		t.Fatalf("expected cached row with >= 5 columns, got %+v", cached)
+	}
+
+	origObj := cached.rowCols.Objects[4]
+	origPos := origObj.Position()
+	origSize := origObj.Size()
+	if origPos.X <= 0 || origSize.Width <= 0 {
+		t.Fatalf("expected initial TTS column positioned and sized > 0, got pos=%v size=%v", origPos, origSize)
+	}
+
+	// Simulate LiveUpdateOutcome changing Spoken/Outcome and triggering renderEntries without window resize.
+	v.mu.Lock()
+	v.entries[0].Spoken = true
+	v.entries[0].Outcome = "spoken"
+	v.mu.Unlock()
+
+	v.renderEntries()
+
+	updatedObj := cached.rowCols.Objects[4]
+	if updatedObj == origObj {
+		t.Fatalf("expected Objects[4] to be replaced on TTS outcome update")
+	}
+	if cached.ttsStatusCell != updatedObj {
+		t.Fatalf("expected cached.ttsStatusCell to match Objects[4]")
+	}
+	if got := updatedObj.Position(); got != origPos {
+		t.Fatalf("updated TTS column pos = %v, want %v", got, origPos)
+	}
+	if got := updatedObj.Size(); got != origSize {
+		t.Fatalf("updated TTS column size = %v, want %v", got, origSize)
 	}
 }
