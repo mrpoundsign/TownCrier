@@ -21,6 +21,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/internal/bot/obs"
 	"github.com/mrpoundsign/TownCrier/internal/pluginhost"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
 
 // BotTabView provides the UI for Streamer.bot-class Bot Automation (Commands, Triggers,
@@ -116,9 +117,9 @@ func (v *BotTabView) Build() fyne.CanvasObject {
 	v.obsStatusLbl = widget.NewLabelWithStyle("OBS: Disconnected", fyne.TextAlignLeading, fyne.TextStyle{})
 
 	subTabs := container.NewAppTabs(
-		container.NewTabItemWithIcon("Commands", theme.MailReplyAllIcon(), v.buildCommandsAndTriggersTab()),
+		container.NewTabItemWithIcon("Commands & Voice", theme.MailReplyAllIcon(), v.buildCommandsAndVoiceTab()),
 		container.NewTabItemWithIcon("Actions & Sub-Actions", theme.MediaPlayIcon(), v.buildActionsTab()),
-		container.NewTabItemWithIcon("Timers & Voice", theme.HistoryIcon(), v.buildTimersAndVoiceTab()),
+		container.NewTabItemWithIcon("Triggers & Timers", theme.HistoryIcon(), v.buildTriggersAndTimersTab()),
 		container.NewTabItemWithIcon("Queues & Variables", theme.StorageIcon(), v.buildQueuesAndVarsTab()),
 		container.NewTabItemWithIcon("OBS Studio", theme.ComputerIcon(), v.buildOBSTab()),
 	)
@@ -187,12 +188,26 @@ func (v *BotTabView) updateOBSStatusBadge(st obs.ClientStatus) {
 func (v *BotTabView) actionDisplayMap(b config.BotAutomationConfig) (labels []string, labelToID map[string]string, idToLabel map[string]string) {
 	labelToID = make(map[string]string, len(b.Actions))
 	idToLabel = make(map[string]string, len(b.Actions))
-	for _, a := range b.Actions {
+
+	nameCounts := make(map[string]int, len(b.Actions))
+	baseNames := make([]string, len(b.Actions))
+	for i, a := range b.Actions {
 		name := strings.TrimSpace(a.Name)
 		if name == "" {
-			name = a.ID
+			name = "Untitled Action"
 		}
-		lbl := fmt.Sprintf("%s (%s)", name, a.ID)
+		baseNames[i] = name
+		nameCounts[name]++
+	}
+
+	seenCounts := make(map[string]int, len(b.Actions))
+	for i, a := range b.Actions {
+		name := baseNames[i]
+		lbl := name
+		if nameCounts[name] > 1 {
+			seenCounts[name]++
+			lbl = fmt.Sprintf("%s (#%d)", name, seenCounts[name])
+		}
 		labels = append(labels, lbl)
 		labelToID[lbl] = a.ID
 		idToLabel[a.ID] = lbl
@@ -206,7 +221,7 @@ func (v *BotTabView) actionName(b config.BotAutomationConfig, actionID string) s
 			if strings.TrimSpace(a.Name) != "" {
 				return a.Name
 			}
-			return a.ID
+			return "Untitled Action"
 		}
 	}
 	if actionID == "" {
@@ -215,34 +230,237 @@ func (v *BotTabView) actionName(b config.BotAutomationConfig, actionID string) s
 	return actionID
 }
 
-// --- Sub-tab 1: Commands & Triggers ---
+func (v *BotTabView) queueDisplayMap(b config.BotAutomationConfig) (labels []string, labelToID map[string]string, idToLabel map[string]string) {
+	labelToID = make(map[string]string, len(b.Queues))
+	idToLabel = make(map[string]string, len(b.Queues))
 
-func (v *BotTabView) buildCommandsAndTriggersTab() fyne.CanvasObject {
+	nameCounts := make(map[string]int, len(b.Queues))
+	baseNames := make([]string, len(b.Queues))
+	for i, q := range b.Queues {
+		name := strings.TrimSpace(q.Name)
+		if name == "" {
+			name = q.ID
+		}
+		baseNames[i] = name
+		nameCounts[name]++
+	}
+
+	seenCounts := make(map[string]int, len(b.Queues))
+	for i, q := range b.Queues {
+		name := baseNames[i]
+		lbl := name
+		if nameCounts[name] > 1 {
+			seenCounts[name]++
+			lbl = fmt.Sprintf("%s (#%d)", name, seenCounts[name])
+		}
+		labels = append(labels, lbl)
+		labelToID[lbl] = q.ID
+		idToLabel[q.ID] = lbl
+	}
+	return labels, labelToID, idToLabel
+}
+
+func (v *BotTabView) queueName(b config.BotAutomationConfig, queueID string) string {
+	if strings.TrimSpace(queueID) == "" {
+		queueID = "default"
+	}
+	for _, q := range b.Queues {
+		if q.ID == queueID {
+			if strings.TrimSpace(q.Name) != "" {
+				return q.Name
+			}
+			return q.ID
+		}
+	}
+	return queueID
+}
+
+func (v *BotTabView) pluginDisplayMap(savedUUID string) (labels []string, labelToUUID map[string]string, uuidToLabel map[string]string, byUUID map[string]pluginhost.PluginStatus) {
+	labelToUUID = make(map[string]string)
+	uuidToLabel = make(map[string]string)
+	byUUID = make(map[string]pluginhost.PluginStatus)
+
+	if v.session != nil && v.session.PluginManager() != nil {
+		plugins := v.session.PluginManager().Plugins()
+		nameCounts := make(map[string]int, len(plugins))
+		for _, p := range plugins {
+			if p.State == pluginhost.StatusDisabled {
+				continue
+			}
+			name := strings.TrimSpace(p.Name)
+			if name == "" {
+				name = p.UUID
+			}
+			nameCounts[name]++
+		}
+		seen := make(map[string]int, len(plugins))
+		for _, p := range plugins {
+			if p.State == pluginhost.StatusDisabled {
+				continue
+			}
+			byUUID[p.UUID] = p
+			name := strings.TrimSpace(p.Name)
+			if name == "" {
+				name = p.UUID
+			}
+			lbl := name
+			if nameCounts[name] > 1 {
+				seen[name]++
+				lbl = fmt.Sprintf("%s (#%d)", name, seen[name])
+			}
+			labels = append(labels, lbl)
+			labelToUUID[lbl] = p.UUID
+			uuidToLabel[p.UUID] = lbl
+		}
+	}
+
+	if clean := strings.TrimSpace(savedUUID); clean != "" {
+		if _, ok := uuidToLabel[clean]; !ok {
+			lbl := fmt.Sprintf("Offline Plugin (%s)", clean)
+			labels = append(labels, lbl)
+			labelToUUID[lbl] = clean
+			uuidToLabel[clean] = lbl
+		}
+	}
+	return labels, labelToUUID, uuidToLabel, byUUID
+}
+
+func pluginActionDisplayMap(p *pluginhost.PluginStatus, savedActionID string) (labels []string, labelToID map[string]string, idToLabel map[string]string, descByID map[string]string) {
+	labelToID = make(map[string]string)
+	idToLabel = make(map[string]string)
+	descByID = make(map[string]string)
+
+	if p != nil {
+		nameCounts := make(map[string]int, len(p.Actions))
+		for _, ad := range p.Actions {
+			name := strings.TrimSpace(ad.GetName())
+			if name == "" {
+				name = ad.GetId()
+			}
+			nameCounts[name]++
+		}
+		seen := make(map[string]int, len(p.Actions))
+		for _, ad := range p.Actions {
+			name := strings.TrimSpace(ad.GetName())
+			if name == "" {
+				name = ad.GetId()
+			}
+			lbl := name
+			if nameCounts[name] > 1 {
+				seen[name]++
+				lbl = fmt.Sprintf("%s (#%d)", name, seen[name])
+			}
+			labels = append(labels, lbl)
+			labelToID[lbl] = ad.GetId()
+			idToLabel[ad.GetId()] = lbl
+			descByID[ad.GetId()] = strings.TrimSpace(ad.GetDescription())
+		}
+	}
+
+	if clean := strings.TrimSpace(savedActionID); clean != "" {
+		if _, ok := idToLabel[clean]; !ok {
+			lbl := clean + " (Offline)"
+			labels = append(labels, lbl)
+			labelToID[lbl] = clean
+			idToLabel[clean] = lbl
+		}
+	}
+	return labels, labelToID, idToLabel, descByID
+}
+
+func (v *BotTabView) pluginName(uuid string) string {
+	clean := strings.TrimSpace(uuid)
+	if clean == "" {
+		return "(none)"
+	}
+	if v.session != nil && v.session.PluginManager() != nil {
+		for _, p := range v.session.PluginManager().Plugins() {
+			if p.UUID == clean {
+				if strings.TrimSpace(p.Name) != "" {
+					return p.Name
+				}
+				return p.UUID
+			}
+		}
+	}
+	return clean
+}
+
+func (v *BotTabView) pluginActionName(uuid, actionID string) string {
+	cleanUUID := strings.TrimSpace(uuid)
+	cleanAct := strings.TrimSpace(actionID)
+	if cleanAct == "" {
+		return "(none)"
+	}
+	if v.session != nil && v.session.PluginManager() != nil {
+		for _, p := range v.session.PluginManager().Plugins() {
+			if p.UUID == cleanUUID {
+				for _, ad := range p.Actions {
+					if ad.GetId() == cleanAct {
+						if strings.TrimSpace(ad.GetName()) != "" {
+							return ad.GetName()
+						}
+						return ad.GetId()
+					}
+				}
+			}
+		}
+	}
+	return cleanAct
+}
+
+func (v *BotTabView) pluginTriggerName(triggerID string) string {
+	clean := strings.TrimSpace(triggerID)
+	if clean == "" {
+		return "(none)"
+	}
+	if v.session != nil && v.session.PluginManager() != nil {
+		for _, p := range v.session.PluginManager().Plugins() {
+			for _, td := range p.Triggers {
+				if td.GetId() == clean {
+					name := strings.TrimSpace(td.GetName())
+					if name == "" {
+						name = td.GetId()
+					}
+					if strings.TrimSpace(p.Name) != "" {
+						return p.Name + " — " + name
+					}
+					return name
+				}
+			}
+		}
+	}
+	return clean
+}
+
+// --- Sub-tab 1: Commands & Voice ---
+
+func (v *BotTabView) buildCommandsAndVoiceTab() fyne.CanvasObject {
 	v.commandsBox = container.NewVBox()
-	v.triggersBox = container.NewVBox()
+	v.voiceCmdsBox = container.NewVBox()
 
 	addCmdBtn := widget.NewButtonWithIcon("Add Command", theme.ContentAddIcon(), func() {
 		v.openCommandDialog(-1)
 	})
 	addCmdBtn.Importance = widget.HighImportance
 
-	addTrigBtn := widget.NewButtonWithIcon("Add Trigger", theme.ContentAddIcon(), func() {
-		v.openTriggerDialog(-1)
+	addVoiceBtn := widget.NewButtonWithIcon("Add Voice Command", theme.ContentAddIcon(), func() {
+		v.openVoiceCmdDialog(-1)
 	})
-	addTrigBtn.Importance = widget.HighImportance
+	addVoiceBtn.Importance = widget.HighImportance
 
 	cmdsCard := widget.NewCard(
 		"Chat Commands",
 		"Respond to !commands across connected platforms (raw Event Bus before TTS filters)",
 		container.NewVBox(container.NewHBox(addCmdBtn), v.commandsBox),
 	)
-	trigsCard := widget.NewCard(
-		"Event Triggers",
-		"React to stream events (follow/sub/cheer/raid/redemption), plugin triggers, or OBS events",
-		container.NewVBox(container.NewHBox(addTrigBtn), v.triggersBox),
+	voiceCard := widget.NewCard(
+		"Whisper Voice Commands",
+		"Trigger actions when local Whisper STT hears a spoken phrase on your configured microphone",
+		container.NewVBox(container.NewHBox(addVoiceBtn), v.voiceCmdsBox),
 	)
 
-	return newPanelVScroll(container.NewVBox(cmdsCard, trigsCard))
+	return newPanelVScroll(container.NewVBox(cmdsCard, voiceCard))
 }
 
 func (v *BotTabView) refreshCommandsAndTriggers(b config.BotAutomationConfig) {
@@ -254,10 +472,7 @@ func (v *BotTabView) refreshCommandsAndTriggers(b config.BotAutomationConfig) {
 		for i, cmd := range b.Commands {
 			idx := i
 			c := cmd
-			mode := c.MatchMode
-			if mode == "" {
-				mode = "prefix"
-			}
+			mode := botOptionLabel(botCommandMatchModeOptions, c.MatchMode)
 			title := fmt.Sprintf("%s  [%s • %s]", c.Trigger, c.Name, mode)
 			var details []string
 			details = append(details, "Action: "+v.actionName(b, c.ActionID))
@@ -313,7 +528,11 @@ func (v *BotTabView) refreshCommandsAndTriggers(b config.BotAutomationConfig) {
 		for i, tr := range b.Triggers {
 			idx := i
 			t := tr
-			lbl := fmt.Sprintf("%s  (%s: %s → %s)", t.Name, t.Source, t.EventKind, v.actionName(b, t.ActionID))
+			eventLabel := t.EventKind
+			if strings.EqualFold(strings.TrimSpace(t.Source), "plugin_trigger") {
+				eventLabel = v.pluginTriggerName(t.EventKind)
+			}
+			lbl := fmt.Sprintf("%s  (%s: %s → %s)", t.Name, botOptionLabel(botTriggerSourceOptions, t.Source), eventLabel, v.actionName(b, t.ActionID))
 			enabledChk := widget.NewCheck("Enabled", func(checked bool) {
 				if v.initializing {
 					return
@@ -366,12 +585,8 @@ func (v *BotTabView) openCommandDialog(idx int) {
 	aliasesEntry := widget.NewEntry()
 	aliasesEntry.SetPlaceHolder("!shoutout, !sh")
 	aliasesEntry.SetText(strings.Join(cur.Aliases, ", "))
-	modeSelect := widget.NewSelect([]string{"prefix", "exact", "regex"}, nil)
-	if cur.MatchMode == "" {
-		modeSelect.SetSelected("prefix")
-	} else {
-		modeSelect.SetSelected(cur.MatchMode)
-	}
+	modeSelect := widget.NewSelect(botOptionLabels(botCommandMatchModeOptions), nil)
+	modeSelect.SetSelected(botOptionLabel(botCommandMatchModeOptions, cur.MatchMode))
 	caseChk := widget.NewCheck("Case Sensitive", nil)
 	caseChk.SetChecked(cur.CaseSensitive)
 	consumeChk := widget.NewCheck("Suppress TTS Speech (Consume Command)", nil)
@@ -432,7 +647,7 @@ func (v *BotTabView) openCommandDialog(idx int) {
 			cur.Name = strings.TrimSpace(trigEntry.Text)
 		}
 		cur.Trigger = strings.TrimSpace(trigEntry.Text)
-		cur.MatchMode = modeSelect.Selected
+		cur.MatchMode = botOptionKey(botCommandMatchModeOptions, modeSelect.Selected)
 		cur.Aliases = splitCommaTrim(aliasesEntry.Text)
 		cur.CaseSensitive = caseChk.Checked
 		cur.ConsumeTTS = consumeChk.Checked
@@ -467,12 +682,8 @@ func (v *BotTabView) openTriggerDialog(idx int) {
 
 	nameEntry := widget.NewEntry()
 	nameEntry.SetText(cur.Name)
-	sourceSelect := widget.NewSelect([]string{"platform_event", "plugin_trigger", "obs_event"}, nil)
-	if cur.Source == "" {
-		sourceSelect.SetSelected("platform_event")
-	} else {
-		sourceSelect.SetSelected(cur.Source)
-	}
+	sourceSelect := widget.NewSelect(botOptionLabels(botTriggerSourceOptions), nil)
+	sourceSelect.SetSelected(botOptionLabel(botTriggerSourceOptions, cur.Source))
 	kindEntry := widget.NewEntry()
 	kindEntry.SetPlaceHolder("follow, sub, cheer, raid, redemption, or plugin/OBS event ID")
 	kindEntry.SetText(cur.EventKind)
@@ -480,22 +691,31 @@ func (v *BotTabView) openTriggerDialog(idx int) {
 	// Plugin trigger quick-picker if plugins export custom triggers.
 	var trigOpts []string
 	trigOptToID := make(map[string]string)
+	trigIDToOpt := make(map[string]string)
 	if v.session != nil && v.session.PluginManager() != nil {
 		for _, p := range v.session.PluginManager().Plugins() {
 			for _, td := range p.Triggers {
-				lbl := fmt.Sprintf("%s: %s (%s)", p.Name, td.GetName(), td.GetId())
+				tName := strings.TrimSpace(td.GetName())
+				if tName == "" {
+					tName = td.GetId()
+				}
+				lbl := fmt.Sprintf("%s — %s", p.Name, tName)
 				trigOpts = append(trigOpts, lbl)
 				trigOptToID[lbl] = td.GetId()
+				trigIDToOpt[td.GetId()] = lbl
 			}
 		}
 	}
 	pluginTrigPicker := widget.NewSelect(trigOpts, func(sel string) {
 		if id, ok := trigOptToID[sel]; ok {
 			kindEntry.SetText(id)
-			sourceSelect.SetSelected("plugin_trigger")
+			sourceSelect.SetSelected(botOptionLabel(botTriggerSourceOptions, "plugin_trigger"))
 		}
 	})
 	pluginTrigPicker.PlaceHolder = "Optional: pick exported plugin trigger..."
+	if lbl, ok := trigIDToOpt[cur.EventKind]; ok {
+		pluginTrigPicker.SetSelected(lbl)
+	}
 	if len(trigOpts) == 0 {
 		pluginTrigPicker.Disable()
 	}
@@ -547,7 +767,7 @@ func (v *BotTabView) openTriggerDialog(idx int) {
 		if cur.Name == "" {
 			cur.Name = strings.TrimSpace(kindEntry.Text)
 		}
-		cur.Source = sourceSelect.Selected
+		cur.Source = botOptionKey(botTriggerSourceOptions, sourceSelect.Selected)
 		cur.EventKind = strings.TrimSpace(kindEntry.Text)
 		cur.Platform = strings.TrimSpace(platEntry.Text)
 		cur.MinAmount = minAmt
@@ -669,13 +889,13 @@ func (v *BotTabView) refreshActions(b config.BotAutomationConfig) {
 				})
 			})
 
-			lbl := widget.NewLabel(fmt.Sprintf("%d. %s", stepIdx+1, summarizeSubAction(step)))
+			lbl := widget.NewLabel(fmt.Sprintf("%d. %s", stepIdx+1, v.summarizeSubAction(b, step)))
 			lbl.Wrapping = fyne.TextWrapWord
 			subRows = append(subRows, container.NewHBox(lbl, layout.NewSpacer(), upBtn, downBtn, editStepBtn, delStepBtn))
 		}
 
 		hdr := container.NewHBox(
-			widget.NewLabelWithStyle(fmt.Sprintf("%s  (queue: %s, id: %s)", a.Name, qName, a.ID), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			widget.NewLabelWithStyle(fmt.Sprintf("%s  (Queue: %s)", a.Name, v.queueName(b, qName)), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 			layout.NewSpacer(),
 			enabledChk,
 			testBtn,
@@ -690,38 +910,55 @@ func (v *BotTabView) refreshActions(b config.BotAutomationConfig) {
 	v.actionsBox.Refresh()
 }
 
-func summarizeSubAction(sa config.BotSubActionDef) string {
+func (v *BotTabView) summarizeSubAction(b config.BotAutomationConfig, sa config.BotSubActionDef) string {
 	switch sa.Kind {
 	case "speak_tts":
+		if strings.TrimSpace(sa.VoiceID) != "" {
+			return fmt.Sprintf("Speak TTS (%s): %q", tts.VoiceDisplayName(sa.VoiceID), sa.Text)
+		}
 		return fmt.Sprintf("Speak TTS: %q", sa.Text)
 	case "send_chat":
 		return fmt.Sprintf("Send Chat [%s]: %q", sa.Platform, sa.Text)
 	case "play_sound":
 		return "Play Sound: " + sa.SoundPath
 	case "moderate":
-		return fmt.Sprintf("Moderate %s: %s %s", sa.Platform, sa.Operation, sa.Target)
+		return fmt.Sprintf("Moderate %s: %s %s", sa.Platform, botOptionLabel(botModerationOpOptions, sa.Operation), sa.Target)
 	case "set_var":
-		return fmt.Sprintf("Set Var (%s) %s = %q", sa.Scope, sa.Key, sa.Value)
+		return fmt.Sprintf("Set Var (%s) %s = %q", botOptionLabel(botVarScopeOptions, sa.Scope), sa.Key, sa.Value)
 	case "inc_var":
-		return fmt.Sprintf("Inc Var (%s) %s += %g", sa.Scope, sa.Key, sa.Delta)
+		return fmt.Sprintf("Inc Var (%s) %s += %g", botOptionLabel(botVarScopeOptions, sa.Scope), sa.Key, sa.Delta)
 	case "if_else":
-		return fmt.Sprintf("If %q %s %q", sa.LHS, sa.Operator, sa.RHS)
+		return fmt.Sprintf("If %q %s %q", sa.LHS, botOptionLabel(botConditionOperatorOptions, sa.Operator), sa.RHS)
 	case "delay":
-		return fmt.Sprintf("Delay %d ms", sa.DelayMs)
+		return fmt.Sprintf("Wait %d ms", sa.DelayMs)
 	case "http_request":
 		return fmt.Sprintf("HTTP %s %s", sa.Method, sa.URL)
 	case "run_action":
-		return "Run Action → " + sa.TargetActionID
+		return "Run Action → " + v.actionName(b, sa.TargetActionID)
 	case "overlay_broadcast":
-		return fmt.Sprintf("Overlay %s:%s", sa.PluginUUID, sa.EventName)
+		return fmt.Sprintf("Overlay Event (%s): %s", v.pluginName(sa.PluginUUID), sa.EventName)
 	case "obs":
-		return fmt.Sprintf("OBS %s (scene=%s src=%s)", sa.OBSOperation, sa.OBSScene, sa.OBSSource)
+		opLbl := botOptionLabel(botOBSOperationOptions, sa.OBSOperation)
+		var details []string
+		if s := strings.TrimSpace(sa.OBSScene); s != "" {
+			details = append(details, "scene="+s)
+		}
+		if s := strings.TrimSpace(sa.OBSSource); s != "" {
+			details = append(details, "src="+s)
+		}
+		if s := strings.TrimSpace(sa.OBSInput); s != "" {
+			details = append(details, "input="+s)
+		}
+		if len(details) > 0 {
+			return fmt.Sprintf("OBS: %s (%s)", opLbl, strings.Join(details, " "))
+		}
+		return "OBS: " + opLbl
 	case "plugin_action":
-		return fmt.Sprintf("Plugin Action %s :: %s", sa.PluginUUID, sa.PluginActionID)
+		return fmt.Sprintf("Plugin Action: %s — %s", v.pluginName(sa.PluginUUID), v.pluginActionName(sa.PluginUUID, sa.PluginActionID))
 	case "break":
-		return "Break"
+		return "Stop Action (Break)"
 	default:
-		return sa.Kind
+		return botOptionLabel(botSubActionKindOptions, sa.Kind)
 	}
 }
 
@@ -741,18 +978,12 @@ func (v *BotTabView) openActionDialog(idx int) {
 	nameEntry := widget.NewEntry()
 	nameEntry.SetText(cur.Name)
 
-	qOpts := make([]string, 0, len(cfg.Queues))
-	for _, q := range cfg.Queues {
-		qOpts = append(qOpts, q.ID)
-	}
-	if len(qOpts) == 0 {
-		qOpts = []string{"default", "concurrent"}
-	}
-	qSelect := widget.NewSelect(qOpts, nil)
-	if cur.QueueID != "" && slices.Contains(qOpts, cur.QueueID) {
-		qSelect.SetSelected(cur.QueueID)
-	} else {
-		qSelect.SetSelected(qOpts[0])
+	qLabels, qLabelToID, qIDToLabel := v.queueDisplayMap(cfg)
+	qSelect := widget.NewSelect(qLabels, nil)
+	if lbl, ok := qIDToLabel[cur.QueueID]; ok {
+		qSelect.SetSelected(lbl)
+	} else if len(qLabels) > 0 {
+		qSelect.SetSelected(qLabels[0])
 	}
 
 	form := widget.NewForm(
@@ -769,9 +1000,11 @@ func (v *BotTabView) openActionDialog(idx int) {
 		}
 		cur.Name = strings.TrimSpace(nameEntry.Text)
 		if cur.Name == "" {
-			cur.Name = cur.ID
+			cur.Name = "Untitled Action"
 		}
-		cur.QueueID = qSelect.Selected
+		if qID, ok := qLabelToID[qSelect.Selected]; ok {
+			cur.QueueID = qID
+		}
 		_ = v.updateBotConfig(func(b *config.BotAutomationConfig) {
 			if editing && idx < len(b.Actions) {
 				b.Actions[idx] = cur
@@ -798,37 +1031,62 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		cur = config.BotSubActionDef{ID: newBotItemID("step"), Kind: "send_chat", Enabled: true}
 	}
 
-	kinds := []string{
-		"send_chat",
-		"speak_tts",
-		"play_sound",
-		"moderate",
-		"set_var",
-		"inc_var",
-		"delay",
-		"http_request",
-		"obs",
-		"plugin_action",
-		"overlay_broadcast",
-		"run_action",
-		"if_else",
-		"break",
-	}
-
-	kindSelect := widget.NewSelect(kinds, nil)
-	kindSelect.SetSelected(cur.Kind)
+	kindSelect := widget.NewSelect(botOptionLabels(botSubActionKindOptions), nil)
+	kindSelect.SetSelected(botOptionLabel(botSubActionKindOptions, cur.Kind))
 	if kindSelect.Selected == "" {
-		kindSelect.SetSelected("send_chat")
+		kindSelect.SetSelected(botOptionLabel(botSubActionKindOptions, "send_chat"))
 	}
 
 	textEntry := widget.NewMultiLineEntry()
 	textEntry.SetMinRowsVisible(2)
 	textEntry.SetText(cur.Text)
-	if cur.SoundPath != "" && textEntry.Text == "" {
-		textEntry.SetText(cur.SoundPath)
+
+	soundPathEntry := widget.NewEntry()
+	soundPathEntry.SetPlaceHolder("Path to .wav or .mp3 audio file")
+	soundPathEntry.SetText(cur.SoundPath)
+
+	eventNameEntry := widget.NewEntry()
+	eventNameEntry.SetPlaceHolder("e.g. alert_triggered")
+	eventNameEntry.SetText(cur.EventName)
+
+	payloadEntry := widget.NewMultiLineEntry()
+	payloadEntry.SetMinRowsVisible(2)
+	payloadEntry.SetPlaceHolder(`e.g. {"user":"%user%"}`)
+	payloadEntry.SetText(cur.Payload)
+
+	selectedVoiceID := strings.TrimSpace(cur.VoiceID)
+	selectedSpeed := cur.Speed
+	voiceSummaryLbl := widget.NewLabel("")
+	voiceSummaryLbl.Truncation = fyne.TextTruncateEllipsis
+	updateVoiceSummary := func() {
+		if selectedVoiceID == "" {
+			voiceSummaryLbl.SetText("Global Default Voice")
+		} else {
+			voiceSummaryLbl.SetText(FormatVoiceSpeedSummary(selectedVoiceID, selectedSpeed))
+		}
+		voiceSummaryLbl.Refresh()
 	}
-	voiceEntry := widget.NewEntry()
-	voiceEntry.SetText(cur.VoiceID)
+	updateVoiceSummary()
+
+	chooseVoiceBtn := widget.NewButtonWithIcon("Choose Voice…", theme.VolumeUpIcon(), func() {
+		initVoice := selectedVoiceID
+		initSpeed := selectedSpeed
+		if initSpeed <= 0 {
+			initSpeed = 1.0
+		}
+		ShowVoiceSpeedDialog(v.window, v.session, "Select Sub-Action Voice", initVoice, initSpeed, func(newVoiceID string, newSpeed float32) {
+			selectedVoiceID = newVoiceID
+			selectedSpeed = newSpeed
+			updateVoiceSummary()
+		}, v.onStatus)
+	})
+	clearVoiceBtn := widget.NewButton("Use Default", func() {
+		selectedVoiceID = ""
+		selectedSpeed = 0
+		updateVoiceSummary()
+	})
+	voicePickerRow := container.NewBorder(nil, nil, nil, container.NewHBox(chooseVoiceBtn, clearVoiceBtn), voiceSummaryLbl)
+
 	platEntry := widget.NewEntry()
 	platEntry.SetPlaceHolder("blank = triggering platform")
 	platEntry.SetText(cur.Platform)
@@ -845,33 +1103,25 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		sendAsSel.SetSelected("Auto (Bot if connected)")
 	}
 
-	opSelect := widget.NewSelect([]string{"delete", "timeout", "ban", "unban"}, nil)
+	opSelect := widget.NewSelect(botOptionLabels(botModerationOpOptions), nil)
 	if cur.Operation != "" {
-		opSelect.SetSelected(cur.Operation)
+		opSelect.SetSelected(botOptionLabel(botModerationOpOptions, cur.Operation))
 	} else {
-		opSelect.SetSelected("timeout")
+		opSelect.SetSelected(botOptionLabel(botModerationOpOptions, "timeout"))
 	}
 	targetEntry := widget.NewEntry()
 	targetEntry.SetText(cur.Target)
 	durEntry := widget.NewEntry()
 	durEntry.SetText(strconv.Itoa(cur.DurationSeconds))
 
-	scopeSelect := widget.NewSelect([]string{"global_persistent", "global_ephemeral", "user_persistent"}, nil)
-	if cur.Scope != "" {
-		scopeSelect.SetSelected(cur.Scope)
-	} else {
-		scopeSelect.SetSelected("global_persistent")
-	}
+	scopeSelect := widget.NewSelect(botOptionLabels(botVarScopeOptions), nil)
+	scopeSelect.SetSelected(botOptionLabel(botVarScopeOptions, cur.Scope))
 	keyEntry := widget.NewEntry()
 	keyEntry.SetText(cur.Key)
 	valEntry := widget.NewEntry()
 	valEntry.SetText(cur.Value)
-	varKindSelect := widget.NewSelect([]string{"string", "int", "float", "bool"}, nil)
-	if cur.VarKind != "" {
-		varKindSelect.SetSelected(cur.VarKind)
-	} else {
-		varKindSelect.SetSelected("string")
-	}
+	varKindSelect := widget.NewSelect(botOptionLabels(botVarKindOptions), nil)
+	varKindSelect.SetSelected(botOptionLabel(botVarKindOptions, cur.VarKind))
 	deltaEntry := widget.NewEntry()
 	if cur.Delta != 0 {
 		deltaEntry.SetText(strconv.FormatFloat(cur.Delta, 'f', -1, 64))
@@ -895,12 +1145,8 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 	httpSaveVarEntry := widget.NewEntry()
 	httpSaveVarEntry.SetText(cur.SaveVar)
 
-	obsOpSelect := widget.NewSelect([]string{"set_scene", "set_source_visible", "set_mute", "toggle_record", "toggle_stream", "save_replay", "refresh_browser"}, nil)
-	if cur.OBSOperation != "" {
-		obsOpSelect.SetSelected(cur.OBSOperation)
-	} else {
-		obsOpSelect.SetSelected("set_scene")
-	}
+	obsOpSelect := widget.NewSelect(botOptionLabels(botOBSOperationOptions), nil)
+	obsOpSelect.SetSelected(botOptionLabel(botOBSOperationOptions, cur.OBSOperation))
 	obsSceneEntry := widget.NewEntry()
 	obsSceneEntry.SetText(cur.OBSScene)
 	obsSourceEntry := widget.NewEntry()
@@ -910,66 +1156,110 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 	obsInputEntry := widget.NewEntry()
 	obsInputEntry.SetText(cur.OBSInput)
 
-	// Plugin Actions Picker
-	var pluginActLabels []string
-	type pActTarget struct {
-		uuid string
-		id   string
-	}
-	pluginActMap := make(map[string]pActTarget)
-	var selectedPluginLbl string
-	if v.session != nil && v.session.PluginManager() != nil {
-		for _, p := range v.session.PluginManager().Plugins() {
-			if p.State == pluginhost.StatusDisabled {
-				continue
-			}
-			for _, ad := range p.Actions {
-				lbl := fmt.Sprintf("%s: %s (%s)", p.Name, ad.GetName(), ad.GetId())
-				pluginActLabels = append(pluginActLabels, lbl)
-				pluginActMap[lbl] = pActTarget{uuid: p.UUID, id: ad.GetId()}
-				if p.UUID == cur.PluginUUID && ad.GetId() == cur.PluginActionID {
-					selectedPluginLbl = lbl
-				}
-			}
-		}
-	}
-	pluginUUIDEntry := widget.NewEntry()
-	pluginUUIDEntry.SetText(cur.PluginUUID)
-	pluginActIDEntry := widget.NewEntry()
-	pluginActIDEntry.SetText(cur.PluginActionID)
-	pluginPicker := widget.NewSelect(pluginActLabels, func(sel string) {
-		if t, ok := pluginActMap[sel]; ok {
-			pluginUUIDEntry.SetText(t.uuid)
-			pluginActIDEntry.SetText(t.id)
+	// Cascading Plugin -> Action pickers (no raw UUIDs or Action IDs exposed in UI)
+	pluginLabels, pluginLabelToUUID, pluginUUIDToLabel, pluginByUUID := v.pluginDisplayMap(cur.PluginUUID)
+	selectedPluginUUID := strings.TrimSpace(cur.PluginUUID)
+	selectedPluginActionID := strings.TrimSpace(cur.PluginActionID)
+
+	var actLabelToID map[string]string
+	var actDescByID map[string]string
+	pluginActDescLbl := widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
+	pluginActDescLbl.Wrapping = fyne.TextWrapWord
+
+	pluginActSelect := widget.NewSelect(nil, func(sel string) {
+		if id, ok := actLabelToID[sel]; ok {
+			selectedPluginActionID = id
+			pluginActDescLbl.SetText(actDescByID[id])
+		} else {
+			selectedPluginActionID = ""
+			pluginActDescLbl.SetText("")
 		}
 	})
-	pluginPicker.PlaceHolder = "Pick exported plugin action..."
-	if selectedPluginLbl != "" {
-		pluginPicker.SetSelected(selectedPluginLbl)
+	pluginActSelect.PlaceHolder = "Select an action..."
+
+	syncPluginActions := func(pluginUUID, preferredActionID string) {
+		var pPtr *pluginhost.PluginStatus
+		if st, ok := pluginByUUID[pluginUUID]; ok {
+			pPtr = &st
+		}
+		var actLabels []string
+		var actIDToLabel map[string]string
+		actLabels, actLabelToID, actIDToLabel, actDescByID = pluginActionDisplayMap(pPtr, preferredActionID)
+		pluginActSelect.Options = actLabels
+		if len(actLabels) == 0 {
+			pluginActSelect.ClearSelected()
+			pluginActSelect.Disable()
+			selectedPluginActionID = ""
+			pluginActDescLbl.SetText("Selected plugin exports no actions.")
+			pluginActSelect.Refresh()
+			return
+		}
+		pluginActSelect.Enable()
+		if lbl, ok := actIDToLabel[preferredActionID]; ok {
+			pluginActSelect.SetSelected(lbl)
+		} else {
+			pluginActSelect.SetSelected(actLabels[0])
+		}
+		pluginActSelect.Refresh()
 	}
-	if len(pluginActLabels) == 0 {
-		pluginPicker.Disable()
+
+	pluginSelect := widget.NewSelect(pluginLabels, func(sel string) {
+		if uuid, ok := pluginLabelToUUID[sel]; ok {
+			prevUUID := selectedPluginUUID
+			selectedPluginUUID = uuid
+			prefAct := ""
+			if prevUUID == uuid {
+				prefAct = selectedPluginActionID
+			}
+			syncPluginActions(uuid, prefAct)
+		}
+	})
+	pluginSelect.PlaceHolder = "No plugins installed"
+	if len(pluginLabels) == 0 {
+		pluginSelect.Disable()
+		pluginActSelect.Disable()
+	} else {
+		if lbl, ok := pluginUUIDToLabel[selectedPluginUUID]; ok {
+			pluginSelect.SetSelected(lbl)
+		} else {
+			pluginSelect.SetSelected(pluginLabels[0])
+		}
+	}
+
+	overlayPluginLabels, overlayPluginLabelToUUID, overlayPluginUUIDToLabel, _ := v.pluginDisplayMap(cur.PluginUUID)
+	selectedOverlayPluginUUID := strings.TrimSpace(cur.PluginUUID)
+	overlayPluginSelect := widget.NewSelect(overlayPluginLabels, func(sel string) {
+		if uuid, ok := overlayPluginLabelToUUID[sel]; ok {
+			selectedOverlayPluginUUID = uuid
+		}
+	})
+	overlayPluginSelect.PlaceHolder = "No plugins installed"
+	if len(overlayPluginLabels) == 0 {
+		overlayPluginSelect.Disable()
+	} else if lbl, ok := overlayPluginUUIDToLabel[selectedOverlayPluginUUID]; ok {
+		overlayPluginSelect.SetSelected(lbl)
+	} else {
+		overlayPluginSelect.SetSelected(overlayPluginLabels[0])
 	}
 
 	targetActLabels, targetMap, targetRevMap := v.actionDisplayMap(cfg)
 	targetActSelect := widget.NewSelect(targetActLabels, nil)
 	if lbl, ok := targetRevMap[cur.TargetActionID]; ok {
 		targetActSelect.SetSelected(lbl)
+	} else if len(targetActLabels) > 0 {
+		targetActSelect.SetSelected(targetActLabels[0])
 	}
 
 	ifLHSEntry := widget.NewEntry()
 	ifLHSEntry.SetText(cur.LHS)
-	ifOpSelect := widget.NewSelect([]string{"eq", "neq", "contains", "gt", "gte", "lt", "lte", "empty", "not_empty"}, nil)
-	if cur.Operator != "" {
-		ifOpSelect.SetSelected(cur.Operator)
-	} else {
-		ifOpSelect.SetSelected("eq")
-	}
+	ifOpSelect := widget.NewSelect(botOptionLabels(botConditionOperatorOptions), nil)
+	ifOpSelect.SetSelected(botOptionLabel(botConditionOperatorOptions, cur.Operator))
 	ifRHSEntry := widget.NewEntry()
 	ifRHSEntry.SetText(cur.RHS)
 
 	detailsBox := container.NewVBox()
-	rebuildDetails := func(k string) {
+	rebuildDetails := func(selectedLabel string) {
+		k := botOptionKey(botSubActionKindOptions, selectedLabel)
 		var items []*widget.FormItem
 		switch k {
 		case "send_chat":
@@ -982,10 +1272,10 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		case "speak_tts":
 			items = append(items,
 				widget.NewFormItem("Speech Text", textEntry),
-				widget.NewFormItem("Voice ID", voiceEntry),
+				widget.NewFormItem("Voice & Speed", voicePickerRow),
 			)
 		case "play_sound":
-			items = append(items, widget.NewFormItem("Audio File Path", textEntry))
+			items = append(items, widget.NewFormItem("Audio File Path", soundPathEntry))
 		case "moderate":
 			items = append(items,
 				widget.NewFormItem("Platform", platEntry),
@@ -1025,15 +1315,15 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 			)
 		case "plugin_action":
 			items = append(items,
-				widget.NewFormItem("Plugin Action Picker", pluginPicker),
-				widget.NewFormItem("Plugin UUID", pluginUUIDEntry),
-				widget.NewFormItem("Action ID", pluginActIDEntry),
+				widget.NewFormItem("Plugin", pluginSelect),
+				widget.NewFormItem("Action", pluginActSelect),
+				widget.NewFormItem("", pluginActDescLbl),
 			)
 		case "overlay_broadcast":
 			items = append(items,
-				widget.NewFormItem("Plugin UUID", pluginUUIDEntry),
-				widget.NewFormItem("Event Name", keyEntry),
-				widget.NewFormItem("JSON Payload", textEntry),
+				widget.NewFormItem("Plugin", overlayPluginSelect),
+				widget.NewFormItem("Event Name", eventNameEntry),
+				widget.NewFormItem("JSON Payload", payloadEntry),
 			)
 		case "run_action":
 			items = append(items, widget.NewFormItem("Target Action", targetActSelect))
@@ -1045,7 +1335,7 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 			)
 		}
 		if len(items) == 0 {
-			detailsBox.Objects = []fyne.CanvasObject{widget.NewLabel("No extra parameters required for 'break'.")}
+			detailsBox.Objects = []fyne.CanvasObject{widget.NewLabel("No extra parameters required — halts any remaining steps in this action.")}
 		} else {
 			detailsBox.Objects = []fyne.CanvasObject{widget.NewForm(items...)}
 		}
@@ -1058,7 +1348,7 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		widget.NewForm(widget.NewFormItem("Step Kind", kindSelect)),
 		detailsBox,
 	))
-	body.SetMinSize(fyne.NewSize(480, 400))
+	body.SetMinSize(fyne.NewSize(500, 420))
 
 	title := "Add Sub-Action"
 	if editing {
@@ -1068,18 +1358,23 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		if !ok {
 			return
 		}
-		cur.Kind = kindSelect.Selected
+		cur.Kind = botOptionKey(botSubActionKindOptions, kindSelect.Selected)
 		cur.Platform = strings.TrimSpace(platEntry.Text)
 		switch cur.Kind {
 		case "play_sound":
-			cur.SoundPath = strings.TrimSpace(textEntry.Text)
+			cur.SoundPath = strings.TrimSpace(soundPathEntry.Text)
 		case "overlay_broadcast":
-			cur.Payload = textEntry.Text
-			cur.EventName = strings.TrimSpace(keyEntry.Text)
+			cur.Payload = payloadEntry.Text
+			cur.EventName = strings.TrimSpace(eventNameEntry.Text)
+			cur.PluginUUID = selectedOverlayPluginUUID
+		case "plugin_action":
+			cur.PluginUUID = selectedPluginUUID
+			cur.PluginActionID = selectedPluginActionID
 		default:
 			cur.Text = textEntry.Text
 		}
-		cur.VoiceID = strings.TrimSpace(voiceEntry.Text)
+		cur.VoiceID = selectedVoiceID
+		cur.Speed = selectedSpeed
 		cur.AsAnnouncement = announceChk.Checked
 		switch sendAsSel.Selected {
 		case "Bot Account":
@@ -1089,12 +1384,12 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		default:
 			cur.SendAs = ""
 		}
-		cur.Operation = opSelect.Selected
+		cur.Operation = botOptionKey(botModerationOpOptions, opSelect.Selected)
 		cur.Target = strings.TrimSpace(targetEntry.Text)
 		cur.DurationSeconds, _ = strconv.Atoi(strings.TrimSpace(durEntry.Text))
-		cur.Scope = scopeSelect.Selected
+		cur.Scope = botOptionKey(botVarScopeOptions, scopeSelect.Selected)
 		cur.Key = strings.TrimSpace(keyEntry.Text)
-		cur.VarKind = varKindSelect.Selected
+		cur.VarKind = botOptionKey(botVarKindOptions, varKindSelect.Selected)
 		cur.Value = valEntry.Text
 		cur.Delta, _ = strconv.ParseFloat(strings.TrimSpace(deltaEntry.Text), 64)
 		cur.DelayMs, _ = strconv.Atoi(strings.TrimSpace(delayEntry.Text))
@@ -1102,17 +1397,15 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		cur.URL = strings.TrimSpace(httpURLEntry.Text)
 		cur.Body = httpBodyEntry.Text
 		cur.SaveVar = strings.TrimSpace(httpSaveVarEntry.Text)
-		cur.OBSOperation = obsOpSelect.Selected
+		cur.OBSOperation = botOptionKey(botOBSOperationOptions, obsOpSelect.Selected)
 		cur.OBSScene = strings.TrimSpace(obsSceneEntry.Text)
 		cur.OBSSource = strings.TrimSpace(obsSourceEntry.Text)
 		cur.OBSInput = strings.TrimSpace(obsInputEntry.Text)
 		cur.OBSVisible = obsVisibleChk.Checked
 		cur.OBSMuted = obsVisibleChk.Checked
-		cur.PluginUUID = strings.TrimSpace(pluginUUIDEntry.Text)
-		cur.PluginActionID = strings.TrimSpace(pluginActIDEntry.Text)
 		cur.TargetActionID = targetMap[targetActSelect.Selected]
 		cur.LHS = ifLHSEntry.Text
-		cur.Operator = ifOpSelect.Selected
+		cur.Operator = botOptionKey(botConditionOperatorOptions, ifOpSelect.Selected)
 		cur.RHS = ifRHSEntry.Text
 
 		_ = v.updateBotConfig(func(b *config.BotAutomationConfig) {
@@ -1128,33 +1421,33 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 	}, v.window)
 }
 
-// --- Sub-tab 3: Timers & Voice Commands ---
+// --- Sub-tab 3: Triggers & Timers ---
 
-func (v *BotTabView) buildTimersAndVoiceTab() fyne.CanvasObject {
+func (v *BotTabView) buildTriggersAndTimersTab() fyne.CanvasObject {
+	v.triggersBox = container.NewVBox()
 	v.timersBox = container.NewVBox()
-	v.voiceCmdsBox = container.NewVBox()
+
+	addTrigBtn := widget.NewButtonWithIcon("Add Trigger", theme.ContentAddIcon(), func() {
+		v.openTriggerDialog(-1)
+	})
+	addTrigBtn.Importance = widget.HighImportance
 
 	addTimerBtn := widget.NewButtonWithIcon("Add Timer", theme.ContentAddIcon(), func() {
 		v.openTimerDialog(-1)
 	})
 	addTimerBtn.Importance = widget.HighImportance
 
-	addVoiceBtn := widget.NewButtonWithIcon("Add Voice Command", theme.ContentAddIcon(), func() {
-		v.openVoiceCmdDialog(-1)
-	})
-	addVoiceBtn.Importance = widget.HighImportance
-
+	trigsCard := widget.NewCard(
+		"Event Triggers",
+		"React to stream events (follow/sub/cheer/raid/redemption), plugin triggers, or OBS events",
+		container.NewVBox(container.NewHBox(addTrigBtn), v.triggersBox),
+	)
 	timersCard := widget.NewCard(
 		"Interval Timers",
 		"Fire actions on a fixed interval (optionally requiring live stream & minimum chat lines)",
 		container.NewVBox(container.NewHBox(addTimerBtn), v.timersBox),
 	)
-	voiceCard := widget.NewCard(
-		"Whisper Voice Commands",
-		"Trigger actions when local Whisper STT hears a spoken phrase on your configured microphone",
-		container.NewVBox(container.NewHBox(addVoiceBtn), v.voiceCmdsBox),
-	)
-	return newPanelVScroll(container.NewVBox(timersCard, voiceCard))
+	return newPanelVScroll(container.NewVBox(trigsCard, timersCard))
 }
 
 func (v *BotTabView) refreshTimersAndVoice(b config.BotAutomationConfig) {
@@ -1231,7 +1524,7 @@ func (v *BotTabView) refreshTimersAndVoice(b config.BotAutomationConfig) {
 			if item.Enabled && !vdOn {
 				pausedSuffix = " [Paused — Voice Detection off]"
 			}
-			lbl := fmt.Sprintf("%s  (%q [%s], cd=%ds → %s)%s", item.Name, item.Phrase, item.MatchMode, item.CooldownSec, v.actionName(b, item.ActionID), pausedSuffix)
+			lbl := fmt.Sprintf("%s  (%q [%s], cd=%ds → %s)%s", item.Name, item.Phrase, botOptionLabel(botVoiceMatchModeOptions, item.MatchMode), item.CooldownSec, v.actionName(b, item.ActionID), pausedSuffix)
 			chk := widget.NewCheck("Enabled", func(checked bool) {
 				if v.initializing {
 					return
@@ -1353,12 +1646,8 @@ func (v *BotTabView) openVoiceCmdDialog(idx int) {
 	nameEntry.SetText(cur.Name)
 	phraseEntry := widget.NewEntry()
 	phraseEntry.SetText(cur.Phrase)
-	modeSelect := widget.NewSelect([]string{"contains", "exact", "regex"}, nil)
-	if cur.MatchMode != "" {
-		modeSelect.SetSelected(cur.MatchMode)
-	} else {
-		modeSelect.SetSelected("contains")
-	}
+	modeSelect := widget.NewSelect(botOptionLabels(botVoiceMatchModeOptions), nil)
+	modeSelect.SetSelected(botOptionLabel(botVoiceMatchModeOptions, cur.MatchMode))
 	cdEntry := widget.NewEntry()
 	cdEntry.SetText(strconv.Itoa(cur.CooldownSec))
 
@@ -1387,7 +1676,7 @@ func (v *BotTabView) openVoiceCmdDialog(idx int) {
 			cur.Name = strings.TrimSpace(phraseEntry.Text)
 		}
 		cur.Phrase = strings.TrimSpace(phraseEntry.Text)
-		cur.MatchMode = modeSelect.Selected
+		cur.MatchMode = botOptionKey(botVoiceMatchModeOptions, modeSelect.Selected)
 		cur.CooldownSec = max(0, cd)
 		cur.ActionID = labelToID[actSelect.Selected]
 		if v.session != nil {
@@ -1434,12 +1723,12 @@ func (v *BotTabView) buildQueuesAndVarsTab() fyne.CanvasObject {
 		container.NewVBox(container.NewHBox(addQBtn, clearQBtn), v.queuesBox),
 	)
 
-	varScopeSelect := widget.NewSelect([]string{"global_persistent", "global_ephemeral"}, nil)
-	varScopeSelect.SetSelected("global_persistent")
+	varScopeSelect := widget.NewSelect(botOptionLabels(botGlobalVarScopeOptions), nil)
+	varScopeSelect.SetSelected(botOptionLabel(botGlobalVarScopeOptions, "global_persistent"))
 	varKeyEntry := NewScrollPassEntry()
 	varKeyEntry.SetPlaceHolder("key")
-	varKindSelect := widget.NewSelect([]string{"string", "int", "float", "bool"}, nil)
-	varKindSelect.SetSelected("string")
+	varKindSelect := widget.NewSelect(botOptionLabels(botVarKindOptions), nil)
+	varKindSelect.SetSelected(botOptionLabel(botVarKindOptions, "string"))
 	varValEntry := NewScrollPassEntry()
 	varValEntry.SetPlaceHolder("value")
 	setVarBtn := widget.NewButton("Set Variable", func() {
@@ -1447,8 +1736,9 @@ func (v *BotTabView) buildQueuesAndVarsTab() fyne.CanvasObject {
 		if st == nil {
 			return
 		}
-		ephem := varScopeSelect.Selected == "global_ephemeral"
-		if err := st.SetGlobalVar(varKeyEntry.Text, varKindSelect.Selected, varValEntry.Text, ephem); err != nil {
+		ephem := botOptionKey(botGlobalVarScopeOptions, varScopeSelect.Selected) == "global_ephemeral"
+		kindKey := botOptionKey(botVarKindOptions, varKindSelect.Selected)
+		if err := st.SetGlobalVar(varKeyEntry.Text, kindKey, varValEntry.Text, ephem); err != nil {
 			v.reportStatus("Set variable failed: " + err.Error())
 			return
 		}
@@ -1521,7 +1811,7 @@ func (v *BotTabView) refreshQueuesAndVars(b config.BotAutomationConfig) {
 			if q.Blocking {
 				mode = "Blocking"
 			}
-			lbl := widget.NewLabel(fmt.Sprintf("%s (%s) • %s • Max=%d • Running=%d Pending=%d", q.Name, q.ID, mode, q.MaxPending, st.Running, st.Pending))
+			lbl := widget.NewLabel(fmt.Sprintf("%s • %s • Max=%d • Running=%d Pending=%d", v.queueName(b, q.ID), mode, q.MaxPending, st.Running, st.Pending))
 			editBtn := widget.NewButton("Edit", func() {
 				v.openQueueDialog(idx)
 			})
@@ -1548,9 +1838,9 @@ func (v *BotTabView) refreshQueuesAndVars(b config.BotAutomationConfig) {
 		} else {
 			var rows []fyne.CanvasObject
 			for _, ephem := range []bool{false, true} {
-				scopeLbl := "global_persistent"
+				scopeLbl := botOptionLabel(botVarScopeOptions, "global_persistent")
 				if ephem {
-					scopeLbl = "global_ephemeral"
+					scopeLbl = botOptionLabel(botVarScopeOptions, "global_ephemeral")
 				}
 				for _, ve := range st.ListGlobalVars(ephem) {
 					key := ve.Key
@@ -1561,7 +1851,7 @@ func (v *BotTabView) refreshQueuesAndVars(b config.BotAutomationConfig) {
 					})
 					rm.SetIcon(theme.DeleteIcon())
 					rows = append(rows, container.NewHBox(
-						widget.NewLabel(fmt.Sprintf("[%s] %s (%s) = %q", scopeLbl, ve.Key, ve.Kind, ve.Value)),
+						widget.NewLabel(fmt.Sprintf("[%s] %s (%s) = %q", scopeLbl, ve.Key, botOptionLabel(botVarKindOptions, ve.Kind), ve.Value)),
 						layout.NewSpacer(),
 						rm,
 					))
@@ -1631,11 +1921,6 @@ func (v *BotTabView) openQueueDialog(idx int) {
 		cur = config.BotQueueDef{ID: newBotItemID("q"), Blocking: true, MaxPending: 64}
 	}
 
-	idEntry := widget.NewEntry()
-	idEntry.SetText(cur.ID)
-	if cur.ID == "default" || cur.ID == "concurrent" {
-		idEntry.Disable()
-	}
 	nameEntry := widget.NewEntry()
 	nameEntry.SetText(cur.Name)
 	maxEntry := widget.NewEntry()
@@ -1645,7 +1930,6 @@ func (v *BotTabView) openQueueDialog(idx int) {
 
 	form := container.NewVBox(
 		widget.NewForm(
-			widget.NewFormItem("Queue ID", idEntry),
 			widget.NewFormItem("Display Name", nameEntry),
 			widget.NewFormItem("Max Pending", maxEntry),
 		),
@@ -1656,8 +1940,10 @@ func (v *BotTabView) openQueueDialog(idx int) {
 			return
 		}
 		mp, _ := strconv.Atoi(strings.TrimSpace(maxEntry.Text))
-		cur.ID = strings.TrimSpace(idEntry.Text)
 		cur.Name = strings.TrimSpace(nameEntry.Text)
+		if cur.Name == "" {
+			cur.Name = "Custom Queue"
+		}
 		cur.MaxPending = max(1, mp)
 		cur.Blocking = blockChk.Checked
 		_ = v.updateBotConfig(func(b *config.BotAutomationConfig) {
@@ -1749,7 +2035,7 @@ func (v *BotTabView) runSelectedActionTest() {
 		v.reportStatus("Test Run failed: " + err.Error())
 		return
 	}
-	v.reportStatus("✓ Executed Test Run: " + v.selectedActionID)
+	v.reportStatus("✓ Executed Test Run: " + v.actionName(v.currentConfig().Bot, v.selectedActionID))
 }
 
 func (v *BotTabView) syncOBSFieldsFromConfig(b config.BotAutomationConfig) {

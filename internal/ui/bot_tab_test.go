@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -11,8 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/pluginhost"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/pluginv1"
 	"github.com/mrpoundsign/TownCrier/pkg/secrets"
+	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
 
 func TestBotTabViewBuildTestRunAndOBSSecret(t *testing.T) {
@@ -66,9 +70,9 @@ func TestBotTabViewBuildTestRunAndOBSSecret(t *testing.T) {
 	tabs, ok := obj.(*container.AppTabs)
 	require.True(t, ok, "expected *container.AppTabs from BotTabView.Build()")
 	require.Len(t, tabs.Items, 5)
-	require.Equal(t, "Commands", tabs.Items[0].Text)
+	require.Equal(t, "Commands & Voice", tabs.Items[0].Text)
 	require.Equal(t, "Actions & Sub-Actions", tabs.Items[1].Text)
-	require.Equal(t, "Timers & Voice", tabs.Items[2].Text)
+	require.Equal(t, "Triggers & Timers", tabs.Items[2].Text)
 	require.Equal(t, "Queues & Variables", tabs.Items[3].Text)
 	require.Equal(t, "OBS Studio", tabs.Items[4].Text)
 
@@ -154,4 +158,95 @@ func TestBotTabViewVoiceCommandAutoEnablesAndRespectsMasterToggle(t *testing.T) 
 	require.True(t, sess.Config().Bot.VoiceCommands[0].Enabled)
 	require.GreaterOrEqual(t, len(view.voiceCmdsBox.Objects), 3, "expected paused banner + separator + voice command row")
 }
+
+func TestBotTabViewFriendlyLabelsAndNoRawIDs(t *testing.T) {
+	// 1. All human-readable option tables round-trip cleanly and contain zero underscores.
+	tables := [][]botOption{
+		botSubActionKindOptions,
+		botOBSOperationOptions,
+		botVarScopeOptions,
+		botVarKindOptions,
+		botConditionOperatorOptions,
+		botModerationOpOptions,
+		botTriggerSourceOptions,
+		botCommandMatchModeOptions,
+		botVoiceMatchModeOptions,
+	}
+	for _, tbl := range tables {
+		labels := botOptionLabels(tbl)
+		require.Len(t, labels, len(tbl))
+		for _, opt := range tbl {
+			require.NotContains(t, opt.Label, "_", "display label %q should not contain underscores", opt.Label)
+			require.Equal(t, opt.Label, botOptionLabel(tbl, opt.Key))
+			require.Equal(t, opt.Key, botOptionKey(tbl, opt.Label))
+		}
+	}
+
+	// 2. actionDisplayMap hides raw act-... IDs for unique names and disambiguates duplicates cleanly.
+	b := config.BotAutomationConfig{
+		Actions: []config.BotActionDef{
+			{ID: "act-1111111", Name: "Welcome Shoutout", Enabled: true},
+			{ID: "act-2222222", Name: "Alert", Enabled: true},
+			{ID: "act-3333333", Name: "Alert", Enabled: true},
+		},
+		Queues: config.DefaultBotAutomationConfig().Queues,
+	}
+	view := &BotTabView{}
+	labels, labelToID, idToLabel := view.actionDisplayMap(b)
+	require.Equal(t, []string{"Welcome Shoutout", "Alert (#1)", "Alert (#2)"}, labels)
+	require.Equal(t, "act-1111111", labelToID["Welcome Shoutout"])
+	require.Equal(t, "act-2222222", labelToID["Alert (#1)"])
+	require.Equal(t, "act-3333333", labelToID["Alert (#2)"])
+	require.Equal(t, "Welcome Shoutout", idToLabel["act-1111111"])
+	for _, lbl := range labels {
+		require.False(t, strings.Contains(lbl, "act-"), "label %q leaked raw action ID", lbl)
+	}
+
+	// 3. summarizeSubAction resolves friendly action names, voice names, and human labels.
+	sumRun := view.summarizeSubAction(b, config.BotSubActionDef{Kind: "run_action", TargetActionID: "act-1111111"})
+	require.Equal(t, "Run Action → Welcome Shoutout", sumRun)
+	require.NotContains(t, sumRun, "act-1111111")
+
+	sumTTS := view.summarizeSubAction(b, config.BotSubActionDef{Kind: "speak_tts", VoiceID: "af_bella", Text: "hi"})
+	require.Contains(t, sumTTS, tts.VoiceDisplayName("af_bella"))
+
+	sumOBS := view.summarizeSubAction(b, config.BotSubActionDef{Kind: "obs", OBSOperation: "set_scene", OBSScene: "Main"})
+	require.Equal(t, "OBS: Switch Scene (scene=Main)", sumOBS)
+
+	sumVar := view.summarizeSubAction(b, config.BotSubActionDef{Kind: "set_var", Scope: "global_persistent", Key: "count", Value: "1"})
+	require.Equal(t, `Set Var (Global (Saved)) count = "1"`, sumVar)
+
+	sumCond := view.summarizeSubAction(b, config.BotSubActionDef{Kind: "if_else", LHS: "%a%", Operator: "not_empty"})
+	require.Equal(t, `If "%a%" Is Not Empty ""`, sumCond)
+
+	// 4. pluginActionDisplayMap maps human action names back to canonical IDs and preserves offline fallback.
+	st := &pluginhost.PluginStatus{
+		UUID: "com.example.dj",
+		Name: "CrowdDJ",
+		Actions: []*pluginv1.ActionDescriptor{
+			{Id: "skip_track", Name: "Skip Current Track", Description: "Skips to next queued song"},
+		},
+	}
+	pActLabels, pActToID, pActFromID, descByID := pluginActionDisplayMap(st, "missing_offline_action")
+	require.Contains(t, pActLabels, "Skip Current Track")
+	require.Contains(t, pActLabels, "missing_offline_action (Offline)")
+	require.Equal(t, "skip_track", pActToID["Skip Current Track"])
+	require.Equal(t, "Skip Current Track", pActFromID["skip_track"])
+	require.Equal(t, "Skips to next queued song", descByID["skip_track"])
+
+	// 5. Test Run status uses action display name rather than raw ID.
+	fyneApp := test.NewApp()
+	defer fyneApp.Quit()
+	cfg := config.DefaultConfig()
+	cfg.Bot.Enabled = true
+	cfg.Bot.Actions = []config.BotActionDef{{ID: "act-999", Name: "Hype Wave", Enabled: true}}
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
+	var statusMsg string
+	btv := NewBotTabView(fyneApp.NewWindow("Test"), sess, func(msg string) { statusMsg = msg })
+	btv.selectedActionID = "act-999"
+	btv.runSelectedActionTest()
+	require.Equal(t, "✓ Executed Test Run: Hype Wave", statusMsg)
+}
+
 
