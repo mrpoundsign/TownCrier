@@ -153,6 +153,37 @@ func (c *Client) PreviousProgramScene() string {
 	return c.state.previousProgramScene
 }
 
+// CurrentPreviewScene returns the cached current Studio Mode preview scene name.
+func (c *Client) CurrentPreviewScene() string {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.state.currentPreviewScene
+}
+
+// ResolveCurrentProgramScene returns the cached current program scene name, or queries OBS if connected and uncached.
+func (c *Client) ResolveCurrentProgramScene(ctx context.Context) string {
+	if cur := c.CurrentProgramScene(); cur != "" {
+		return cur
+	}
+	if !c.IsConnected() {
+		return ""
+	}
+	resp, err := c.Call(ctx, "GetCurrentProgramScene", nil)
+	if err != nil {
+		return ""
+	}
+	scene := strings.TrimSpace(stringMapVal(resp, "currentProgramSceneName"))
+	if scene == "" {
+		scene = strings.TrimSpace(stringMapVal(resp, "sceneName"))
+	}
+	if scene != "" {
+		c.stateMu.Lock()
+		c.state.currentProgramScene = scene
+		c.stateMu.Unlock()
+	}
+	return scene
+}
+
 // ListScenes returns OBS scenes in top-to-bottom UI order.
 func (c *Client) ListScenes(ctx context.Context, refresh bool) ([]string, error) {
 	if !refresh {

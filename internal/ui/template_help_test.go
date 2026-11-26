@@ -91,3 +91,29 @@ func TestTemplateHelpMarkerLifecycle(t *testing.T) {
 		t.Errorf("expected '{user}', got '%s'", emptyEntry.Text)
 	}
 }
+
+func TestBotTemplateVarsCoverage(t *testing.T) {
+	vars := BotTemplateVars()
+	if len(vars) < 10 {
+		t.Fatalf("expected comprehensive bot template vars, got %d", len(vars))
+	}
+	want := map[string]bool{
+		"%obs.scene%":         false,
+		"%obs.previousScene%": false,
+		"%obs.previewScene%":  false,
+		"%obs.connected%":     false,
+		"%user%":              false,
+		"%arg0%":              false,
+		"%global.<key>%":      false,
+	}
+	for _, v := range vars {
+		if _, ok := want[v.Var]; ok {
+			want[v.Var] = true
+		}
+	}
+	for k, found := range want {
+		if !found {
+			t.Errorf("expected %s in BotTemplateVars()", k)
+		}
+	}
+}

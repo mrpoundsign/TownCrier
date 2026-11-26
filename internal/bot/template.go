@@ -8,10 +8,11 @@ import (
 
 // TemplateContext provides variable & argument lookup for single-pass %token% interpolation.
 type TemplateContext struct {
-	Args     map[string]string
-	Store    *Store
-	Platform string
-	UserID   string
+	Args      map[string]string
+	Store     *Store
+	Platform  string
+	UserID    string
+	LookupOBS func(key string) (string, bool)
 }
 
 // Interpolate expands %key%, %global.key%, %user.key%, %random(min,max)%, and %pick(a,b,c)%
@@ -106,6 +107,25 @@ func evalToken(token string, ctx TemplateContext) (string, bool) {
 				return e.Value, true
 			}
 			return "", true
+		}
+	}
+
+	if ctx.LookupOBS != nil {
+		var obsKey string
+		switch lower {
+		case "obs.scene", "obsscene":
+			obsKey = "scene"
+		case "obs.previousscene", "obspreviousscene":
+			obsKey = "previous_scene"
+		case "obs.previewscene", "obspreviewscene":
+			obsKey = "preview_scene"
+		case "obs.connected", "obsconnected":
+			obsKey = "connected"
+		}
+		if obsKey != "" {
+			if val, ok := ctx.LookupOBS(obsKey); ok {
+				return val, true
+			}
 		}
 	}
 

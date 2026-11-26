@@ -1308,7 +1308,18 @@ func (v *BotTabView) summarizeSubAction(b config.BotAutomationConfig, sa config.
 	case "inc_var":
 		return fmt.Sprintf("Inc Var (%s) %s += %g", botOptionLabel(botVarScopeOptions, sa.Scope), sa.Key, sa.Delta)
 	case "if_else":
-		return fmt.Sprintf("If %q %s %q", sa.LHS, botOptionLabel(botConditionOperatorOptions, sa.Operator), sa.RHS)
+		base := fmt.Sprintf("If %q %s %q", sa.LHS, botOptionLabel(botConditionOperatorOptions, sa.Operator), sa.RHS)
+		if len(sa.ThenSubActions) == 0 && len(sa.ElseSubActions) == 0 {
+			return base
+		}
+		var parts []string
+		if len(sa.ThenSubActions) > 0 {
+			parts = append(parts, "Then: "+v.summarizeConditionBranch(b, sa.ThenSubActions))
+		}
+		if len(sa.ElseSubActions) > 0 {
+			parts = append(parts, "Else: "+v.summarizeConditionBranch(b, sa.ElseSubActions))
+		}
+		return base + " (" + strings.Join(parts, "; ") + ")"
 	case "delay":
 		return fmt.Sprintf("Wait %d ms", sa.DelayMs)
 	case "http_request":
@@ -1361,6 +1372,20 @@ func (v *BotTabView) summarizeSubAction(b config.BotAutomationConfig, sa config.
 		return "Stop Action (Break)"
 	default:
 		return botOptionLabel(botSubActionKindOptions, sa.Kind)
+	}
+}
+
+func (v *BotTabView) summarizeConditionBranch(b config.BotAutomationConfig, steps []config.BotSubActionDef) string {
+	mode, targetID, custom := decodeConditionBranch(steps)
+	switch mode {
+	case "break":
+		return "Stop"
+	case "run_action":
+		return "Run " + v.actionName(b, targetID)
+	case "run_action_break":
+		return "Run " + v.actionName(b, targetID) + " & Stop"
+	default:
+		return fmt.Sprintf("%d step(s)", len(custom))
 	}
 }
 
@@ -1551,7 +1576,7 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 	httpSaveVarEntry := widget.NewEntry()
 	httpSaveVarEntry.SetText(cur.SaveVar)
 
-	obsEditor := newOBSSubActionEditor(v.obsClient(), cur)
+	obsEditor := newOBSSubActionEditor(v.window, v.obsClient(), cur, v.onStatus)
 
 	// Cascading Plugin -> Action pickers (no raw UUIDs or Action IDs exposed in UI)
 	pluginLabels, pluginLabelToUUID, pluginUUIDToLabel, pluginByUUID := v.pluginDisplayMap(cur.PluginUUID)
@@ -1647,12 +1672,7 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		targetActSelect.SetSelected(targetActLabels[0])
 	}
 
-	ifLHSEntry := widget.NewEntry()
-	ifLHSEntry.SetText(cur.LHS)
-	ifOpSelect := widget.NewSelect(botOptionLabels(botConditionOperatorOptions), nil)
-	ifOpSelect.SetSelected(botOptionLabel(botConditionOperatorOptions, cur.Operator))
-	ifRHSEntry := widget.NewEntry()
-	ifRHSEntry.SetText(cur.RHS)
+	condEditor := newBotConditionEditor(v.window, v.obsClient(), cur, targetActLabels, targetMap, targetRevMap, v.onStatus)
 
 	detailsBox := container.NewVBox()
 	rebuildDetails := func(selectedLabel string) {
@@ -1662,13 +1682,13 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		case "send_chat":
 			items = append(items,
 				widget.NewFormItem("Platform", platEntry),
-				widget.NewFormItem("Message Text", textEntry),
+				widget.NewFormItem("Message Text", withBotVarHelp(v.window, "Chat Message", textEntry, v.onStatus)),
 				widget.NewFormItem("Send As (Twitch)", sendAsSel),
 				widget.NewFormItem("Options", announceChk),
 			)
 		case "speak_tts":
 			items = append(items,
-				widget.NewFormItem("Speech Text", textEntry),
+				widget.NewFormItem("Speech Text", withBotVarHelp(v.window, "TTS Speech", textEntry, v.onStatus)),
 				widget.NewFormItem("Voice & Speed", voicePickerRow),
 			)
 		case "play_sound":
@@ -1685,7 +1705,7 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 				widget.NewFormItem("Scope", scopeSelect),
 				widget.NewFormItem("Key", keyEntry),
 				widget.NewFormItem("Type", varKindSelect),
-				widget.NewFormItem("Value", valEntry),
+				widget.NewFormItem("Value", withBotVarHelp(v.window, "Variable Value", valEntry, v.onStatus)),
 			)
 		case "inc_var":
 			items = append(items,
@@ -1698,8 +1718,8 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		case "http_request":
 			items = append(items,
 				widget.NewFormItem("Method", httpMethodSelect),
-				widget.NewFormItem("URL", httpURLEntry),
-				widget.NewFormItem("Body", httpBodyEntry),
+				widget.NewFormItem("URL", withBotVarHelp(v.window, "HTTP URL", httpURLEntry, v.onStatus)),
+				widget.NewFormItem("Body", withBotVarHelp(v.window, "HTTP Body", httpBodyEntry, v.onStatus)),
 				widget.NewFormItem("Save Response Var", httpSaveVarEntry),
 			)
 		case "obs":
@@ -1721,11 +1741,9 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		case "run_action":
 			items = append(items, widget.NewFormItem("Target Action", targetActSelect))
 		case "if_else":
-			items = append(items,
-				widget.NewFormItem("Left Value (e.g. %arg0%)", ifLHSEntry),
-				widget.NewFormItem("Operator", ifOpSelect),
-				widget.NewFormItem("Right Value", ifRHSEntry),
-			)
+			detailsBox.Objects = []fyne.CanvasObject{condEditor.CanvasObject()}
+			detailsBox.Refresh()
+			return
 		}
 		if len(items) == 0 {
 			detailsBox.Objects = []fyne.CanvasObject{widget.NewLabel("No extra parameters required — halts any remaining steps in this action.")}
@@ -1749,6 +1767,7 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 	}
 	dialog.ShowCustomConfirm(title, "Save", "Cancel", body, func(ok bool) {
 		defer obsEditor.Close()
+		defer condEditor.Close()
 		if !ok {
 			return
 		}
@@ -1766,6 +1785,8 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 			cur.PluginActionID = selectedPluginActionID
 		case "obs":
 			obsEditor.ApplyTo(&cur)
+		case "if_else":
+			condEditor.ApplyTo(&cur)
 		default:
 			cur.Text = textEntry.Text
 		}
@@ -1794,9 +1815,11 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		cur.Body = httpBodyEntry.Text
 		cur.SaveVar = strings.TrimSpace(httpSaveVarEntry.Text)
 		cur.TargetActionID = targetMap[targetActSelect.Selected]
-		cur.LHS = ifLHSEntry.Text
-		cur.Operator = botOptionKey(botConditionOperatorOptions, ifOpSelect.Selected)
-		cur.RHS = ifRHSEntry.Text
+		if cur.Kind != "if_else" {
+			cur.LHS = ""
+			cur.Operator = ""
+			cur.RHS = ""
+		}
 
 		_ = v.updateBotConfig(func(b *config.BotAutomationConfig) {
 			if actIdx >= len(b.Actions) {

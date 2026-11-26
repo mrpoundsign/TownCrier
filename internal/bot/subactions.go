@@ -47,6 +47,34 @@ func (e *Engine) templateCtx(st *execState) TemplateContext {
 		Store:    e.store,
 		Platform: st.platform,
 		UserID:   st.userID,
+		LookupOBS: func(key string) (string, bool) {
+			switch key {
+			case "connected":
+				if e.obs != nil && e.obs.IsConnected() {
+					return "true", true
+				}
+				return "false", true
+			case "scene":
+				if e.obs == nil {
+					return "", true
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				return e.obs.ResolveCurrentProgramScene(ctx), true
+			case "previous_scene":
+				if e.obs == nil {
+					return "", true
+				}
+				return e.obs.PreviousProgramScene(), true
+			case "preview_scene":
+				if e.obs == nil {
+					return "", true
+				}
+				return e.obs.CurrentPreviewScene(), true
+			default:
+				return "", false
+			}
+		},
 	}
 }
 

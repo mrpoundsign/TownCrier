@@ -24,7 +24,9 @@ const obsCurrentSceneOption = "(Current Scene)"
 
 // obsSubActionEditor builds and manages the dynamic cascading OBS Studio sub-action form.
 type obsSubActionEditor struct {
+	win       fyne.Window
 	obsClient *obs.Client
+	onStatus  func(string)
 	ctx       context.Context
 	cancel    context.CancelFunc
 
@@ -81,10 +83,12 @@ type obsSubActionEditor struct {
 	root      *fyne.Container
 }
 
-func newOBSSubActionEditor(client *obs.Client, cur config.BotSubActionDef) *obsSubActionEditor {
+func newOBSSubActionEditor(win fyne.Window, client *obs.Client, cur config.BotSubActionDef, onStatus func(string)) *obsSubActionEditor {
 	ctx, cancel := context.WithCancel(context.Background())
 	ed := &obsSubActionEditor{
+		win:       win,
 		obsClient: client,
+		onStatus:  onStatus,
 		ctx:       ctx,
 		cancel:    cancel,
 	}
@@ -427,7 +431,7 @@ func (e *obsSubActionEditor) rebuildFields() {
 	case "set_text":
 		items = append(items,
 			widget.NewFormItem("Text Input", e.inputEntry),
-			widget.NewFormItem("Text", e.textEntry),
+			widget.NewFormItem("Text", withBotVarHelp(e.win, "OBS Text Content", e.textEntry, e.onStatus)),
 		)
 
 	case "media_action":
@@ -454,7 +458,7 @@ func (e *obsSubActionEditor) rebuildFields() {
 	case "custom_request":
 		items = append(items,
 			widget.NewFormItem("Request Type", e.reqTypeEntry),
-			widget.NewFormItem("Request Data (JSON)", e.reqDataEntry),
+			widget.NewFormItem("Request Data (JSON)", withBotVarHelp(e.win, "OBS Request Data", e.reqDataEntry, e.onStatus)),
 		)
 	}
 

@@ -406,3 +406,132 @@ func TestEngineExpandedOBSSubActions(t *testing.T) {
 	require.False(t, *lastVisible)
 	require.Contains(t, calls, "SetSceneItemTransform")
 }
+
+func TestEngineOBSSceneConditionBranching(t *testing.T) {
+	st, err := OpenStore(":memory:")
+	require.NoError(t, err)
+	defer func() { _ = st.Close() }()
+
+	var mu sync.Mutex
+	currentScene := "Main"
+	zoomedCount := 0
+	sceneSwitchCount := 0
+
+	obsSrv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		defer func() { _ = ws.Close() }()
+		_ = sendObsTestMsg(ws, 0, map[string]any{"obsWebSocketVersion": "5.4.2", "rpcVersion": 1})
+		_, _ = recvObsTestMsg(ws)
+		_ = sendObsTestMsg(ws, 2, map[string]any{"negotiatedRpcVersion": 1})
+		for {
+			reqEnv, rErr := recvObsTestMsg(ws)
+			if rErr != nil {
+				return
+			}
+			var req struct {
+				RequestType string         `json:"requestType"`
+				RequestID   string         `json:"requestId"`
+				RequestData map[string]any `json:"requestData"`
+			}
+			_ = json.Unmarshal(reqEnv.D, &req)
+			resp := map[string]any{}
+			switch req.RequestType {
+			case "GetVersion":
+				resp = map[string]any{"obsVersion": "30.2.3", "obsWebSocketVersion": "5.4.2"}
+			case "GetSceneList", "GetCurrentProgramScene":
+				mu.Lock()
+				resp = map[string]any{
+					"currentProgramSceneName": currentScene,
+					"scenes": []any{
+						map[string]any{"sceneName": "Enhance"},
+						map[string]any{"sceneName": "Main"},
+					},
+				}
+				mu.Unlock()
+			case "SetCurrentProgramScene":
+				mu.Lock()
+				currentScene, _ = req.RequestData["sceneName"].(string)
+				sceneSwitchCount++
+				mu.Unlock()
+			case "GetSceneItemId":
+				resp = map[string]any{"sceneItemId": 12}
+			case "GetSceneItemTransform":
+				resp = map[string]any{
+					"sceneItemTransform": map[string]any{
+						"positionX": 0.0, "positionY": 0.0,
+						"scaleX": 1.0, "scaleY": 1.0,
+						"width": 1920.0, "height": 1080.0,
+						"alignment": 5, "boundsType": "OBS_BOUNDS_NONE",
+					},
+				}
+			case "SetSceneItemTransform":
+				mu.Lock()
+				zoomedCount++
+				mu.Unlock()
+			}
+			_ = sendObsTestMsg(ws, 7, map[string]any{
+				"requestType":   req.RequestType,
+				"requestId":     req.RequestID,
+				"requestStatus": map[string]any{"result": true, "code": 100},
+				"responseData":  resp,
+			})
+		}
+	}))
+	defer obsSrv.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Bot.Enabled = true
+	cfg.Bot.Actions = []config.BotActionDef{
+		{
+			ID:      "act-zoom",
+			Name:    "Enhance Zoom",
+			Enabled: true,
+			SubActions: []config.BotSubActionDef{
+				{ID: "z1", Kind: "obs", Enabled: true, OBSOperation: "zoom_source", OBSScene: "Enhance", OBSSource: "Camera", OBSZoomFactor: 1.35},
+			},
+		},
+		{
+			ID:      "act-enhance",
+			Name:    "Smart Enhance",
+			Enabled: true,
+			SubActions: []config.BotSubActionDef{
+				{
+					ID:       "c1",
+					Kind:     "if_else",
+					Enabled:  true,
+					LHS:      "%obs.scene%",
+					Operator: "eq",
+					RHS:      "Enhance",
+					ThenSubActions: []config.BotSubActionDef{
+						{ID: "t1", Kind: "run_action", Enabled: true, TargetActionID: "act-zoom"},
+						{ID: "t2", Kind: "break", Enabled: true},
+					},
+				},
+				{ID: "s1", Kind: "obs", Enabled: true, OBSOperation: "set_scene", OBSScene: "Enhance"},
+			},
+		},
+	}
+
+	eng := NewEngine(st, HostBridge{
+		GetConfig: func() *config.Config { return cfg.Clone() },
+	})
+	defer func() { _ = eng.Close() }()
+
+	host, portStr, _ := net.SplitHostPort(obsSrv.Listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	require.NoError(t, eng.OBSClient().Connect(context.Background(), host, port, ""))
+
+	// Run 1: OBS starts on "Main" -> condition false -> switches to "Enhance", does NOT zoom.
+	require.NoError(t, eng.RunActionByID("act-enhance", nil, true))
+	mu.Lock()
+	require.Equal(t, "Enhance", currentScene)
+	require.Equal(t, 1, sceneSwitchCount)
+	require.Equal(t, 0, zoomedCount)
+	mu.Unlock()
+
+	// Run 2: OBS is now on "Enhance" -> condition true -> runs "Enhance Zoom" and breaks (no extra scene switch).
+	require.NoError(t, eng.RunActionByID("act-enhance", nil, true))
+	mu.Lock()
+	require.Equal(t, 1, sceneSwitchCount)
+	require.Equal(t, 1, zoomedCount)
+	mu.Unlock()
+}

@@ -32,3 +32,26 @@ func TestInterpolateSinglePassAndLookups(t *testing.T) {
 	// Unclosed or unknown tokens stay literal
 	require.Equal(t, "100% legit %nope", Interpolate("100% legit %nope", tc))
 }
+
+func TestInterpolateOBSTokensSinglePass(t *testing.T) {
+	obsCtx := TemplateContext{
+		Args: map[string]string{"user": "alice"},
+		LookupOBS: func(key string) (string, bool) {
+			switch key {
+			case "scene":
+				return "Enhance %user%", true
+			case "previous_scene":
+				return "Main", true
+			case "preview_scene":
+				return "BRB", true
+			case "connected":
+				return "true", true
+			default:
+				return "", false
+			}
+		},
+	}
+
+	got := Interpolate("cur=%obs.scene%|alt=%obsScene%|prev=%obs.previousScene%|pre=%obs.previewScene%|conn=%obs.connected%", obsCtx)
+	require.Equal(t, "cur=Enhance %user%|alt=Enhance %user%|prev=Main|pre=BRB|conn=true", got)
+}

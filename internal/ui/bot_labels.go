@@ -149,6 +149,24 @@ var botConditionOperatorOptions = []botOption{
 	{Key: "not_empty", Label: "Is Not Empty"},
 }
 
+var botConditionBranchModeOptions = []botOption{
+	{Key: "continue", Label: "Continue to Next Step"},
+	{Key: "break", Label: "Stop Action (Break)"},
+	{Key: "run_action", Label: "Run Another Action"},
+	{Key: "run_action_break", Label: "Run Action & Stop"},
+}
+
+var botConditionLHSPresetOptions = []botOption{
+	{Key: "%obs.scene%", Label: "Current OBS Scene (%obs.scene%)"},
+	{Key: "%obs.previousScene%", Label: "Previous OBS Scene (%obs.previousScene%)"},
+	{Key: "%obs.previewScene%", Label: "Preview OBS Scene (%obs.previewScene%)"},
+	{Key: "%obs.connected%", Label: "OBS Connected (%obs.connected%)"},
+	{Key: "%user%", Label: "Triggering User (%user%)"},
+	{Key: "%arg0%", Label: "First Command Arg (%arg0%)"},
+	{Key: "%rawInput%", Label: "Full Message Input (%rawInput%)"},
+	{Key: "%platform%", Label: "Platform (%platform%)"},
+}
+
 var botModerationOpOptions = []botOption{
 	{Key: "delete", Label: "Delete Message"},
 	{Key: "timeout", Label: "Timeout User"},

@@ -181,6 +181,8 @@ func TestBotTabViewFriendlyLabelsAndNoRawIDs(t *testing.T) {
 		botVarScopeOptions,
 		botVarKindOptions,
 		botConditionOperatorOptions,
+		botConditionBranchModeOptions,
+		botConditionLHSPresetOptions,
 		botModerationOpOptions,
 		botTriggerSourceOptions,
 		botCommandMatchModeOptions,
@@ -245,6 +247,21 @@ func TestBotTabViewFriendlyLabelsAndNoRawIDs(t *testing.T) {
 
 	sumCond := view.summarizeSubAction(b, config.BotSubActionDef{Kind: "if_else", LHS: "%a%", Operator: "not_empty"})
 	require.Equal(t, `If "%a%" Is Not Empty ""`, sumCond)
+
+	sumCondBranch := view.summarizeSubAction(b, config.BotSubActionDef{
+		Kind:     "if_else",
+		LHS:      "%obs.scene%",
+		Operator: "eq",
+		RHS:      "Enhance",
+		ThenSubActions: []config.BotSubActionDef{
+			{Kind: "run_action", TargetActionID: "act-1111111"},
+			{Kind: "break"},
+		},
+		ElseSubActions: []config.BotSubActionDef{
+			{Kind: "break"},
+		},
+	})
+	require.Equal(t, `If "%obs.scene%" Equals "Enhance" (Then: Run Welcome Shoutout & Stop; Else: Stop)`, sumCondBranch)
 
 	// 4. pluginActionDisplayMap maps human action names back to canonical IDs and preserves offline fallback.
 	st := &pluginhost.PluginStatus{
@@ -445,12 +462,12 @@ func TestOBSSubActionEditorLiveDiscoverySnapshotAndApply(t *testing.T) {
 	fyneApp := test.NewApp()
 	defer fyneApp.Quit()
 
-	ed := newOBSSubActionEditor(client, config.BotSubActionDef{
+	ed := newOBSSubActionEditor(nil, client, config.BotSubActionDef{
 		Kind:         "obs",
 		OBSOperation: "set_filter_enabled",
 		OBSScene:     "Main",
 		OBSSource:    "Camera",
-	})
+	}, nil)
 	defer ed.Close()
 
 	win := fyneApp.NewWindow("OBS Editor Test")
@@ -491,6 +508,123 @@ func TestOBSSubActionEditorLiveDiscoverySnapshotAndApply(t *testing.T) {
 	require.InDelta(t, 140.5, *saved.OBSTransform.PositionX, 0.001)
 	require.NotNil(t, saved.OBSTransform.ScaleX)
 	require.InDelta(t, 1.35, *saved.OBSTransform.ScaleX, 0.001)
+}
+
+func TestBotConditionEditorOBSScenesAndBranches(t *testing.T) {
+	obsSrv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		defer func() { _ = ws.Close() }()
+		sendMsg := func(op int, d any) {
+			rawD, _ := json.Marshal(d)
+			env, _ := json.Marshal(map[string]any{"op": op, "d": json.RawMessage(rawD)})
+			_ = websocket.Message.Send(ws, string(env))
+		}
+		sendMsg(0, map[string]any{"obsWebSocketVersion": "5.4.2", "rpcVersion": 1})
+		var raw string
+		if err := websocket.Message.Receive(ws, &raw); err != nil {
+			return
+		}
+		sendMsg(2, map[string]any{"negotiatedRpcVersion": 1})
+		for {
+			if err := websocket.Message.Receive(ws, &raw); err != nil {
+				return
+			}
+			var env struct {
+				Op int             `json:"op"`
+				D  json.RawMessage `json:"d"`
+			}
+			_ = json.Unmarshal([]byte(raw), &env)
+			var req struct {
+				RequestType string `json:"requestType"`
+				RequestID   string `json:"requestId"`
+			}
+			_ = json.Unmarshal(env.D, &req)
+			resp := map[string]any{}
+			switch req.RequestType {
+			case "GetVersion":
+				resp = map[string]any{"obsVersion": "30.2.3", "obsWebSocketVersion": "5.4.2"}
+			case "GetSceneList":
+				resp = map[string]any{
+					"currentProgramSceneName": "Main",
+					"scenes": []any{
+						map[string]any{"sceneName": "Enhance"},
+						map[string]any{"sceneName": "Main"},
+					},
+				}
+			}
+			sendMsg(7, map[string]any{
+				"requestType":   req.RequestType,
+				"requestId":     req.RequestID,
+				"requestStatus": map[string]any{"result": true, "code": 100},
+				"responseData":  resp,
+			})
+		}
+	}))
+	defer obsSrv.Close()
+
+	client := obs.NewClient(nil, nil)
+	host, portStr, _ := net.SplitHostPort(obsSrv.Listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	require.NoError(t, client.Connect(context.Background(), host, port, ""))
+	defer client.Disconnect()
+
+	fyneApp := test.NewApp()
+	defer fyneApp.Quit()
+	win := fyneApp.NewWindow("Condition Editor Test")
+	defer win.Close()
+
+	actLabels := []string{"Enhance Zoom"}
+	actToID := map[string]string{"Enhance Zoom": "act-zoom"}
+	idToAct := map[string]string{"act-zoom": "Enhance Zoom"}
+
+	ed := newBotConditionEditor(win, client, config.BotSubActionDef{Kind: "if_else"}, actLabels, actToID, idToAct, nil)
+	defer ed.Close()
+	win.SetContent(ed.CanvasObject())
+
+	// Picking Current OBS Scene preset normalizes LHS to %obs.scene% and loads OBS scenes for RHS.
+	ed.lhsEntry.SetText(botOptionLabel(botConditionLHSPresetOptions, "%obs.scene%"))
+	require.Equal(t, "%obs.scene%", ed.lhsEntry.Text)
+	require.Eventually(t, func() bool {
+		ed.mu.RLock()
+		n := len(ed.obsScenes)
+		ed.mu.RUnlock()
+		return n == 2 && strings.Contains(ed.rhsHintLbl.Text, "2 OBS scenes")
+	}, 3*time.Second, 20*time.Millisecond)
+
+	ed.rhsEntry.SetText("Enhance")
+	ed.thenBranch.modeSelect.SetSelected(botOptionLabel(botConditionBranchModeOptions, "run_action_break"))
+	ed.elseBranch.modeSelect.SetSelected(botOptionLabel(botConditionBranchModeOptions, "continue"))
+
+	var saved config.BotSubActionDef
+	saved.Kind = "if_else"
+	ed.ApplyTo(&saved)
+	require.Equal(t, "%obs.scene%", saved.LHS)
+	require.Equal(t, "eq", saved.Operator)
+	require.Equal(t, "Enhance", saved.RHS)
+	require.Len(t, saved.ThenSubActions, 2)
+	require.Equal(t, "run_action", saved.ThenSubActions[0].Kind)
+	require.Equal(t, "act-zoom", saved.ThenSubActions[0].TargetActionID)
+	require.Equal(t, "break", saved.ThenSubActions[1].Kind)
+	require.Empty(t, saved.ElseSubActions)
+
+	// Re-opening preserves branch mode and target action; custom multi-step branches stay intact.
+	ed2 := newBotConditionEditor(win, client, saved, actLabels, actToID, idToAct, nil)
+	defer ed2.Close()
+	require.Equal(t, botOptionLabel(botConditionBranchModeOptions, "run_action_break"), ed2.thenBranch.modeSelect.Selected)
+	require.Equal(t, "Enhance Zoom", ed2.thenBranch.actSelect.Selected)
+
+	customStep := saved
+	customStep.ThenSubActions = []config.BotSubActionDef{
+		{ID: "x1", Kind: "delay", Enabled: true, DelayMs: 250},
+		{ID: "x2", Kind: "break", Enabled: true},
+	}
+	ed3 := newBotConditionEditor(win, client, customStep, actLabels, actToID, idToAct, nil)
+	defer ed3.Close()
+	require.True(t, strings.HasPrefix(ed3.thenBranch.modeSelect.Selected, keepCustomBranchPrefix))
+	var roundTripped config.BotSubActionDef
+	ed3.ApplyTo(&roundTripped)
+	require.Len(t, roundTripped.ThenSubActions, 2)
+	require.Equal(t, "delay", roundTripped.ThenSubActions[0].Kind)
+	require.Equal(t, 250, roundTripped.ThenSubActions[0].DelayMs)
 }
 
 
