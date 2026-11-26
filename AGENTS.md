@@ -10,7 +10,7 @@
 > 4. **Pre-Commit Quality Gate**: Before every single commit, ALWAYS run:
 >    - `golangci-lint-v2 run ./...` (must report 0 issues)
 >    - `go fix --diff ./...` (must report 0 diff)
->    - `go test -count=1 -v ./...` (all unit tests must pass)
+>    - `go test -count=1 ./...` (all unit tests must pass; omit `-v` to minimize output)
 > 5. **User tests GUI before committing**: Always stop and let the user manually test the GUI before any changes are committed to git.
 > 6. **Prioritize Built-in Agent Tools Over Shelling Out**: Always use built-in tools (`grep_search`, `list_dir`, `view_file`) for searching code, finding files, and inspecting contents. Do not shell out when built-in tools are capable of performing the operation. Only shell out via `run_command` when strictly necessary (e.g., git operations, building/running code, tests, or `gh` CLI).
 > 7. **Always Build via WSL (`./build.sh win`) & Output Location**: Always build binaries from WSL (`wsl -e bash -lc "./build.sh win"`), NEVER natively on Windows via `go build` (which omits `-ldflags="-H windowsgui"` and launcher packaging, causing a console terminal window to open). Regenerate Protobuf Go bindings via `./build.sh proto` after editing `proto/`. All temporary binaries, DLLs, and build artifacts belong in `build/` (e.g., `build/bin/`), which is gitignored. Never commit binaries or model weights.

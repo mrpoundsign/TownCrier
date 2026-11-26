@@ -19,6 +19,7 @@ import (
 )
 
 func TestCheckVersionAndCapabilities(t *testing.T) {
+	t.Parallel()
 	require.Nil(t, CheckVersion(1, 0))
 
 	errZero := CheckVersion(0, 0)
@@ -43,6 +44,7 @@ func TestCheckVersionAndCapabilities(t *testing.T) {
 }
 
 func TestKVStoreLifecycle(t *testing.T) {
+	t.Parallel()
 	kv := NewKVStore(":memory:")
 	defer func() { _ = kv.Close() }()
 	ctx := context.Background()
@@ -77,6 +79,7 @@ func TestKVStoreLifecycle(t *testing.T) {
 }
 
 func TestIsHostAllowedAndExecuteHTTP(t *testing.T) {
+	t.Parallel()
 	require.True(t, IsHostAllowed("https://api.twitch.tv/helix/users", []string{"api.twitch.tv"}))
 	require.True(t, IsHostAllowed("https://sub.example.com/path", []string{"*.example.com"}))
 	require.False(t, IsHostAllowed("https://example.com/path", []string{"*.example.com"}))
@@ -107,6 +110,7 @@ func TestIsHostAllowedAndExecuteHTTP(t *testing.T) {
 }
 
 func TestSettingsKeyringRouting(t *testing.T) {
+	t.Parallel()
 	cfg := config.DefaultConfig()
 	sec := secrets.NewMemoryStore()
 	mgr := NewManager(Options{
@@ -163,6 +167,7 @@ func TestSettingsKeyringRouting(t *testing.T) {
 }
 
 func TestNativeTrustGateAndTamperDetection(t *testing.T) {
+	t.Parallel()
 	baseDir := t.TempDir()
 	plugDir := filepath.Join(baseDir, "native", "demo")
 	require.NoError(t, os.MkdirAll(plugDir, 0o755))
@@ -217,6 +222,7 @@ func TestNativeTrustGateAndTamperDetection(t *testing.T) {
 }
 
 func TestValidateManifestUIViewsPermission(t *testing.T) {
+	t.Parallel()
 	apiErr := ValidateManifest(&pluginv1.Manifest{
 		Uuid: "com.example.noui",
 		Name: "No UI Perm",
@@ -240,6 +246,7 @@ func TestValidateManifestUIViewsPermission(t *testing.T) {
 }
 
 func TestPushUIUpdateHostCallAndSubscription(t *testing.T) {
+	t.Parallel()
 	mgr := NewManager(Options{KVDBPath: ":memory:", Secrets: secrets.NewMemoryStore()})
 	defer func() { _ = mgr.Close() }()
 
@@ -304,6 +311,7 @@ func (f *fakeBotBackend) SetTimer(_, _ string, _ uint32) *pluginv1.APIError { re
 func (f *fakeBotBackend) Close() error                                      { return nil }
 
 func TestBeforeTTSAndRunPluginActionAndBotHostCalls(t *testing.T) {
+	t.Parallel()
 	var sentChat *pluginv1.SendChatRequest
 	var modReq *pluginv1.ModerateRequest
 	var setVarReq *pluginv1.SetVarRequest
@@ -478,6 +486,7 @@ func (s *stubBackend) SetTimer(_, _ string, _ uint32) *pluginv1.APIError { retur
 func (s *stubBackend) Close() error                                        { return nil }
 
 func TestBeforeTTSMiddlewareAndTimeoutBudget(t *testing.T) {
+	t.Parallel()
 	mgr := NewManager(Options{KVDBPath: ":memory:", Secrets: secrets.NewMemoryStore()})
 	defer func() { _ = mgr.Close() }()
 
@@ -535,6 +544,7 @@ func TestBeforeTTSMiddlewareAndTimeoutBudget(t *testing.T) {
 }
 
 func TestRunPluginActionAndBotHostCalls(t *testing.T) {
+	t.Parallel()
 	var sentChat *pluginv1.SendChatRequest
 	var modReq *pluginv1.ModerateRequest
 	var emitted *pluginv1.EmitTriggerRequest

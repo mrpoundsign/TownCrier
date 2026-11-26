@@ -34,6 +34,7 @@ func TestEndToEndWasmAndNativeReferencePlugins(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Go compiler e2e plugin build in -short mode")
 	}
+	t.Parallel()
 
 	root := repoRootFromPluginHost(t)
 	baseDir := t.TempDir()
@@ -42,24 +43,37 @@ func TestEndToEndWasmAndNativeReferencePlugins(t *testing.T) {
 	require.NoError(t, os.MkdirAll(wasmDir, 0o755))
 	require.NoError(t, os.MkdirAll(nativeDir, 0o755))
 
-	// 1. Build wasm-greeter -> .wasm (WASI reactor)
+	// Build wasm-greeter and native-echo concurrently to cut compiler wait time in half.
 	wasmOut := filepath.Join(wasmDir, "wasm-greeter.wasm")
-	buildWasm := exec.Command("go", "build", "-buildmode=c-shared", "-o", wasmOut, "./examples/plugins/wasm-greeter")
-	buildWasm.Dir = root
-	buildWasm.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
-	out, err := buildWasm.CombinedOutput()
-	require.NoError(t, err, "build wasm-greeter failed: %s", string(out))
-
-	// 2. Build native-echo -> native binary + copy plugin.json
 	binName := "native-echo"
 	if runtime.GOOS == "windows" {
 		binName += ".exe"
 	}
 	nativeBinOut := filepath.Join(nativeDir, binName)
-	buildNative := exec.Command("go", "build", "-o", nativeBinOut, "./examples/plugins/native-echo")
-	buildNative.Dir = root
-	out, err = buildNative.CombinedOutput()
-	require.NoError(t, err, "build native-echo failed: %s", string(out))
+
+	var (
+		wasmErr, nativeErr error
+		wasmOutLog, nativeOutLog []byte
+		buildWG sync.WaitGroup
+	)
+	buildWG.Add(2)
+	go func() {
+		defer buildWG.Done()
+		cmd := exec.Command("go", "build", "-buildmode=c-shared", "-o", wasmOut, "./examples/plugins/wasm-greeter")
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+		wasmOutLog, wasmErr = cmd.CombinedOutput()
+	}()
+	go func() {
+		defer buildWG.Done()
+		cmd := exec.Command("go", "build", "-o", nativeBinOut, "./examples/plugins/native-echo")
+		cmd.Dir = root
+		nativeOutLog, nativeErr = cmd.CombinedOutput()
+	}()
+	buildWG.Wait()
+	require.NoError(t, wasmErr, "build wasm-greeter failed: %s", string(wasmOutLog))
+	require.NoError(t, nativeErr, "build native-echo failed: %s", string(nativeOutLog))
+
 	pjBytes, err := os.ReadFile(filepath.Join(root, "examples", "plugins", "native-echo", "plugin.json"))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(nativeDir, "plugin.json"), pjBytes, 0o644))
@@ -328,6 +342,7 @@ func TestEndToEndWasmAndNativeReferencePlugins(t *testing.T) {
 }
 
 func TestVersionMismatchHandshakeError(t *testing.T) {
+	t.Parallel()
 	// Verify native TCRP preamble over a stream rejects incompatible major API version with structured APIError.
 	clientConn, serverConn := net.Pipe()
 	defer func() { _ = clientConn.Close() }()
@@ -363,6 +378,7 @@ func TestEndToEndNativeUIAndOverlayAssetPlugin(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Go compiler e2e plugin build in -short mode")
 	}
+	t.Parallel()
 
 	root := repoRootFromPluginHost(t)
 	baseDir := t.TempDir()

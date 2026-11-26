@@ -133,12 +133,26 @@ run_lint() {
     echo "✓ Lint passed (0 issues)!"
 }
 
+run_test_quiet() {
+    local label="$1"
+    shift
+    local log_file="$BUILD_DIR/test_output.log"
+    local start_ts
+    start_ts=$(date +%s)
+    if ! "$@" >"$log_file" 2>&1; then
+        echo "✗ ${label} failed:"
+        cat "$log_file"
+        rm -f "$log_file"
+        exit 1
+    fi
+    local elapsed=$(( $(date +%s) - start_ts ))
+    rm -f "$log_file"
+    echo "✓ ${label} passed (${elapsed}s)"
+}
+
 run_test() {
-    echo "==> Running unit tests with race detector..."
-    go test -race -timeout 180s -count=1 -v ./...
-    echo "==> Running multi-count race stress tests (-count=5) on concurrent core packages..."
-    go test -race -timeout 180s -count=5 ./internal/app/... ./pkg/queue/... ./pkg/platform/... ./internal/eventlog/...
-    echo "✓ All unit and race tests passed!"
+    run_test_quiet "Unit tests (with race detector)" go test -race -timeout 180s -count=1 ./...
+    run_test_quiet "Concurrent race stress tests (-count=5)" go test -race -timeout 180s -count=5 ./internal/app/... ./pkg/queue/... ./pkg/platform/... ./internal/eventlog/...
 }
 
 build_win() {
