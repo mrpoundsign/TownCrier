@@ -7,6 +7,7 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -162,4 +163,60 @@ func TestPluginImageCacheFetchAndAllowlist(t *testing.T) {
 	})
 	require.NotNil(t, syncHit)
 	_ = fyne.NewSize(4, 4)
+}
+
+func TestPluginUIReconcilerApplySnapshotPreservesCanvasFocusAndCursor(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	w := a.NewWindow("ReconcilerFocusTest")
+	defer w.Close()
+
+	var mu sync.Mutex
+	var events []*pluginv1.UIEvent
+	rec := NewPluginUIReconciler(w, "main", NewPluginImageCache(nil), ReconcilerCallbacks{
+		OnUIEvent: func(ev *pluginv1.UIEvent) {
+			mu.Lock()
+			events = append(events, ev)
+			mu.Unlock()
+		},
+	})
+
+	snap1 := ui.Snapshot("main", 1, ui.VBox("root",
+		ui.TextInput("search", ui.WithValue(""), ui.WithDebounce(50)),
+	))
+	rec.ApplySnapshot(snap1)
+	w.SetContent(rec.Root())
+
+	entry := rec.nodes["search"].entry
+	require.NotNil(t, entry)
+	w.Canvas().Focus(entry)
+	test.Type(entry, "hello")
+	entry.CursorColumn = 3
+	require.Equal(t, "hello", entry.Text)
+	require.True(t, rec.nodes["search"].hasPending)
+
+	// Full snapshot arrives with stale server Value "he" while user has typed "hello"
+	snap2 := ui.Snapshot("main", 2, ui.VBox("root",
+		ui.TextInput("search", ui.WithValue("he"), ui.WithDebounce(50)),
+	))
+	rec.ApplySnapshot(snap2)
+
+	newEntry := rec.nodes["search"].entry
+	require.NotNil(t, newEntry)
+	require.NotSame(t, entry, newEntry)
+	require.Equal(t, newEntry, w.Canvas().Focused(), "ApplySnapshot must restore Fyne canvas focus to rebuilt TextInput")
+	require.Equal(t, "hello", newEntry.Text)
+	require.Equal(t, 3, newEntry.CursorColumn)
+
+	mu.Lock()
+	syncCount := len(events)
+	mu.Unlock()
+	require.Equal(t, 0, syncCount, "discarded entry FocusLost must not emit stale CHANGE synchronously during ApplySnapshot")
+
+	// Wait past the 50ms debounce to verify the re-armed timer delivers "hello"
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(events) == 1 && events[0].GetStringValue() == "hello"
+	}, 2*time.Second, 15*time.Millisecond)
 }

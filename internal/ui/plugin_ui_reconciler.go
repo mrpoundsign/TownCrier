@@ -45,6 +45,13 @@ func (e *focusAwareEntry) FocusLost() {
 	}
 }
 
+type focusedEntryState struct {
+	text       string
+	cursorRow  int
+	cursorCol  int
+	hasPending bool
+}
+
 type reconciledNode struct {
 	id       string
 	kind     string
@@ -151,7 +158,12 @@ func (r *PluginUIReconciler) ApplySnapshot(snap *pluginv1.UISnapshot) {
 	}
 
 	// Capture existing scroll positions, selected tabs, and focused input state before rebuilding.
-	oldFocused := make(map[string]string)
+	var canvasFocused fyne.Focusable
+	if r.window != nil && r.window.Canvas() != nil {
+		canvasFocused = r.window.Canvas().Focused()
+	}
+	oldFocused := make(map[string]focusedEntryState)
+	var refocusID string
 	for id, n := range r.nodes {
 		if n.scrollCont != nil {
 			r.scrollOffsets[id] = n.scrollCont.Offset
@@ -166,9 +178,19 @@ func (r *PluginUIReconciler) ApplySnapshot(snap *pluginv1.UISnapshot) {
 				}
 			}
 		}
-		if n.focused && n.entry != nil {
-			oldFocused[id] = n.entry.Text
+		if n.entry != nil && (n.focused || (canvasFocused != nil && canvasFocused == n.entry)) {
+			oldFocused[id] = focusedEntryState{
+				text:       n.entry.Text,
+				cursorRow:  n.entry.CursorRow,
+				cursorCol:  n.entry.CursorColumn,
+				hasPending: n.hasPending,
+			}
+			refocusID = id
 		}
+		// Disarm old entry state before cleanup/Focus so FocusLost on the discarded widget
+		// cannot fire a stale duplicate CHANGE event.
+		n.hasPending = false
+		n.focused = false
 		r.cleanupNodeTimers(n)
 	}
 
@@ -181,13 +203,22 @@ func (r *PluginUIReconciler) ApplySnapshot(snap *pluginv1.UISnapshot) {
 	r.rootWrap.Objects = []fyne.CanvasObject{rootObj}
 	r.rootWrap.Refresh()
 
-	// Restore scroll offsets and tab selections.
+	// Restore scroll offsets, tab selections, and active TextInput focus/cursor.
 	for id, n := range r.nodes {
 		if n.scrollCont != nil {
 			if pos, ok := r.scrollOffsets[id]; ok {
 				n.scrollCont.Offset = pos
 				n.scrollCont.Refresh()
 			}
+		}
+	}
+	if refocusID != "" && r.window != nil && r.window.Canvas() != nil {
+		if rebuilt := r.nodes[refocusID]; rebuilt != nil && rebuilt.entry != nil && !rebuilt.entry.Disabled() {
+			row, col := rebuilt.entry.CursorRow, rebuilt.entry.CursorColumn
+			r.window.Canvas().Focus(rebuilt.entry)
+			rebuilt.entry.CursorRow = row
+			rebuilt.entry.CursorColumn = col
+			rebuilt.entry.Refresh()
 		}
 	}
 }
@@ -628,7 +659,7 @@ func itoa(n int) string {
 	return string(buf[i:])
 }
 
-func (r *PluginUIReconciler) buildNode(parentID string, node *pluginv1.UINode, focusedTexts map[string]string) fyne.CanvasObject {
+func (r *PluginUIReconciler) buildNode(parentID string, node *pluginv1.UINode, focusedTexts map[string]focusedEntryState) fyne.CanvasObject {
 	if node == nil {
 		return nil
 	}
@@ -1011,8 +1042,9 @@ func (r *PluginUIReconciler) buildNode(parentID string, node *pluginv1.UINode, f
 		entry.SetPlaceHolder(in.GetPlaceholder())
 
 		initialVal := in.GetValue()
-		if prevFocusedText, wasFocused := focusedTexts[id]; wasFocused && !in.GetForceValue() {
-			initialVal = prevFocusedText
+		prevFocused, wasFocused := focusedTexts[id]
+		if wasFocused && !in.GetForceValue() {
+			initialVal = prevFocused.text
 			rn.focused = true
 		}
 		rn.suppressNextChange = true
@@ -1023,14 +1055,7 @@ func (r *PluginUIReconciler) buildNode(parentID string, node *pluginv1.UINode, f
 		}
 
 		debounce := time.Duration(in.GetDebounceMs()) * time.Millisecond
-		entry.OnChanged = func(text string) {
-			if rn.suppressNextChange {
-				return
-			}
-			if debounce <= 0 {
-				r.emitEvent(id, pluginv1.UIEventKind_UI_EVENT_KIND_CHANGE, text, 0, false)
-				return
-			}
+		rearmDebounce := func(text string) {
 			rn.pendingText = text
 			rn.hasPending = true
 			if rn.debounceStop != nil {
@@ -1046,6 +1071,25 @@ func (r *PluginUIReconciler) buildNode(parentID string, node *pluginv1.UINode, f
 					r.emitEvent(id, pluginv1.UIEventKind_UI_EVENT_KIND_CHANGE, val, 0, false)
 				})
 			})
+		}
+		if wasFocused && !in.GetForceValue() {
+			runeLen := len([]rune(initialVal))
+			entry.CursorRow = max(0, prevFocused.cursorRow)
+			entry.CursorColumn = min(max(0, prevFocused.cursorCol), runeLen)
+			if debounce > 0 && (prevFocused.hasPending || prevFocused.text != in.GetValue()) {
+				rearmDebounce(initialVal)
+			}
+		}
+
+		entry.OnChanged = func(text string) {
+			if rn.suppressNextChange {
+				return
+			}
+			if debounce <= 0 {
+				r.emitEvent(id, pluginv1.UIEventKind_UI_EVENT_KIND_CHANGE, text, 0, false)
+				return
+			}
+			rearmDebounce(text)
 		}
 		entry.OnSubmitted = func(text string) {
 			if rn.debounceStop != nil {
@@ -1216,7 +1260,7 @@ func (r *PluginUIReconciler) buildNode(parentID string, node *pluginv1.UINode, f
 	return rn.obj
 }
 
-func (r *PluginUIReconciler) buildChildSlot(parentID string, child *pluginv1.UINode, focusedTexts map[string]string, children *[]string, slotID *string) fyne.CanvasObject {
+func (r *PluginUIReconciler) buildChildSlot(parentID string, child *pluginv1.UINode, focusedTexts map[string]focusedEntryState, children *[]string, slotID *string) fyne.CanvasObject {
 	if child == nil {
 		return nil
 	}
