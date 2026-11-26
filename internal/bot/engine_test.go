@@ -262,3 +262,147 @@ func recvObsTestMsg(ws *websocket.Conn) (struct {
 	_ = json.Unmarshal([]byte(raw), &out)
 	return out, nil
 }
+
+func TestEngineExpandedOBSSubActions(t *testing.T) {
+	st, err := OpenStore(":memory:")
+	require.NoError(t, err)
+	defer func() { _ = st.Close() }()
+
+	var mu sync.Mutex
+	var calls []string
+	var lastText string
+	var lastVisible *bool
+	var lastFilterEnabled *bool
+	var lastVolMul float64
+
+	obsSrv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		defer func() { _ = ws.Close() }()
+		_ = sendObsTestMsg(ws, 0, map[string]any{"obsWebSocketVersion": "5.4.2", "rpcVersion": 1})
+		_, _ = recvObsTestMsg(ws)
+		_ = sendObsTestMsg(ws, 2, map[string]any{"negotiatedRpcVersion": 1})
+		for {
+			reqEnv, rErr := recvObsTestMsg(ws)
+			if rErr != nil {
+				return
+			}
+			var req struct {
+				RequestType string         `json:"requestType"`
+				RequestID   string         `json:"requestId"`
+				RequestData map[string]any `json:"requestData"`
+			}
+			_ = json.Unmarshal(reqEnv.D, &req)
+			mu.Lock()
+			calls = append(calls, req.RequestType)
+			mu.Unlock()
+
+			resp := map[string]any{}
+			switch req.RequestType {
+			case "GetVersion":
+				resp = map[string]any{"obsVersion": "30.2.3", "obsWebSocketVersion": "5.4.2"}
+			case "GetSceneList":
+				resp = map[string]any{
+					"currentProgramSceneName": "Main",
+					"scenes":                  []any{map[string]any{"sceneName": "Main"}},
+				}
+			case "GetSceneItemId":
+				resp = map[string]any{"sceneItemId": 12}
+			case "GetSourceFilter":
+				resp = map[string]any{"filterEnabled": false}
+			case "SetSourceFilterEnabled":
+				v, _ := req.RequestData["filterEnabled"].(bool)
+				mu.Lock()
+				lastFilterEnabled = &v
+				mu.Unlock()
+			case "GetSceneItemTransform":
+				resp = map[string]any{
+					"sceneItemTransform": map[string]any{
+						"positionX": 100.0, "positionY": 100.0, "rotation": 0.0,
+						"scaleX": 1.0, "scaleY": 1.0, "width": 800.0, "height": 450.0,
+						"alignment": 5, "boundsType": "OBS_BOUNDS_NONE",
+					},
+				}
+			case "SetInputSettings":
+				if settings, ok := req.RequestData["inputSettings"].(map[string]any); ok {
+					mu.Lock()
+					lastText, _ = settings["text"].(string)
+					mu.Unlock()
+				}
+			case "GetInputVolume":
+				resp = map[string]any{"inputVolumeMul": 0.125}
+			case "SetInputVolume":
+				v, _ := req.RequestData["inputVolumeMul"].(float64)
+				mu.Lock()
+				lastVolMul = v
+				mu.Unlock()
+			case "SetSceneItemEnabled":
+				v, _ := req.RequestData["sceneItemEnabled"].(bool)
+				mu.Lock()
+				lastVisible = &v
+				mu.Unlock()
+			case "CustomEcho":
+				who, _ := req.RequestData["who"].(string)
+				resp = map[string]any{"echoed": who}
+			}
+			_ = sendObsTestMsg(ws, 7, map[string]any{
+				"requestType":   req.RequestType,
+				"requestId":     req.RequestID,
+				"requestStatus": map[string]any{"result": true, "code": 100},
+				"responseData":  resp,
+			})
+		}
+	}))
+	defer obsSrv.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Bot.Enabled = true
+	cfg.Bot.Actions = []config.BotActionDef{
+		{
+			ID:      "act-enhance",
+			Name:    "Enhance Bit",
+			Enabled: true,
+			SubActions: []config.BotSubActionDef{
+				{ID: "s1", Kind: "obs", Enabled: true, OBSOperation: "set_filter_enabled", OBSSource: "Camera", OBSFilter: "EnhanceMove"},
+				{ID: "s2", Kind: "obs", Enabled: true, OBSOperation: "zoom_source", OBSScene: "Main", OBSSource: "Camera", OBSZoomFactor: 1.5},
+				{ID: "s3", Kind: "obs", Enabled: true, OBSOperation: "reset_transform", OBSScene: "Main", OBSSource: "Camera"},
+				{ID: "s4", Kind: "obs", Enabled: true, OBSOperation: "set_text", OBSInput: "BannerText", Text: "Enhance by %user%"},
+				{ID: "s5", Kind: "obs", Enabled: true, OBSOperation: "set_volume", OBSInput: "Mic/Aux", OBSMode: "step", OBSVolumePct: 25},
+				{ID: "s6", Kind: "obs", Enabled: true, OBSOperation: "custom_request", OBSRequestType: "CustomEcho", OBSRequestData: `{"who":"%user%"}`},
+				{ID: "s7", Kind: "obs", Enabled: true, OBSOperation: "set_source_visible", OBSScene: "Main", OBSSource: "Camera", OBSVisible: false},
+				{ID: "s8", Kind: "send_chat", Enabled: true, Platform: "twitch", Text: "resp=%obsResponse%"},
+			},
+		},
+	}
+
+	chatCh := make(chan string, 1)
+	eng := NewEngine(st, HostBridge{
+		GetConfig: func() *config.Config { return cfg.Clone() },
+		SendChat: func(_ context.Context, _, _, text, _ string, _ bool, _ string) error {
+			chatCh <- text
+			return nil
+		},
+	})
+	defer func() { _ = eng.Close() }()
+
+	host, portStr, _ := net.SplitHostPort(obsSrv.Listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	require.NoError(t, eng.OBSClient().Connect(context.Background(), host, port, ""))
+
+	require.NoError(t, eng.RunActionByID("act-enhance", map[string]string{"user": "Alice"}, false))
+
+	select {
+	case msg := <-chatCh:
+		require.Equal(t, `resp={"echoed":"Alice"}`, msg)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for expanded OBS action chain")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotNil(t, lastFilterEnabled)
+	require.True(t, *lastFilterEnabled)
+	require.Equal(t, "Enhance by Alice", lastText)
+	require.InDelta(t, 0.421875, lastVolMul, 0.0001)
+	require.NotNil(t, lastVisible)
+	require.False(t, *lastVisible)
+	require.Contains(t, calls, "SetSceneItemTransform")
+}

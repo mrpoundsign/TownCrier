@@ -61,12 +61,65 @@ var botSubActionKindOptions = []botOption{
 
 var botOBSOperationOptions = []botOption{
 	{Key: "set_scene", Label: "Switch Scene"},
-	{Key: "set_source_visible", Label: "Show / Hide Source"},
-	{Key: "set_mute", Label: "Mute / Unmute Input"},
+	{Key: "previous_scene", Label: "Switch to Previous Scene"},
+	{Key: "set_source_visible", Label: "Show / Hide / Toggle Source"},
+	{Key: "set_filter_enabled", Label: "Enable / Disable / Toggle Filter"},
+	{Key: "zoom_source", Label: "Zoom Source (Relative Step)"},
+	{Key: "set_transform", Label: "Set Source Transform"},
+	{Key: "reset_transform", Label: "Reset Source Transform"},
+	{Key: "set_mute", Label: "Mute / Unmute / Toggle Input"},
+	{Key: "set_volume", Label: "Set / Step Input Volume"},
+	{Key: "set_text", Label: "Set Text Source"},
+	{Key: "media_action", Label: "Control Media Playback"},
+	{Key: "refresh_browser", Label: "Refresh Browser Source"},
+	{Key: "set_transition", Label: "Set Scene Transition"},
+	{Key: "studio_mode", Label: "Studio Mode Action"},
 	{Key: "toggle_record", Label: "Toggle Recording"},
 	{Key: "toggle_stream", Label: "Toggle Streaming"},
 	{Key: "save_replay", Label: "Save Replay Buffer"},
-	{Key: "refresh_browser", Label: "Refresh Browser Source"},
+	{Key: "custom_request", Label: "Custom OBS WebSocket Request"},
+}
+
+var botOBSSceneTargetOptions = []botOption{
+	{Key: "program", Label: "Program (Live)"},
+	{Key: "preview", Label: "Preview (Studio Mode)"},
+}
+
+var botOBSVisibilityModeOptions = []botOption{
+	{Key: "toggle", Label: "Toggle"},
+	{Key: "show", Label: "Show"},
+	{Key: "hide", Label: "Hide"},
+}
+
+var botOBSFilterModeOptions = []botOption{
+	{Key: "toggle", Label: "Toggle"},
+	{Key: "enable", Label: "Enable"},
+	{Key: "disable", Label: "Disable"},
+}
+
+var botOBSMuteModeOptions = []botOption{
+	{Key: "toggle", Label: "Toggle"},
+	{Key: "mute", Label: "Mute"},
+	{Key: "unmute", Label: "Unmute"},
+}
+
+var botOBSVolumeModeOptions = []botOption{
+	{Key: "set", Label: "Set Exact Volume (%)"},
+	{Key: "step", Label: "Step Relative (+/- %)"},
+}
+
+var botOBSMediaActionOptions = []botOption{
+	{Key: "play", Label: "Play"},
+	{Key: "pause", Label: "Pause"},
+	{Key: "restart", Label: "Restart"},
+	{Key: "stop", Label: "Stop"},
+}
+
+var botOBSStudioModeOptions = []botOption{
+	{Key: "transition", Label: "Trigger Transition"},
+	{Key: "toggle", Label: "Toggle Studio Mode"},
+	{Key: "enable", Label: "Enable Studio Mode"},
+	{Key: "disable", Label: "Disable Studio Mode"},
 }
 
 var botVarScopeOptions = []botOption{

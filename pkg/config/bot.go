@@ -168,12 +168,34 @@ type BotSubActionDef struct {
 	Params         map[string]string `json:"params,omitempty"`
 
 	// OBS Studio WebSocket v5
-	OBSOperation string `json:"obs_operation,omitempty"` // "set_scene", "set_source_visible", "set_mute", "toggle_record", "toggle_stream", "save_replay", "refresh_browser"
-	OBSScene     string `json:"obs_scene,omitempty"`
-	OBSSource    string `json:"obs_source,omitempty"`
-	OBSVisible   bool   `json:"obs_visible,omitempty"`
-	OBSInput     string `json:"obs_input,omitempty"`
-	OBSMuted     bool   `json:"obs_muted,omitempty"`
+	OBSOperation   string           `json:"obs_operation,omitempty"` // "set_scene", "previous_scene", "set_source_visible", "set_filter_enabled", "zoom_source", "set_transform", "reset_transform", "set_mute", "set_volume", "set_text", "media_action", "refresh_browser", "set_transition", "studio_mode", "toggle_record", "toggle_stream", "save_replay", "custom_request"
+	OBSMode        string           `json:"obs_mode,omitempty"`
+	OBSScene       string           `json:"obs_scene,omitempty"`
+	OBSSource      string           `json:"obs_source,omitempty"`
+	OBSVisible     bool             `json:"obs_visible,omitempty"`
+	OBSFilter      string           `json:"obs_filter,omitempty"`
+	OBSInput       string           `json:"obs_input,omitempty"`
+	OBSMuted       bool             `json:"obs_muted,omitempty"`
+	OBSVolumePct   float64          `json:"obs_volume_pct,omitempty"`
+	OBSTransition  string           `json:"obs_transition,omitempty"`
+	OBSDurationMs  int              `json:"obs_duration_ms,omitempty"`
+	OBSZoomFactor  float64          `json:"obs_zoom_factor,omitempty"`
+	OBSTransform   *BotOBSTransform `json:"obs_transform,omitempty"`
+	OBSRequestType string           `json:"obs_request_type,omitempty"`
+	OBSRequestData string           `json:"obs_request_data,omitempty"`
+}
+
+// BotOBSTransform holds optional OBS scene item transform parameters (nil fields are left unchanged).
+type BotOBSTransform struct {
+	PositionX  *float64 `json:"position_x,omitempty"`
+	PositionY  *float64 `json:"position_y,omitempty"`
+	ScaleX     *float64 `json:"scale_x,omitempty"`
+	ScaleY     *float64 `json:"scale_y,omitempty"`
+	Rotation   *float64 `json:"rotation,omitempty"`
+	CropLeft   *float64 `json:"crop_left,omitempty"`
+	CropRight  *float64 `json:"crop_right,omitempty"`
+	CropTop    *float64 `json:"crop_top,omitempty"`
+	CropBottom *float64 `json:"crop_bottom,omitempty"`
 }
 
 // BotOBSConfig stores non-secret OBS Studio WebSocket v5 connection settings.
@@ -231,6 +253,31 @@ func NormalizeBotAutomationConfig(b *BotAutomationConfig) {
 	}
 }
 
+func cloneFloat64Ptr(p *float64) *float64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+func cloneOBSTransform(t *BotOBSTransform) *BotOBSTransform {
+	if t == nil {
+		return nil
+	}
+	return &BotOBSTransform{
+		PositionX:  cloneFloat64Ptr(t.PositionX),
+		PositionY:  cloneFloat64Ptr(t.PositionY),
+		ScaleX:     cloneFloat64Ptr(t.ScaleX),
+		ScaleY:     cloneFloat64Ptr(t.ScaleY),
+		Rotation:   cloneFloat64Ptr(t.Rotation),
+		CropLeft:   cloneFloat64Ptr(t.CropLeft),
+		CropRight:  cloneFloat64Ptr(t.CropRight),
+		CropTop:    cloneFloat64Ptr(t.CropTop),
+		CropBottom: cloneFloat64Ptr(t.CropBottom),
+	}
+}
+
 func cloneSubActions(src []BotSubActionDef) []BotSubActionDef {
 	if len(src) == 0 {
 		return nil
@@ -248,6 +295,7 @@ func cloneSubActions(src []BotSubActionDef) []BotSubActionDef {
 			maps.Copy(p, s.Params)
 			out[i].Params = p
 		}
+		out[i].OBSTransform = cloneOBSTransform(s.OBSTransform)
 		out[i].ThenSubActions = cloneSubActions(s.ThenSubActions)
 		out[i].ElseSubActions = cloneSubActions(s.ElseSubActions)
 	}

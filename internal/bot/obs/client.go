@@ -128,6 +128,9 @@ type Client struct {
 	onEvent     func(Event)
 	onStatus    func(ClientStatus)
 	manualClose bool
+
+	stateMu sync.RWMutex
+	state   clientState
 }
 
 // NewClient creates an OBS WebSocket v5 client invoking onEvent and onStatus outside internal locks.
@@ -137,6 +140,7 @@ func NewClient(onEvent func(Event), onStatus func(ClientStatus)) *Client {
 		pending:  make(map[string]chan pendingResult),
 		onEvent:  onEvent,
 		onStatus: onStatus,
+		state:    newClientState(),
 	}
 }
 
@@ -282,6 +286,7 @@ func (c *Client) connectOnce(ctx context.Context, host string, port int, passwor
 		OBSVersion:       obsVer,
 		WebSocketVersion: wsVer,
 	})
+	go c.hydrateDiscovery()
 	return nil
 }
 
@@ -382,69 +387,6 @@ func (c *Client) Call(ctx context.Context, requestType string, requestData map[s
 	}
 }
 
-// SetCurrentProgramScene switches OBS's active program scene.
-func (c *Client) SetCurrentProgramScene(ctx context.Context, sceneName string) error {
-	_, err := c.Call(ctx, "SetCurrentProgramScene", map[string]any{"sceneName": sceneName})
-	return err
-}
-
-// SetSceneItemEnabled resolves sourceName inside sceneName and sets its visibility.
-func (c *Client) SetSceneItemEnabled(ctx context.Context, sceneName, sourceName string, enabled bool) error {
-	idData, err := c.Call(ctx, "GetSceneItemId", map[string]any{
-		"sceneName":  sceneName,
-		"sourceName": sourceName,
-	})
-	if err != nil {
-		return err
-	}
-	itemID, ok := idData["sceneItemId"]
-	if !ok {
-		return fmt.Errorf("scene item %q not found in %q", sourceName, sceneName)
-	}
-	_, err = c.Call(ctx, "SetSceneItemEnabled", map[string]any{
-		"sceneName":        sceneName,
-		"sceneItemId":      itemID,
-		"sceneItemEnabled": enabled,
-	})
-	return err
-}
-
-// SetInputMute sets mute state on an OBS audio input source.
-func (c *Client) SetInputMute(ctx context.Context, inputName string, muted bool) error {
-	_, err := c.Call(ctx, "SetInputMute", map[string]any{
-		"inputName":  inputName,
-		"inputMuted": muted,
-	})
-	return err
-}
-
-// ToggleRecord toggles OBS recording output.
-func (c *Client) ToggleRecord(ctx context.Context) error {
-	_, err := c.Call(ctx, "ToggleRecord", nil)
-	return err
-}
-
-// ToggleStream toggles OBS streaming output.
-func (c *Client) ToggleStream(ctx context.Context) error {
-	_, err := c.Call(ctx, "ToggleStream", nil)
-	return err
-}
-
-// SaveReplayBuffer saves the active OBS replay buffer.
-func (c *Client) SaveReplayBuffer(ctx context.Context) error {
-	_, err := c.Call(ctx, "SaveReplayBuffer", nil)
-	return err
-}
-
-// RefreshBrowserSource triggers OBS's refreshnocache button on a browser source input.
-func (c *Client) RefreshBrowserSource(ctx context.Context, inputName string) error {
-	_, err := c.Call(ctx, "PressInputPropertiesButton", map[string]any{
-		"inputName":    inputName,
-		"propertyName": "refreshnocache",
-	})
-	return err
-}
-
 func (c *Client) readLoop(conn *websocket.Conn, gen uint64, dropCh chan struct{}) {
 	defer close(dropCh)
 	for {
@@ -500,10 +442,13 @@ func (c *Client) readLoop(conn *websocket.Conn, gen uint64, dropCh chan struct{}
 			if err := json.Unmarshal(env.D, &ev); err != nil {
 				continue
 			}
-			if c.onEvent != nil && ev.EventType != "" {
-				cb := c.onEvent
+			if ev.EventType != "" {
 				e := Event{Type: ev.EventType, Data: ev.EventData}
-				go cb(e)
+				c.applyEventState(e)
+				if c.onEvent != nil {
+					cb := c.onEvent
+					go cb(e)
+				}
 			}
 		}
 	}
@@ -539,6 +484,10 @@ func (c *Client) closeActiveConn(manual bool, waitErr error) {
 		delete(c.pending, id)
 	}
 	c.mu.Unlock()
+
+	c.stateMu.Lock()
+	c.state = newClientState()
+	c.stateMu.Unlock()
 
 	if conn != nil {
 		_ = conn.Close()

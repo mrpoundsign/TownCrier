@@ -998,7 +998,81 @@ func TestVoiceDetectionMasterToggleAndGating(t *testing.T) {
 	}
 }
 
+func TestBotOBSSubActionCloneAndRoundTrip(t *testing.T) {
+	posX := 120.5
+	scaleX := 1.75
+	cropTop := 12.0
+	cfg := DefaultConfig()
+	cfg.Bot.Enabled = true
+	cfg.Bot.Actions = []BotActionDef{
+		{
+			ID:      "act-obs",
+			Name:    "Enhance",
+			Enabled: true,
+			SubActions: []BotSubActionDef{
+				{
+					ID:             "sa-obs-1",
+					Kind:           "obs",
+					Enabled:        true,
+					OBSOperation:   "set_transform",
+					OBSMode:        "show",
+					OBSScene:       "Main",
+					OBSSource:      "Camera",
+					OBSFilter:      "ColorGrade",
+					OBSInput:       "Mic/Aux",
+					OBSVolumePct:   65.5,
+					OBSTransition:  "Fade",
+					OBSDurationMs:  450,
+					OBSZoomFactor:  1.5,
+					OBSRequestType: "TriggerHotkeyByName",
+					OBSRequestData: `{"hotkeyName":"OBSBasic.Screenshot"}`,
+					OBSTransform: &BotOBSTransform{
+						PositionX: &posX,
+						ScaleX:    &scaleX,
+						CropTop:   &cropTop,
+					},
+				},
+			},
+		},
+	}
 
+	cloned := cfg.Clone()
+	*cloned.Bot.Actions[0].SubActions[0].OBSTransform.PositionX = 999.0
+	*cloned.Bot.Actions[0].SubActions[0].OBSTransform.ScaleX = 3.0
+	if *cfg.Bot.Actions[0].SubActions[0].OBSTransform.PositionX != 120.5 ||
+		*cfg.Bot.Actions[0].SubActions[0].OBSTransform.ScaleX != 1.75 {
+		t.Fatal("expected Clone() to deep-copy BotOBSTransform float pointers")
+	}
 
-
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(cfgPath, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	sa := loaded.Bot.Actions[0].SubActions[0]
+	if sa.OBSOperation != "set_transform" ||
+		sa.OBSMode != "show" ||
+		sa.OBSScene != "Main" ||
+		sa.OBSSource != "Camera" ||
+		sa.OBSFilter != "ColorGrade" ||
+		sa.OBSInput != "Mic/Aux" ||
+		sa.OBSVolumePct != 65.5 ||
+		sa.OBSTransition != "Fade" ||
+		sa.OBSDurationMs != 450 ||
+		sa.OBSZoomFactor != 1.5 ||
+		sa.OBSRequestType != "TriggerHotkeyByName" ||
+		sa.OBSRequestData != `{"hotkeyName":"OBSBasic.Screenshot"}` {
+		t.Fatalf("unexpected OBS fields after round-trip: %+v", sa)
+	}
+	if sa.OBSTransform == nil ||
+		sa.OBSTransform.PositionX == nil || *sa.OBSTransform.PositionX != 120.5 ||
+		sa.OBSTransform.ScaleX == nil || *sa.OBSTransform.ScaleX != 1.75 ||
+		sa.OBSTransform.CropTop == nil || *sa.OBSTransform.CropTop != 12.0 ||
+		sa.OBSTransform.PositionY != nil {
+		t.Fatalf("unexpected OBSTransform after round-trip: %+v", sa.OBSTransform)
+	}
+}
 

@@ -68,6 +68,8 @@ type BotTabView struct {
 	obsConnectBtn    *widget.Button
 	obsDisconnectBtn *widget.Button
 	obsTestBtn       *widget.Button
+	obsInventoryLbl  *widget.Label
+	obsRefreshBtn    *widget.Button
 
 	initializing bool
 }
@@ -203,6 +205,40 @@ func (v *BotTabView) updateOBSStatusBadge(st obs.ClientStatus) {
 	if v.obsStatusLbl.Text != next {
 		v.obsStatusLbl.SetText(next)
 	}
+	v.refreshOBSInventorySummary()
+}
+
+func (v *BotTabView) refreshOBSInventorySummary() {
+	if v.obsInventoryLbl == nil {
+		return
+	}
+	client := v.obsClient()
+	if client == nil || !client.IsConnected() {
+		v.obsInventoryLbl.SetText("Connect to OBS Studio to discover scenes, sources, inputs, filters, and transitions automatically.")
+		if v.obsRefreshBtn != nil {
+			v.obsRefreshBtn.Disable()
+		}
+		return
+	}
+	snap := client.DiscoverySnapshot()
+	cur := snap.CurrentScene
+	if cur == "" {
+		cur = "(unknown)"
+	}
+	v.obsInventoryLbl.SetText(fmt.Sprintf(
+		"Discovered: %d scenes • %d inputs • %d transitions • Active scene: %s",
+		len(snap.Scenes), len(snap.Inputs), len(snap.Transitions), cur,
+	))
+	if v.obsRefreshBtn != nil {
+		v.obsRefreshBtn.Enable()
+	}
+}
+
+func (v *BotTabView) obsClient() *obs.Client {
+	if v.session == nil || v.session.BotEngine() == nil {
+		return nil
+	}
+	return v.session.BotEngine().OBSClient()
 }
 
 func (v *BotTabView) actionDisplayMap(b config.BotAutomationConfig) (labels []string, labelToID map[string]string, idToLabel map[string]string) {
@@ -1290,8 +1326,30 @@ func (v *BotTabView) summarizeSubAction(b config.BotAutomationConfig, sa config.
 		if s := strings.TrimSpace(sa.OBSSource); s != "" {
 			details = append(details, "src="+s)
 		}
+		if s := strings.TrimSpace(sa.OBSFilter); s != "" {
+			details = append(details, "filter="+s)
+		}
 		if s := strings.TrimSpace(sa.OBSInput); s != "" {
 			details = append(details, "input="+s)
+		}
+		if s := strings.TrimSpace(sa.OBSTransition); s != "" {
+			details = append(details, "transition="+s)
+		}
+		if strings.EqualFold(sa.OBSOperation, "zoom_source") && sa.OBSZoomFactor > 0 {
+			details = append(details, fmt.Sprintf("factor=%.2gx", sa.OBSZoomFactor))
+		}
+		if strings.EqualFold(sa.OBSOperation, "set_volume") {
+			if strings.EqualFold(sa.OBSMode, "step") {
+				details = append(details, fmt.Sprintf("delta=%+.0f%%", sa.OBSVolumePct))
+			} else {
+				details = append(details, fmt.Sprintf("vol=%.0f%%", sa.OBSVolumePct))
+			}
+		}
+		if strings.EqualFold(sa.OBSOperation, "custom_request") && strings.TrimSpace(sa.OBSRequestType) != "" {
+			details = append(details, "req="+strings.TrimSpace(sa.OBSRequestType))
+		}
+		if m := strings.TrimSpace(sa.OBSMode); m != "" && (!strings.EqualFold(sa.OBSOperation, "set_scene") || !strings.EqualFold(m, "program")) {
+			details = append(details, "mode="+m)
 		}
 		if len(details) > 0 {
 			return fmt.Sprintf("OBS: %s (%s)", opLbl, strings.Join(details, " "))
@@ -1493,16 +1551,7 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 	httpSaveVarEntry := widget.NewEntry()
 	httpSaveVarEntry.SetText(cur.SaveVar)
 
-	obsOpSelect := widget.NewSelect(botOptionLabels(botOBSOperationOptions), nil)
-	obsOpSelect.SetSelected(botOptionLabel(botOBSOperationOptions, cur.OBSOperation))
-	obsSceneEntry := widget.NewEntry()
-	obsSceneEntry.SetText(cur.OBSScene)
-	obsSourceEntry := widget.NewEntry()
-	obsSourceEntry.SetText(cur.OBSSource)
-	obsVisibleChk := widget.NewCheck("Visible / Muted", nil)
-	obsVisibleChk.SetChecked(cur.OBSVisible || cur.OBSMuted)
-	obsInputEntry := widget.NewEntry()
-	obsInputEntry.SetText(cur.OBSInput)
+	obsEditor := newOBSSubActionEditor(v.obsClient(), cur)
 
 	// Cascading Plugin -> Action pickers (no raw UUIDs or Action IDs exposed in UI)
 	pluginLabels, pluginLabelToUUID, pluginUUIDToLabel, pluginByUUID := v.pluginDisplayMap(cur.PluginUUID)
@@ -1654,13 +1703,9 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 				widget.NewFormItem("Save Response Var", httpSaveVarEntry),
 			)
 		case "obs":
-			items = append(items,
-				widget.NewFormItem("OBS Operation", obsOpSelect),
-				widget.NewFormItem("Scene", obsSceneEntry),
-				widget.NewFormItem("Source", obsSourceEntry),
-				widget.NewFormItem("Input", obsInputEntry),
-				widget.NewFormItem("State", obsVisibleChk),
-			)
+			detailsBox.Objects = []fyne.CanvasObject{obsEditor.CanvasObject()}
+			detailsBox.Refresh()
+			return
 		case "plugin_action":
 			items = append(items,
 				widget.NewFormItem("Plugin", pluginSelect),
@@ -1696,13 +1741,14 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		widget.NewForm(widget.NewFormItem("Step Kind", kindSelect)),
 		detailsBox,
 	))
-	body.SetMinSize(fyne.NewSize(500, 420))
+	body.SetMinSize(fyne.NewSize(540, 460))
 
 	title := "Add Sub-Action"
 	if editing {
 		title = "Edit Sub-Action"
 	}
 	dialog.ShowCustomConfirm(title, "Save", "Cancel", body, func(ok bool) {
+		defer obsEditor.Close()
 		if !ok {
 			return
 		}
@@ -1718,6 +1764,8 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		case "plugin_action":
 			cur.PluginUUID = selectedPluginUUID
 			cur.PluginActionID = selectedPluginActionID
+		case "obs":
+			obsEditor.ApplyTo(&cur)
 		default:
 			cur.Text = textEntry.Text
 		}
@@ -1745,12 +1793,6 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		cur.URL = strings.TrimSpace(httpURLEntry.Text)
 		cur.Body = httpBodyEntry.Text
 		cur.SaveVar = strings.TrimSpace(httpSaveVarEntry.Text)
-		cur.OBSOperation = botOptionKey(botOBSOperationOptions, obsOpSelect.Selected)
-		cur.OBSScene = strings.TrimSpace(obsSceneEntry.Text)
-		cur.OBSSource = strings.TrimSpace(obsSourceEntry.Text)
-		cur.OBSInput = strings.TrimSpace(obsInputEntry.Text)
-		cur.OBSVisible = obsVisibleChk.Checked
-		cur.OBSMuted = obsVisibleChk.Checked
 		cur.TargetActionID = targetMap[targetActSelect.Selected]
 		cur.LHS = ifLHSEntry.Text
 		cur.Operator = botOptionKey(botConditionOperatorOptions, ifOpSelect.Selected)
@@ -2397,6 +2439,26 @@ func (v *BotTabView) buildOBSTab() fyne.CanvasObject {
 		}
 	})
 	v.obsTestBtn = widget.NewButtonWithIcon("Test Connection", theme.ConfirmIcon(), v.testOBSConnection)
+	v.obsInventoryLbl = widget.NewLabel("")
+	v.obsInventoryLbl.Wrapping = fyne.TextWrapWord
+	v.obsRefreshBtn = widget.NewButtonWithIcon("Refresh OBS Lists", theme.ViewRefreshIcon(), func() {
+		client := v.obsClient()
+		if client == nil || !client.IsConnected() {
+			v.reportStatus("Connect to OBS Studio first.")
+			return
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = client.ListScenes(ctx, true)
+			_, _ = client.ListInputs(ctx, true)
+			_, _ = client.ListTransitions(ctx, true)
+			fyne.Do(func() {
+				v.refreshOBSInventorySummary()
+				v.reportStatus("✓ Refreshed OBS scenes, inputs, and transitions.")
+			})
+		}()
+	})
 
 	form := widget.NewForm(
 		widget.NewFormItem("OBS Host", v.obsHostEntry),
@@ -2409,12 +2471,14 @@ func (v *BotTabView) buildOBSTab() fyne.CanvasObject {
 		"Configure obs-websocket (Tools → WebSocket Server Settings in OBS Studio v28+)",
 		container.NewVBox(
 			v.obsStatusLbl,
+			v.obsInventoryLbl,
 			v.obsEnabledCheck,
 			v.obsAutoReconnChk,
 			form,
-			container.NewHBox(v.obsConnectBtn, v.obsDisconnectBtn, v.obsTestBtn),
+			container.NewHBox(v.obsConnectBtn, v.obsDisconnectBtn, v.obsTestBtn, v.obsRefreshBtn),
 		),
 	)
+	v.refreshOBSInventorySummary()
 	return newPanelVScroll(card)
 }
 

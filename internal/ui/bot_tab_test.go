@@ -1,6 +1,11 @@
 package ui
 
 import (
+	"context"
+	"encoding/json"
+	"net"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -10,8 +15,10 @@ import (
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/websocket"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/bot/obs"
 	"github.com/mrpoundsign/TownCrier/internal/pluginhost"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 	"github.com/mrpoundsign/TownCrier/pkg/pluginv1"
@@ -164,6 +171,13 @@ func TestBotTabViewFriendlyLabelsAndNoRawIDs(t *testing.T) {
 	tables := [][]botOption{
 		botSubActionKindOptions,
 		botOBSOperationOptions,
+		botOBSSceneTargetOptions,
+		botOBSVisibilityModeOptions,
+		botOBSFilterModeOptions,
+		botOBSMuteModeOptions,
+		botOBSVolumeModeOptions,
+		botOBSMediaActionOptions,
+		botOBSStudioModeOptions,
 		botVarScopeOptions,
 		botVarKindOptions,
 		botConditionOperatorOptions,
@@ -212,6 +226,19 @@ func TestBotTabViewFriendlyLabelsAndNoRawIDs(t *testing.T) {
 
 	sumOBS := view.summarizeSubAction(b, config.BotSubActionDef{Kind: "obs", OBSOperation: "set_scene", OBSScene: "Main"})
 	require.Equal(t, "OBS: Switch Scene (scene=Main)", sumOBS)
+
+	sumOBSFilter := view.summarizeSubAction(b, config.BotSubActionDef{Kind: "obs", OBSOperation: "set_filter_enabled", OBSSource: "Camera", OBSFilter: "EnhanceMove", OBSMode: "enable"})
+	require.Contains(t, sumOBSFilter, "src=Camera")
+	require.Contains(t, sumOBSFilter, "filter=EnhanceMove")
+
+	sumOBSZoom := view.summarizeSubAction(b, config.BotSubActionDef{Kind: "obs", OBSOperation: "zoom_source", OBSSource: "Camera", OBSZoomFactor: 1.5})
+	require.Contains(t, sumOBSZoom, "factor=1.5x")
+
+	sumOBSVol := view.summarizeSubAction(b, config.BotSubActionDef{Kind: "obs", OBSOperation: "set_volume", OBSInput: "Mic/Aux", OBSMode: "step", OBSVolumePct: -10})
+	require.Contains(t, sumOBSVol, "delta=-10%")
+
+	sumOBSCustom := view.summarizeSubAction(b, config.BotSubActionDef{Kind: "obs", OBSOperation: "custom_request", OBSRequestType: "TriggerHotkeyByName"})
+	require.Contains(t, sumOBSCustom, "req=TriggerHotkeyByName")
 
 	sumVar := view.summarizeSubAction(b, config.BotSubActionDef{Kind: "set_var", Scope: "global_persistent", Key: "count", Value: "1"})
 	require.Equal(t, `Set Var (Global (Saved)) count = "1"`, sumVar)
@@ -317,6 +344,153 @@ func TestBotTabViewVoiceTesterAndWakeWord(t *testing.T) {
 	}))
 	view.Refresh()
 	require.Equal(t, FormatVoiceSpeedSummary("bm_lewis", 1.25), view.voiceResponseLbl.Text)
+}
+
+func TestOBSSubActionEditorLiveDiscoverySnapshotAndApply(t *testing.T) {
+	obsSrv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		defer func() { _ = ws.Close() }()
+		sendMsg := func(op int, d any) {
+			rawD, _ := json.Marshal(d)
+			env, _ := json.Marshal(map[string]any{"op": op, "d": json.RawMessage(rawD)})
+			_ = websocket.Message.Send(ws, string(env))
+		}
+		sendMsg(0, map[string]any{"obsWebSocketVersion": "5.4.2", "rpcVersion": 1})
+		var raw string
+		if err := websocket.Message.Receive(ws, &raw); err != nil {
+			return
+		}
+		sendMsg(2, map[string]any{"negotiatedRpcVersion": 1})
+		for {
+			if err := websocket.Message.Receive(ws, &raw); err != nil {
+				return
+			}
+			var env struct {
+				Op int             `json:"op"`
+				D  json.RawMessage `json:"d"`
+			}
+			_ = json.Unmarshal([]byte(raw), &env)
+			var req struct {
+				RequestType string         `json:"requestType"`
+				RequestID   string         `json:"requestId"`
+				RequestData map[string]any `json:"requestData"`
+			}
+			_ = json.Unmarshal(env.D, &req)
+
+			resp := map[string]any{}
+			switch req.RequestType {
+			case "GetVersion":
+				resp = map[string]any{"obsVersion": "30.2.3", "obsWebSocketVersion": "5.4.2"}
+			case "GetSceneList":
+				resp = map[string]any{
+					"currentProgramSceneName": "Main",
+					"scenes": []any{
+						map[string]any{"sceneName": "Enhance"},
+						map[string]any{"sceneName": "Main"},
+					},
+				}
+			case "GetSceneItemList":
+				resp = map[string]any{
+					"sceneItems": []any{
+						map[string]any{"sourceName": "Camera", "sceneItemId": 12, "sceneItemEnabled": true, "isGroup": false},
+					},
+				}
+			case "GetInputList":
+				resp = map[string]any{
+					"inputs": []any{
+						map[string]any{"inputName": "Mic/Aux", "inputKind": "wasapi_input_capture"},
+						map[string]any{"inputName": "BannerText", "inputKind": "text_gdiplus_v3"},
+					},
+				}
+			case "GetSceneTransitionList":
+				resp = map[string]any{
+					"transitions": []any{
+						map[string]any{"transitionName": "Move"},
+					},
+				}
+			case "GetSourceFilterList":
+				resp = map[string]any{
+					"filters": []any{
+						map[string]any{"filterName": "EnhanceMove", "filterKind": "move_source_filter", "filterEnabled": false},
+					},
+				}
+			case "GetSceneItemId":
+				resp = map[string]any{"sceneItemId": 12}
+			case "GetSceneItemTransform":
+				resp = map[string]any{
+					"sceneItemTransform": map[string]any{
+						"positionX": 140.5, "positionY": 80.0,
+						"scaleX": 1.35, "scaleY": 1.35,
+						"rotation": 2.5,
+						"cropLeft": 10.0, "cropRight": 10.0, "cropTop": 0.0, "cropBottom": 0.0,
+						"width": 1080.0, "height": 607.5,
+					},
+				}
+			}
+			sendMsg(7, map[string]any{
+				"requestType":   req.RequestType,
+				"requestId":     req.RequestID,
+				"requestStatus": map[string]any{"result": true, "code": 100},
+				"responseData":  resp,
+			})
+		}
+	}))
+	defer obsSrv.Close()
+
+	client := obs.NewClient(nil, nil)
+	host, portStr, _ := net.SplitHostPort(obsSrv.Listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	require.NoError(t, client.Connect(context.Background(), host, port, ""))
+	defer client.Disconnect()
+
+	fyneApp := test.NewApp()
+	defer fyneApp.Quit()
+
+	ed := newOBSSubActionEditor(client, config.BotSubActionDef{
+		Kind:         "obs",
+		OBSOperation: "set_filter_enabled",
+		OBSScene:     "Main",
+		OBSSource:    "Camera",
+	})
+	defer ed.Close()
+
+	win := fyneApp.NewWindow("OBS Editor Test")
+	win.SetContent(ed.CanvasObject())
+	defer win.Close()
+
+	require.Eventually(t, func() bool {
+		ed.mu.RLock()
+		nScenes := len(ed.scenes)
+		nItems := len(ed.sceneItems)
+		nFilters := len(ed.filters)
+		nInputs := len(ed.inputs)
+		nTrans := len(ed.transitions)
+		ed.mu.RUnlock()
+		return strings.Contains(ed.statusLbl.Text, "OBS Connected") &&
+			nScenes >= 2 &&
+			nItems >= 1 &&
+			nFilters >= 1 &&
+			nInputs >= 2 &&
+			nTrans >= 1
+	}, 3*time.Second, 20*time.Millisecond)
+
+	ed.opSelect.SetSelected(botOptionLabel(botOBSOperationOptions, "set_transform"))
+	ed.snapshotTransformFromOBS()
+
+	require.Eventually(t, func() bool {
+		return ed.posXEntry.Text == "140.5" && ed.scaleXEntry.Text == "1.35"
+	}, 3*time.Second, 20*time.Millisecond)
+
+	var saved config.BotSubActionDef
+	saved.Kind = "obs"
+	ed.ApplyTo(&saved)
+	require.Equal(t, "set_transform", saved.OBSOperation)
+	require.Equal(t, "Main", saved.OBSScene)
+	require.Equal(t, "Camera", saved.OBSSource)
+	require.NotNil(t, saved.OBSTransform)
+	require.NotNil(t, saved.OBSTransform.PositionX)
+	require.InDelta(t, 140.5, *saved.OBSTransform.PositionX, 0.001)
+	require.NotNil(t, saved.OBSTransform.ScaleX)
+	require.InDelta(t, 1.35, *saved.OBSTransform.ScaleX, 0.001)
 }
 
 
