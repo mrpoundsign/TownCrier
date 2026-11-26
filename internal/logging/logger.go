@@ -1,13 +1,19 @@
 package logging
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"sync"
 )
+
+// DefaultTailMaxBytes is the maximum number of trailing bytes read by ReadTail when maxBytes <= 0.
+const DefaultTailMaxBytes int64 = 64 * 1024
 
 var (
 	mu        sync.Mutex
@@ -91,6 +97,51 @@ func LogPath() string {
 		return "towncrier.log"
 	}
 	return filepath.Join(configDir, "com.github.mrpoundsign.towncrier", "logs", "towncrier.log")
+}
+
+// ReadTail flushes buffered writes and reads up to the final maxBytes of path (or LogPath() if empty).
+// When the file exceeds maxBytes, it discards any partial leading line and returns truncated = true.
+func ReadTail(path string, maxBytes int64) (content string, truncated bool, err error) {
+	target := strings.TrimSpace(path)
+	if target == "" {
+		target = LogPath()
+	}
+	Sync()
+	if maxBytes <= 0 {
+		maxBytes = DefaultTailMaxBytes
+	}
+
+	f, err := os.Open(target)
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = f.Close() }()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return "", false, err
+	}
+
+	if fi.Size() > maxBytes {
+		if _, seekErr := f.Seek(fi.Size()-maxBytes, io.SeekStart); seekErr != nil {
+			return "", false, seekErr
+		}
+		truncated = true
+	}
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return "", false, err
+	}
+
+	if truncated {
+		if idx := bytes.IndexByte(data, '\n'); idx >= 0 && idx+1 < len(data) {
+			data = data[idx+1:]
+		}
+	}
+
+	content = strings.ReplaceAll(string(data), "\r\n", "\n")
+	return content, truncated, nil
 }
 
 // Sync flushes pending buffered log writes to disk.
