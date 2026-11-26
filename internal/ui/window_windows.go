@@ -72,3 +72,23 @@ func restoreMaximizedWindow(w fyne.Window) {
 		}
 	}
 }
+
+func maximizeWindow(w fyne.Window) {
+	hwnd := getWin32Handle(w)
+	if hwnd == 0 {
+		return
+	}
+	_, _, _ = procShowWindow.Call(hwnd, swMaximize)
+
+	var rc winRect
+	if ret, _, _ := procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc))); ret != 0 {
+		clientW := float32(rc.Right - rc.Left)
+		clientH := float32(rc.Bottom - rc.Top)
+		sc := w.Canvas().Scale()
+		if clientW > 0 && clientH > 0 && sc > 0 {
+			if cr, ok := w.Canvas().(interface{ Resize(fyne.Size) }); ok {
+				cr.Resize(fyne.NewSize(clientW/sc, clientH/sc))
+			}
+		}
+	}
+}

@@ -1763,3 +1763,34 @@ func TestSessionCopypastaAndASCIIArtSuppression(t *testing.T) {
 	}
 }
 
+func TestSessionSaveWindowGeometry(t *testing.T) {
+	cfg := config.DefaultConfig()
+	memStore := config.NewMemoryStore(cfg)
+	session := NewSession(cfg, secrets.NewMemoryStore(), memStore)
+	defer func() { _ = session.Close() }()
+
+	// No-op when identical to current config
+	if err := session.SaveWindowGeometry(config.DefaultWindowWidth, config.DefaultWindowHeight, false); err != nil {
+		t.Fatalf("SaveWindowGeometry no-op failed: %v", err)
+	}
+
+	// Saves clamped values and maximized flag
+	if err := session.SaveWindowGeometry(400, 1024, true); err != nil {
+		t.Fatalf("SaveWindowGeometry failed: %v", err)
+	}
+
+	got := session.Config()
+	if got.WindowWidth != config.MinWindowWidth || got.WindowHeight != 1024 || !got.WindowMaximized {
+		t.Fatalf("unexpected session config window geometry: %dx%d max=%v", got.WindowWidth, got.WindowHeight, got.WindowMaximized)
+	}
+
+	stored, err := memStore.Load()
+	if err != nil {
+		t.Fatalf("memStore.Load: %v", err)
+	}
+	if stored.WindowWidth != config.MinWindowWidth || stored.WindowHeight != 1024 || !stored.WindowMaximized {
+		t.Fatalf("unexpected persisted window geometry: %dx%d max=%v", stored.WindowWidth, stored.WindowHeight, stored.WindowMaximized)
+	}
+}
+
+

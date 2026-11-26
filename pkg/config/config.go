@@ -17,6 +17,13 @@ import (
 const (
 	CurrentVersion   = 2
 	maxConfigBackups = 5
+
+	DefaultWindowWidth  = 1200
+	DefaultWindowHeight = 820
+	MinWindowWidth      = 800
+	MinWindowHeight     = 600
+	MaxWindowWidth      = 7680
+	MaxWindowHeight     = 4320
 )
 
 // Config represents the application configuration hierarchy.
@@ -24,6 +31,9 @@ type Config struct {
 	Version             int                       `json:"version"`
 	LoadedSchemaVersion int                       `json:"-"`
 	UIScale             string                    `json:"ui_scale,omitempty"`
+	WindowWidth         int                       `json:"window_width,omitempty"`
+	WindowHeight        int                       `json:"window_height,omitempty"`
+	WindowMaximized     bool                      `json:"window_maximized,omitempty"`
 	Update          UpdateConfig              `json:"update"`
 	Audio           AudioConfig               `json:"audio"`
 	TTS             TTSConfig                 `json:"tts"`
@@ -1135,12 +1145,36 @@ func LookupViewer(viewers map[string]ViewerConfig, platform, userID, userName st
 	return v, ok
 }
 
+// NormalizeWindowSize clamps non-zero window dimensions to sensible bounds, defaulting <= 0 to 1200x820.
+func NormalizeWindowSize(w, h int) (int, int) {
+	switch {
+	case w <= 0:
+		w = DefaultWindowWidth
+	case w < MinWindowWidth:
+		w = MinWindowWidth
+	case w > MaxWindowWidth:
+		w = MaxWindowWidth
+	}
+	switch {
+	case h <= 0:
+		h = DefaultWindowHeight
+	case h < MinWindowHeight:
+		h = MinWindowHeight
+	case h > MaxWindowHeight:
+		h = MaxWindowHeight
+	}
+	return w, h
+}
+
 // DefaultConfig returns a new Config initialized with production defaults.
 func DefaultConfig() *Config {
 	return &Config{
 		Version:             CurrentVersion,
 		LoadedSchemaVersion: CurrentVersion,
 		UIScale:             "1.0",
+		WindowWidth:         DefaultWindowWidth,
+		WindowHeight:        DefaultWindowHeight,
+		WindowMaximized:     false,
 		Update: UpdateConfig{
 			CheckOnStartup: true,
 		},
@@ -2169,6 +2203,7 @@ func migrate(cfg *Config) error {
 	if strings.TrimSpace(cfg.UIScale) == "" {
 		cfg.UIScale = "1.0"
 	}
+	cfg.WindowWidth, cfg.WindowHeight = NormalizeWindowSize(cfg.WindowWidth, cfg.WindowHeight)
 	if strings.TrimSpace(cfg.Logging.Backend) == "" {
 		cfg.Logging.Backend = "sqlite"
 	}

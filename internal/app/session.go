@@ -795,6 +795,32 @@ func (s *Session) UpdateConfig(fn func(c *config.Config)) error {
 	return nil
 }
 
+// SaveWindowGeometry persists the main window dimensions and maximized state without triggering a full ReloadConfig.
+func (s *Session) SaveWindowGeometry(width, height int, maximized bool) error {
+	normW, normH := config.NormalizeWindowSize(width, height)
+	s.mu.Lock()
+	if s.cfg == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	if s.cfg.WindowWidth == normW && s.cfg.WindowHeight == normH && s.cfg.WindowMaximized == maximized {
+		s.mu.Unlock()
+		return nil
+	}
+	s.cfg.WindowWidth = normW
+	s.cfg.WindowHeight = normH
+	s.cfg.WindowMaximized = maximized
+	cfgCopy := s.cfg.Clone()
+	cStore := s.configStore
+	s.mu.Unlock()
+	if cStore != nil {
+		if err := cStore.Save(cfgCopy); err != nil {
+			return fmt.Errorf("save window geometry: %w", err)
+		}
+	}
+	return nil
+}
+
 func syncConnectors(cfg *config.Config, tw *twitch.Connector, ytConn *youtube.Connector, ttConn *tiktok.Connector, kkConn *kick.Connector) {
 	if cfg == nil {
 		return

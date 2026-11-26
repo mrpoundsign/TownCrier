@@ -3,6 +3,7 @@ package ui
 import (
 	"testing"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
@@ -267,6 +268,59 @@ func TestMainWindowPlatformStatusResolution(t *testing.T) {
 		t.Errorf("expected selected Settings sub-tab to be 'Twitch', got %+v", sel)
 	}
 }
+
+func TestMainWindowGeometryPersistence(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+
+	// 1. Default config opens at 1200x820
+	defCfg := config.DefaultConfig()
+	defCfg.WindowWidth = 0
+	defCfg.WindowHeight = 0
+	defSess := app.NewSession(defCfg, secrets.NewMemoryStore(), config.NewMemoryStore(defCfg))
+	defer func() { _ = defSess.Close() }()
+
+	mwDef := NewMainWindow(appObj, defSess)
+	gotDef := mwDef.Window.Canvas().Size()
+	if gotDef.Width != float32(config.DefaultWindowWidth) || gotDef.Height != float32(config.DefaultWindowHeight) {
+		t.Fatalf("expected default canvas size %dx%d, got %vx%v", config.DefaultWindowWidth, config.DefaultWindowHeight, gotDef.Width, gotDef.Height)
+	}
+	if mwDef.hotkeyMgr != nil {
+		mwDef.hotkeyMgr.Close()
+	}
+
+	// 2. Saved config restores custom size and persists resized dimensions on close/save
+	cfg := config.DefaultConfig()
+	cfg.WindowWidth = 1360
+	cfg.WindowHeight = 880
+	memStore := config.NewMemoryStore(cfg)
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), memStore)
+	defer func() { _ = sess.Close() }()
+
+	mw := NewMainWindow(appObj, sess)
+	defer func() {
+		if mw.hotkeyMgr != nil {
+			mw.hotkeyMgr.Close()
+		}
+	}()
+
+	got := mw.Window.Canvas().Size()
+	if got.Width != 1360 || got.Height != 880 {
+		t.Fatalf("expected restored canvas size 1360x880, got %vx%v", got.Width, got.Height)
+	}
+
+	mw.Window.Resize(fyne.NewSize(1480, 920))
+	mw.persistWindowGeometry()
+
+	savedCfg, err := memStore.Load()
+	if err != nil {
+		t.Fatalf("memStore.Load: %v", err)
+	}
+	if savedCfg.WindowWidth != 1480 || savedCfg.WindowHeight != 920 {
+		t.Fatalf("expected persisted window size 1480x920, got %dx%d", savedCfg.WindowWidth, savedCfg.WindowHeight)
+	}
+}
+
 
 
 

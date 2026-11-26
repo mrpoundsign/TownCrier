@@ -1053,9 +1053,14 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 	v.refreshVoiceSubtitleModelStatus()
 	v.SyncSTTStatus(false, false, "")
 
-	return newPanelVScroll(container.NewVBox(
+	v.voiceSubtitlesPanel = newSectionedPanelVScroll(container.NewVBox(
 		sttCard,
 		targetsCard,
 		overlayCard,
-	))
+	), []panelSection{
+		{Label: "Speech Engine", Target: sttCard},
+		{Label: "Display Languages", Target: targetsCard},
+		{Label: "OBS Overlay", Target: overlayCard},
+	})
+	return v.voiceSubtitlesPanel.Root()
 }

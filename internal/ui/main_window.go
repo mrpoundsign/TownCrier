@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -99,6 +100,12 @@ type MainWindow struct {
 	activeShortcut     *desktop.CustomShortcut
 	modeHotkeyMgr      *GlobalHotkeyManager
 	activeModeShortcut *desktop.CustomShortcut
+
+	windowGeomMu     sync.Mutex
+	lastNormalW      int
+	lastNormalH      int
+	windowSaveTimer  *time.Timer
+	initialMaximized bool
 }
 
 // NewMainWindow creates and initializes the complete desktop application window.
@@ -108,10 +115,16 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 
 	w := fyneApp.NewWindow("TownCrier " + AppVersion + " — Streamer Neural TTS")
 
+	cfg := session.Config()
+	winW, winH := config.NormalizeWindowSize(cfg.WindowWidth, cfg.WindowHeight)
+
 	mw := &MainWindow{
 		Window:           w,
 		Session:          session,
 		platformStatuses: make(map[string]platformStatusState),
+		lastNormalW:      winW,
+		lastNormalH:      winH,
+		initialMaximized: cfg.WindowMaximized,
 	}
 
 	mw.initStatusBar()
@@ -149,14 +162,20 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 
 	rootContent := container.NewStack(mainContent, mw.tooltipLayer)
 
-	w.SetContent(rootContent)
-	w.Resize(fyne.NewSize(950, 720))
+	w.SetContent(newResizeNotifyContainer(rootContent, mw.onMainWindowResized))
+	w.Resize(fyne.NewSize(float32(winW), float32(winH)))
 	w.CenterOnScreen()
 
 	var closeOnce sync.Once
 	cleanup := func() {
 		closeOnce.Do(func() {
 			log.Println("[MainWindow] Close requested, shutting down subsystems...")
+			mw.windowGeomMu.Lock()
+			if mw.windowSaveTimer != nil {
+				mw.windowSaveTimer.Stop()
+				mw.windowSaveTimer = nil
+			}
+			mw.windowGeomMu.Unlock()
 			mw.volumeMu.Lock()
 			if mw.volumeSaveTimer != nil {
 				mw.volumeSaveTimer.Stop()
@@ -180,6 +199,7 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	}
 
 	w.SetCloseIntercept(func() {
+		mw.persistWindowGeometry()
 		if mw.pluginStatusUnsub != nil {
 			mw.pluginStatusUnsub()
 			mw.pluginStatusUnsub = nil
@@ -1562,6 +1582,63 @@ func (mw *MainWindow) updatePlatformBadge(platform, status, detail string) {
 		}
 	})
 }
+
+// ApplyPostShowWindowState restores OS-level maximized window state after the window has been shown.
+func (mw *MainWindow) ApplyPostShowWindowState() {
+	if mw == nil || mw.Window == nil || !mw.initialMaximized {
+		return
+	}
+	maximizeWindow(mw.Window)
+}
+
+func (mw *MainWindow) onMainWindowResized() {
+	if mw == nil || mw.Window == nil || mw.Window.Canvas() == nil {
+		return
+	}
+	maximized := isWindowMaximized(mw.Window)
+	sz := mw.Window.Canvas().Size()
+
+	mw.windowGeomMu.Lock()
+	if !maximized {
+		wInt := int(math.Round(float64(sz.Width)))
+		hInt := int(math.Round(float64(sz.Height)))
+		if wInt >= config.MinWindowWidth && hInt >= config.MinWindowHeight {
+			mw.lastNormalW = wInt
+			mw.lastNormalH = hInt
+		}
+	}
+	if !testing.Testing() {
+		if mw.windowSaveTimer != nil {
+			mw.windowSaveTimer.Stop()
+		}
+		mw.windowSaveTimer = time.AfterFunc(500*time.Millisecond, func() {
+			fyne.Do(mw.persistWindowGeometry)
+		})
+	}
+	mw.windowGeomMu.Unlock()
+}
+
+func (mw *MainWindow) persistWindowGeometry() {
+	if mw == nil || mw.Session == nil || mw.Window == nil {
+		return
+	}
+	maximized := isWindowMaximized(mw.Window)
+	mw.windowGeomMu.Lock()
+	saveW, saveH := mw.lastNormalW, mw.lastNormalH
+	if !maximized && mw.Window.Canvas() != nil {
+		sz := mw.Window.Canvas().Size()
+		wInt := int(math.Round(float64(sz.Width)))
+		hInt := int(math.Round(float64(sz.Height)))
+		if wInt >= config.MinWindowWidth && hInt >= config.MinWindowHeight {
+			saveW, saveH = wInt, hInt
+			mw.lastNormalW = saveW
+			mw.lastNormalH = saveH
+		}
+	}
+	mw.windowGeomMu.Unlock()
+	_ = mw.Session.SaveWindowGeometry(saveW, saveH, maximized)
+}
+
 
 
 

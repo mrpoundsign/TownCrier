@@ -34,6 +34,7 @@ type TikTokTabView struct {
 	rulesCard          *widget.Card
 	notifsCard         *widget.Card
 	overridesCard      *widget.Card
+	panel              *sectionedPanel
 	notifChecks        []*widget.Check
 	notifEntries       []*ScrollPassEntry
 	notifHelpMarkers   []*templateHelpMarker
@@ -88,7 +89,13 @@ func (v *TikTokTabView) Build() fyne.CanvasObject {
 		v.overridesCard,
 	)
 
-	return newPanelVScroll(content)
+	v.panel = newSectionedPanelVScroll(content, []panelSection{
+		{Label: "Connection", Target: v.connCard},
+		{Label: "Read Rules", Target: v.rulesCard},
+		{Label: "Notifications", Target: v.notifsCard},
+		{Label: "Overrides", Target: v.overridesCard},
+	})
+	return v.panel.Root()
 }
 
 // SyncFromConfig updates the TikTok tab controls to match the active session configuration.
@@ -136,6 +143,9 @@ func (v *TikTokTabView) SyncTTSState(enabled bool) {
 			} else {
 				v.overridesCard.Hide()
 			}
+		}
+		if v.panel != nil {
+			v.panel.SyncVisibility()
 		}
 	})
 }

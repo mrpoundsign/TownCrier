@@ -398,6 +398,7 @@ func run() error {
 				mainWindow := ui.NewMainWindow(myApp, session)
 				mainWindow.Window.SetMaster()
 				mainWindow.Window.Show()
+				mainWindow.ApplyPostShowWindowState()
 				log.Println("MainWindow rendered and shown. Closing launch window...")
 				launchWin.Close()
 				log.Println("Launch window closed.")

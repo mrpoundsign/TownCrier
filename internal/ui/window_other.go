@@ -9,3 +9,5 @@ func isWindowMaximized(_ fyne.Window) bool {
 }
 
 func restoreMaximizedWindow(_ fyne.Window) {}
+
+func maximizeWindow(_ fyne.Window) {}

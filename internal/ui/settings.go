@@ -65,6 +65,12 @@ type SettingsView struct {
 	voiceSubtitlesTabItem *container.TabItem
 	rulesTabItem          *container.TabItem
 	logsTabItem           *container.TabItem
+	generalPanel          *sectionedPanel
+	obsPanel              *sectionedPanel
+	ttsPanel              *sectionedPanel
+	voiceSubtitlesPanel   *sectionedPanel
+	translationPanel      *sectionedPanel
+	rulesPanel            *sectionedPanel
 	pluginsTab            *PluginsTabView
 	pluginSubTabs         map[string]*mountedPluginSettingsTab
 	pluginSubOrder        []string
@@ -741,6 +747,9 @@ func (v *SettingsView) SyncTTSState(enabled bool) {
 		if v.ttsBox != nil {
 			v.ttsBox.Refresh()
 		}
+		if v.ttsPanel != nil {
+			v.ttsPanel.SyncVisibility()
+		}
 		v.SyncPlatformTabVisibility()
 	})
 }
@@ -1072,11 +1081,24 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		displayCard,
 		backupCard,
 	)
+	v.generalPanel = newSectionedPanelVScroll(v.generalBox, []panelSection{
+		{Label: "Features", Target: v.featuresCard},
+		{Label: "Services", Target: servicesCard},
+		{Label: "Display & Scale", Target: displayCard},
+		{Label: "Backups & Recovery", Target: backupCard},
+	})
 
 	v.obsBox = container.NewVBox(
 		v.wsControlCard,
 	)
-	obsTabContent := newPanelVScroll(v.obsBox)
+	v.obsPanel = newSectionedPanelVScroll(v.obsBox, []panelSection{
+		{Label: "Unified Canvas", Target: v.wsUnifiedSection},
+		{Label: "TTS Overlay", Target: v.wsTTSOverlayGroup},
+		{Label: "Chat Overlay", Target: v.wsChatOverlayGroup},
+		{Label: "Subtitles Overlay", Target: v.wsSubtitlesOverlayGroup},
+		{Label: "Stream Deck & API", Target: v.wsEnabledCheck},
+		{Label: "Server & Auth", Target: v.wsNetSection},
+	})
 
 	v.ttsBox = container.NewVBox(
 		v.globalVoiceCard,
@@ -1084,20 +1106,32 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		v.audioCard,
 		ttsCard,
 	)
+	v.ttsPanel = newSectionedPanelVScroll(v.ttsBox, []panelSection{
+		{Label: "Default Voice", Target: v.globalVoiceCard},
+		{Label: "Output Mode", Target: v.ttsOutputModeCard},
+		{Label: "Audio & Mic", Target: v.audioCard},
+		{Label: "Neural Models", Target: ttsCard},
+	})
 
-	generalTabContent := newPanelVScroll(v.generalBox)
-	ttsTabContent := newPanelVScroll(v.ttsBox)
+	generalTabContent := v.generalPanel.Root()
+	obsTabContent := v.obsPanel.Root()
+	ttsTabContent := v.ttsPanel.Root()
 	v.logsView = NewLogsView(v.window, v.session)
 	v.logsView.SetStatusHandler(v.setStatus)
 	v.logsView.SetOnAssignVoice(v.onAssignVoice)
 	v.logsView.SetOnChatScaleChanged(v.onChatScaleChanged)
 	v.logsView.SetOnAnimateEmotesChanged(v.onAnimateEmotesChanged)
 
-	rulesTabContent := newPanelVScroll(container.NewVBox(
+	v.rulesPanel = newSectionedPanelVScroll(container.NewVBox(
 		rulesCard,
 		botsCard,
 		safetyCard,
-	))
+	), []panelSection{
+		{Label: "Chat Rules", Target: rulesCard},
+		{Label: "Bot Filtering", Target: botsCard},
+		{Label: "Safety & Hotkeys", Target: safetyCard},
+	})
+	rulesTabContent := v.rulesPanel.Root()
 
 	logsTabContent := newPanelVScroll(container.NewVBox(
 		v.logsView.BuildRetentionCard(),
@@ -1193,6 +1227,9 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 		}
 		if v.ttsBox != nil {
 			v.ttsBox.Refresh()
+		}
+		if v.ttsPanel != nil {
+			v.ttsPanel.SyncVisibility()
 		}
 		v.SyncPlatformTabVisibility()
 		if v.onTTSChanged != nil {
@@ -1688,6 +1725,9 @@ func (v *SettingsView) refreshWSStatusLabel() {
 	}
 	if v.obsBox != nil {
 		v.obsBox.Refresh()
+	}
+	if v.obsPanel != nil {
+		v.obsPanel.SyncVisibility()
 	}
 	if v.generalBox != nil {
 		v.generalBox.Refresh()
@@ -6038,8 +6078,12 @@ func (v *SettingsView) buildTranslationTab() fyne.CanvasObject {
 	)
 	v.syncChatTranslationCardsVisibility()
 
-	scrollBody := newPanelVScroll(v.translationScrollBody)
-	return container.NewStack(scrollBody, v.translationTooltipLayer)
+	v.translationPanel = newSectionedPanelVScroll(v.translationScrollBody, []panelSection{
+		{Label: "Providers & Cache", Target: providerCard},
+		{Label: "Target Language", Target: v.chatTranslationLangCard},
+		{Label: "Chime & Alerts", Target: v.chatTranslationChimeCard},
+	})
+	return container.NewStack(v.translationPanel.Root(), v.translationTooltipLayer)
 }
 
 func (v *SettingsView) syncChatTranslationCardsVisibility() {
@@ -6059,6 +6103,9 @@ func (v *SettingsView) syncChatTranslationCardsVisibility() {
 	}
 	if v.translationScrollBody != nil {
 		v.translationScrollBody.Refresh()
+	}
+	if v.translationPanel != nil {
+		v.translationPanel.SyncVisibility()
 	}
 }
 

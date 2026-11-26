@@ -819,5 +819,49 @@ func TestPluginsConfigDefaultsCloneAndLegacyLoad(t *testing.T) {
 	}
 }
 
+func TestWindowGeometryDefaultsNormalizeAndRoundTrip(t *testing.T) {
+	def := DefaultConfig()
+	if def.WindowWidth != DefaultWindowWidth || def.WindowHeight != DefaultWindowHeight {
+		t.Fatalf("expected default window size %dx%d, got %dx%d", DefaultWindowWidth, DefaultWindowHeight, def.WindowWidth, def.WindowHeight)
+	}
+	if def.WindowWidth != 1200 || def.WindowHeight != 820 {
+		t.Fatalf("expected 1200x820 defaults, got %dx%d", def.WindowWidth, def.WindowHeight)
+	}
+	if def.WindowMaximized {
+		t.Fatal("expected WindowMaximized=false by default")
+	}
+
+	if w, h := NormalizeWindowSize(0, -10); w != DefaultWindowWidth || h != DefaultWindowHeight {
+		t.Fatalf("expected zero/negative to normalize to %dx%d, got %dx%d", DefaultWindowWidth, DefaultWindowHeight, w, h)
+	}
+	if w, h := NormalizeWindowSize(320, 240); w != MinWindowWidth || h != MinWindowHeight {
+		t.Fatalf("expected tiny sizes to clamp to %dx%d, got %dx%d", MinWindowWidth, MinWindowHeight, w, h)
+	}
+	if w, h := NormalizeWindowSize(99999, 99999); w != MaxWindowWidth || h != MaxWindowHeight {
+		t.Fatalf("expected huge sizes to clamp to %dx%d, got %dx%d", MaxWindowWidth, MaxWindowHeight, w, h)
+	}
+
+	loc := TestLocations(t.TempDir())
+	store, err := NewFileStore(loc)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	cfg := DefaultConfig()
+	cfg.WindowWidth = 1440
+	cfg.WindowHeight = 900
+	cfg.WindowMaximized = true
+	if err := store.Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.WindowWidth != 1440 || loaded.WindowHeight != 900 || !loaded.WindowMaximized {
+		t.Fatalf("unexpected window geometry after round-trip: %dx%d max=%v", loaded.WindowWidth, loaded.WindowHeight, loaded.WindowMaximized)
+	}
+}
+
+
 
 
