@@ -26,9 +26,10 @@ import (
 // BotTabView provides the UI for Streamer.bot-class Bot Automation (Commands, Triggers,
 // Actions & Sub-Actions, Timers, Whisper Voice Commands, Execution Queues, Variables, and OBS Studio v5).
 type BotTabView struct {
-	window   fyne.Window
-	session  *app.Session
-	onStatus func(string)
+	window          fyne.Window
+	session         *app.Session
+	onStatus        func(string)
+	onConfigChanged func()
 
 	engineStatusLbl *widget.Label
 	obsStatusLbl    *widget.Label
@@ -72,6 +73,11 @@ func (v *BotTabView) SetStatusHandler(fn func(string)) {
 	v.onStatus = fn
 }
 
+// SetOnConfigChanged registers a callback invoked when BotTabView mutates config (e.g. auto-enabling Voice Detection).
+func (v *BotTabView) SetOnConfigChanged(fn func()) {
+	v.onConfigChanged = fn
+}
+
 func (v *BotTabView) reportStatus(msg string) {
 	if v.onStatus != nil {
 		v.onStatus(msg)
@@ -94,6 +100,9 @@ func (v *BotTabView) updateBotConfig(fn func(b *config.BotAutomationConfig)) err
 		config.NormalizeBotAutomationConfig(&c.Bot)
 	})
 	v.Refresh()
+	if v.onConfigChanged != nil {
+		v.onConfigChanged()
+	}
 	return err
 }
 
@@ -1189,23 +1198,59 @@ func (v *BotTabView) refreshTimersAndVoice(b config.BotAutomationConfig) {
 	}
 
 	if v.voiceCmdsBox != nil {
-		rows := make([]fyne.CanvasObject, 0, max(1, len(b.VoiceCommands)))
+		vdOn := v.currentConfig().EffectiveVoiceDetectionEnabled()
+		rows := make([]fyne.CanvasObject, 0, max(1, len(b.VoiceCommands)+1))
+		if !vdOn && len(b.VoiceCommands) > 0 {
+			enableVDBtn := widget.NewButton("Enable Voice Detection", func() {
+				if v.session != nil {
+					_ = v.session.UpdateConfig(func(c *config.Config) {
+						c.SetVoiceDetectionEnabled(true)
+					})
+				}
+				v.Refresh()
+				if v.onConfigChanged != nil {
+					v.onConfigChanged()
+				}
+				v.reportStatus("✓ Voice Detection enabled for Bot Voice Commands.")
+			})
+			enableVDBtn.Importance = widget.HighImportance
+			banner := container.NewHBox(
+				widget.NewLabelWithStyle("⚪ Voice Detection is disabled — voice commands are paused.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
+				layout.NewSpacer(),
+				enableVDBtn,
+			)
+			rows = append(rows, banner, widget.NewSeparator())
+		}
 		if len(b.VoiceCommands) == 0 {
 			rows = append(rows, widget.NewLabel("No voice commands configured yet."))
 		}
 		for i, vc := range b.VoiceCommands {
 			idx := i
 			item := vc
-			lbl := fmt.Sprintf("%s  (%q [%s], cd=%ds → %s)", item.Name, item.Phrase, item.MatchMode, item.CooldownSec, v.actionName(b, item.ActionID))
+			pausedSuffix := ""
+			if item.Enabled && !vdOn {
+				pausedSuffix = " [Paused — Voice Detection off]"
+			}
+			lbl := fmt.Sprintf("%s  (%q [%s], cd=%ds → %s)%s", item.Name, item.Phrase, item.MatchMode, item.CooldownSec, v.actionName(b, item.ActionID), pausedSuffix)
 			chk := widget.NewCheck("Enabled", func(checked bool) {
 				if v.initializing {
 					return
 				}
-				_ = v.updateBotConfig(func(cfg *config.BotAutomationConfig) {
-					if idx < len(cfg.VoiceCommands) {
-						cfg.VoiceCommands[idx].Enabled = checked
+				if v.session != nil {
+					_ = v.session.UpdateConfig(func(c *config.Config) {
+						if idx < len(c.Bot.VoiceCommands) {
+							c.Bot.VoiceCommands[idx].Enabled = checked
+							if checked && strings.TrimSpace(c.Bot.VoiceCommands[idx].Phrase) != "" {
+								c.SetVoiceDetectionEnabled(true)
+							}
+						}
+						config.NormalizeBotAutomationConfig(&c.Bot)
+					})
+					v.Refresh()
+					if v.onConfigChanged != nil {
+						v.onConfigChanged()
 					}
-				})
+				}
 			})
 			v.initializing = true
 			chk.SetChecked(item.Enabled)
@@ -1345,13 +1390,23 @@ func (v *BotTabView) openVoiceCmdDialog(idx int) {
 		cur.MatchMode = modeSelect.Selected
 		cur.CooldownSec = max(0, cd)
 		cur.ActionID = labelToID[actSelect.Selected]
-		_ = v.updateBotConfig(func(b *config.BotAutomationConfig) {
-			if editing && idx < len(b.VoiceCommands) {
-				b.VoiceCommands[idx] = cur
-			} else {
-				b.VoiceCommands = append(b.VoiceCommands, cur)
+		if v.session != nil {
+			_ = v.session.UpdateConfig(func(c *config.Config) {
+				if editing && idx < len(c.Bot.VoiceCommands) {
+					c.Bot.VoiceCommands[idx] = cur
+				} else {
+					c.Bot.VoiceCommands = append(c.Bot.VoiceCommands, cur)
+				}
+				if cur.Enabled && strings.TrimSpace(cur.Phrase) != "" {
+					c.SetVoiceDetectionEnabled(true)
+				}
+				config.NormalizeBotAutomationConfig(&c.Bot)
+			})
+			v.Refresh()
+			if v.onConfigChanged != nil {
+				v.onConfigChanged()
 			}
-		})
+		}
 	}, v.window)
 }
 

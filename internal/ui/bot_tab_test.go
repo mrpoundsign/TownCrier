@@ -4,8 +4,10 @@ import (
 	"testing"
 	"time"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/widget"
 	"github.com/stretchr/testify/require"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
@@ -95,3 +97,61 @@ func TestBotTabViewBuildTestRunAndOBSSecret(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "supersecret", pw)
 }
+
+func TestBotTabViewVoiceCommandAutoEnablesAndRespectsMasterToggle(t *testing.T) {
+	fyneApp := test.NewApp()
+	defer fyneApp.Quit()
+
+	cfg := config.DefaultConfig()
+	cfg.Bot.Enabled = true
+	cfg.Bot.Actions = []config.BotActionDef{
+		{ID: "act-1", Name: "Wave", Enabled: true},
+	}
+	cfg.Bot.VoiceCommands = []config.BotVoiceCommandDef{
+		{ID: "vc-1", Name: "Wave Cmd", Enabled: false, Phrase: "say hello", MatchMode: "contains", ActionID: "act-1"},
+	}
+
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
+
+	win := fyneApp.NewWindow("Bot Voice Command Test")
+	defer win.Close()
+
+	var configSyncCount int
+	view := NewBotTabView(win, sess, nil)
+	view.SetOnConfigChanged(func() {
+		configSyncCount++
+	})
+	_ = view.Build()
+
+	require.False(t, sess.Config().EffectiveVoiceDetectionEnabled())
+
+	// Enable the voice command checkbox -> auto-enables Voice Detection
+	var vcCheck *widget.Check
+	for _, obj := range view.voiceCmdsBox.Objects {
+		if row, ok := obj.(*fyne.Container); ok {
+			for _, child := range row.Objects {
+				if chk, okChk := child.(*widget.Check); okChk {
+					vcCheck = chk
+					break
+				}
+			}
+		}
+	}
+	require.NotNil(t, vcCheck, "expected voice command Enabled checkbox")
+	vcCheck.SetChecked(true)
+
+	require.True(t, sess.Config().EffectiveVoiceDetectionEnabled(), "enabling a voice command should auto-enable Voice Detection")
+	require.True(t, sess.Config().EffectiveVoiceCommandsEnabled())
+	require.Greater(t, configSyncCount, 0)
+
+	// Master disable of Voice Detection shows paused banner & Enable button while keeping vc-1 enabled
+	require.NoError(t, sess.UpdateConfig(func(c *config.Config) {
+		c.SetVoiceDetectionEnabled(false)
+	}))
+	view.Refresh()
+	require.False(t, sess.Config().EffectiveVoiceCommandsEnabled())
+	require.True(t, sess.Config().Bot.VoiceCommands[0].Enabled)
+	require.GreaterOrEqual(t, len(view.voiceCmdsBox.Objects), 3, "expected paused banner + separator + voice command row")
+}
+

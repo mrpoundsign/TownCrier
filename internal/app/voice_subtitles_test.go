@@ -179,4 +179,34 @@ func TestSessionVoiceSubtitlesPipelineAndPanicClear(t *testing.T) {
 	if resets == 0 {
 		t.Fatal("expected segmenter.Reset() to be called on Panic()")
 	}
+
+	// Master disable of Voice Detection stops MicMonitor, clears subtitles, and disables /overlay/subtitles
+	// while preserving VoiceSubtitles.Enabled so re-enabling restores it.
+	if err := sess.UpdateConfig(func(c *config.Config) {
+		c.SetVoiceDetectionEnabled(false)
+	}); err != nil {
+		t.Fatalf("UpdateConfig disable VoiceDetection failed: %v", err)
+	}
+	if sess.MicMonitor().IsRunning() {
+		t.Fatal("expected CaptureMonitor to stop when VoiceDetection is disabled")
+	}
+	if sess.Config().EffectiveSubtitlesOverlayEnabled() {
+		t.Fatal("expected EffectiveSubtitlesOverlayEnabled()=false when VoiceDetection is disabled")
+	}
+	if !sess.Config().VoiceSubtitles.Enabled {
+		t.Fatal("expected VoiceSubtitles.Enabled to remain preserved while VoiceDetection is disabled")
+	}
+
+	// Re-enabling Voice Detection restores MicMonitor and /overlay/subtitles
+	if err := sess.UpdateConfig(func(c *config.Config) {
+		c.SetVoiceDetectionEnabled(true)
+	}); err != nil {
+		t.Fatalf("UpdateConfig re-enable VoiceDetection failed: %v", err)
+	}
+	if !sess.MicMonitor().IsRunning() {
+		t.Fatal("expected CaptureMonitor to restart when VoiceDetection is re-enabled")
+	}
+	if !sess.Config().EffectiveSubtitlesOverlayEnabled() {
+		t.Fatal("expected EffectiveSubtitlesOverlayEnabled()=true after re-enabling VoiceDetection")
+	}
 }

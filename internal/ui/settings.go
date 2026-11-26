@@ -113,14 +113,17 @@ type SettingsView struct {
 	prevUseGPU        bool
 	initializing      bool
 
-	onTTSChanged           func(enabled bool)
-	onLoggingChanged       func(enabled bool)
-	onBotChanged           func(enabled bool)
-	onPluginOpenTab        func(viewKey string)
-	onChatScaleChanged     func(pct int)
-	onAnimateEmotesChanged func(enabled bool)
-	featuresCard         *widget.Card
-	ttsOutputModeCard    *widget.Card
+	onTTSChanged            func(enabled bool)
+	onLoggingChanged        func(enabled bool)
+	onBotChanged            func(enabled bool)
+	onVoiceDetectionChanged func(enabled bool)
+	onPluginOpenTab         func(viewKey string)
+	onChatScaleChanged      func(pct int)
+	onAnimateEmotesChanged  func(enabled bool)
+	featuresCard            *widget.Card
+	voiceDetectionCard      *widget.Card
+	vdConsumersLabel        *widget.Label
+	ttsOutputModeCard       *widget.Card
 	ttsOutputModeSelect  *widget.Select
 	idleTimeoutSelect    *widget.Select
 	ttsModeStatusLabel   *widget.Label
@@ -173,6 +176,7 @@ type SettingsView struct {
 	enableLogCheck            *widget.Check
 	enableBotCheck            *widget.Check
 	enableTranslationCheck    *widget.Check
+	enableVoiceDetectionCheck *widget.Check
 	enableVoiceSubtitlesCheck *widget.Check
 	checkUpdatesCheck         *widget.Check
 	chatTranslationLangCard   *widget.Card
@@ -274,9 +278,10 @@ type SettingsView struct {
 	loggingEnabled        bool
 	botEnabled            bool
 	translationEnabled    bool
+	voiceDetectionEnabled bool
 	voiceSubtitlesEnabled bool
 
-	// Voice Subtitles tab controls (internal/ui/voice_subtitles_tab.go)
+	// Voice Detection & Subtitles controls (internal/ui/voice_subtitles_tab.go)
 	vsMicDeviceSelect       *widget.Select
 	vsMicRefreshBtn         *widget.Button
 	vsMicLevelBar           *widget.ProgressBar
@@ -299,6 +304,7 @@ type SettingsView struct {
 	vsTargetListBox         *fyne.Container
 	vsRefreshTargetList     func()
 	vsOpenTranslationTabBtn *widget.Button
+	vsOpenVoiceDetectionBtn *widget.Button
 	vsOverlayPosSelect      *widget.Select
 	vsOverlayAlignSelect    *widget.Select
 	vsOverlayFadeSelect     *widget.Select
@@ -321,12 +327,14 @@ func NewSettingsView(w fyne.Window, cfg *config.Config, player audio.Player, eng
 	ttsOn := true
 	loggingOn := true
 	translationOn := false
+	voiceDetectionOn := false
 	voiceSubOn := false
 	if cfg != nil {
 		ttsOn = cfg.TTS.Enabled
 		loggingOn = cfg.Logging.Enabled
 		translationOn = cfg.Translation.Enabled
-		voiceSubOn = cfg.VoiceSubtitles.Enabled
+		voiceDetectionOn = cfg.EffectiveVoiceDetectionEnabled()
+		voiceSubOn = cfg.EffectiveVoiceSubtitlesEnabled()
 	}
 	defaultModelDir := tts.DefaultModelDir()
 	defaultSTTModelDir := stt.DefaultSTTModelDir()
@@ -353,6 +361,7 @@ func NewSettingsView(w fyne.Window, cfg *config.Config, player audio.Player, eng
 		ttsEnabled:            ttsOn,
 		loggingEnabled:        loggingOn,
 		translationEnabled:    translationOn,
+		voiceDetectionEnabled: voiceDetectionOn,
 		voiceSubtitlesEnabled: voiceSubOn,
 		modelChecks:           make(map[string]*widget.Check),
 	}
@@ -371,6 +380,11 @@ func (v *SettingsView) SetLoggingChangedHandler(fn func(enabled bool)) {
 // SetBotChangedHandler registers a callback invoked when the Bot Automation Engine is enabled or disabled.
 func (v *SettingsView) SetBotChangedHandler(fn func(enabled bool)) {
 	v.onBotChanged = fn
+}
+
+// SetVoiceDetectionChangedHandler registers a callback invoked when Voice Detection is enabled or disabled.
+func (v *SettingsView) SetVoiceDetectionChangedHandler(fn func(enabled bool)) {
+	v.onVoiceDetectionChanged = fn
 }
 
 // SetPluginOpenTabHandler registers a callback invoked when the user clicks "Open <View>" on a running plugin card.
@@ -975,9 +989,26 @@ func (v *SettingsView) SyncFromConfig() {
 		v.translationEnabled = v.cfg.Translation.Enabled
 		v.enableTranslationCheck.SetChecked(v.cfg.Translation.Enabled)
 	}
+	v.voiceDetectionEnabled = v.cfg.EffectiveVoiceDetectionEnabled()
+	v.voiceSubtitlesEnabled = v.cfg.EffectiveVoiceSubtitlesEnabled()
+	if v.enableVoiceDetectionCheck != nil {
+		v.enableVoiceDetectionCheck.SetChecked(v.voiceDetectionEnabled)
+	}
 	if v.enableVoiceSubtitlesCheck != nil {
-		v.voiceSubtitlesEnabled = v.cfg.VoiceSubtitles.Enabled
 		v.enableVoiceSubtitlesCheck.SetChecked(v.cfg.VoiceSubtitles.Enabled)
+	}
+	if v.voiceDetectionCard != nil {
+		if v.voiceDetectionEnabled {
+			v.voiceDetectionCard.Show()
+		} else {
+			v.voiceDetectionCard.Hide()
+		}
+	}
+	if v.generalBox != nil {
+		v.generalBox.Refresh()
+	}
+	if v.generalPanel != nil {
+		v.generalPanel.SyncVisibility()
 	}
 	if v.wsSubtitlesOverlayCheck != nil {
 		v.wsSubtitlesOverlayCheck.SetChecked(v.cfg.WebSocket.SubtitlesOverlayEnabled)
@@ -986,6 +1017,9 @@ func (v *SettingsView) SyncFromConfig() {
 		v.pluginsTab.Refresh()
 	}
 	v.syncVoiceSubtitlesControlsFromConfig()
+	v.refreshVoiceDetectionSummary()
+	v.SyncSTTStatus(false, false, "")
+	v.SyncPlatformTabVisibility()
 	if v.translationTargetSelect != nil {
 		v.translationTargetSelect.SetSelected(FormatTranslationTargetLangOption(v.cfg.Translation.TargetLang))
 	}
@@ -1057,6 +1091,7 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	}
 
 	v.featuresCard = v.buildFeaturesCard()
+	v.voiceDetectionCard = v.buildVoiceDetectionCard()
 	v.ttsOutputModeCard = v.buildTTSOutputModeCard()
 	v.wsControlCard = v.buildWSControlCard()
 	servicesCard := v.buildServicesCard()
@@ -1074,15 +1109,20 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 		v.globalVoiceCard.Hide()
 		v.audioCard.Hide()
 	}
+	if !v.voiceDetectionEnabled {
+		v.voiceDetectionCard.Hide()
+	}
 
 	v.generalBox = container.NewVBox(
 		v.featuresCard,
+		v.voiceDetectionCard,
 		servicesCard,
 		displayCard,
 		backupCard,
 	)
 	v.generalPanel = newSectionedPanelVScroll(v.generalBox, []panelSection{
 		{Label: "Features", Target: v.featuresCard},
+		{Label: "Voice Detection", Target: v.voiceDetectionCard},
 		{Label: "Services", Target: servicesCard},
 		{Label: "Display & Scale", Target: displayCard},
 		{Label: "Backups & Recovery", Target: backupCard},
@@ -1303,28 +1343,44 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 	})
 	v.enableTranslationCheck.SetChecked(cfg.Translation.Enabled)
 
+	v.enableVoiceDetectionCheck = widget.NewCheck("Enable Voice Detection (Offline Speech Recognition / Whisper)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.SetVoiceDetectionEnabled(checked)
+		})
+		v.applyVoiceDetectionUIState()
+		if v.onVoiceDetectionChanged != nil {
+			v.onVoiceDetectionChanged(checked)
+		}
+		if checked {
+			v.setStatus("✓ Voice Detection enabled. Configure microphone and Whisper model below.")
+		} else {
+			v.setStatus("Voice Detection disabled (Whisper unloaded; Voice Subtitles & Bot Voice Commands paused).")
+		}
+	})
+	v.enableVoiceDetectionCheck.SetChecked(cfg.EffectiveVoiceDetectionEnabled())
+
 	v.enableVoiceSubtitlesCheck = widget.NewCheck("Enable Voice Subtitles (Offline Speech-to-Text & Multi-Language OBS Overlay)", func(checked bool) {
 		if v.initializing {
 			return
 		}
 		v.updateConfig(func(c *config.Config) {
 			c.VoiceSubtitles.Enabled = checked
-			if checked && !c.WebSocket.SubtitlesOverlayEnabled {
-				c.WebSocket.SubtitlesOverlayEnabled = true
+			if checked {
+				c.SetVoiceDetectionEnabled(true)
+				if !c.WebSocket.SubtitlesOverlayEnabled {
+					c.WebSocket.SubtitlesOverlayEnabled = true
+				}
 			}
 		})
-		v.voiceSubtitlesEnabled = checked
-		prevInit := v.initializing
-		v.initializing = true
-		if v.wsSubtitlesOverlayCheck != nil {
-			v.wsSubtitlesOverlayCheck.SetChecked(v.currentConfig().WebSocket.SubtitlesOverlayEnabled)
+		v.applyVoiceDetectionUIState()
+		if checked && v.onVoiceDetectionChanged != nil {
+			v.onVoiceDetectionChanged(true)
 		}
-		v.initializing = prevInit
-		v.refreshWSStatusLabel()
-		v.SyncPlatformTabVisibility()
-		v.refreshVoiceSubtitleModelStatus()
 		if checked {
-			v.setStatus("✓ Voice Subtitles enabled. Configure languages and Whisper model in the Voice Subtitles tab.")
+			v.setStatus("✓ Voice Subtitles enabled. Configure languages and layout in the Voice Subtitles tab.")
 		} else {
 			v.setStatus("Voice Subtitles disabled.")
 		}
@@ -1352,11 +1408,58 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 		v.enableLogCheck,
 		v.enableBotCheck,
 		v.enableTranslationCheck,
+		v.enableVoiceDetectionCheck,
 		v.enableVoiceSubtitlesCheck,
 		updateRow,
 	)
 
 	return widget.NewCard("Application Features", "Enable or disable core system features", cardContent)
+}
+
+func (v *SettingsView) applyVoiceDetectionUIState() {
+	cfg := v.currentConfig()
+	vdOn := false
+	vsOn := false
+	vsRawOn := false
+	if cfg != nil {
+		vdOn = cfg.EffectiveVoiceDetectionEnabled()
+		vsOn = cfg.EffectiveVoiceSubtitlesEnabled()
+		vsRawOn = cfg.VoiceSubtitles.Enabled
+	}
+	v.voiceDetectionEnabled = vdOn
+	v.voiceSubtitlesEnabled = vsOn
+
+	prevInit := v.initializing
+	v.initializing = true
+	if v.enableVoiceDetectionCheck != nil {
+		v.enableVoiceDetectionCheck.SetChecked(vdOn)
+	}
+	if v.enableVoiceSubtitlesCheck != nil {
+		v.enableVoiceSubtitlesCheck.SetChecked(vsRawOn)
+	}
+	if v.wsSubtitlesOverlayCheck != nil && cfg != nil {
+		v.wsSubtitlesOverlayCheck.SetChecked(cfg.WebSocket.SubtitlesOverlayEnabled)
+	}
+	v.initializing = prevInit
+
+	if v.voiceDetectionCard != nil {
+		if vdOn {
+			v.voiceDetectionCard.Show()
+		} else {
+			v.voiceDetectionCard.Hide()
+		}
+	}
+	if v.generalBox != nil {
+		v.generalBox.Refresh()
+	}
+	if v.generalPanel != nil {
+		v.generalPanel.SyncVisibility()
+	}
+	v.refreshWSStatusLabel()
+	v.SyncPlatformTabVisibility()
+	v.refreshVoiceSubtitleModelStatus()
+	v.refreshVoiceDetectionSummary()
+	v.SyncSTTStatus(false, false, "")
 }
 
 // IdleTimeoutOptions lists selectable keyboard/mouse inactivity thresholds for Auto-AFK mode.

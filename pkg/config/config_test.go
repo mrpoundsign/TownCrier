@@ -862,6 +862,80 @@ func TestWindowGeometryDefaultsNormalizeAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestVoiceDetectionMasterToggleAndGating(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.VoiceDetection.Enabled != nil {
+		t.Fatal("expected VoiceDetection.Enabled=nil by default for auto-derivation")
+	}
+	if cfg.EffectiveVoiceDetectionEnabled() {
+		t.Fatal("expected EffectiveVoiceDetectionEnabled()=false when no consumers are enabled")
+	}
+
+	// Auto-derives true when VoiceSubtitles or Bot VoiceCommands are enabled and VoiceDetection.Enabled is nil
+	cfg.VoiceSubtitles.Enabled = true
+	cfg.WebSocket.SubtitlesOverlayEnabled = true
+	if !cfg.EffectiveVoiceDetectionEnabled() || !cfg.EffectiveVoiceSubtitlesEnabled() || !cfg.EffectiveSubtitlesOverlayEnabled() {
+		t.Fatal("expected Voice Detection & Subtitles to auto-derive enabled when VoiceSubtitles.Enabled=true")
+	}
+
+	cfg.VoiceSubtitles.Enabled = false
+	cfg.Bot.Enabled = true
+	cfg.Bot.VoiceCommands = []BotVoiceCommandDef{
+		{ID: "vc-1", Name: "Hi", Enabled: true, Phrase: "hello world", ActionID: "act-1"},
+	}
+	if !cfg.EffectiveVoiceDetectionEnabled() || !cfg.EffectiveVoiceCommandsEnabled() {
+		t.Fatal("expected Voice Detection to auto-derive enabled when an enabled Bot VoiceCommand exists")
+	}
+
+	// Explicit master disable gates Subtitles, Overlay, and Voice Commands while preserving saved rules
+	cfg.VoiceSubtitles.Enabled = true
+	cfg.SetVoiceDetectionEnabled(false)
+	if cfg.EffectiveVoiceDetectionEnabled() {
+		t.Fatal("expected EffectiveVoiceDetectionEnabled()=false after master disable")
+	}
+	if cfg.EffectiveVoiceSubtitlesEnabled() {
+		t.Fatal("expected EffectiveVoiceSubtitlesEnabled()=false after master disable")
+	}
+	if cfg.EffectiveSubtitlesOverlayEnabled() {
+		t.Fatal("expected EffectiveSubtitlesOverlayEnabled()=false after master disable")
+	}
+	if cfg.EffectiveVoiceCommandsEnabled() {
+		t.Fatal("expected EffectiveVoiceCommandsEnabled()=false after master disable")
+	}
+	_, _, _, anyWS := cfg.EffectiveWebSocketFeatures()
+	if anyWS {
+		t.Fatal("expected EffectiveWebSocketFeatures() anyEnabled=false when VoiceDetection is disabled")
+	}
+
+	// Clone deep-copies the pointer
+	cloned := cfg.Clone()
+	cloned.SetVoiceDetectionEnabled(true)
+	if cfg.EffectiveVoiceDetectionEnabled() {
+		t.Fatal("expected Clone() to deep-copy VoiceDetection.Enabled pointer")
+	}
+
+	// JSON round-trip preserves explicit false and re-enabling restores consumers
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(cfgPath, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.VoiceDetection.Enabled == nil || *loaded.VoiceDetection.Enabled {
+		t.Fatal("expected loaded VoiceDetection.Enabled to remain explicit false")
+	}
+	if !loaded.VoiceSubtitles.Enabled || !loaded.Bot.HasEnabledVoiceCommands() {
+		t.Fatal("expected saved VoiceSubtitles and VoiceCommands rules to be preserved when VoiceDetection is off")
+	}
+	loaded.SetVoiceDetectionEnabled(true)
+	if !loaded.EffectiveVoiceSubtitlesEnabled() || !loaded.EffectiveSubtitlesOverlayEnabled() || !loaded.EffectiveVoiceCommandsEnabled() {
+		t.Fatal("expected re-enabling VoiceDetection to restore all saved consumers")
+	}
+}
+
+
 
 
 

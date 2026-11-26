@@ -313,6 +313,10 @@ func (v *SettingsView) SyncSTTStatus(speaking bool, transcribing bool, errText s
 			v.vsSTTStatusLabel.SetText("🎙️ Speaking detected...")
 		default:
 			cfg := v.currentConfig()
+			if cfg != nil && !cfg.EffectiveVoiceDetectionEnabled() {
+				v.vsSTTStatusLabel.SetText("⚪ Voice Detection Disabled")
+				return
+			}
 			fam := config.DefaultVoiceSubtitleModel
 			if cfg != nil {
 				fam = config.NormalizeVoiceSubtitleModel(cfg.VoiceSubtitles.ModelFamily)
@@ -426,6 +430,42 @@ func (v *SettingsView) refreshVoiceSubtitleModelStatus() {
 	v.vsModelStatusLabel.Refresh()
 	v.vsDownloadModelBtn.Refresh()
 	v.syncComputeDeviceLockState(ggmlInstalled, legacyInstalled, spec)
+	v.refreshVoiceDetectionSummary()
+}
+
+func (v *SettingsView) refreshVoiceDetectionSummary() {
+	if v.vdConsumersLabel == nil {
+		return
+	}
+	cfg := v.currentConfig()
+	if cfg == nil {
+		return
+	}
+	vdOn := cfg.EffectiveVoiceDetectionEnabled()
+	subStatus := "Off"
+	if cfg.EffectiveVoiceSubtitlesEnabled() {
+		subStatus = "On"
+	} else if cfg.VoiceSubtitles.Enabled && !vdOn {
+		subStatus = "Paused (Voice Detection Off)"
+	}
+
+	activeCmds := 0
+	for _, vc := range cfg.Bot.VoiceCommands {
+		if vc.Enabled && strings.TrimSpace(vc.Phrase) != "" && strings.TrimSpace(vc.ActionID) != "" {
+			activeCmds++
+		}
+	}
+	botSummary := fmt.Sprintf("%d configured", activeCmds)
+	switch {
+	case activeCmds > 0 && !cfg.Bot.Enabled:
+		botSummary = fmt.Sprintf("%d configured (Bot Engine Off)", activeCmds)
+	case activeCmds > 0 && !vdOn:
+		botSummary = fmt.Sprintf("%d paused (Voice Detection Off)", activeCmds)
+	case activeCmds > 0:
+		botSummary = fmt.Sprintf("%d active", activeCmds)
+	}
+
+	v.vdConsumersLabel.SetText(fmt.Sprintf("Active Voice Consumers: Voice Subtitles (%s) • Bot Voice Commands (%s)", subStatus, botSummary))
 }
 
 func (v *SettingsView) syncComputeDeviceLockState(ggmlInstalled, legacyInstalled bool, spec stt.ModelSpec) {
@@ -499,7 +539,7 @@ func (v *SettingsView) syncVoiceSubtitlesControlsFromConfig() {
 	v.refreshVoiceSubtitleModelStatus()
 }
 
-func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
+func (v *SettingsView) buildVoiceDetectionCard() *widget.Card {
 	v.updateConfig(func(c *config.Config) {
 		config.NormalizeVoiceSubtitlesConfig(&c.VoiceSubtitles)
 	})
@@ -511,7 +551,7 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 		return container.NewBorder(nil, nil, container.NewGridWrap(fyne.NewSize(185, 36), widget.NewLabel(label)), nil, ctrl)
 	}
 
-	// --- Card 1: Microphone, Silero VAD & Offline Whisper Model ---
+	// --- Shared Offline Speech Recognition (Microphone, Silero VAD & Whisper) ---
 	v.vsMicDeviceSelect = widget.NewSelect([]string{"Default Microphone"}, func(selected string) {
 		if v.initializing {
 			return
@@ -739,9 +779,12 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 	)
 	spokenDesc.Wrapping = fyne.TextWrapWord
 
+	v.vdConsumersLabel = widget.NewLabel("")
+	v.vdConsumersLabel.Wrapping = fyne.TextWrapWord
+
 	sttCard := widget.NewCard(
-		"Offline Speech Recognition (Microphone, VAD & Whisper GPU / iGPU / CPU)",
-		"100% local speech-to-text powered by Silero VAD and SHA-256 verified Whisper (Vulkan NVIDIA/AMD/Intel GPUs, iGPUs, or CPU)",
+		"Voice Detection (Microphone, Silero VAD & Whisper GPU / iGPU / CPU)",
+		"100% local speech-to-text shared by Voice Subtitles and Bot Voice Commands (Vulkan GPU / iGPU / CPU)",
 		container.NewVBox(
 			makeRow("Microphone Input:", container.NewBorder(nil, nil, nil, v.vsMicRefreshBtn, v.vsMicDeviceSelect)),
 			makeRow("Live Mic & Engine:", container.NewBorder(nil, nil, nil, v.vsSTTStatusLabel, v.vsMicLevelBar)),
@@ -756,8 +799,25 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 			spokenDesc,
 			makeRow("Add Spoken Language:", container.NewBorder(nil, nil, nil, v.vsAddSpokenBtn, v.vsSpokenAddSelect)),
 			v.vsSpokenListBox,
+			widget.NewSeparator(),
+			v.vdConsumersLabel,
 		),
 	)
+
+	v.refreshVoiceSubtitleModelStatus()
+	v.refreshVoiceDetectionSummary()
+	v.SyncSTTStatus(false, false, "")
+	return sttCard
+}
+
+func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
+	cfg := v.currentConfig()
+	vs := cfg.VoiceSubtitles
+	config.NormalizeVoiceSubtitlesConfig(&vs)
+
+	makeRow := func(label string, ctrl fyne.CanvasObject) *fyne.Container {
+		return container.NewBorder(nil, nil, container.NewGridWrap(fyne.NewSize(185, 36), widget.NewLabel(label)), nil, ctrl)
+	}
 
 	// --- Card 2: Configured OBS Target Display Languages ---
 	targetOpts := TranslationTargetLangOptions()
@@ -869,6 +929,20 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 		}
 	})
 
+	v.vsOpenVoiceDetectionBtn = widget.NewButtonWithIcon("Configure Microphone & Whisper Model", theme.MediaRecordIcon(), func() {
+		if v.subTabs != nil && v.generalTabItem != nil {
+			v.subTabs.Select(v.generalTabItem)
+			if v.generalPanel != nil && v.voiceDetectionCard != nil {
+				for i, sec := range v.generalPanel.sections {
+					if sec.Target == v.voiceDetectionCard {
+						v.generalPanel.ScrollTo(i)
+						break
+					}
+				}
+			}
+		}
+	})
+
 	targetDesc := widget.NewLabelWithStyle(
 		"All listed languages are translated concurrently and stacked top-to-bottom on the OBS Subtitle Overlay. Use ▲/▼ to reorder rows.",
 		fyne.TextAlignLeading,
@@ -884,7 +958,7 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 			makeRow("Select Language:", container.NewBorder(nil, nil, nil, v.vsAddTargetBtn, v.vsTargetAddSelect)),
 			v.vsTargetListBox,
 			widget.NewSeparator(),
-			v.vsOpenTranslationTabBtn,
+			container.NewGridWithColumns(2, v.vsOpenTranslationTabBtn, v.vsOpenVoiceDetectionBtn),
 		),
 	)
 
@@ -1050,15 +1124,10 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 		),
 	)
 
-	v.refreshVoiceSubtitleModelStatus()
-	v.SyncSTTStatus(false, false, "")
-
 	v.voiceSubtitlesPanel = newSectionedPanelVScroll(container.NewVBox(
-		sttCard,
 		targetsCard,
 		overlayCard,
 	), []panelSection{
-		{Label: "Speech Engine", Target: sttCard},
 		{Label: "Display Languages", Target: targetsCard},
 		{Label: "OBS Overlay", Target: overlayCard},
 	})

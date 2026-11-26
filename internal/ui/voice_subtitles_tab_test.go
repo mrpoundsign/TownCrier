@@ -147,4 +147,46 @@ func TestSharedTranslationTabAndVoiceSubtitlesLanguageLists(t *testing.T) {
 	if view.subTabs.Selected() != view.translationTabItem {
 		t.Fatal("expected clicking Configure Shared Translation Providers to select Translation tab")
 	}
+
+	// 9. Voice Detection card lives in General and auto-enabled when Voice Subtitles turned on
+	if !sess.Config().EffectiveVoiceDetectionEnabled() || !view.enableVoiceDetectionCheck.Checked {
+		t.Fatal("expected Voice Detection to auto-enable when Voice Subtitles is turned on")
+	}
+	if !view.voiceDetectionCard.Visible() {
+		t.Fatal("expected voiceDetectionCard in General to be visible when Voice Detection is enabled")
+	}
+
+	// Clicking "Configure Microphone & Whisper Model" jumps back to General -> Voice Detection
+	test.Tap(view.vsOpenVoiceDetectionBtn)
+	if view.subTabs.Selected() != view.generalTabItem {
+		t.Fatal("expected Configure Microphone & Whisper Model button to select General tab")
+	}
+
+	// 10. Master disable of Voice Detection hides voiceDetectionCard, Voice Subtitles tab, and OBS Subtitles overlay
+	// while preserving VoiceSubtitles.Enabled so re-enabling restores them cleanly.
+	view.enableVoiceDetectionCheck.SetChecked(false)
+	if sess.Config().EffectiveVoiceDetectionEnabled() {
+		t.Fatal("expected EffectiveVoiceDetectionEnabled()=false after unchecking master toggle")
+	}
+	if sess.Config().EffectiveSubtitlesOverlayEnabled() {
+		t.Fatal("expected EffectiveSubtitlesOverlayEnabled()=false when Voice Detection is disabled")
+	}
+	if view.voiceDetectionCard.Visible() {
+		t.Fatal("expected voiceDetectionCard to hide when Voice Detection is disabled")
+	}
+	if slices.Contains(view.subTabs.Items, view.voiceSubtitlesTabItem) {
+		t.Fatal("expected Voice Subtitles sub-tab to hide when Voice Detection is disabled")
+	}
+	if view.wsSubtitlesOverlayGroup.Visible() {
+		t.Fatal("expected OBS Subtitles overlay settings group to hide when Voice Detection is disabled")
+	}
+	if !sess.Config().VoiceSubtitles.Enabled {
+		t.Fatal("expected VoiceSubtitles.Enabled to remain preserved in config while Voice Detection is off")
+	}
+
+	// Re-enabling Voice Detection restores Voice Subtitles tab and OBS Subtitles overlay
+	view.enableVoiceDetectionCheck.SetChecked(true)
+	if !sess.Config().EffectiveVoiceSubtitlesEnabled() || !slices.Contains(view.subTabs.Items, view.voiceSubtitlesTabItem) {
+		t.Fatal("expected re-enabling Voice Detection to restore Voice Subtitles tab")
+	}
 }

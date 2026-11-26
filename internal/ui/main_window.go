@@ -496,6 +496,11 @@ func (mw *MainWindow) initViews() {
 	mw.settingsTab.SetBotChangedHandler(func(enabled bool) {
 		mw.syncBotState(enabled)
 	})
+	mw.settingsTab.SetVoiceDetectionChangedHandler(func(_ bool) {
+		if mw.botTab != nil {
+			mw.botTab.Refresh()
+		}
+	})
 	mw.settingsTab.SetPluginOpenTabHandler(func(viewKey string) {
 		mw.SelectPluginView(viewKey)
 	})
@@ -573,6 +578,11 @@ func (mw *MainWindow) initViews() {
 
 	mw.settingsTab.SetPlatformTabs(mw.twitchTab, mw.youtubeTab, mw.tiktokTab, mw.kickTab)
 	mw.botTab = NewBotTabView(mw.Window, mw.Session, mw.SetStatus)
+	mw.botTab.SetOnConfigChanged(func() {
+		if mw.settingsTab != nil {
+			mw.settingsTab.SyncFromConfig()
+		}
+	})
 
 	mw.dashboardObj = mw.dashboardTab.Build()
 	mw.botObj = mw.botTab.Build()

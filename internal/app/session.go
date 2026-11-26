@@ -1285,8 +1285,8 @@ func (s *Session) syncMicMonitor(cfg *config.Config) {
 
 	mode := config.NormalizeMicGateMode(cfg.Audio.MicGateMode)
 	needMicGate := cfg.TTS.Enabled && (mode == config.MicGateModeDuck || mode == config.MicGateModePause)
-	needVoiceSubtitles := cfg.VoiceSubtitles.Enabled || cfg.Bot.HasEnabledVoiceCommands()
-	if running && (needMicGate || needVoiceSubtitles) {
+	needVoiceDetection := cfg.EffectiveVoiceDetectionEnabled()
+	if running && (needMicGate || needVoiceDetection) {
 		if err := mon.Start(cfg.Audio.MicDeviceID); err != nil {
 			log.Printf("[Session] Failed to start microphone capture monitor: %v", err)
 		}

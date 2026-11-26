@@ -122,4 +122,16 @@ func TestSessionBotRawEventBusConsumeAndVoiceTrigger(t *testing.T) {
 	require.True(t, s.TogglePanic())
 	require.True(t, s.IsPanicked())
 	require.False(t, s.TogglePanic())
+
+	// Master Voice Detection disable prevents Bot Voice Commands from firing while preserving rules
+	require.NoError(t, s.UpdateConfig(func(c *config.Config) {
+		c.SetVoiceDetectionEnabled(false)
+	}))
+	require.NoError(t, s.BotEngine().Store().DeleteGlobalVar("voice_hit", true))
+	s.processUtteranceSamples([]float32{0.1, 0.2, 0.3})
+	s.BotEngine().OnVoiceTranscript("please switch scene now")
+	time.Sleep(50 * time.Millisecond)
+	_, ok := s.BotEngine().Store().GetGlobalVar("voice_hit", true)
+	require.False(t, ok, "voice command must not fire when VoiceDetection is disabled")
+	require.True(t, s.Config().Bot.HasEnabledVoiceCommands(), "saved voice commands must be preserved")
 }

@@ -259,6 +259,11 @@ func (e *Engine) OnEvent(ev *chat.Event) (consumeTTS bool) {
 
 // OnVoiceTranscript evaluates finalized Whisper STT transcripts against enabled voice command triggers.
 func (e *Engine) OnVoiceTranscript(transcript string) {
+	if e.bridge.GetConfig != nil {
+		if fullCfg := e.bridge.GetConfig(); fullCfg != nil && !fullCfg.EffectiveVoiceCommandsEnabled() {
+			return
+		}
+	}
 	cfg := e.currentBotConfig()
 	if !cfg.Enabled || strings.TrimSpace(transcript) == "" {
 		return

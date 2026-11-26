@@ -34,21 +34,22 @@ type Config struct {
 	WindowWidth         int                       `json:"window_width,omitempty"`
 	WindowHeight        int                       `json:"window_height,omitempty"`
 	WindowMaximized     bool                      `json:"window_maximized,omitempty"`
-	Update          UpdateConfig              `json:"update"`
-	Audio           AudioConfig               `json:"audio"`
-	TTS             TTSConfig                 `json:"tts"`
-	Safety          SafetyConfig              `json:"safety"`
-	Queue           QueueConfig               `json:"queue"`
-	Bots            BotConfig                 `json:"bots"`
-	Logging         LoggingConfig             `json:"logging"`
-	WebSocket       WebSocketConfig           `json:"websocket"`
-	Translation     TranslationConfig         `json:"translation"`
-	VoiceSubtitles  VoiceSubtitlesConfig      `json:"voice_subtitles"`
-	Plugins         PluginsConfig             `json:"plugins"`
-	Bot             BotAutomationConfig       `json:"bot"`
-	GlobalChatRules GlobalChatRules           `json:"global_chat_rules"`
-	Viewers         map[string]ViewerConfig   `json:"viewers"`
-	Platforms       map[string]PlatformConfig `json:"platforms"`
+	Update              UpdateConfig              `json:"update"`
+	Audio               AudioConfig               `json:"audio"`
+	TTS                 TTSConfig                 `json:"tts"`
+	Safety              SafetyConfig              `json:"safety"`
+	Queue               QueueConfig               `json:"queue"`
+	Bots                BotConfig                 `json:"bots"`
+	Logging             LoggingConfig             `json:"logging"`
+	WebSocket           WebSocketConfig           `json:"websocket"`
+	Translation         TranslationConfig         `json:"translation"`
+	VoiceDetection      VoiceDetectionConfig      `json:"voice_detection,omitzero"`
+	VoiceSubtitles      VoiceSubtitlesConfig      `json:"voice_subtitles"`
+	Plugins             PluginsConfig             `json:"plugins"`
+	Bot                 BotAutomationConfig       `json:"bot"`
+	GlobalChatRules     GlobalChatRules           `json:"global_chat_rules"`
+	Viewers             map[string]ViewerConfig   `json:"viewers"`
+	Platforms           map[string]PlatformConfig `json:"platforms"`
 }
 
 const (
@@ -343,13 +344,58 @@ func (w WebSocketConfig) AnyEnabled() bool {
 	return w.Enabled || w.TTSOverlayEnabled || w.ChatOverlayEnabled || w.SubtitlesOverlayEnabled
 }
 
+// VoiceDetectionConfig controls the master Offline Speech Recognition (Silero VAD + Whisper) subsystem.
+// When Enabled is nil (legacy/unset), availability is auto-derived from active consumers
+// (VoiceSubtitles.Enabled or Bot.HasEnabledVoiceCommands). When explicitly false, Whisper/VAD and all
+// dependent features (Voice Subtitles, OBS /overlay/subtitles, and Bot Voice Commands) are disabled
+// while preserving the user's saved rules.
+type VoiceDetectionConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// SetVoiceDetectionEnabled explicitly sets the master Voice Detection enabled state.
+func (c *Config) SetVoiceDetectionEnabled(enabled bool) {
+	if c == nil {
+		return
+	}
+	v := enabled
+	c.VoiceDetection.Enabled = &v
+}
+
+// EffectiveVoiceDetectionEnabled reports whether Offline Speech Recognition (Silero VAD + Whisper) should run.
+func (c *Config) EffectiveVoiceDetectionEnabled() bool {
+	if c == nil {
+		return false
+	}
+	if c.VoiceDetection.Enabled != nil {
+		return *c.VoiceDetection.Enabled
+	}
+	return c.VoiceSubtitles.Enabled || c.Bot.HasEnabledVoiceCommands()
+}
+
+// EffectiveVoiceSubtitlesEnabled reports whether Voice Subtitles translation/broadcasting is active.
+func (c *Config) EffectiveVoiceSubtitlesEnabled() bool {
+	if c == nil {
+		return false
+	}
+	return c.EffectiveVoiceDetectionEnabled() && c.VoiceSubtitles.Enabled
+}
+
+// EffectiveVoiceCommandsEnabled reports whether Bot Automation Whisper Voice Commands should trigger.
+func (c *Config) EffectiveVoiceCommandsEnabled() bool {
+	if c == nil {
+		return false
+	}
+	return c.EffectiveVoiceDetectionEnabled() && c.Bot.HasEnabledVoiceCommands()
+}
+
 // EffectiveSubtitlesOverlayEnabled reports whether the OBS Multi-Language Voice Subtitles Overlay (/overlay/subtitles)
-// is active (requiring both VoiceSubtitles.Enabled and WebSocket.SubtitlesOverlayEnabled).
+// is active (requiring VoiceDetection, VoiceSubtitles.Enabled, and WebSocket.SubtitlesOverlayEnabled).
 func (c *Config) EffectiveSubtitlesOverlayEnabled() bool {
 	if c == nil {
 		return false
 	}
-	return c.WebSocket.SubtitlesOverlayEnabled && c.VoiceSubtitles.Enabled
+	return c.WebSocket.SubtitlesOverlayEnabled && c.EffectiveVoiceSubtitlesEnabled()
 }
 
 // EffectiveWebSocketFeatures returns the active feature states for the local HTTP/WebSocket server,
@@ -726,13 +772,13 @@ type TTSConfig struct {
 	AlertSoundPath        string   `json:"alert_sound_path,omitempty"`     // optional custom .wav or .mp3 file path (empty = built-in chime)
 	AlertCooldownMs       int      `json:"alert_cooldown_ms,omitempty"`    // minimum interval between alert sounds in ms (default 1500)
 	Preset                string   `json:"preset,omitempty"`               // "ultra_low", "fast_lean", "balanced", "beefy", "custom"
-	EnabledModels      []string `json:"enabled_models,omitempty"`       // ["kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper"]
-	ModelFamily        string   `json:"model_family"`                   // "kokoro"
-	ModelPath          string   `json:"model_path"`
-	NumThreads         int      `json:"num_threads"`
-	UseGPU             bool     `json:"use_gpu"`
-	MaxClauseWords     int      `json:"max_clause_words,omitempty"`
-	IdleUnloadMinutes  int      `json:"idle_unload_minutes,omitempty"`
+	EnabledModels         []string `json:"enabled_models,omitempty"`       // ["kokoro", "supertonic", "kitten_mini", "kitten_nano", "piper"]
+	ModelFamily           string   `json:"model_family"`                   // "kokoro"
+	ModelPath             string   `json:"model_path"`
+	NumThreads            int      `json:"num_threads"`
+	UseGPU                bool     `json:"use_gpu"`
+	MaxClauseWords        int      `json:"max_clause_words,omitempty"`
+	IdleUnloadMinutes     int      `json:"idle_unload_minutes,omitempty"`
 }
 
 // EffectiveEnabledModels returns the non-empty list of enabled TTS model families.
@@ -1197,13 +1243,13 @@ func DefaultConfig() *Config {
 			AlertSoundPath:        "",
 			AlertCooldownMs:       DefaultAlertCooldownMs,
 			Preset:                "fast_lean",
-			EnabledModels:      []string{"supertonic"},
-			ModelFamily:        "supertonic",
-			ModelPath:          "",
-			NumThreads:         4,
-			UseGPU:             false,
-			MaxClauseWords:     12,
-			IdleUnloadMinutes:  0,
+			EnabledModels:         []string{"supertonic"},
+			ModelFamily:           "supertonic",
+			ModelPath:             "",
+			NumThreads:            4,
+			UseGPU:                false,
+			MaxClauseWords:        12,
+			IdleUnloadMinutes:     0,
 		},
 		Safety: SafetyConfig{
 			PanicHotkey:          "Ctrl+Shift+M",
@@ -1933,6 +1979,10 @@ func (c *Config) Clone() *Config {
 	clone.Bots.CustomBots = slices.Clone(c.Bots.CustomBots)
 	clone.Logging.LiveLogs = slices.Clone(c.Logging.LiveLogs)
 	clone.Translation.Providers = slices.Clone(c.Translation.Providers)
+	if c.VoiceDetection.Enabled != nil {
+		vd := *c.VoiceDetection.Enabled
+		clone.VoiceDetection.Enabled = &vd
+	}
 	clone.VoiceSubtitles.SpokenLanguages = slices.Clone(c.VoiceSubtitles.SpokenLanguages)
 	clone.VoiceSubtitles.TargetLanguages = slices.Clone(c.VoiceSubtitles.TargetLanguages)
 	clone.Plugins.ExtraPaths = slices.Clone(c.Plugins.ExtraPaths)

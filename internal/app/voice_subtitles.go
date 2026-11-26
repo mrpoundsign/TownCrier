@@ -187,7 +187,7 @@ func (s *Session) handleCapturedMicSamples(samples []float32) {
 		return
 	}
 	s.mu.RLock()
-	enabled := s.running && s.cfg != nil && (s.cfg.VoiceSubtitles.Enabled || s.cfg.Bot.HasEnabledVoiceCommands())
+	enabled := s.running && s.cfg != nil && s.cfg.EffectiveVoiceDetectionEnabled()
 	s.mu.RUnlock()
 	if !enabled {
 		return
@@ -227,7 +227,7 @@ func (s *Session) syncVoiceSubtitlesSync(cfg *config.Config) {
 	running := s.running
 	s.mu.RUnlock()
 
-	if !running || (!vs.Enabled && !cfg.Bot.HasEnabledVoiceCommands()) {
+	if !running || !cfg.EffectiveVoiceDetectionEnabled() {
 		s.stopVoiceSubtitlesLocked(true)
 		return
 	}
@@ -448,7 +448,7 @@ func (s *Session) voiceSubtitleWorker(uttCh <-chan []float32, stopCh <-chan stru
 
 func (s *Session) processUtteranceSamples(samples []float32) {
 	cfg := s.Config()
-	if cfg == nil || (!cfg.VoiceSubtitles.Enabled && !cfg.Bot.HasEnabledVoiceCommands()) {
+	if cfg == nil || !cfg.EffectiveVoiceDetectionEnabled() {
 		return
 	}
 	vs := cfg.VoiceSubtitles
@@ -479,10 +479,10 @@ func (s *Session) processUtteranceSamples(samples []float32) {
 		return
 	}
 
-	if s.botEngine != nil {
+	if s.botEngine != nil && cfg.EffectiveVoiceCommandsEnabled() {
 		s.botEngine.OnVoiceTranscript(tr.Text)
 	}
-	if !cfg.VoiceSubtitles.Enabled {
+	if !cfg.EffectiveVoiceSubtitlesEnabled() {
 		s.sttTranscribing.Store(false)
 		s.notifySTTStatus("")
 		return
