@@ -136,9 +136,103 @@ run_lint() {
 run_test_quiet() {
     local label="$1"
     shift
-    local log_file="$BUILD_DIR/test_output.log"
     local start_ts
     start_ts=$(date +%s)
+
+    if [ "${1:-}" = "go" ] && [ "${2:-}" = "test" ] && command -v gotestsum &>/dev/null; then
+        echo "==> ${label}..."
+        gotestsum --format dots -- "${@:2}"
+        local elapsed=$(( $(date +%s) - start_ts ))
+        echo "✓ ${label} passed (${elapsed}s)"
+        return 0
+    fi
+
+    if [ "${1:-}" = "go" ] && [ "${2:-}" = "test" ] && command -v python3 &>/dev/null; then
+        echo "==> ${label}..."
+        local rc=0
+        set +e
+        go test -json "${@:3}" 2>&1 | python3 -u -c '
+import json, sys, collections
+
+passed = skipped = failed = col = 0
+outputs = collections.defaultdict(list)
+non_json = []
+failed_tests = []
+build_failed = False
+
+def emit(ch):
+    global col
+    sys.stdout.write(ch)
+    col += 1
+    if col >= 80:
+        sys.stdout.write("\n")
+        col = 0
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    raw = line.rstrip("\n")
+    try:
+        ev = json.loads(raw)
+    except Exception:
+        if raw.strip():
+            non_json.append(raw)
+        continue
+    act = ev.get("Action")
+    pkg = ev.get("Package") or ev.get("ImportPath") or ""
+    test = ev.get("Test") or ""
+    key = (pkg, test)
+    if act in ("output", "build-output"):
+        txt = ev.get("Output", "")
+        if txt:
+            outputs[key].append(txt)
+    elif act == "pass" and test:
+        passed += 1
+        emit(".")
+    elif act == "skip" and test:
+        skipped += 1
+        emit("s")
+    elif act == "fail" and test:
+        failed += 1
+        failed_tests.append(key)
+        emit("F")
+    elif act in ("fail", "build-fail") and not test:
+        build_failed = True
+        if key not in failed_tests:
+            failed_tests.append(key)
+
+if col > 0:
+    sys.stdout.write("\n")
+
+if failed > 0 or build_failed or non_json:
+    for key in failed_tests:
+        pkg, test = key
+        hdr = f"{pkg} :: {test}" if test else (pkg or "build")
+        print(f"\n--- FAIL: {hdr} ---")
+        for out in outputs.get(key, []):
+            sys.stdout.write(out)
+    if non_json:
+        print("\n--- STDERR / OUTPUT ---")
+        for l in non_json:
+            print(l)
+    print(f"\n✗ Failed: {failed} failed, {passed} passed, {skipped} skipped")
+    sys.exit(1)
+
+print(f"Summary: {passed} passed, {skipped} skipped")
+'
+        local pipe_status=("${PIPESTATUS[@]}")
+        set -e
+        local go_rc="${pipe_status[0]:-0}"
+        local py_rc="${pipe_status[1]:-0}"
+        local elapsed=$(( $(date +%s) - start_ts ))
+        if [ "$go_rc" -ne 0 ] || [ "$py_rc" -ne 0 ]; then
+            echo "✗ ${label} failed (${elapsed}s)"
+            exit 1
+        fi
+        echo "✓ ${label} passed (${elapsed}s)"
+        return 0
+    fi
+
+    local log_file="$BUILD_DIR/test_output.log"
     if ! "$@" >"$log_file" 2>&1; then
         echo "✗ ${label} failed:"
         cat "$log_file"

@@ -2,6 +2,13 @@ module github.com/mrpoundsign/TownCrier
 
 go 1.27.1
 
+ignore (
+	./build
+	./dist
+	./models
+	./planning
+)
+
 require (
 	fyne.io/fyne/v2 v2.8.2
 	github.com/gempir/go-twitch-irc/v4 v4.4.1
