@@ -189,4 +189,62 @@ func TestSharedTranslationTabAndVoiceSubtitlesLanguageLists(t *testing.T) {
 	if !sess.Config().EffectiveVoiceSubtitlesEnabled() || !slices.Contains(view.subTabs.Items, view.voiceSubtitlesTabItem) {
 		t.Fatal("expected re-enabling Voice Detection to restore Voice Subtitles tab")
 	}
+
+	// 11. Wake word controls update Session config while preserving SettingsView MinSize().Width <= 550
+	if view.vdWakeWordEntry == nil || view.vdWakeWindowSelect == nil || view.vdLastHeardLabel == nil {
+		t.Fatal("expected wake word and last heard controls to be constructed")
+	}
+	view.vdWakeWordEntry.OnSubmitted("octo")
+	if got := sess.Config().VoiceDetection.WakeWord; got != "octo" {
+		t.Fatalf("expected WakeWord 'octo', got %q", got)
+	}
+	view.vdWakeWindowSelect.SetSelected("10 seconds")
+	if got := sess.Config().VoiceDetection.EffectiveWakeWindowSec(); got != 10 {
+		t.Fatalf("expected EffectiveWakeWindowSec()=10, got %d", got)
+	}
+	if view.vdWakeSoundCheck == nil || !view.vdWakeSoundCheck.Checked {
+		t.Fatal("expected vdWakeSoundCheck to default to checked")
+	}
+	view.vdWakeSoundCheck.SetChecked(false)
+	if sess.Config().VoiceDetection.EffectiveWakeSoundEnabled() {
+		t.Fatal("expected EffectiveWakeSoundEnabled()=false after unchecking vdWakeSoundCheck")
+	}
+	if minW := obj.MinSize().Width; minW > 550 {
+		t.Errorf("expected SettingsView MinSize().Width <= 550 DIPs with wake controls, got %v", minW)
+	}
+}
+
+func TestSettingsViewBuildPreservesInitializingGuard(t *testing.T) {
+	fyneApp := test.NewApp()
+	defer fyneApp.Quit()
+	w := fyneApp.NewWindow("TestInitGuard")
+
+	cfg := config.DefaultConfig()
+	cfg.VoiceDetection.WakeWord = "octo"
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
+	sess.SetSTTModelDir(t.TempDir())
+
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.SetSTTModelDir(t.TempDir())
+	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
+		return []audio.DeviceInfo{{ID: "spk1", Name: "Mock Speakers", IsDefault: true}}, nil
+	})
+	view.SetCaptureDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
+		return []audio.DeviceInfo{{ID: "mic1", Name: "Shure MV7", IsDefault: true}}, nil
+	})
+	view.SetSTTGPUDeviceEnumerator(func() ([]stt.GPUDevice, error) {
+		return nil, nil
+	})
+
+	view.initializing = true
+	_ = view.buildVoiceDetectionCard()
+	if !view.initializing {
+		t.Fatal("expected buildVoiceDetectionCard to preserve outer initializing=true guard")
+	}
+	view.syncVoiceSubtitlesControlsFromConfig()
+	if !view.initializing {
+		t.Fatal("expected syncVoiceSubtitlesControlsFromConfig to preserve outer initializing=true guard")
+	}
 }

@@ -47,12 +47,14 @@ type Engine struct {
 	obs        *obs.Client
 	httpClient *http.Client
 
-	mu          sync.Mutex
-	closed      bool
-	stopCh      chan struct{}
-	chatLines   atomic.Uint64
-	timerStates map[string]timerState
-	lastOBSCfg  config.BotOBSConfig
+	mu             sync.Mutex
+	closed         bool
+	stopCh         chan struct{}
+	chatLines      atomic.Uint64
+	timerStates    map[string]timerState
+	lastOBSCfg     config.BotOBSConfig
+	wakeArmedUntil time.Time
+	nowFunc        func() time.Time
 }
 
 // NewEngine constructs a Bot Automation Engine backed by store and bridge.
@@ -257,36 +259,240 @@ func (e *Engine) OnEvent(ev *chat.Event) (consumeTTS bool) {
 	return consumeTTS
 }
 
+func (e *Engine) now() time.Time {
+	if e.nowFunc != nil {
+		return e.nowFunc()
+	}
+	return time.Now()
+}
+
 // OnVoiceTranscript evaluates finalized Whisper STT transcripts against enabled voice command triggers.
-func (e *Engine) OnVoiceTranscript(transcript string) {
+func (e *Engine) OnVoiceTranscript(transcript string) VoiceTranscriptEvent {
+	return e.evaluateVoiceTranscript(transcript, false)
+}
+
+// TestVoiceTranscript evaluates transcript against enabled voice commands without requiring Whisper audio,
+// optionally executing matched actions when execute is true.
+func (e *Engine) TestVoiceTranscript(transcript string, execute bool) VoiceTranscriptEvent {
+	return e.evaluateVoiceTranscript(transcript, !execute)
+}
+
+func (e *Engine) evaluateVoiceTranscript(transcript string, dryRun bool) VoiceTranscriptEvent {
+	now := e.now()
+	trimmed := strings.TrimSpace(transcript)
+	ev := VoiceTranscriptEvent{
+		Timestamp:  now,
+		RawText:    trimmed,
+		Normalized: NormalizeVoiceText(trimmed),
+	}
+
+	var fullCfg *config.Config
 	if e.bridge.GetConfig != nil {
-		if fullCfg := e.bridge.GetConfig(); fullCfg != nil && !fullCfg.EffectiveVoiceCommandsEnabled() {
-			return
+		fullCfg = e.bridge.GetConfig()
+	}
+	var cfg config.BotAutomationConfig
+	var wakeWord string
+	wakeWindowSec := config.DefaultVoiceWakeWindowSec
+	if fullCfg != nil {
+		cfg = fullCfg.Bot
+		wakeWord = strings.TrimSpace(fullCfg.VoiceDetection.WakeWord)
+		wakeWindowSec = fullCfg.VoiceDetection.EffectiveWakeWindowSec()
+	} else {
+		cfg = e.currentBotConfig()
+	}
+	ev.WakeWord = wakeWord
+
+	if !dryRun {
+		if fullCfg != nil && !fullCfg.EffectiveVoiceCommandsEnabled() {
+			ev.Note = "Voice commands paused (Voice Detection or Bot Automation disabled)"
+			return ev
+		}
+		if !cfg.Enabled {
+			ev.Note = "Bot Automation disabled"
+			return ev
 		}
 	}
-	cfg := e.currentBotConfig()
-	if !cfg.Enabled || strings.TrimSpace(transcript) == "" {
-		return
+	if trimmed == "" {
+		ev.Note = "Empty transcript"
+		return ev
 	}
-	now := time.Now()
+
+	actionNames := make(map[string]string, len(cfg.Actions))
+	for _, act := range cfg.Actions {
+		name := strings.TrimSpace(act.Name)
+		if name == "" {
+			name = act.ID
+		}
+		actionNames[act.ID] = name
+	}
+
+	var (
+		hasWake                  = wakeWord != ""
+		wakeMatchedSameUtterance bool
+		afterWake                string
+		windowArmed              bool
+		standaloneWake           bool
+	)
+	if hasWake {
+		wakeMatchedSameUtterance, afterWake = stripWakeWord(trimmed, wakeWord)
+		e.mu.Lock()
+		windowArmed = !e.wakeArmedUntil.IsZero() && now.Before(e.wakeArmedUntil)
+		if wakeMatchedSameUtterance && strings.TrimSpace(afterWake) == "" {
+			standaloneWake = true
+			if !dryRun {
+				e.wakeArmedUntil = now.Add(time.Duration(wakeWindowSec) * time.Second)
+			}
+		}
+		e.mu.Unlock()
+	}
+
+	switch {
+	case !hasWake:
+		ev.WakeState = ""
+		ev.Effective = trimmed
+	case standaloneWake:
+		ev.WakeState = "armed"
+		ev.Effective = ""
+	case wakeMatchedSameUtterance:
+		ev.WakeState = "same_utterance"
+		ev.Effective = afterWake
+	case windowArmed:
+		ev.WakeState = "armed_window"
+		ev.Effective = trimmed
+	default:
+		ev.WakeState = "waiting"
+		ev.Effective = trimmed
+	}
+
+	type pendingDispatch struct {
+		vc   config.BotVoiceCommandDef
+		text string
+	}
+	var dispatches []pendingDispatch
+	var consumedArmedWindow bool
+	var firedNames []string
+	var matchedNames []string
+
 	for _, vc := range cfg.VoiceCommands {
 		if !vc.Enabled || strings.TrimSpace(vc.ActionID) == "" {
 			continue
 		}
-		ok, text := matchVoicePhrase(vc, transcript)
+		if standaloneWake && !vc.IgnoreWakeWord {
+			continue
+		}
+
+		var ok bool
+		var matchedText string
+		if !vc.IgnoreWakeWord && hasWake && ev.WakeState == "waiting" {
+			if wouldMatch, text := matchVoicePhrase(vc, trimmed); wouldMatch {
+				ev.Matches = append(ev.Matches, VoiceCommandMatch{
+					CommandID:   vc.ID,
+					CommandName: vc.Name,
+					Phrase:      vc.Phrase,
+					MatchMode:   vc.MatchMode,
+					ActionID:    vc.ActionID,
+					ActionName:  actionNames[vc.ActionID],
+					MatchedText: text,
+					Fired:       false,
+					SkipReason:  fmt.Sprintf("waiting for wake word %q", wakeWord),
+				})
+			}
+			continue
+		}
+
+		if vc.IgnoreWakeWord || !hasWake || ev.WakeState == "armed_window" {
+			ok, matchedText = matchVoicePhrase(vc, trimmed)
+		} else if ev.WakeState == "same_utterance" {
+			ok, matchedText = matchVoicePhrase(vc, afterWake)
+			if !ok {
+				ok, matchedText = matchVoicePhrase(vc, trimmed)
+			}
+		}
 		if !ok {
 			continue
 		}
-		if vc.CooldownSec > 0 && !e.cooldowns.allowAndStamp("voice:"+vc.ID+":"+vc.Phrase, "", vc.CooldownSec, 0, now) {
+
+		actName := actionNames[vc.ActionID]
+		if !dryRun && vc.CooldownSec > 0 && !e.cooldowns.allowAndStamp("voice:"+vc.ID+":"+vc.Phrase, "", vc.CooldownSec, 0, now) {
+			ev.Matches = append(ev.Matches, VoiceCommandMatch{
+				CommandID:   vc.ID,
+				CommandName: vc.Name,
+				Phrase:      vc.Phrase,
+				MatchMode:   vc.MatchMode,
+				ActionID:    vc.ActionID,
+				ActionName:  actName,
+				MatchedText: matchedText,
+				Fired:       false,
+				SkipReason:  fmt.Sprintf("cooldown (%ds)", vc.CooldownSec),
+			})
 			continue
 		}
-		args := map[string]string{
-			"transcript": text,
-			"rawInput":   text,
-			"voicePhrase": vc.Phrase,
+
+		if !vc.IgnoreWakeWord && ev.WakeState == "armed_window" {
+			consumedArmedWindow = true
 		}
-		e.dispatchActionByID(cfg, vc.ActionID, args, "", "", "", "", false)
+
+		skipReason := ""
+		if dryRun {
+			skipReason = "dry run"
+		}
+		ev.Matches = append(ev.Matches, VoiceCommandMatch{
+			CommandID:   vc.ID,
+			CommandName: vc.Name,
+			Phrase:      vc.Phrase,
+			MatchMode:   vc.MatchMode,
+			ActionID:    vc.ActionID,
+			ActionName:  actName,
+			MatchedText: matchedText,
+			Fired:       !dryRun,
+			SkipReason:  skipReason,
+		})
+		matchedNames = append(matchedNames, vc.Name)
+		if !dryRun {
+			firedNames = append(firedNames, vc.Name)
+			dispatches = append(dispatches, pendingDispatch{vc: vc, text: matchedText})
+		}
 	}
+
+	if !dryRun {
+		if consumedArmedWindow {
+			e.mu.Lock()
+			e.wakeArmedUntil = time.Time{}
+			e.mu.Unlock()
+		}
+		for _, d := range dispatches {
+			args := map[string]string{
+				"transcript":  d.text,
+				"rawInput":    d.text,
+				"voicePhrase": d.vc.Phrase,
+			}
+			e.dispatchActionByID(cfg, d.vc.ActionID, args, "", "", "", "", false)
+		}
+	}
+
+	switch {
+	case len(firedNames) > 0:
+		ev.Note = "Triggered: " + strings.Join(firedNames, ", ")
+	case dryRun && len(matchedNames) > 0:
+		ev.Note = "Would trigger: " + strings.Join(matchedNames, ", ")
+	case standaloneWake:
+		if dryRun {
+			ev.Note = fmt.Sprintf("Would arm wake word %q for %ds", wakeWord, wakeWindowSec)
+		} else {
+			ev.Note = fmt.Sprintf("Wake word %q armed for %ds", wakeWord, wakeWindowSec)
+		}
+	case len(ev.Matches) > 0:
+		ev.Note = "Skipped: " + ev.Matches[0].SkipReason
+	case ev.WakeState == "waiting":
+		ev.Note = fmt.Sprintf("Waiting for wake word %q", wakeWord)
+	default:
+		ev.Note = "No voice command matched"
+	}
+	if dryRun && (!cfg.Enabled || (fullCfg != nil && !fullCfg.EffectiveVoiceCommandsEnabled())) {
+		ev.Note += " (live voice commands currently paused)"
+	}
+
+	return ev
 }
 
 // OnPluginTrigger dispatches a custom plugin trigger emitted via Host.EmitTrigger.

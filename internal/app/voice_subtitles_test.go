@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mrpoundsign/TownCrier/internal/bot"
 	"github.com/mrpoundsign/TownCrier/internal/ws"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 	"github.com/mrpoundsign/TownCrier/pkg/secrets"
@@ -209,4 +210,147 @@ func TestSessionVoiceSubtitlesPipelineAndPanicClear(t *testing.T) {
 	if !sess.Config().EffectiveSubtitlesOverlayEnabled() {
 		t.Fatal("expected EffectiveSubtitlesOverlayEnabled()=true after re-enabling VoiceDetection")
 	}
+}
+
+func TestSessionVoiceTranscriptFeedRecordsWithSubtitlesDisabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.VoiceSubtitles.Enabled = false
+	cfg.Bot.Enabled = true
+	cfg.Bot.Actions = []config.BotActionDef{
+		{ID: "act-1", Name: "Hello Action", Enabled: true},
+	}
+	cfg.Bot.VoiceCommands = []config.BotVoiceCommandDef{
+		{ID: "vc-1", Name: "Octo Hello", Enabled: true, Phrase: "octo say hello", MatchMode: "phonetic", ActionID: "act-1"},
+	}
+
+	sess := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	sess.SetSTTModelDir(t.TempDir())
+	sess.SetSTTFactories(
+		func(family, baseDir string, numThreads int, useGPU bool) (stt.Engine, error) {
+			return &mockSTTEngine{text: "Auto, say hello.", lang: "en"}, nil
+		},
+		func(scfg stt.SegmenterConfig) (stt.Segmenter, error) {
+			return &mockSTTSegmenter{cfg: scfg}, nil
+		},
+	)
+
+	var receivedMu sync.Mutex
+	var received []bot.VoiceTranscriptEvent
+	sess.AddOnVoiceTranscript(func(ev bot.VoiceTranscriptEvent) {
+		receivedMu.Lock()
+		received = append(received, ev)
+		receivedMu.Unlock()
+	})
+
+	if err := sess.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	if !cfg.EffectiveVoiceCommandsEnabled() {
+		t.Fatal("expected EffectiveVoiceCommandsEnabled()=true")
+	}
+
+	sess.processUtteranceSamples([]float32{0.1, 0.2, 0.3})
+
+	receivedMu.Lock()
+	gotCount := len(received)
+	var first bot.VoiceTranscriptEvent
+	if gotCount > 0 {
+		first = received[0]
+	}
+	receivedMu.Unlock()
+
+	if gotCount != 1 {
+		t.Fatalf("expected 1 recorded voice transcript event, got %d", gotCount)
+	}
+	if first.RawText != "Auto, say hello." || first.DetectedLang != "en" {
+		t.Fatalf("unexpected transcript event: %+v", first)
+	}
+	if len(first.Matches) != 1 || !first.Matches[0].Fired || first.Matches[0].CommandName != "Octo Hello" {
+		t.Fatalf("expected phonetic match on Octo Hello, got %+v", first.Matches)
+	}
+
+	recent := sess.RecentVoiceTranscripts()
+	if len(recent) != 1 || recent[0].RawText != "Auto, say hello." {
+		t.Fatalf("expected RecentVoiceTranscripts to retain event, got %+v", recent)
+	}
+}
+
+func TestSessionPlayWakeWordChimeOnActivation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.VoiceSubtitles.Enabled = false
+	cfg.VoiceDetection.WakeWord = "octothorpe, hey octo"
+	cfg.Bot.Enabled = true
+	cfg.Bot.Actions = []config.BotActionDef{
+		{ID: "act-1", Name: "Hello Action", Enabled: true},
+	}
+	cfg.Bot.VoiceCommands = []config.BotVoiceCommandDef{
+		{ID: "vc-1", Name: "Say Hello", Enabled: true, Phrase: "say hello", MatchMode: "contains", ActionID: "act-1"},
+	}
+
+	eng := &mockSTTEngine{text: "Hey, Octo.", lang: "en"}
+	sess := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	sess.SetSTTModelDir(t.TempDir())
+	sess.SetSTTFactories(
+		func(_, _ string, _ int, _ bool) (stt.Engine, error) { return eng, nil },
+		func(scfg stt.SegmenterConfig) (stt.Segmenter, error) { return &mockSTTSegmenter{cfg: scfg}, nil },
+	)
+	player := &alertCapturePlayer{}
+	sess.SetPlayer(player)
+
+	if err := sess.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	// 1. Standalone wake word arms and triggers beep.
+	sess.processUtteranceSamples([]float32{0.1, 0.2, 0.3})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && player.playCount.Load() < 1 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := player.playCount.Load(); got != 1 {
+		t.Fatalf("expected wake beep on armed wake word (count=1), got %d", got)
+	}
+
+	// 2. Follow-up command in armed window does not play a second wake beep.
+	eng.text = "Say hello."
+	sess.processUtteranceSamples([]float32{0.1, 0.2, 0.3})
+	time.Sleep(30 * time.Millisecond)
+	if got := player.playCount.Load(); got != 1 {
+		t.Fatalf("expected no extra wake beep on follow-up phrase, got %d", got)
+	}
+
+	// 3. Same-utterance wake alias triggering a command plays wake beep.
+	eng.text = "Octothorpe, say hello."
+	sess.processUtteranceSamples([]float32{0.1, 0.2, 0.3})
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && player.playCount.Load() < 2 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := player.playCount.Load(); got != 2 {
+		t.Fatalf("expected wake beep on same-utterance wake match (count=2), got %d", got)
+	}
+
+	// 4. Disabling WakeSoundEnabled suppresses wake beep.
+	if err := sess.UpdateConfig(func(c *config.Config) {
+		c.VoiceDetection.SetWakeSoundEnabled(false)
+	}); err != nil {
+		t.Fatalf("UpdateConfig failed: %v", err)
+	}
+	eng.text = "Hey, Octo."
+	sess.processUtteranceSamples([]float32{0.1, 0.2, 0.3})
+	time.Sleep(40 * time.Millisecond)
+	if got := player.playCount.Load(); got != 2 {
+		t.Fatalf("expected wake beep suppressed when disabled, got %d", got)
+	}
+
+	// 5. Panic suppresses even explicit PlayWakeWordChime().
+	sess.Panic()
+	_ = sess.PlayWakeWordChime()
+	if got := player.playCount.Load(); got != 2 {
+		t.Fatalf("expected wake beep suppressed when panicked, got %d", got)
+	}
+	sess.ClearPanic()
 }

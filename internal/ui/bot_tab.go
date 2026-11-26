@@ -45,6 +45,17 @@ type BotTabView struct {
 	varsBox      *fyne.Container
 	groupsBox    *fyne.Container
 
+	voiceWakeWordEntry     *ScrollPassEntry
+	voiceWakeWindowSelect  *widget.Select
+	voiceWakeSoundCheck    *widget.Check
+	voiceMonitorStatusLbl  *widget.Label
+	voiceTranscriptFeedLbl *widget.Label
+	voiceTranscriptScroll  *container.Scroll
+	voiceTestEntry         *ScrollPassEntry
+	voiceTestResultLbl     *widget.Label
+	voiceTranscriptMu      sync.Mutex
+	voiceTranscriptHistory []bot.VoiceTranscriptEvent
+
 	selectedActionID string
 
 	// OBS tab controls exposed for tests and programmatic updates.
@@ -130,6 +141,14 @@ func (v *BotTabView) Build() fyne.CanvasObject {
 				v.updateOBSStatusBadge(st)
 			})
 		})
+		v.session.AddOnVoiceTranscript(v.SyncVoiceTranscript)
+		v.session.AddOnSTTStatus(v.SyncSTTStatus)
+		if recent := v.session.RecentVoiceTranscripts(); len(recent) > 0 {
+			v.voiceTranscriptMu.Lock()
+			v.voiceTranscriptHistory = append([]bot.VoiceTranscriptEvent(nil), recent...)
+			v.voiceTranscriptMu.Unlock()
+			v.refreshVoiceTranscriptFeed()
+		}
 	}
 
 	v.Refresh()
@@ -460,7 +479,281 @@ func (v *BotTabView) buildCommandsAndVoiceTab() fyne.CanvasObject {
 		container.NewVBox(container.NewHBox(addVoiceBtn), v.voiceCmdsBox),
 	)
 
-	return newPanelVScroll(container.NewVBox(cmdsCard, voiceCard))
+	cfg := v.currentConfig()
+	v.voiceWakeWordEntry = NewScrollPassEntry()
+	v.voiceWakeWordEntry.SetPlaceHolder("Optional, comma-separated (e.g. octothorpe, hey octo) — 2–3+ syllables work best")
+	v.voiceWakeWordEntry.SetText(cfg.VoiceDetection.WakeWord)
+
+	saveWakeSettings := func(word string, windowSec int) {
+		clean := strings.TrimSpace(word)
+		if v.session != nil {
+			_ = v.session.UpdateConfig(func(c *config.Config) {
+				c.VoiceDetection.WakeWord = clean
+				if windowSec > 0 {
+					c.VoiceDetection.WakeWindowSec = windowSec
+				}
+				config.NormalizeVoiceDetectionConfig(&c.VoiceDetection)
+			})
+		}
+		v.Refresh()
+		if v.onConfigChanged != nil {
+			v.onConfigChanged()
+		}
+		if clean == "" {
+			v.reportStatus("✓ Global wake word cleared (voice commands listen directly).")
+		} else {
+			v.reportStatus(fmt.Sprintf("✓ Global wake word set to %q.", clean))
+		}
+	}
+	v.voiceWakeWordEntry.OnSubmitted = func(text string) {
+		saveWakeSettings(text, 0)
+	}
+
+	v.voiceWakeWindowSelect = widget.NewSelect(voiceWakeWindowOptions, func(selected string) {
+		if v.initializing {
+			return
+		}
+		sec := parseWakeWindowOption(selected)
+		if v.session != nil {
+			_ = v.session.UpdateConfig(func(c *config.Config) {
+				c.VoiceDetection.WakeWindowSec = sec
+				config.NormalizeVoiceDetectionConfig(&c.VoiceDetection)
+			})
+		}
+		if v.onConfigChanged != nil {
+			v.onConfigChanged()
+		}
+		v.reportStatus(fmt.Sprintf("✓ Wake word armed window set to %ds.", sec))
+	})
+	prevInit := v.initializing
+	v.initializing = true
+	v.voiceWakeWindowSelect.SetSelected(formatWakeWindowOption(cfg.VoiceDetection.EffectiveWakeWindowSec()))
+	v.initializing = prevInit
+
+	saveWakeBtn := widget.NewButton("Save Wake Word", func() {
+		saveWakeSettings(v.voiceWakeWordEntry.Text, 0)
+	})
+	clearWakeBtn := widget.NewButton("Clear", func() {
+		v.voiceWakeWordEntry.SetText("")
+		saveWakeSettings("", 0)
+	})
+
+	v.voiceWakeSoundCheck = widget.NewCheck("Play beep when wake word activates", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		if v.session != nil {
+			_ = v.session.UpdateConfig(func(c *config.Config) {
+				c.VoiceDetection.SetWakeSoundEnabled(checked)
+			})
+		}
+		if v.onConfigChanged != nil {
+			v.onConfigChanged()
+		}
+		if checked {
+			v.reportStatus("✓ Wake-word activation beep enabled.")
+		} else {
+			v.reportStatus("Wake-word activation beep disabled.")
+		}
+	})
+	prevInitSound := v.initializing
+	v.initializing = true
+	v.voiceWakeSoundCheck.SetChecked(cfg.VoiceDetection.EffectiveWakeSoundEnabled())
+	v.initializing = prevInitSound
+
+	testBeepBtn := widget.NewButton("Test Beep", func() {
+		if v.session == nil {
+			return
+		}
+		go func() {
+			_ = v.session.PlayWakeWordChime()
+		}()
+	})
+
+	v.voiceMonitorStatusLbl = widget.NewLabel("⚪ Waiting for speech")
+	clearFeedBtn := widget.NewButton("Clear Feed", func() {
+		if v.session != nil {
+			v.session.ClearRecentVoiceTranscripts()
+		}
+		v.voiceTranscriptMu.Lock()
+		v.voiceTranscriptHistory = nil
+		v.voiceTranscriptMu.Unlock()
+		v.refreshVoiceTranscriptFeed()
+	})
+
+	v.voiceTranscriptFeedLbl = widget.NewLabel("No Whisper transcripts heard yet. Speak into your mic or run a test phrase below.")
+	v.voiceTranscriptFeedLbl.TextStyle = fyne.TextStyle{Monospace: true}
+	v.voiceTranscriptFeedLbl.Wrapping = fyne.TextWrapWord
+
+	v.voiceTranscriptScroll = container.NewVScroll(container.NewThemeOverride(v.voiceTranscriptFeedLbl, NewScaledChatTheme(0.85)))
+	v.voiceTranscriptScroll.SetMinSize(fyne.NewSize(420, 130))
+
+	v.voiceTestEntry = NewScrollPassEntry()
+	v.voiceTestEntry.SetPlaceHolder("Type a sample phrase (e.g. Octo, say hello. or Auto say hello)")
+	v.voiceTestResultLbl = widget.NewLabel("Tip: Whisper adds punctuation (like commas/periods); 'Contains Phrase' ignores punctuation and 'Phonetic / Sound-Alike' matches similar words like \"auto\" or \"otto\" for \"octo\".")
+	v.voiceTestResultLbl.Wrapping = fyne.TextWrapWord
+
+	runTestPhrase := func(execute bool) {
+		raw := strings.TrimSpace(v.voiceTestEntry.Text)
+		if raw == "" {
+			v.voiceTestResultLbl.SetText("Enter a phrase above to test matching against your enabled voice commands.")
+			return
+		}
+		if v.session == nil || v.session.BotEngine() == nil {
+			v.voiceTestResultLbl.SetText("Bot engine unavailable.")
+			return
+		}
+		ev := v.session.BotEngine().TestVoiceTranscript(raw, execute)
+		v.voiceTestResultLbl.SetText(formatVoiceEvalSummary(ev))
+	}
+	v.voiceTestEntry.OnSubmitted = func(_ string) {
+		runTestPhrase(false)
+	}
+	testMatchBtn := widget.NewButtonWithIcon("Test Match", theme.SearchIcon(), func() {
+		runTestPhrase(false)
+	})
+	testRunBtn := widget.NewButtonWithIcon("Test & Run", theme.MediaPlayIcon(), func() {
+		runTestPhrase(true)
+	})
+	testRunBtn.Importance = widget.HighImportance
+
+	wakeForm := container.NewVBox(
+		widget.NewForm(
+			widget.NewFormItem("Wake Word (Optional)", container.NewBorder(nil, nil, nil, container.NewHBox(saveWakeBtn, clearWakeBtn), v.voiceWakeWordEntry)),
+			widget.NewFormItem("Armed Window", v.voiceWakeWindowSelect),
+		),
+		container.NewHBox(v.voiceWakeSoundCheck, testBeepBtn),
+	)
+	feedHeader := container.NewHBox(widget.NewLabelWithStyle("Recent What Whisper Heard:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), layout.NewSpacer(), v.voiceMonitorStatusLbl, clearFeedBtn)
+	testerRow := container.NewBorder(nil, nil, nil, container.NewHBox(testMatchBtn, testRunBtn), v.voiceTestEntry)
+
+	monitorCard := widget.NewCard(
+		"Live Whisper Monitor & Voice Command Tester",
+		"See exactly what Whisper hears from your mic, set an optional wake word, and test command matching without waiting on audio",
+		container.NewVBox(
+			wakeForm,
+			widget.NewSeparator(),
+			feedHeader,
+			v.voiceTranscriptScroll,
+			widget.NewSeparator(),
+			widget.NewLabelWithStyle("Interactive Phrase Tester:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			testerRow,
+			v.voiceTestResultLbl,
+		),
+	)
+
+	return newPanelVScroll(container.NewVBox(cmdsCard, voiceCard, monitorCard))
+}
+
+// SyncSTTStatus updates the live Whisper listening indicator in Bot -> Commands & Voice.
+func (v *BotTabView) SyncSTTStatus(speaking, transcribing bool, errText string) {
+	fyne.Do(func() {
+		if v.voiceMonitorStatusLbl == nil {
+			return
+		}
+		if strings.TrimSpace(errText) != "" {
+			v.voiceMonitorStatusLbl.SetText("⚠️ " + strings.TrimSpace(errText))
+			return
+		}
+		switch {
+		case transcribing:
+			v.voiceMonitorStatusLbl.SetText("⏳ Transcribing...")
+		case speaking:
+			v.voiceMonitorStatusLbl.SetText("🎙️ Speaking...")
+		default:
+			if v.currentConfig().EffectiveVoiceDetectionEnabled() {
+				v.voiceMonitorStatusLbl.SetText("🟢 Listening")
+			} else {
+				v.voiceMonitorStatusLbl.SetText("⚪ Voice Detection Off")
+			}
+		}
+	})
+}
+
+// SyncVoiceTranscript appends a live Whisper transcript evaluation to the monitor feed.
+func (v *BotTabView) SyncVoiceTranscript(ev bot.VoiceTranscriptEvent) {
+	v.voiceTranscriptMu.Lock()
+	v.voiceTranscriptHistory = append(v.voiceTranscriptHistory, ev)
+	if len(v.voiceTranscriptHistory) > 15 {
+		v.voiceTranscriptHistory = v.voiceTranscriptHistory[len(v.voiceTranscriptHistory)-15:]
+	}
+	v.voiceTranscriptMu.Unlock()
+	fyne.Do(func() {
+		v.refreshVoiceTranscriptFeed()
+	})
+}
+
+func (v *BotTabView) refreshVoiceTranscriptFeed() {
+	if v.voiceTranscriptFeedLbl == nil {
+		return
+	}
+	v.voiceTranscriptMu.Lock()
+	items := slices.Clone(v.voiceTranscriptHistory)
+	v.voiceTranscriptMu.Unlock()
+
+	if len(items) == 0 {
+		v.voiceTranscriptFeedLbl.SetText("No Whisper transcripts heard yet. Speak into your mic or run a test phrase below.")
+		return
+	}
+	var sb strings.Builder
+	for i, it := range items {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		ts := "--:--:--"
+		if !it.Timestamp.IsZero() {
+			ts = it.Timestamp.Local().Format("15:04:05")
+		}
+		var meta []string
+		if lang := strings.TrimSpace(it.DetectedLang); lang != "" {
+			meta = append(meta, lang)
+		}
+		if it.DecodeMs > 0 {
+			meta = append(meta, fmt.Sprintf("%dms", it.DecodeMs))
+		}
+		metaStr := ""
+		if len(meta) > 0 {
+			metaStr = " (" + strings.Join(meta, ", ") + ")"
+		}
+		note := strings.TrimSpace(it.Note)
+		if note != "" {
+			note = " — " + note
+		}
+		fmt.Fprintf(&sb, "[%s] %q%s%s", ts, it.RawText, metaStr, note)
+	}
+	v.voiceTranscriptFeedLbl.SetText(sb.String())
+	if v.voiceTranscriptScroll != nil {
+		v.voiceTranscriptScroll.ScrollToBottom()
+	}
+}
+
+func formatVoiceEvalSummary(ev bot.VoiceTranscriptEvent) string {
+	var parts []string
+	if strings.TrimSpace(ev.Normalized) != "" {
+		parts = append(parts, fmt.Sprintf("Normalized: %q", ev.Normalized))
+	}
+	if strings.TrimSpace(ev.WakeWord) != "" {
+		parts = append(parts, fmt.Sprintf("Wake (%s): %s", ev.WakeWord, ev.WakeState))
+	}
+	header := strings.Join(parts, " • ")
+	var lines []string
+	if ev.Note != "" {
+		lines = append(lines, ev.Note)
+	}
+	if header != "" {
+		lines = append(lines, header)
+	}
+	for _, m := range ev.Matches {
+		state := "WOULD TRIGGER"
+		switch {
+		case m.Fired:
+			state = "FIRED"
+		case m.SkipReason != "" && m.SkipReason != "dry run":
+			state = "SKIPPED (" + m.SkipReason + ")"
+		}
+		lines = append(lines, fmt.Sprintf("• %s [%s] → %s (%s)", m.CommandName, state, m.ActionName, botOptionLabel(botVoiceMatchModeOptions, m.MatchMode)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (v *BotTabView) refreshCommandsAndTriggers(b config.BotAutomationConfig) {
@@ -1491,7 +1784,36 @@ func (v *BotTabView) refreshTimersAndVoice(b config.BotAutomationConfig) {
 	}
 
 	if v.voiceCmdsBox != nil {
-		vdOn := v.currentConfig().EffectiveVoiceDetectionEnabled()
+		fullCfg := v.currentConfig()
+		vdOn := fullCfg.EffectiveVoiceDetectionEnabled()
+		wakeWord := strings.TrimSpace(fullCfg.VoiceDetection.WakeWord)
+		if v.voiceWakeWordEntry != nil && v.voiceWakeWordEntry.Text != fullCfg.VoiceDetection.WakeWord {
+			prevInit := v.initializing
+			v.initializing = true
+			v.voiceWakeWordEntry.SetText(fullCfg.VoiceDetection.WakeWord)
+			v.initializing = prevInit
+		}
+		if v.voiceWakeWindowSelect != nil {
+			prevInit := v.initializing
+			v.initializing = true
+			v.voiceWakeWindowSelect.SetSelected(formatWakeWindowOption(fullCfg.VoiceDetection.EffectiveWakeWindowSec()))
+			v.initializing = prevInit
+		}
+		if v.voiceWakeSoundCheck != nil {
+			prevInit := v.initializing
+			v.initializing = true
+			v.voiceWakeSoundCheck.SetChecked(fullCfg.VoiceDetection.EffectiveWakeSoundEnabled())
+			v.initializing = prevInit
+		}
+		if v.voiceMonitorStatusLbl != nil {
+			if vdOn {
+				if !strings.HasPrefix(v.voiceMonitorStatusLbl.Text, "🎙") && !strings.HasPrefix(v.voiceMonitorStatusLbl.Text, "⏳") && !strings.HasPrefix(v.voiceMonitorStatusLbl.Text, "⚠") {
+					v.voiceMonitorStatusLbl.SetText("🟢 Listening")
+				}
+			} else {
+				v.voiceMonitorStatusLbl.SetText("⚪ Voice Detection Off")
+			}
+		}
 		rows := make([]fyne.CanvasObject, 0, max(1, len(b.VoiceCommands)+1))
 		if !vdOn && len(b.VoiceCommands) > 0 {
 			enableVDBtn := widget.NewButton("Enable Voice Detection", func() {
@@ -1524,7 +1846,15 @@ func (v *BotTabView) refreshTimersAndVoice(b config.BotAutomationConfig) {
 			if item.Enabled && !vdOn {
 				pausedSuffix = " [Paused — Voice Detection off]"
 			}
-			lbl := fmt.Sprintf("%s  (%q [%s], cd=%ds → %s)%s", item.Name, item.Phrase, botOptionLabel(botVoiceMatchModeOptions, item.MatchMode), item.CooldownSec, v.actionName(b, item.ActionID), pausedSuffix)
+			wakeSuffix := ""
+			if wakeWord != "" {
+				if item.IgnoreWakeWord {
+					wakeSuffix = " [Always listens]"
+				} else {
+					wakeSuffix = " [Wake: " + wakeWord + "]"
+				}
+			}
+			lbl := fmt.Sprintf("%s  (%q [%s], cd=%ds → %s)%s%s", item.Name, item.Phrase, botOptionLabel(botVoiceMatchModeOptions, item.MatchMode), item.CooldownSec, v.actionName(b, item.ActionID), wakeSuffix, pausedSuffix)
 			chk := widget.NewCheck("Enabled", func(checked bool) {
 				if v.initializing {
 					return
@@ -1659,12 +1989,26 @@ func (v *BotTabView) openVoiceCmdDialog(idx int) {
 		actSelect.SetSelected(actLabels[0])
 	}
 
-	form := widget.NewForm(
-		widget.NewFormItem("Name", nameEntry),
-		widget.NewFormItem("Phrase", phraseEntry),
-		widget.NewFormItem("Match Mode", modeSelect),
-		widget.NewFormItem("Cooldown (s)", cdEntry),
-		widget.NewFormItem("Action", actSelect),
+	ignoreWakeChk := widget.NewCheck("Always listen (bypass global wake word)", nil)
+	ignoreWakeChk.SetChecked(cur.IgnoreWakeWord)
+	globalWake := strings.TrimSpace(v.currentConfig().VoiceDetection.WakeWord)
+	wakeHintText := "No global wake word configured (all enabled phrases match directly)."
+	if globalWake != "" {
+		wakeHintText = fmt.Sprintf("Global wake word is %q — this command waits for it unless bypassed.", globalWake)
+	}
+	wakeHint := widget.NewLabelWithStyle(wakeHintText, fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
+	wakeHint.Wrapping = fyne.TextWrapWord
+
+	form := container.NewVBox(
+		widget.NewForm(
+			widget.NewFormItem("Name", nameEntry),
+			widget.NewFormItem("Phrase", phraseEntry),
+			widget.NewFormItem("Match Mode", modeSelect),
+			widget.NewFormItem("Cooldown (s)", cdEntry),
+			widget.NewFormItem("Action", actSelect),
+		),
+		ignoreWakeChk,
+		wakeHint,
 	)
 	dialog.ShowCustomConfirm("Whisper Voice Command", "Save", "Cancel", form, func(ok bool) {
 		if !ok {
@@ -1677,6 +2021,7 @@ func (v *BotTabView) openVoiceCmdDialog(idx int) {
 		}
 		cur.Phrase = strings.TrimSpace(phraseEntry.Text)
 		cur.MatchMode = botOptionKey(botVoiceMatchModeOptions, modeSelect.Selected)
+		cur.IgnoreWakeWord = ignoreWakeChk.Checked
 		cur.CooldownSec = max(0, cd)
 		cur.ActionID = labelToID[actSelect.Selected]
 		if v.session != nil {

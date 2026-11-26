@@ -71,13 +71,14 @@ type BotTimerDef struct {
 
 // BotVoiceCommandDef binds a local Whisper STT transcript match to a BotActionDef.
 type BotVoiceCommandDef struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Enabled     bool   `json:"enabled"`
-	Phrase      string `json:"phrase"`
-	MatchMode   string `json:"match_mode,omitempty"` // "contains" (default), "exact", "regex"
-	CooldownSec int    `json:"cooldown_sec,omitempty"`
-	ActionID    string `json:"action_id"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Enabled        bool   `json:"enabled"`
+	Phrase         string `json:"phrase"`
+	MatchMode      string `json:"match_mode,omitempty"` // "contains" (default), "phonetic", "exact", "regex"
+	IgnoreWakeWord bool   `json:"ignore_wake_word,omitempty"`
+	CooldownSec    int    `json:"cooldown_sec,omitempty"`
+	ActionID       string `json:"action_id"`
 }
 
 // BotQueueDef defines a named action execution queue.

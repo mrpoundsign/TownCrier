@@ -933,6 +933,51 @@ func TestVoiceDetectionMasterToggleAndGating(t *testing.T) {
 	if !loaded.EffectiveVoiceSubtitlesEnabled() || !loaded.EffectiveSubtitlesOverlayEnabled() || !loaded.EffectiveVoiceCommandsEnabled() {
 		t.Fatal("expected re-enabling VoiceDetection to restore all saved consumers")
 	}
+
+	// WakeWord & WakeWindowSec normalization and round-trip
+	vd := VoiceDetectionConfig{WakeWord: "  octo  ", WakeWindowSec: 1}
+	NormalizeVoiceDetectionConfig(&vd)
+	if vd.WakeWord != "octo" {
+		t.Fatalf("expected trimmed WakeWord 'octo', got %q", vd.WakeWord)
+	}
+	if vd.WakeWindowSec != 2 || vd.EffectiveWakeWindowSec() != 2 {
+		t.Fatalf("expected WakeWindowSec clamped to 2, got %d", vd.WakeWindowSec)
+	}
+	if (VoiceDetectionConfig{}).EffectiveWakeWindowSec() != DefaultVoiceWakeWindowSec {
+		t.Fatalf("expected zero WakeWindowSec to default to %d", DefaultVoiceWakeWindowSec)
+	}
+	if !(VoiceDetectionConfig{}).EffectiveWakeSoundEnabled() {
+		t.Fatalf("expected WakeSoundEnabled to default to true when nil")
+	}
+
+	cfg.VoiceDetection.WakeWord = "  octo  "
+	cfg.VoiceDetection.WakeWindowSec = 10
+	cfg.VoiceDetection.SetWakeSoundEnabled(false)
+	cfg.Bot.VoiceCommands[0].IgnoreWakeWord = true
+	wakeClone := cfg.Clone()
+	if wakeClone.VoiceDetection.WakeWord != "  octo  " || wakeClone.VoiceDetection.WakeWindowSec != 10 {
+		t.Fatalf("expected Clone() to copy WakeWord and WakeWindowSec")
+	}
+	if wakeClone.VoiceDetection.EffectiveWakeSoundEnabled() {
+		t.Fatalf("expected Clone() to deep-copy WakeSoundEnabled=false")
+	}
+	wakeClone.VoiceDetection.SetWakeSoundEnabled(true)
+	if cfg.VoiceDetection.EffectiveWakeSoundEnabled() {
+		t.Fatalf("expected mutating cloned WakeSoundEnabled not to mutate original")
+	}
+	if err := Save(cfgPath, cfg); err != nil {
+		t.Fatalf("Save with wake word: %v", err)
+	}
+	loadedWake, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load with wake word: %v", err)
+	}
+	if loadedWake.VoiceDetection.WakeWord != "octo" || loadedWake.VoiceDetection.WakeWindowSec != 10 || loadedWake.VoiceDetection.EffectiveWakeSoundEnabled() {
+		t.Fatalf("expected trimmed WakeWord='octo', WakeWindowSec=10, and WakeSoundEnabled=false after Load, got %+v", loadedWake.VoiceDetection)
+	}
+	if len(loadedWake.Bot.VoiceCommands) == 0 || !loadedWake.Bot.VoiceCommands[0].IgnoreWakeWord {
+		t.Fatalf("expected IgnoreWakeWord=true to survive JSON round-trip")
+	}
 }
 
 

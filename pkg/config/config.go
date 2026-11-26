@@ -344,13 +344,61 @@ func (w WebSocketConfig) AnyEnabled() bool {
 	return w.Enabled || w.TTSOverlayEnabled || w.ChatOverlayEnabled || w.SubtitlesOverlayEnabled
 }
 
+// DefaultVoiceWakeWindowSec is the default armed duration (seconds) after hearing the optional wake word.
+const DefaultVoiceWakeWindowSec = 6
+
 // VoiceDetectionConfig controls the master Offline Speech Recognition (Silero VAD + Whisper) subsystem.
 // When Enabled is nil (legacy/unset), availability is auto-derived from active consumers
 // (VoiceSubtitles.Enabled or Bot.HasEnabledVoiceCommands). When explicitly false, Whisper/VAD and all
 // dependent features (Voice Subtitles, OBS /overlay/subtitles, and Bot Voice Commands) are disabled
 // while preserving the user's saved rules.
 type VoiceDetectionConfig struct {
-	Enabled *bool `json:"enabled,omitempty"`
+	Enabled          *bool  `json:"enabled,omitempty"`
+	WakeWord         string `json:"wake_word,omitempty"`
+	WakeWindowSec    int    `json:"wake_window_sec,omitempty"`
+	WakeSoundEnabled *bool  `json:"wake_sound_enabled,omitempty"`
+}
+
+// EffectiveWakeSoundEnabled reports whether an ascending beep should play when the wake word activates (default true).
+func (vd VoiceDetectionConfig) EffectiveWakeSoundEnabled() bool {
+	if vd.WakeSoundEnabled == nil {
+		return true
+	}
+	return *vd.WakeSoundEnabled
+}
+
+// SetWakeSoundEnabled explicitly sets whether the wake-word activation beep is enabled.
+func (vd *VoiceDetectionConfig) SetWakeSoundEnabled(enabled bool) {
+	if vd == nil {
+		return
+	}
+	v := enabled
+	vd.WakeSoundEnabled = &v
+}
+
+// EffectiveWakeWindowSec returns the clamped armed window duration in seconds (default 6s, range 2..30s).
+func (vd VoiceDetectionConfig) EffectiveWakeWindowSec() int {
+	if vd.WakeWindowSec <= 0 {
+		return DefaultVoiceWakeWindowSec
+	}
+	if vd.WakeWindowSec < 2 {
+		return 2
+	}
+	if vd.WakeWindowSec > 30 {
+		return 30
+	}
+	return vd.WakeWindowSec
+}
+
+// NormalizeVoiceDetectionConfig trims and clamps optional wake word settings.
+func NormalizeVoiceDetectionConfig(vd *VoiceDetectionConfig) {
+	if vd == nil {
+		return
+	}
+	vd.WakeWord = strings.TrimSpace(vd.WakeWord)
+	if vd.WakeWindowSec != 0 {
+		vd.WakeWindowSec = vd.EffectiveWakeWindowSec()
+	}
 }
 
 // SetVoiceDetectionEnabled explicitly sets the master Voice Detection enabled state.
@@ -1983,6 +2031,10 @@ func (c *Config) Clone() *Config {
 		vd := *c.VoiceDetection.Enabled
 		clone.VoiceDetection.Enabled = &vd
 	}
+	if c.VoiceDetection.WakeSoundEnabled != nil {
+		ws := *c.VoiceDetection.WakeSoundEnabled
+		clone.VoiceDetection.WakeSoundEnabled = &ws
+	}
 	clone.VoiceSubtitles.SpokenLanguages = slices.Clone(c.VoiceSubtitles.SpokenLanguages)
 	clone.VoiceSubtitles.TargetLanguages = slices.Clone(c.VoiceSubtitles.TargetLanguages)
 	clone.Plugins.ExtraPaths = slices.Clone(c.Plugins.ExtraPaths)
@@ -2392,6 +2444,7 @@ func migrate(cfg *Config) error {
 	}
 	cfg.GlobalChatRules.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(cfg.GlobalChatRules.IgnoreMentionsMode)
 	NormalizeTranslationProviders(&cfg.Translation)
+	NormalizeVoiceDetectionConfig(&cfg.VoiceDetection)
 	NormalizeVoiceSubtitlesConfig(&cfg.VoiceSubtitles)
 	if cfg.Plugins.TrustedNative == nil {
 		cfg.Plugins.TrustedNative = make(map[string]TrustedNativePlugin)

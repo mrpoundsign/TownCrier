@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mrpoundsign/TownCrier/internal/bot"
 	"github.com/mrpoundsign/TownCrier/internal/ws"
+	"github.com/mrpoundsign/TownCrier/pkg/audio"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 	"github.com/mrpoundsign/TownCrier/pkg/stt"
 )
@@ -54,19 +56,88 @@ func (s *Session) SetOnVoiceSubtitle(fn func(ev ws.SubtitleEvent)) {
 	s.sttMu.Unlock()
 }
 
-// SetOnSTTStatus registers a UI listener invoked when live speech detection, transcription state, or STT errors change.
+// SetOnSTTStatus registers the primary UI listener invoked when live speech detection, transcription state, or STT errors change.
 func (s *Session) SetOnSTTStatus(fn func(speaking bool, transcribing bool, errText string)) {
 	s.sttMu.Lock()
 	s.onSTTStatus = fn
 	s.sttMu.Unlock()
 }
 
+// AddOnSTTStatus appends an additional UI listener invoked on STT speaking/transcribing/error updates.
+func (s *Session) AddOnSTTStatus(fn func(speaking bool, transcribing bool, errText string)) {
+	if fn == nil {
+		return
+	}
+	s.sttMu.Lock()
+	s.extraSTTStatus = append(s.extraSTTStatus, fn)
+	s.sttMu.Unlock()
+}
+
 func (s *Session) notifySTTStatus(errText string) {
 	s.sttMu.Lock()
-	fn := s.onSTTStatus
+	primary := s.onSTTStatus
+	extras := slices.Clone(s.extraSTTStatus)
 	s.sttMu.Unlock()
-	if fn != nil {
-		fn(s.sttSpeaking.Load(), s.sttTranscribing.Load(), errText)
+	speaking := s.sttSpeaking.Load()
+	transcribing := s.sttTranscribing.Load()
+	if primary != nil {
+		primary(speaking, transcribing, errText)
+	}
+	for _, fn := range extras {
+		if fn != nil {
+			fn(speaking, transcribing, errText)
+		}
+	}
+}
+
+const maxRecentVoiceTranscripts = 25
+
+// AddOnVoiceTranscript appends a UI listener invoked whenever Whisper finishes transcribing an utterance
+// (regardless of whether Voice Subtitles or Bot Voice Commands are enabled).
+func (s *Session) AddOnVoiceTranscript(fn func(bot.VoiceTranscriptEvent)) {
+	if fn == nil {
+		return
+	}
+	s.sttMu.Lock()
+	s.onVoiceTranscripts = append(s.onVoiceTranscripts, fn)
+	s.sttMu.Unlock()
+}
+
+// RecentVoiceTranscripts returns a copy of the most recent Whisper transcripts (oldest-to-newest, max 25).
+func (s *Session) RecentVoiceTranscripts() []bot.VoiceTranscriptEvent {
+	s.sttMu.Lock()
+	defer s.sttMu.Unlock()
+	out := make([]bot.VoiceTranscriptEvent, len(s.recentVoiceTranscripts))
+	for i, ev := range s.recentVoiceTranscripts {
+		ev.Matches = slices.Clone(ev.Matches)
+		out[i] = ev
+	}
+	return out
+}
+
+// ClearRecentVoiceTranscripts clears the in-memory Whisper live transcript history.
+func (s *Session) ClearRecentVoiceTranscripts() {
+	s.sttMu.Lock()
+	s.recentVoiceTranscripts = nil
+	s.sttMu.Unlock()
+}
+
+func (s *Session) recordAndNotifyVoiceTranscript(ev bot.VoiceTranscriptEvent) {
+	evCopy := ev
+	evCopy.Matches = slices.Clone(ev.Matches)
+	s.sttMu.Lock()
+	s.recentVoiceTranscripts = append(s.recentVoiceTranscripts, evCopy)
+	if len(s.recentVoiceTranscripts) > maxRecentVoiceTranscripts {
+		s.recentVoiceTranscripts = s.recentVoiceTranscripts[len(s.recentVoiceTranscripts)-maxRecentVoiceTranscripts:]
+	}
+	listeners := slices.Clone(s.onVoiceTranscripts)
+	s.sttMu.Unlock()
+	for _, fn := range listeners {
+		if fn != nil {
+			notifyCopy := ev
+			notifyCopy.Matches = slices.Clone(ev.Matches)
+			fn(notifyCopy)
+		}
 	}
 }
 
@@ -446,6 +517,22 @@ func (s *Session) voiceSubtitleWorker(uttCh <-chan []float32, stopCh <-chan stru
 	}
 }
 
+// PlayWakeWordChime synthesizes and plays the ascending wake-word activation beep
+// on the active audio player unless Emergency Panic Mute is active.
+func (s *Session) PlayWakeWordChime() error {
+	if s.IsPanicked() {
+		return nil
+	}
+	s.mu.RLock()
+	player := s.player
+	s.mu.RUnlock()
+	if player == nil {
+		return nil
+	}
+	samples := audio.SynthesizeEarcon(audio.EarconWakeWord, audio.AlertSampleRate)
+	return player.Play(samples, audio.AlertSampleRate)
+}
+
 func (s *Session) processUtteranceSamples(samples []float32) {
 	cfg := s.Config()
 	if cfg == nil || !cfg.EffectiveVoiceDetectionEnabled() {
@@ -479,9 +566,41 @@ func (s *Session) processUtteranceSamples(samples []float32) {
 		return
 	}
 
+	var eval bot.VoiceTranscriptEvent
 	if s.botEngine != nil && cfg.EffectiveVoiceCommandsEnabled() {
-		s.botEngine.OnVoiceTranscript(tr.Text)
+		eval = s.botEngine.OnVoiceTranscript(tr.Text)
+	} else {
+		eval = bot.VoiceTranscriptEvent{
+			Timestamp:  time.Now(),
+			RawText:    strings.TrimSpace(tr.Text),
+			Normalized: bot.NormalizeVoiceText(tr.Text),
+			Note:       "Voice commands off — transcript only",
+		}
 	}
+	eval.DetectedLang = tr.DetectedLang
+	if tr.Latency > 0 {
+		eval.DecodeMs = tr.Latency.Milliseconds()
+	}
+	log.Printf("[STT] Heard (%s, %dms): %q — %s", tr.DetectedLang, eval.DecodeMs, eval.RawText, eval.Note)
+	s.recordAndNotifyVoiceTranscript(eval)
+
+	if cfg.VoiceDetection.EffectiveWakeSoundEnabled() {
+		wakeFired := false
+		if eval.WakeState == "same_utterance" {
+			for _, m := range eval.Matches {
+				if m.Fired {
+					wakeFired = true
+					break
+				}
+			}
+		}
+		if eval.WakeState == "armed" || wakeFired {
+			go func() {
+				_ = s.PlayWakeWordChime()
+			}()
+		}
+	}
+
 	if !cfg.EffectiveVoiceSubtitlesEnabled() {
 		s.sttTranscribing.Store(false)
 		s.notifySTTStatus("")

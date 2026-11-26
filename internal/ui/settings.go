@@ -295,6 +295,10 @@ type SettingsView struct {
 	vsThreadsSelect         *widget.Select
 	sttGPUEnum              func() ([]stt.GPUDevice, error)
 	vsSilenceSelect         *widget.Select
+	vdWakeWordEntry         *ScrollPassEntry
+	vdWakeWindowSelect      *widget.Select
+	vdWakeSoundCheck        *widget.Check
+	vdLastHeardLabel        *widget.Label
 	vsSpokenAddSelect       *widget.Select
 	vsAddSpokenBtn          *widget.Button
 	vsSpokenListBox         *fyne.Container
@@ -447,6 +451,7 @@ func (v *SettingsView) SetSession(s *app.Session) {
 		s.SetOnMicLevel(v.SyncMicLevel)
 		s.SetOnVoiceSubtitle(v.SyncVoiceSubtitlePreview)
 		s.SetOnSTTStatus(v.SyncSTTStatus)
+		s.AddOnVoiceTranscript(v.SyncVoiceTranscript)
 	}
 }
 

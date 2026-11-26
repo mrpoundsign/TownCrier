@@ -117,6 +117,7 @@ var botCommandMatchModeOptions = []botOption{
 
 var botVoiceMatchModeOptions = []botOption{
 	{Key: "contains", Label: "Contains Phrase"},
+	{Key: "phonetic", Label: "Phonetic / Sound-Alike"},
 	{Key: "exact", Label: "Exact Match"},
 	{Key: "regex", Label: "Regular Expression (Regex)"},
 }

@@ -249,4 +249,64 @@ func TestBotTabViewFriendlyLabelsAndNoRawIDs(t *testing.T) {
 	require.Equal(t, "✓ Executed Test Run: Hype Wave", statusMsg)
 }
 
+func TestBotTabViewVoiceTesterAndWakeWord(t *testing.T) {
+	fyneApp := test.NewApp()
+	defer fyneApp.Quit()
+
+	cfg := config.DefaultConfig()
+	cfg.Bot.Enabled = true
+	cfg.Bot.Actions = []config.BotActionDef{
+		{ID: "act-hello", Name: "Say Hello Action", Enabled: true},
+	}
+	cfg.Bot.VoiceCommands = []config.BotVoiceCommandDef{
+		{
+			ID:        "vc-octo",
+			Name:      "Octo Say Hello",
+			Enabled:   true,
+			Phrase:    "octo say hello",
+			MatchMode: "phonetic",
+			ActionID:  "act-hello",
+		},
+	}
+
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
+
+	win := fyneApp.NewWindow("Voice Tester")
+	defer win.Close()
+
+	var syncCount int
+	view := NewBotTabView(win, sess, nil)
+	view.SetOnConfigChanged(func() { syncCount++ })
+	_ = view.Build()
+
+	require.NotNil(t, view.voiceWakeWordEntry)
+	require.NotNil(t, view.voiceTranscriptFeedLbl)
+	require.NotNil(t, view.voiceTestEntry)
+	require.NotNil(t, view.voiceTestResultLbl)
+
+	// 1. Live Whisper transcript update populates the feed.
+	sess.BotEngine().OnVoiceTranscript("Auto, say hello.")
+	view.SyncVoiceTranscript(sess.BotEngine().TestVoiceTranscript("Auto, say hello.", false))
+	require.Contains(t, view.voiceTranscriptFeedLbl.Text, "Auto, say hello.")
+
+	// 2. Interactive Phrase Tester runs dry-run phonetic match diagnostics via Submit.
+	view.voiceTestEntry.SetText("Otto, say hello!")
+	view.voiceTestEntry.OnSubmitted(view.voiceTestEntry.Text)
+	require.Contains(t, view.voiceTestResultLbl.Text, "Octo Say Hello")
+	require.Contains(t, view.voiceTestResultLbl.Text, "WOULD TRIGGER")
+
+	// 3. Submitting a global wake word persists to config.VoiceDetection and fires onConfigChanged.
+	view.voiceWakeWordEntry.OnSubmitted("octo")
+	require.Equal(t, "octo", sess.Config().VoiceDetection.WakeWord)
+	require.Greater(t, syncCount, 0)
+	require.Equal(t, "octo", view.voiceWakeWordEntry.Text)
+
+	// 4. Wake beep checkbox defaults to true and persists changes to Session config.
+	require.NotNil(t, view.voiceWakeSoundCheck)
+	require.True(t, view.voiceWakeSoundCheck.Checked)
+	view.voiceWakeSoundCheck.SetChecked(false)
+	require.False(t, sess.Config().VoiceDetection.EffectiveWakeSoundEnabled())
+}
+
 

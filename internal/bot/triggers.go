@@ -197,11 +197,39 @@ func matchVoicePhrase(vc config.BotVoiceCommandDef, transcript string) (bool, st
 			return true, trimmed
 		}
 	case "exact":
-		if strings.EqualFold(trimmed, phrase) {
+		normTranscript := NormalizeVoiceText(trimmed)
+		normPhrase := NormalizeVoiceText(phrase)
+		if normPhrase == "" {
+			if strings.EqualFold(trimmed, phrase) {
+				return true, trimmed
+			}
+			return false, ""
+		}
+		if normTranscript == normPhrase {
+			return true, trimmed
+		}
+	case "phonetic":
+		spoken := voiceTokens(trimmed)
+		target := voiceTokens(phrase)
+		if len(target) == 0 {
+			if strings.Contains(strings.ToLower(trimmed), strings.ToLower(phrase)) {
+				return true, trimmed
+			}
+			return false, ""
+		}
+		if ok, _ := matchTokensPhonetic(spoken, target); ok {
 			return true, trimmed
 		}
 	default: // "contains"
-		if strings.Contains(strings.ToLower(trimmed), strings.ToLower(phrase)) {
+		spoken := voiceTokens(trimmed)
+		target := voiceTokens(phrase)
+		if len(target) == 0 {
+			if strings.Contains(strings.ToLower(trimmed), strings.ToLower(phrase)) {
+				return true, trimmed
+			}
+			return false, ""
+		}
+		if ok, _ := matchTokensContains(spoken, target); ok {
 			return true, trimmed
 		}
 	}

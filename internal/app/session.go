@@ -123,9 +123,12 @@ type Session struct {
 	sttTranscribing  atomic.Bool
 	sttLastDecodeMs  atomic.Int64
 	sttSeq           atomic.Uint64
-	latestSubtitle   *ws.SubtitleEvent
-	onVoiceSubtitle  func(ev ws.SubtitleEvent)
-	onSTTStatus      func(speaking bool, transcribing bool, errText string)
+	latestSubtitle         *ws.SubtitleEvent
+	onVoiceSubtitle        func(ev ws.SubtitleEvent)
+	onSTTStatus            func(speaking bool, transcribing bool, errText string)
+	extraSTTStatus         []func(speaking bool, transcribing bool, errText string)
+	recentVoiceTranscripts []bot.VoiceTranscriptEvent
+	onVoiceTranscripts     []func(bot.VoiceTranscriptEvent)
 }
 
 // NewSession creates an application session initialized with configuration, secret store, and config store.

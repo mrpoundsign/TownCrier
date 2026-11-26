@@ -15,6 +15,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/mrpoundsign/TownCrier/internal/bot"
 	"github.com/mrpoundsign/TownCrier/internal/ws"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 	"github.com/mrpoundsign/TownCrier/pkg/stt"
@@ -172,6 +173,34 @@ func formatSTTThreadsOption(threads int) string {
 	default:
 		return "Auto (Smart Cap — Recommended)"
 	}
+}
+
+var voiceWakeWindowOptions = []string{
+	"4 seconds",
+	"6 seconds (Default)",
+	"10 seconds",
+	"15 seconds",
+}
+
+func formatWakeWindowOption(sec int) string {
+	switch sec {
+	case 4:
+		return "4 seconds"
+	case 10:
+		return "10 seconds"
+	case 15:
+		return "15 seconds"
+	default:
+		return "6 seconds (Default)"
+	}
+}
+
+func parseWakeWindowOption(label string) int {
+	var sec int
+	if _, err := fmt.Sscanf(strings.TrimSpace(label), "%d", &sec); err == nil && sec >= 2 && sec <= 30 {
+		return sec
+	}
+	return config.DefaultVoiceWakeWindowSec
 }
 
 func parseSTTThreadsOption(label string) int {
@@ -367,6 +396,24 @@ func (v *SettingsView) SyncVoiceSubtitlePreview(ev ws.SubtitleEvent) {
 	})
 }
 
+// SyncVoiceTranscript updates the "Last Heard by Whisper" diagnostic label in Voice Detection settings.
+func (v *SettingsView) SyncVoiceTranscript(ev bot.VoiceTranscriptEvent) {
+	fyne.Do(func() {
+		if v.vdLastHeardLabel == nil {
+			return
+		}
+		if strings.TrimSpace(ev.RawText) == "" {
+			v.vdLastHeardLabel.SetText("—")
+			return
+		}
+		summary := fmt.Sprintf("%q", ev.RawText)
+		if strings.TrimSpace(ev.Note) != "" {
+			summary += " — " + ev.Note
+		}
+		v.vdLastHeardLabel.SetText(summary)
+	})
+}
+
 func (v *SettingsView) refreshVoiceSubtitleModelStatus() {
 	if v.vsModelStatusLabel == nil || v.vsDownloadModelBtn == nil {
 		return
@@ -510,6 +557,24 @@ func (v *SettingsView) syncVoiceSubtitlesControlsFromConfig() {
 	if v.vsSilenceSelect != nil {
 		v.vsSilenceSelect.SetSelected(formatSilenceOption(vs.MinSilenceMs))
 	}
+	if v.vdWakeWordEntry != nil && v.vdWakeWordEntry.Text != cfg.VoiceDetection.WakeWord {
+		prevInit := v.initializing
+		v.initializing = true
+		v.vdWakeWordEntry.SetText(cfg.VoiceDetection.WakeWord)
+		v.initializing = prevInit
+	}
+	if v.vdWakeWindowSelect != nil {
+		prevInit := v.initializing
+		v.initializing = true
+		v.vdWakeWindowSelect.SetSelected(formatWakeWindowOption(cfg.VoiceDetection.EffectiveWakeWindowSec()))
+		v.initializing = prevInit
+	}
+	if v.vdWakeSoundCheck != nil {
+		prevInit := v.initializing
+		v.initializing = true
+		v.vdWakeSoundCheck.SetChecked(cfg.VoiceDetection.EffectiveWakeSoundEnabled())
+		v.initializing = prevInit
+	}
 	if v.vsOverlayPosSelect != nil {
 		if vs.OverlayPosition == "top" {
 			v.vsOverlayPosSelect.SetSelected("Top")
@@ -565,9 +630,10 @@ func (v *SettingsView) buildVoiceDetectionCard() *widget.Card {
 			c.Audio.MicDeviceID = devHex
 		})
 		if v.micDeviceSelect != nil && v.micDeviceSelect.Selected != selected {
+			prevInit := v.initializing
 			v.initializing = true
 			v.micDeviceSelect.SetSelected(selected)
-			v.initializing = false
+			v.initializing = prevInit
 		}
 		v.setStatus("✓ Active microphone input: " + selected)
 	})
@@ -702,6 +768,91 @@ func (v *SettingsView) buildVoiceDetectionCard() *widget.Card {
 	})
 	v.vsSilenceSelect.SetSelected(formatSilenceOption(vs.MinSilenceMs))
 
+	v.vdWakeWordEntry = NewScrollPassEntry()
+	v.vdWakeWordEntry.SetPlaceHolder("Optional (comma-separated, e.g. octothorpe, hey octo)")
+	v.vdWakeWordEntry.SetText(cfg.VoiceDetection.WakeWord)
+	applyWakeWord := func(word string) {
+		clean := strings.TrimSpace(word)
+		v.updateConfig(func(c *config.Config) {
+			c.VoiceDetection.WakeWord = clean
+			config.NormalizeVoiceDetectionConfig(&c.VoiceDetection)
+		})
+		if v.vdWakeWordEntry != nil && v.vdWakeWordEntry.Text != clean {
+			prevInit := v.initializing
+			v.initializing = true
+			v.vdWakeWordEntry.SetText(clean)
+			v.initializing = prevInit
+		}
+		if clean == "" {
+			v.setStatus("✓ Voice command wake word cleared (listening directly).")
+		} else {
+			v.setStatus(fmt.Sprintf("✓ Voice command wake word set to %q.", clean))
+		}
+	}
+	v.vdWakeWordEntry.OnSubmitted = applyWakeWord
+	vdWakeApplyBtn := widget.NewButton("Apply", func() {
+		applyWakeWord(v.vdWakeWordEntry.Text)
+	})
+	vdWakeClearBtn := widget.NewButton("Clear", func() {
+		applyWakeWord("")
+	})
+
+	v.vdWakeWindowSelect = widget.NewSelect(voiceWakeWindowOptions, func(selected string) {
+		if v.initializing {
+			return
+		}
+		sec := parseWakeWindowOption(selected)
+		v.updateConfig(func(c *config.Config) {
+			c.VoiceDetection.WakeWindowSec = sec
+			config.NormalizeVoiceDetectionConfig(&c.VoiceDetection)
+		})
+		v.setStatus(fmt.Sprintf("✓ Wake word armed window set to %ds.", sec))
+	})
+	prevInit := v.initializing
+	v.initializing = true
+	v.vdWakeWindowSelect.SetSelected(formatWakeWindowOption(cfg.VoiceDetection.EffectiveWakeWindowSec()))
+	v.initializing = prevInit
+
+	v.vdWakeSoundCheck = widget.NewCheck("Play beep on wake", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.VoiceDetection.SetWakeSoundEnabled(checked)
+		})
+		if checked {
+			v.setStatus("✓ Wake-word activation beep enabled.")
+		} else {
+			v.setStatus("Wake-word activation beep disabled.")
+		}
+	})
+	prevInitSound := v.initializing
+	v.initializing = true
+	v.vdWakeSoundCheck.SetChecked(cfg.VoiceDetection.EffectiveWakeSoundEnabled())
+	v.initializing = prevInitSound
+
+	vdWakeTestBtn := widget.NewButton("Test", func() {
+		if v.session == nil {
+			return
+		}
+		go func() {
+			_ = v.session.PlayWakeWordChime()
+		}()
+	})
+
+	v.vdLastHeardLabel = widget.NewLabel("Waiting for speech...")
+	v.vdLastHeardLabel.Wrapping = fyne.TextWrapWord
+	if v.session != nil {
+		if recent := v.session.RecentVoiceTranscripts(); len(recent) > 0 {
+			last := recent[len(recent)-1]
+			summary := fmt.Sprintf("%q", last.RawText)
+			if strings.TrimSpace(last.Note) != "" {
+				summary += " — " + last.Note
+			}
+			v.vdLastHeardLabel.SetText(summary)
+		}
+	}
+
 	// Spoken Languages pulldown + Add button + configured list
 	spokenOpts := SpokenLangSelectOptions()
 	v.vsSpokenAddSelect = widget.NewSelect(spokenOpts, nil)
@@ -794,6 +945,10 @@ func (v *SettingsView) buildVoiceDetectionCard() *widget.Card {
 			makeRow("Compute Device:", container.NewBorder(nil, nil, nil, v.vsComputeRefreshBtn, v.vsComputeDeviceSelect)),
 			makeRow("CPU Helper Threads:", v.vsThreadsSelect),
 			makeRow("Phrase End Pause:", v.vsSilenceSelect),
+			makeRow("Wake Word (Optional):", container.NewBorder(nil, nil, nil, container.NewHBox(vdWakeApplyBtn, vdWakeClearBtn), v.vdWakeWordEntry)),
+			makeRow("Wake Armed Window:", v.vdWakeWindowSelect),
+			makeRow("Wake Beep:", container.NewBorder(nil, nil, nil, vdWakeTestBtn, v.vdWakeSoundCheck)),
+			makeRow("Last Heard by Whisper:", v.vdLastHeardLabel),
 			widget.NewSeparator(),
 			widget.NewLabelWithStyle("Spoken Languages (Microphone Input)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 			spokenDesc,
