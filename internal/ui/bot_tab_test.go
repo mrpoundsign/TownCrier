@@ -307,6 +307,16 @@ func TestBotTabViewVoiceTesterAndWakeWord(t *testing.T) {
 	require.True(t, view.voiceWakeSoundCheck.Checked)
 	view.voiceWakeSoundCheck.SetChecked(false)
 	require.False(t, sess.Config().VoiceDetection.EffectiveWakeSoundEnabled())
+
+	// 5. Response voice summary reflects configured ResponseVoiceID & Speed and resets cleanly.
+	require.NotNil(t, view.voiceResponseLbl)
+	require.Equal(t, "Global Default TTS Voice", view.voiceResponseLbl.Text)
+	require.NoError(t, sess.UpdateConfig(func(c *config.Config) {
+		c.VoiceDetection.ResponseVoiceID = "bm_lewis"
+		c.VoiceDetection.ResponseSpeed = 1.25
+	}))
+	view.Refresh()
+	require.Equal(t, FormatVoiceSpeedSummary("bm_lewis", 1.25), view.voiceResponseLbl.Text)
 }
 
 

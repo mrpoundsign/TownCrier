@@ -298,6 +298,7 @@ type SettingsView struct {
 	vdWakeWordEntry         *ScrollPassEntry
 	vdWakeWindowSelect      *widget.Select
 	vdWakeSoundCheck        *widget.Check
+	vdResponseVoiceLabel    *widget.Label
 	vdLastHeardLabel        *widget.Label
 	vsSpokenAddSelect       *widget.Select
 	vsAddSpokenBtn          *widget.Button

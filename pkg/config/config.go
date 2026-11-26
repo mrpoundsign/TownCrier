@@ -353,10 +353,12 @@ const DefaultVoiceWakeWindowSec = 6
 // dependent features (Voice Subtitles, OBS /overlay/subtitles, and Bot Voice Commands) are disabled
 // while preserving the user's saved rules.
 type VoiceDetectionConfig struct {
-	Enabled          *bool  `json:"enabled,omitempty"`
-	WakeWord         string `json:"wake_word,omitempty"`
-	WakeWindowSec    int    `json:"wake_window_sec,omitempty"`
-	WakeSoundEnabled *bool  `json:"wake_sound_enabled,omitempty"`
+	Enabled          *bool   `json:"enabled,omitempty"`
+	WakeWord         string  `json:"wake_word,omitempty"`
+	WakeWindowSec    int     `json:"wake_window_sec,omitempty"`
+	WakeSoundEnabled *bool   `json:"wake_sound_enabled,omitempty"`
+	ResponseVoiceID  string  `json:"response_voice_id,omitempty"`
+	ResponseSpeed    float32 `json:"response_speed,omitempty"`
 }
 
 // EffectiveWakeSoundEnabled reports whether an ascending beep should play when the wake word activates (default true).
@@ -390,7 +392,7 @@ func (vd VoiceDetectionConfig) EffectiveWakeWindowSec() int {
 	return vd.WakeWindowSec
 }
 
-// NormalizeVoiceDetectionConfig trims and clamps optional wake word settings.
+// NormalizeVoiceDetectionConfig trims and clamps optional wake word and response voice settings.
 func NormalizeVoiceDetectionConfig(vd *VoiceDetectionConfig) {
 	if vd == nil {
 		return
@@ -398,6 +400,15 @@ func NormalizeVoiceDetectionConfig(vd *VoiceDetectionConfig) {
 	vd.WakeWord = strings.TrimSpace(vd.WakeWord)
 	if vd.WakeWindowSec != 0 {
 		vd.WakeWindowSec = vd.EffectiveWakeWindowSec()
+	}
+	vd.ResponseVoiceID = strings.TrimSpace(vd.ResponseVoiceID)
+	switch {
+	case vd.ResponseSpeed < 0:
+		vd.ResponseSpeed = 0
+	case vd.ResponseSpeed > 0 && vd.ResponseSpeed < 0.5:
+		vd.ResponseSpeed = 0.5
+	case vd.ResponseSpeed > 2.0:
+		vd.ResponseSpeed = 2.0
 	}
 }
 

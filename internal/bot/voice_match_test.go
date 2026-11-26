@@ -1,12 +1,14 @@
 package bot
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/mrpoundsign/TownCrier/pkg/chat"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 )
 
@@ -176,4 +178,96 @@ func TestVoiceCommandWakeWordSameUtteranceWindowAndIgnoreFlag(t *testing.T) {
 
 	evAliasArm := eng.OnVoiceTranscript("Hey, Octo.")
 	require.Equal(t, "armed", evAliasArm.WakeState)
+}
+
+func TestVoiceCommandResponseVoicePrecedence(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Bot.Enabled = true
+	cfg.VoiceDetection.ResponseVoiceID = "bm_lewis"
+	cfg.VoiceDetection.ResponseSpeed = 1.25
+
+	cfg.Bot.Actions = []config.BotActionDef{
+		{
+			ID:      "act-default-voice",
+			Name:    "Say Hello Default Step",
+			Enabled: true,
+			QueueID: "concurrent",
+			SubActions: []config.BotSubActionDef{
+				{ID: "s1", Kind: "speak_tts", Enabled: true, Text: "Hello from bot"},
+			},
+		},
+		{
+			ID:      "act-override-voice",
+			Name:    "Say Hello Explicit Step",
+			Enabled: true,
+			QueueID: "concurrent",
+			SubActions: []config.BotSubActionDef{
+				{ID: "s2", Kind: "speak_tts", Enabled: true, Text: "Override voice", VoiceID: "af_bella", Speed: 0.90},
+			},
+		},
+	}
+	cfg.Bot.Commands = []config.BotCommandDef{
+		{ID: "cmd-1", Name: "Chat Hello", Enabled: true, Trigger: "!hello", MatchMode: "exact", ActionID: "act-default-voice"},
+	}
+	cfg.Bot.VoiceCommands = []config.BotVoiceCommandDef{
+		{ID: "vc-default", Name: "Voice Default", Enabled: true, Phrase: "say hello", MatchMode: "contains", ActionID: "act-default-voice"},
+		{ID: "vc-override", Name: "Voice Override", Enabled: true, Phrase: "use bella", MatchMode: "contains", ActionID: "act-override-voice"},
+	}
+
+	st, err := OpenStore(":memory:")
+	require.NoError(t, err)
+	defer func() { _ = st.Close() }()
+
+	type spokenCall struct {
+		text    string
+		voiceID string
+		speed   float32
+	}
+	var mu sync.Mutex
+	var calls []spokenCall
+
+	eng := NewEngine(st, HostBridge{
+		GetConfig: func() *config.Config { return cfg },
+		SpeakTTS: func(text, voiceID string, speed float32, priority int, username string) error {
+			mu.Lock()
+			calls = append(calls, spokenCall{text: text, voiceID: voiceID, speed: speed})
+			mu.Unlock()
+			return nil
+		},
+	})
+	eng.Start()
+	defer func() { _ = eng.Close() }()
+
+	// 1. Voice command with step left on Default uses VoiceDetection.ResponseVoiceID & ResponseSpeed.
+	eng.OnVoiceTranscript("say hello")
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) == 1
+	}, 2*time.Second, 20*time.Millisecond)
+	mu.Lock()
+	require.Equal(t, spokenCall{text: "Hello from bot", voiceID: "bm_lewis", speed: 1.25}, calls[0])
+	mu.Unlock()
+
+	// 2. Voice command with explicit per-step VoiceID overrides ResponseVoiceID.
+	eng.OnVoiceTranscript("use bella")
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) == 2
+	}, 2*time.Second, 20*time.Millisecond)
+	mu.Lock()
+	require.Equal(t, spokenCall{text: "Override voice", voiceID: "af_bella", speed: 0.90}, calls[1])
+	mu.Unlock()
+
+	// 3. Chat !command using the exact same action does NOT use ResponseVoiceID (keeps "" -> Global Default).
+	eng.OnEvent(&chat.Event{ID: "msg-1", Platform: "twitch", Kind: chat.EventKindMessage, UserName: "alice", Text: "!hello"})
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) == 3
+	}, 2*time.Second, 20*time.Millisecond)
+	mu.Lock()
+	require.Equal(t, spokenCall{text: "Hello from bot", voiceID: "", speed: 0}, calls[2])
+	mu.Unlock()
 }

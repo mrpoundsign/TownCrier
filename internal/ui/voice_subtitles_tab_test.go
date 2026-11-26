@@ -209,6 +209,19 @@ func TestSharedTranslationTabAndVoiceSubtitlesLanguageLists(t *testing.T) {
 	if sess.Config().VoiceDetection.EffectiveWakeSoundEnabled() {
 		t.Fatal("expected EffectiveWakeSoundEnabled()=false after unchecking vdWakeSoundCheck")
 	}
+	if view.vdResponseVoiceLabel == nil || view.vdResponseVoiceLabel.Text != "Global Default TTS Voice" {
+		t.Fatalf("expected default vdResponseVoiceLabel 'Global Default TTS Voice', got %v", view.vdResponseVoiceLabel)
+	}
+	if err := sess.UpdateConfig(func(c *config.Config) {
+		c.VoiceDetection.ResponseVoiceID = "bm_lewis"
+		c.VoiceDetection.ResponseSpeed = 1.15
+	}); err != nil {
+		t.Fatalf("UpdateConfig failed: %v", err)
+	}
+	view.SyncFromConfig()
+	if view.vdResponseVoiceLabel.Text != FormatVoiceSpeedSummary("bm_lewis", 1.15) {
+		t.Fatalf("expected updated vdResponseVoiceLabel summary, got %q", view.vdResponseVoiceLabel.Text)
+	}
 	if minW := obj.MinSize().Width; minW > 550 {
 		t.Errorf("expected SettingsView MinSize().Width <= 550 DIPs with wake controls, got %v", minW)
 	}

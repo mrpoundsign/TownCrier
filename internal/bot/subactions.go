@@ -62,7 +62,21 @@ func (e *Engine) executeSubAction(ctx context.Context, cfg config.BotAutomationC
 			if user == "" {
 				user = st.args["user"]
 			}
-			_ = e.bridge.SpeakTTS(text, sa.VoiceID, sa.Speed, sa.Priority, user)
+			voiceID := strings.TrimSpace(sa.VoiceID)
+			speed := sa.Speed
+			if voiceID == "" && st.args["voicePhrase"] != "" && e.bridge.GetConfig != nil {
+				if fullCfg := e.bridge.GetConfig(); fullCfg != nil {
+					if respVoice := strings.TrimSpace(fullCfg.VoiceDetection.ResponseVoiceID); respVoice != "" {
+						voiceID = respVoice
+						if speed <= 0 && fullCfg.VoiceDetection.ResponseSpeed > 0 {
+							speed = fullCfg.VoiceDetection.ResponseSpeed
+						}
+					} else if speed <= 0 && fullCfg.VoiceDetection.ResponseSpeed > 0 {
+						speed = fullCfg.VoiceDetection.ResponseSpeed
+					}
+				}
+			}
+			_ = e.bridge.SpeakTTS(text, voiceID, speed, sa.Priority, user)
 		}
 
 	case "play_sound":

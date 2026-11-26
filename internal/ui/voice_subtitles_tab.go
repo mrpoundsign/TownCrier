@@ -575,6 +575,9 @@ func (v *SettingsView) syncVoiceSubtitlesControlsFromConfig() {
 		v.vdWakeSoundCheck.SetChecked(cfg.VoiceDetection.EffectiveWakeSoundEnabled())
 		v.initializing = prevInit
 	}
+	if v.vdResponseVoiceLabel != nil {
+		v.vdResponseVoiceLabel.SetText(formatVoiceResponseSummary(cfg.VoiceDetection.ResponseVoiceID, cfg.VoiceDetection.ResponseSpeed))
+	}
 	if v.vsOverlayPosSelect != nil {
 		if vs.OverlayPosition == "top" {
 			v.vsOverlayPosSelect.SetSelected("Top")
@@ -840,6 +843,39 @@ func (v *SettingsView) buildVoiceDetectionCard() *widget.Card {
 		}()
 	})
 
+	v.vdResponseVoiceLabel = widget.NewLabel(formatVoiceResponseSummary(cfg.VoiceDetection.ResponseVoiceID, cfg.VoiceDetection.ResponseSpeed))
+	v.vdResponseVoiceLabel.Truncation = fyne.TextTruncateEllipsis
+	vdRespChooseBtn := widget.NewButton("Choose…", func() {
+		curVD := v.currentConfig().VoiceDetection
+		initVoice := strings.TrimSpace(curVD.ResponseVoiceID)
+		initSpeed := curVD.ResponseSpeed
+		if initSpeed <= 0 {
+			initSpeed = 1.0
+		}
+		ShowVoiceSpeedDialog(v.window, v.session, "Select Keyword Response Voice", initVoice, initSpeed, func(newVoiceID string, newSpeed float32) {
+			v.updateConfig(func(c *config.Config) {
+				c.VoiceDetection.ResponseVoiceID = newVoiceID
+				c.VoiceDetection.ResponseSpeed = newSpeed
+				config.NormalizeVoiceDetectionConfig(&c.VoiceDetection)
+			})
+			if v.vdResponseVoiceLabel != nil {
+				cur := v.currentConfig().VoiceDetection
+				v.vdResponseVoiceLabel.SetText(formatVoiceResponseSummary(cur.ResponseVoiceID, cur.ResponseSpeed))
+			}
+			v.setStatus("✓ Keyword response voice set to " + formatVoiceResponseSummary(newVoiceID, newSpeed))
+		}, v.setStatus)
+	})
+	vdRespClearBtn := widget.NewButton("Default", func() {
+		v.updateConfig(func(c *config.Config) {
+			c.VoiceDetection.ResponseVoiceID = ""
+			c.VoiceDetection.ResponseSpeed = 0
+		})
+		if v.vdResponseVoiceLabel != nil {
+			v.vdResponseVoiceLabel.SetText(formatVoiceResponseSummary("", 0))
+		}
+		v.setStatus("✓ Keyword response voice reset to Global Default.")
+	})
+
 	v.vdLastHeardLabel = widget.NewLabel("Waiting for speech...")
 	v.vdLastHeardLabel.Wrapping = fyne.TextWrapWord
 	if v.session != nil {
@@ -948,6 +984,7 @@ func (v *SettingsView) buildVoiceDetectionCard() *widget.Card {
 			makeRow("Wake Word (Optional):", container.NewBorder(nil, nil, nil, container.NewHBox(vdWakeApplyBtn, vdWakeClearBtn), v.vdWakeWordEntry)),
 			makeRow("Wake Armed Window:", v.vdWakeWindowSelect),
 			makeRow("Wake Beep:", container.NewBorder(nil, nil, nil, vdWakeTestBtn, v.vdWakeSoundCheck)),
+			makeRow("Response Voice:", container.NewBorder(nil, nil, nil, container.NewHBox(vdRespChooseBtn, vdRespClearBtn), v.vdResponseVoiceLabel)),
 			makeRow("Last Heard by Whisper:", v.vdLastHeardLabel),
 			widget.NewSeparator(),
 			widget.NewLabelWithStyle("Spoken Languages (Microphone Input)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),

@@ -48,6 +48,7 @@ type BotTabView struct {
 	voiceWakeWordEntry     *ScrollPassEntry
 	voiceWakeWindowSelect  *widget.Select
 	voiceWakeSoundCheck    *widget.Check
+	voiceResponseLbl       *widget.Label
 	voiceMonitorStatusLbl  *widget.Label
 	voiceTranscriptFeedLbl *widget.Label
 	voiceTranscriptScroll  *container.Scroll
@@ -570,6 +571,44 @@ func (v *BotTabView) buildCommandsAndVoiceTab() fyne.CanvasObject {
 		}()
 	})
 
+	v.voiceResponseLbl = widget.NewLabel(formatVoiceResponseSummary(cfg.VoiceDetection.ResponseVoiceID, cfg.VoiceDetection.ResponseSpeed))
+	v.voiceResponseLbl.Truncation = fyne.TextTruncateEllipsis
+	chooseRespVoiceBtn := widget.NewButtonWithIcon("Choose Voice…", theme.VolumeUpIcon(), func() {
+		curVD := v.currentConfig().VoiceDetection
+		initVoice := strings.TrimSpace(curVD.ResponseVoiceID)
+		initSpeed := curVD.ResponseSpeed
+		if initSpeed <= 0 {
+			initSpeed = 1.0
+		}
+		ShowVoiceSpeedDialog(v.window, v.session, "Select Keyword Response Voice", initVoice, initSpeed, func(newVoiceID string, newSpeed float32) {
+			if v.session != nil {
+				_ = v.session.UpdateConfig(func(c *config.Config) {
+					c.VoiceDetection.ResponseVoiceID = newVoiceID
+					c.VoiceDetection.ResponseSpeed = newSpeed
+					config.NormalizeVoiceDetectionConfig(&c.VoiceDetection)
+				})
+			}
+			v.Refresh()
+			if v.onConfigChanged != nil {
+				v.onConfigChanged()
+			}
+			v.reportStatus("✓ Keyword response voice set to " + formatVoiceResponseSummary(newVoiceID, newSpeed))
+		}, v.onStatus)
+	})
+	clearRespVoiceBtn := widget.NewButton("Use Default", func() {
+		if v.session != nil {
+			_ = v.session.UpdateConfig(func(c *config.Config) {
+				c.VoiceDetection.ResponseVoiceID = ""
+				c.VoiceDetection.ResponseSpeed = 0
+			})
+		}
+		v.Refresh()
+		if v.onConfigChanged != nil {
+			v.onConfigChanged()
+		}
+		v.reportStatus("✓ Keyword response voice reset to Global Default.")
+	})
+
 	v.voiceMonitorStatusLbl = widget.NewLabel("⚪ Waiting for speech")
 	clearFeedBtn := widget.NewButton("Clear Feed", func() {
 		if v.session != nil {
@@ -621,6 +660,7 @@ func (v *BotTabView) buildCommandsAndVoiceTab() fyne.CanvasObject {
 		widget.NewForm(
 			widget.NewFormItem("Wake Word (Optional)", container.NewBorder(nil, nil, nil, container.NewHBox(saveWakeBtn, clearWakeBtn), v.voiceWakeWordEntry)),
 			widget.NewFormItem("Armed Window", v.voiceWakeWindowSelect),
+			widget.NewFormItem("Response Voice", container.NewBorder(nil, nil, nil, container.NewHBox(chooseRespVoiceBtn, clearRespVoiceBtn), v.voiceResponseLbl)),
 		),
 		container.NewHBox(v.voiceWakeSoundCheck, testBeepBtn),
 	)
@@ -754,6 +794,17 @@ func formatVoiceEvalSummary(ev bot.VoiceTranscriptEvent) string {
 		lines = append(lines, fmt.Sprintf("• %s [%s] → %s (%s)", m.CommandName, state, m.ActionName, botOptionLabel(botVoiceMatchModeOptions, m.MatchMode)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func formatVoiceResponseSummary(voiceID string, speed float32) string {
+	clean := strings.TrimSpace(voiceID)
+	if clean == "" {
+		return "Global Default TTS Voice"
+	}
+	if speed > 0 {
+		return FormatVoiceSpeedSummary(clean, speed)
+	}
+	return tts.VoiceDisplayName(clean)
 }
 
 func (v *BotTabView) refreshCommandsAndTriggers(b config.BotAutomationConfig) {
@@ -1353,7 +1404,11 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 	voiceSummaryLbl.Truncation = fyne.TextTruncateEllipsis
 	updateVoiceSummary := func() {
 		if selectedVoiceID == "" {
-			voiceSummaryLbl.SetText("Global Default Voice")
+			if respVoice := strings.TrimSpace(v.currentConfig().VoiceDetection.ResponseVoiceID); respVoice != "" {
+				voiceSummaryLbl.SetText("Default (Keyword: " + tts.VoiceDisplayName(respVoice) + ", else Global)")
+			} else {
+				voiceSummaryLbl.SetText("Global Default Voice")
+			}
 		} else {
 			voiceSummaryLbl.SetText(FormatVoiceSpeedSummary(selectedVoiceID, selectedSpeed))
 		}
@@ -1804,6 +1859,9 @@ func (v *BotTabView) refreshTimersAndVoice(b config.BotAutomationConfig) {
 			v.initializing = true
 			v.voiceWakeSoundCheck.SetChecked(fullCfg.VoiceDetection.EffectiveWakeSoundEnabled())
 			v.initializing = prevInit
+		}
+		if v.voiceResponseLbl != nil {
+			v.voiceResponseLbl.SetText(formatVoiceResponseSummary(fullCfg.VoiceDetection.ResponseVoiceID, fullCfg.VoiceDetection.ResponseSpeed))
 		}
 		if v.voiceMonitorStatusLbl != nil {
 			if vdOn {

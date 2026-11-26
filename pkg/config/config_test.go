@@ -953,10 +953,15 @@ func TestVoiceDetectionMasterToggleAndGating(t *testing.T) {
 	cfg.VoiceDetection.WakeWord = "  octo  "
 	cfg.VoiceDetection.WakeWindowSec = 10
 	cfg.VoiceDetection.SetWakeSoundEnabled(false)
+	cfg.VoiceDetection.ResponseVoiceID = "  bm_lewis  "
+	cfg.VoiceDetection.ResponseSpeed = 3.5
 	cfg.Bot.VoiceCommands[0].IgnoreWakeWord = true
 	wakeClone := cfg.Clone()
 	if wakeClone.VoiceDetection.WakeWord != "  octo  " || wakeClone.VoiceDetection.WakeWindowSec != 10 {
 		t.Fatalf("expected Clone() to copy WakeWord and WakeWindowSec")
+	}
+	if wakeClone.VoiceDetection.ResponseVoiceID != "  bm_lewis  " || wakeClone.VoiceDetection.ResponseSpeed != 3.5 {
+		t.Fatalf("expected Clone() to copy ResponseVoiceID and ResponseSpeed")
 	}
 	if wakeClone.VoiceDetection.EffectiveWakeSoundEnabled() {
 		t.Fatalf("expected Clone() to deep-copy WakeSoundEnabled=false")
@@ -974,6 +979,19 @@ func TestVoiceDetectionMasterToggleAndGating(t *testing.T) {
 	}
 	if loadedWake.VoiceDetection.WakeWord != "octo" || loadedWake.VoiceDetection.WakeWindowSec != 10 || loadedWake.VoiceDetection.EffectiveWakeSoundEnabled() {
 		t.Fatalf("expected trimmed WakeWord='octo', WakeWindowSec=10, and WakeSoundEnabled=false after Load, got %+v", loadedWake.VoiceDetection)
+	}
+	if loadedWake.VoiceDetection.ResponseVoiceID != "bm_lewis" || loadedWake.VoiceDetection.ResponseSpeed != 2.0 {
+		t.Fatalf("expected trimmed ResponseVoiceID='bm_lewis' and clamped ResponseSpeed=2.0 after Load, got %+v", loadedWake.VoiceDetection)
+	}
+	vdNeg := VoiceDetectionConfig{ResponseSpeed: -0.5}
+	NormalizeVoiceDetectionConfig(&vdNeg)
+	if vdNeg.ResponseSpeed != 0 {
+		t.Fatalf("expected negative ResponseSpeed clamped to 0, got %v", vdNeg.ResponseSpeed)
+	}
+	vdLow := VoiceDetectionConfig{ResponseSpeed: 0.2}
+	NormalizeVoiceDetectionConfig(&vdLow)
+	if vdLow.ResponseSpeed != 0.5 {
+		t.Fatalf("expected low non-zero ResponseSpeed clamped to 0.5, got %v", vdLow.ResponseSpeed)
 	}
 	if len(loadedWake.Bot.VoiceCommands) == 0 || !loadedWake.Bot.VoiceCommands[0].IgnoreWakeWord {
 		t.Fatalf("expected IgnoreWakeWord=true to survive JSON round-trip")
