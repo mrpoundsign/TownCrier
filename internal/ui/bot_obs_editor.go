@@ -26,6 +26,7 @@ const obsCurrentSceneOption = "(Current Scene)"
 type obsSubActionEditor struct {
 	win       fyne.Window
 	obsClient *obs.Client
+	botVars   []TemplateVar
 	onStatus  func(string)
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -83,11 +84,15 @@ type obsSubActionEditor struct {
 	root      *fyne.Container
 }
 
-func newOBSSubActionEditor(win fyne.Window, client *obs.Client, cur config.BotSubActionDef, onStatus func(string)) *obsSubActionEditor {
+func newOBSSubActionEditor(win fyne.Window, client *obs.Client, cur config.BotSubActionDef, botVars []TemplateVar, onStatus func(string)) *obsSubActionEditor {
 	ctx, cancel := context.WithCancel(context.Background())
+	if len(botVars) == 0 {
+		botVars = BotTemplateVars()
+	}
 	ed := &obsSubActionEditor{
 		win:       win,
 		obsClient: client,
+		botVars:   botVars,
 		onStatus:  onStatus,
 		ctx:       ctx,
 		cancel:    cancel,
@@ -431,7 +436,7 @@ func (e *obsSubActionEditor) rebuildFields() {
 	case "set_text":
 		items = append(items,
 			widget.NewFormItem("Text Input", e.inputEntry),
-			widget.NewFormItem("Text", withBotVarHelp(e.win, "OBS Text Content", e.textEntry, e.onStatus)),
+			widget.NewFormItem("Text", withBotVarHelpVars(e.win, "OBS Text Content", e.textEntry, e.botVars, e.onStatus)),
 		)
 
 	case "media_action":
@@ -458,7 +463,7 @@ func (e *obsSubActionEditor) rebuildFields() {
 	case "custom_request":
 		items = append(items,
 			widget.NewFormItem("Request Type", e.reqTypeEntry),
-			widget.NewFormItem("Request Data (JSON)", withBotVarHelp(e.win, "OBS Request Data", e.reqDataEntry, e.onStatus)),
+			widget.NewFormItem("Request Data (JSON)", withBotVarHelpVars(e.win, "OBS Request Data", e.reqDataEntry, e.botVars, e.onStatus)),
 		)
 	}
 

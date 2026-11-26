@@ -17,18 +17,32 @@ import (
 const maxActionDepth = 8
 
 type execState struct {
-	args     map[string]string
-	platform string
-	userID   string
-	channel  string
-	replyID  string
-	depth    int
-	broken   bool
+	args           map[string]string
+	actionVars     map[string]string
+	actionVarKinds map[string]string
+	platform       string
+	userID         string
+	channel        string
+	replyID        string
+	depth          int
+	broken         bool
 }
 
 func (e *Engine) executeAction(ctx context.Context, cfg config.BotAutomationConfig, action config.BotActionDef, st *execState) {
 	if !action.Enabled || ctx.Err() != nil || st.depth >= maxActionDepth {
 		return
+	}
+	if st.actionVars == nil {
+		st.actionVars = make(map[string]string, len(action.Variables))
+		st.actionVarKinds = make(map[string]string, len(action.Variables))
+		for _, v := range action.Variables {
+			name := strings.TrimSpace(v.Name)
+			if name == "" {
+				continue
+			}
+			st.actionVars[name] = v.DefaultValue
+			st.actionVarKinds[name] = v.Kind
+		}
 	}
 	for _, sa := range action.SubActions {
 		if ctx.Err() != nil || st.broken {
@@ -43,10 +57,11 @@ func (e *Engine) executeAction(ctx context.Context, cfg config.BotAutomationConf
 
 func (e *Engine) templateCtx(st *execState) TemplateContext {
 	return TemplateContext{
-		Args:     st.args,
-		Store:    e.store,
-		Platform: st.platform,
-		UserID:   st.userID,
+		Args:       st.args,
+		ActionVars: st.actionVars,
+		Store:      e.store,
+		Platform:   st.platform,
+		UserID:     st.userID,
 		LookupOBS: func(key string) (string, bool) {
 			switch key {
 			case "connected":
@@ -148,37 +163,56 @@ func (e *Engine) executeSubAction(ctx context.Context, cfg config.BotAutomationC
 		_ = e.bridge.Moderate(ctx, plat, sa.Operation, st.userID, target, msgID, sa.DurationSeconds, reason)
 
 	case "set_var":
-		if e.store == nil {
-			return
-		}
 		key := strings.TrimSpace(e.interpolate(sa.Key, st))
 		val := e.interpolate(sa.Value, st)
 		scope := strings.ToLower(strings.TrimSpace(sa.Scope))
 		switch scope {
+		case "action", "local", "per_action":
+			if canon, ok := resolveActionVarKey(st.actionVars, key); ok {
+				if sa.Delete {
+					st.actionVars[canon] = ""
+				} else {
+					st.actionVars[canon] = val
+				}
+			}
 		case "user", "user_persistent":
+			if e.store == nil {
+				return
+			}
 			if sa.Delete {
 				_ = e.store.DeleteUserVar(st.platform, st.userID, key)
 			} else {
 				_ = e.store.SetUserVar(st.platform, st.userID, key, sa.VarKind, val)
 			}
-		case "global_ephemeral", "ephemeral":
+		case "session", "global_ephemeral", "ephemeral":
+			if e.store == nil {
+				return
+			}
 			if sa.Delete {
 				_ = e.store.DeleteGlobalVar(key, true)
 			} else {
-				_ = e.store.SetGlobalVar(key, sa.VarKind, val, true)
+				kind := sa.VarKind
+				if strings.TrimSpace(kind) == "" {
+					kind = declaredVarKind(cfg.Variables, "session", key)
+				}
+				_ = e.store.SetGlobalVar(key, kind, val, true)
 			}
 		default:
+			if e.store == nil {
+				return
+			}
 			if sa.Delete {
 				_ = e.store.DeleteGlobalVar(key, false)
 			} else {
-				_ = e.store.SetGlobalVar(key, sa.VarKind, val, false)
+				kind := sa.VarKind
+				if strings.TrimSpace(kind) == "" {
+					kind = declaredVarKind(cfg.Variables, "global", key)
+				}
+				_ = e.store.SetGlobalVar(key, kind, val, false)
 			}
 		}
 
 	case "inc_var":
-		if e.store == nil {
-			return
-		}
 		key := strings.TrimSpace(e.interpolate(sa.Key, st))
 		delta := sa.Delta
 		if delta == 0 {
@@ -186,15 +220,32 @@ func (e *Engine) executeSubAction(ctx context.Context, cfg config.BotAutomationC
 		}
 		scope := strings.ToLower(strings.TrimSpace(sa.Scope))
 		switch scope {
+		case "action", "local", "per_action":
+			if canon, ok := resolveActionVarKey(st.actionVars, key); ok {
+				curVal, _ := strconv.ParseFloat(strings.TrimSpace(st.actionVars[canon]), 64)
+				newVal := curVal + delta
+				formatted := formatActionIncNumber(newVal, st.actionVarKinds[canon], delta)
+				st.actionVars[canon] = formatted
+				st.args[canon] = formatted
+			}
 		case "user", "user_persistent":
+			if e.store == nil {
+				return
+			}
 			if newVal, err := e.store.IncrementUserVar(st.platform, st.userID, key, delta); err == nil {
 				st.args[key] = strconv.FormatFloat(newVal, 'f', -1, 64)
 			}
-		case "global_ephemeral", "ephemeral":
+		case "session", "global_ephemeral", "ephemeral":
+			if e.store == nil {
+				return
+			}
 			if newVal, err := e.store.IncrementGlobalVar(key, delta, true); err == nil {
 				st.args[key] = strconv.FormatFloat(newVal, 'f', -1, 64)
 			}
 		default:
+			if e.store == nil {
+				return
+			}
 			if newVal, err := e.store.IncrementGlobalVar(key, delta, false); err == nil {
 				st.args[key] = strconv.FormatFloat(newVal, 'f', -1, 64)
 			}
@@ -501,6 +552,37 @@ func transformFieldsFromConfig(t *config.BotOBSTransform) map[string]any {
 		fields["cropBottom"] = *t.CropBottom
 	}
 	return fields
+}
+
+func resolveActionVarKey(m map[string]string, key string) (string, bool) {
+	if m == nil || key == "" {
+		return "", false
+	}
+	if _, ok := m[key]; ok {
+		return key, true
+	}
+	for k := range m {
+		if strings.EqualFold(k, key) {
+			return k, true
+		}
+	}
+	return "", false
+}
+
+func declaredVarKind(vars []config.BotVariableDef, scope, key string) string {
+	for _, v := range vars {
+		if strings.EqualFold(v.Scope, scope) && strings.EqualFold(v.Name, key) {
+			return v.Kind
+		}
+	}
+	return ""
+}
+
+func formatActionIncNumber(val float64, kind string, delta float64) string {
+	if (kind == "" || kind == "int") && delta == float64(int64(delta)) && val == float64(int64(val)) {
+		return strconv.FormatInt(int64(val), 10)
+	}
+	return strconv.FormatFloat(val, 'f', -1, 64)
 }
 
 func evalCondition(lhs, op, rhs string) bool {

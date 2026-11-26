@@ -124,11 +124,25 @@ var botOBSStudioModeOptions = []botOption{
 
 var botVarScopeOptions = []botOption{
 	{Key: "global_persistent", Label: "Global (Saved)"},
-	{Key: "global_ephemeral", Label: "Global (Session Only)"},
+	{Key: "session", Label: "Session (Current Stream)"},
+	{Key: "action", Label: "Per-Action (Current Run)"},
 	{Key: "user_persistent", Label: "Per-User (Saved)"},
 }
 
 var botGlobalVarScopeOptions = botVarScopeOptions[:2]
+
+func canonicalBotVarScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "session", "global_ephemeral", "ephemeral":
+		return "session"
+	case "action", "local", "per_action":
+		return "action"
+	case "user", "user_persistent":
+		return "user_persistent"
+	default:
+		return "global_persistent"
+	}
+}
 
 var botVarKindOptions = []botOption{
 	{Key: "string", Label: "Text"},

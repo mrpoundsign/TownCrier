@@ -1,11 +1,15 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/mrpoundsign/TownCrier/internal/bot"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
 )
 
 func TestEventTemplateVarsCoverage(t *testing.T) {
@@ -115,5 +119,47 @@ func TestBotTemplateVarsCoverage(t *testing.T) {
 		if !found {
 			t.Errorf("expected %s in BotTemplateVars()", k)
 		}
+	}
+}
+
+func TestBotTemplateVarsWithDeclared(t *testing.T) {
+	st, err := bot.OpenStore(":memory:")
+	requireNoErr := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	requireNoErr(err)
+	defer func() { _ = st.Close() }()
+	requireNoErr(st.SetGlobalVar("total", "int", "12", false))
+	requireNoErr(st.SetGlobalVar("deaths", "int", "3", true))
+
+	botCfg := config.BotAutomationConfig{
+		Variables: []config.BotVariableDef{
+			{Name: "total", Scope: "global", Kind: "int", DefaultValue: "0"},
+			{Name: "deaths", Scope: "session", Kind: "int", DefaultValue: "0"},
+		},
+	}
+	act := &config.BotActionDef{
+		ID:   "a1",
+		Name: "Act",
+		Variables: []config.BotVariableDef{
+			{Name: "tmp", Scope: "action", Kind: "string", DefaultValue: "abc"},
+		},
+	}
+
+	vars := BotTemplateVarsWithDeclared(botCfg, act, st)
+	if len(vars) < 3 {
+		t.Fatalf("expected declared + base vars, got %d", len(vars))
+	}
+	if vars[0].Var != "%global.total%" || !strings.Contains(vars[0].Desc, `current="12"`) {
+		t.Fatalf("unexpected first declared var: %+v", vars[0])
+	}
+	if vars[1].Var != "%session.deaths%" || !strings.Contains(vars[1].Desc, `current="3"`) {
+		t.Fatalf("unexpected second declared var: %+v", vars[1])
+	}
+	if vars[2].Var != "%action.tmp%" || !strings.Contains(vars[2].Desc, `default="abc"`) {
+		t.Fatalf("unexpected third declared var: %+v", vars[2])
 	}
 }

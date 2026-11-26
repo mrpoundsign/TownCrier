@@ -31,11 +31,13 @@ type conditionBranchUI struct {
 // botConditionEditor builds the If / Else Condition form with %values% help,
 // live OBS scene dropdown suggestions, and Then/Else branch controls.
 type botConditionEditor struct {
-	win       fyne.Window
-	obsClient *obs.Client
-	onStatus  func(string)
-	ctx       context.Context
-	cancel    context.CancelFunc
+	win        fyne.Window
+	obsClient  *obs.Client
+	botVars    []TemplateVar
+	lhsPresets []botOption
+	onStatus   func(string)
+	ctx        context.Context
+	cancel     context.CancelFunc
 
 	mu         sync.RWMutex
 	obsScenes  []string
@@ -62,18 +64,28 @@ func newBotConditionEditor(
 	cur config.BotSubActionDef,
 	actLabels []string,
 	actLabelToID, actIDToLabel map[string]string,
+	botVars []TemplateVar,
+	extraLHSPresets []botOption,
 	onStatus func(string),
 ) *botConditionEditor {
 	ctx, cancel := context.WithCancel(context.Background())
+	if len(botVars) == 0 {
+		botVars = BotTemplateVars()
+	}
+	lhsPresets := make([]botOption, 0, len(botConditionLHSPresetOptions)+len(extraLHSPresets))
+	lhsPresets = append(lhsPresets, botConditionLHSPresetOptions...)
+	lhsPresets = append(lhsPresets, extraLHSPresets...)
 	ed := &botConditionEditor{
-		win:       win,
-		obsClient: obsClient,
-		onStatus:  onStatus,
-		ctx:       ctx,
-		cancel:    cancel,
-		actLabels: actLabels,
-		actToID:   actLabelToID,
-		idToAct:   actIDToLabel,
+		win:        win,
+		obsClient:  obsClient,
+		botVars:    botVars,
+		lhsPresets: lhsPresets,
+		onStatus:   onStatus,
+		ctx:        ctx,
+		cancel:     cancel,
+		actLabels:  actLabels,
+		actToID:    actLabelToID,
+		idToAct:    actIDToLabel,
 	}
 	ed.initWidgets(cur)
 	ed.syncRightValueOptions(false)
@@ -93,8 +105,8 @@ func (e *botConditionEditor) CanvasObject() fyne.CanvasObject {
 }
 
 func (e *botConditionEditor) initWidgets(cur config.BotSubActionDef) {
-	e.lhsEntry = widget.NewSelectEntry(botOptionLabels(botConditionLHSPresetOptions))
-	e.lhsEntry.SetPlaceHolder("e.g. %obs.scene%, %arg0%, %global.count%")
+	e.lhsEntry = widget.NewSelectEntry(botOptionLabels(e.lhsPresets))
+	e.lhsEntry.SetPlaceHolder("e.g. %obs.scene%, %session.count%, %action.tmp%")
 	e.lhsEntry.SetText(cur.LHS)
 
 	e.opSelect = widget.NewSelect(botOptionLabels(botConditionOperatorOptions), nil)
@@ -117,7 +129,7 @@ func (e *botConditionEditor) initWidgets(cur config.BotSubActionDef) {
 		if e.syncing {
 			return
 		}
-		if mapped, ok := matchLHSPresetLabel(val); ok {
+		if mapped, ok := matchLHSPresetLabel(e.lhsPresets, val); ok {
 			e.syncing = true
 			e.lhsEntry.SetText(mapped)
 			e.syncing = false
@@ -140,8 +152,8 @@ func (e *botConditionEditor) initWidgets(cur config.BotSubActionDef) {
 	e.thenBranch = e.buildBranchUI(cur.ThenSubActions)
 	e.elseBranch = e.buildBranchUI(cur.ElseSubActions)
 
-	lhsRow := withBotVarHelpForSelectEntry(e.win, "Left Value", e.lhsEntry, e.onStatus)
-	rhsHelp := newTemplateHelpMarker(e.win, "bot_vars", "Right Value", BotTemplateVars(), e.onStatus, &e.rhsEntry.Entry)
+	lhsRow := withBotVarHelpSelectVars(e.win, "Left Value", e.lhsEntry, e.botVars, e.onStatus)
+	rhsHelp := newTemplateHelpMarker(e.win, "bot_vars", "Right Value", e.botVars, e.onStatus, &e.rhsEntry.Entry)
 	rhsRow := container.NewBorder(nil, nil, nil, container.NewHBox(e.rhsRefreshBtn, container.NewCenter(rhsHelp)), e.rhsEntry)
 
 	form := widget.NewForm(
@@ -212,7 +224,7 @@ func (e *botConditionEditor) branchModeKey(b *conditionBranchUI, selected string
 
 func (e *botConditionEditor) normalizedLHS() string {
 	raw := strings.TrimSpace(e.lhsEntry.Text)
-	if mapped, ok := matchLHSPresetLabel(raw); ok {
+	if mapped, ok := matchLHSPresetLabel(e.lhsPresets, raw); ok {
 		return mapped
 	}
 	return raw
@@ -349,14 +361,42 @@ func decodeConditionBranch(steps []config.BotSubActionDef) (mode, targetActionID
 	return "custom", "", slices.Clone(steps)
 }
 
-func matchLHSPresetLabel(val string) (string, bool) {
+func matchLHSPresetLabel(presets []botOption, val string) (string, bool) {
 	trimmed := strings.TrimSpace(val)
-	for _, opt := range botConditionLHSPresetOptions {
+	for _, opt := range presets {
 		if opt.Label == trimmed {
 			return opt.Key, true
 		}
 	}
 	return "", false
+}
+
+func declaredConditionPresets(botCfg config.BotAutomationConfig, action *config.BotActionDef) []botOption {
+	var out []botOption
+	for _, dv := range botCfg.Variables {
+		name := strings.TrimSpace(dv.Name)
+		if name == "" {
+			continue
+		}
+		if strings.EqualFold(dv.Scope, "session") {
+			tok := "%session." + name + "%"
+			out = append(out, botOption{Key: tok, Label: fmt.Sprintf("Session: %s (%s)", name, tok)})
+		} else {
+			tok := "%global." + name + "%"
+			out = append(out, botOption{Key: tok, Label: fmt.Sprintf("Global: %s (%s)", name, tok)})
+		}
+	}
+	if action != nil {
+		for _, av := range action.Variables {
+			name := strings.TrimSpace(av.Name)
+			if name == "" {
+				continue
+			}
+			tok := "%action." + name + "%"
+			out = append(out, botOption{Key: tok, Label: fmt.Sprintf("Action: %s (%s)", name, tok)})
+		}
+	}
+	return out
 }
 
 func isOBSSceneToken(lhs string) bool {

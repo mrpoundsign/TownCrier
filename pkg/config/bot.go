@@ -14,7 +14,7 @@ const (
 )
 
 // BotAutomationConfig configures TownCrier's Streamer.bot-class automation engine:
-// triggers, commands, timed actions, Whisper voice commands, execution queues, and OBS WebSocket v5.
+// triggers, commands, timed actions, Whisper voice commands, execution queues, variables, and OBS WebSocket v5.
 type BotAutomationConfig struct {
 	Enabled       bool                 `json:"enabled"`
 	Commands      []BotCommandDef      `json:"commands,omitempty"`
@@ -23,7 +23,16 @@ type BotAutomationConfig struct {
 	Timers        []BotTimerDef        `json:"timers,omitempty"`
 	VoiceCommands []BotVoiceCommandDef `json:"voice_commands,omitempty"`
 	Queues        []BotQueueDef        `json:"queues,omitempty"`
+	Variables     []BotVariableDef     `json:"variables,omitempty"`
 	OBS           BotOBSConfig         `json:"obs"`
+}
+
+// BotVariableDef explicitly declares a Global, Session, or Per-Action bot variable with its type and default value.
+type BotVariableDef struct {
+	Name         string `json:"name"`
+	Scope        string `json:"scope,omitempty"` // "global" (persists across restarts), "session" (resets on stream session start), "action" (per-run local)
+	Kind         string `json:"kind,omitempty"`  // "string", "int", "float", "bool"
+	DefaultValue string `json:"default_value,omitempty"`
 }
 
 // BotCommandDef defines a chat command trigger (e.g., !so, !lurk, !hug) and its permissions/cooldowns.
@@ -95,6 +104,7 @@ type BotActionDef struct {
 	Name       string            `json:"name"`
 	Enabled    bool              `json:"enabled"`
 	QueueID    string            `json:"queue_id,omitempty"` // empty -> "default"
+	Variables  []BotVariableDef  `json:"variables,omitempty"`
 	SubActions []BotSubActionDef `json:"sub_actions,omitempty"`
 }
 
@@ -251,6 +261,66 @@ func NormalizeBotAutomationConfig(b *BotAutomationConfig) {
 	if !hasConcurrent {
 		b.Queues = append(b.Queues, BotQueueDef{ID: "concurrent", Name: "Concurrent (Instant)", Blocking: false, MaxPending: 128})
 	}
+	b.Variables = normalizeBotVariables(b.Variables, false)
+	for i := range b.Actions {
+		b.Actions[i].Variables = normalizeBotVariables(b.Actions[i].Variables, true)
+	}
+}
+
+func normalizeBotVarKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "int", "integer":
+		return "int"
+	case "float", "double", "number":
+		return "float"
+	case "bool", "boolean":
+		return "bool"
+	default:
+		return "string"
+	}
+}
+
+func normalizeBotVarScope(scope string, actionOnly bool) string {
+	if actionOnly {
+		return "action"
+	}
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "session", "global_ephemeral", "ephemeral":
+		return "session"
+	default:
+		return "global"
+	}
+}
+
+func normalizeBotVariables(vars []BotVariableDef, actionOnly bool) []BotVariableDef {
+	if len(vars) == 0 {
+		return nil
+	}
+	out := make([]BotVariableDef, 0, len(vars))
+	seen := make(map[string]int, len(vars))
+	for _, v := range vars {
+		name := strings.TrimSpace(v.Name)
+		if name == "" {
+			continue
+		}
+		norm := BotVariableDef{
+			Name:         name,
+			Scope:        normalizeBotVarScope(v.Scope, actionOnly),
+			Kind:         normalizeBotVarKind(v.Kind),
+			DefaultValue: v.DefaultValue,
+		}
+		dedupeKey := norm.Scope + "\x00" + strings.ToLower(norm.Name)
+		if idx, dup := seen[dedupeKey]; dup {
+			out[idx] = norm
+		} else {
+			seen[dedupeKey] = len(out)
+			out = append(out, norm)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func cloneFloat64Ptr(p *float64) *float64 {
@@ -315,10 +385,12 @@ func cloneBotAutomationConfig(b BotAutomationConfig) BotAutomationConfig {
 	out.Timers = slices.Clone(b.Timers)
 	out.VoiceCommands = slices.Clone(b.VoiceCommands)
 	out.Queues = slices.Clone(b.Queues)
+	out.Variables = slices.Clone(b.Variables)
 	if len(b.Actions) > 0 {
 		out.Actions = make([]BotActionDef, len(b.Actions))
 		for i, a := range b.Actions {
 			out.Actions[i] = a
+			out.Actions[i].Variables = slices.Clone(a.Variables)
 			out.Actions[i].SubActions = cloneSubActions(a.SubActions)
 		}
 	}

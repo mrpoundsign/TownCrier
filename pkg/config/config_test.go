@@ -1076,3 +1076,58 @@ func TestBotOBSSubActionCloneAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBotVariableDeclarationsNormalizeCloneAndRoundTrip(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Bot.Enabled = true
+	cfg.Bot.Variables = []BotVariableDef{
+		{Name: "  ", Scope: "global", Kind: "string", DefaultValue: "ignored"},
+		{Name: " totalHugs ", Scope: "global", Kind: "integer", DefaultValue: "10"},
+		{Name: "streamDeaths", Scope: "global_ephemeral", Kind: "int", DefaultValue: "0"},
+		{Name: "streamDeaths", Scope: "session", Kind: "int", DefaultValue: "5"},
+	}
+	cfg.Bot.Actions = []BotActionDef{
+		{
+			ID:      "act-vars",
+			Name:    "Local Test",
+			Enabled: true,
+			Variables: []BotVariableDef{
+				{Name: " localStep ", Scope: "global", Kind: "float", DefaultValue: "1.5"},
+				{Name: "", Scope: "action", Kind: "string", DefaultValue: "skip"},
+			},
+		},
+	}
+
+	NormalizeBotAutomationConfig(&cfg.Bot)
+	if len(cfg.Bot.Variables) != 2 {
+		t.Fatalf("expected 2 normalized Bot.Variables, got %+v", cfg.Bot.Variables)
+	}
+	if cfg.Bot.Variables[0].Name != "totalHugs" || cfg.Bot.Variables[0].Scope != "global" || cfg.Bot.Variables[0].Kind != "int" {
+		t.Fatalf("unexpected normalized global var: %+v", cfg.Bot.Variables[0])
+	}
+	if cfg.Bot.Variables[1].Name != "streamDeaths" || cfg.Bot.Variables[1].Scope != "session" || cfg.Bot.Variables[1].DefaultValue != "5" {
+		t.Fatalf("unexpected normalized session var: %+v", cfg.Bot.Variables[1])
+	}
+	if len(cfg.Bot.Actions[0].Variables) != 1 || cfg.Bot.Actions[0].Variables[0].Scope != "action" || cfg.Bot.Actions[0].Variables[0].Name != "localStep" {
+		t.Fatalf("unexpected normalized action var: %+v", cfg.Bot.Actions[0].Variables)
+	}
+
+	cloned := cfg.Clone()
+	cloned.Bot.Variables[0].DefaultValue = "999"
+	cloned.Bot.Actions[0].Variables[0].DefaultValue = "9.9"
+	if cfg.Bot.Variables[0].DefaultValue != "10" || cfg.Bot.Actions[0].Variables[0].DefaultValue != "1.5" {
+		t.Fatal("expected Clone() to isolate Bot.Variables and Action.Variables slices")
+	}
+
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(cfgPath, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(loaded.Bot.Variables) != 2 || len(loaded.Bot.Actions[0].Variables) != 1 {
+		t.Fatalf("expected declared variables to survive JSON round-trip: %+v / %+v", loaded.Bot.Variables, loaded.Bot.Actions[0].Variables)
+	}
+}
+

@@ -467,7 +467,7 @@ func TestOBSSubActionEditorLiveDiscoverySnapshotAndApply(t *testing.T) {
 		OBSOperation: "set_filter_enabled",
 		OBSScene:     "Main",
 		OBSSource:    "Camera",
-	}, nil)
+	}, nil, nil)
 	defer ed.Close()
 
 	win := fyneApp.NewWindow("OBS Editor Test")
@@ -576,7 +576,7 @@ func TestBotConditionEditorOBSScenesAndBranches(t *testing.T) {
 	actToID := map[string]string{"Enhance Zoom": "act-zoom"}
 	idToAct := map[string]string{"act-zoom": "Enhance Zoom"}
 
-	ed := newBotConditionEditor(win, client, config.BotSubActionDef{Kind: "if_else"}, actLabels, actToID, idToAct, nil)
+	ed := newBotConditionEditor(win, client, config.BotSubActionDef{Kind: "if_else"}, actLabels, actToID, idToAct, nil, nil, nil)
 	defer ed.Close()
 	win.SetContent(ed.CanvasObject())
 
@@ -607,7 +607,7 @@ func TestBotConditionEditorOBSScenesAndBranches(t *testing.T) {
 	require.Empty(t, saved.ElseSubActions)
 
 	// Re-opening preserves branch mode and target action; custom multi-step branches stay intact.
-	ed2 := newBotConditionEditor(win, client, saved, actLabels, actToID, idToAct, nil)
+	ed2 := newBotConditionEditor(win, client, saved, actLabels, actToID, idToAct, nil, nil, nil)
 	defer ed2.Close()
 	require.Equal(t, botOptionLabel(botConditionBranchModeOptions, "run_action_break"), ed2.thenBranch.modeSelect.Selected)
 	require.Equal(t, "Enhance Zoom", ed2.thenBranch.actSelect.Selected)
@@ -617,7 +617,7 @@ func TestBotConditionEditorOBSScenesAndBranches(t *testing.T) {
 		{ID: "x1", Kind: "delay", Enabled: true, DelayMs: 250},
 		{ID: "x2", Kind: "break", Enabled: true},
 	}
-	ed3 := newBotConditionEditor(win, client, customStep, actLabels, actToID, idToAct, nil)
+	ed3 := newBotConditionEditor(win, client, customStep, actLabels, actToID, idToAct, nil, nil, nil)
 	defer ed3.Close()
 	require.True(t, strings.HasPrefix(ed3.thenBranch.modeSelect.Selected, keepCustomBranchPrefix))
 	var roundTripped config.BotSubActionDef
@@ -625,6 +625,28 @@ func TestBotConditionEditorOBSScenesAndBranches(t *testing.T) {
 	require.Len(t, roundTripped.ThenSubActions, 2)
 	require.Equal(t, "delay", roundTripped.ThenSubActions[0].Kind)
 	require.Equal(t, 250, roundTripped.ThenSubActions[0].DelayMs)
+
+	// Declared variable presets normalize cleanly to %global.*%, %session.*%, %action.*%.
+	presets := declaredConditionPresets(
+		config.BotAutomationConfig{
+			Variables: []config.BotVariableDef{
+				{Name: "wins", Scope: "global", Kind: "int"},
+				{Name: "deaths", Scope: "session", Kind: "int"},
+			},
+		},
+		&config.BotActionDef{
+			Variables: []config.BotVariableDef{
+				{Name: "tmp", Scope: "action", Kind: "string"},
+			},
+		},
+	)
+	require.Len(t, presets, 3)
+	ed4 := newBotConditionEditor(win, nil, config.BotSubActionDef{Kind: "if_else"}, actLabels, actToID, idToAct, nil, presets, nil)
+	defer ed4.Close()
+	ed4.lhsEntry.SetText(presets[1].Label)
+	require.Equal(t, "%session.deaths%", ed4.lhsEntry.Text)
+	ed4.lhsEntry.SetText(presets[2].Label)
+	require.Equal(t, "%action.tmp%", ed4.lhsEntry.Text)
 }
 
 

@@ -55,3 +55,23 @@ func TestInterpolateOBSTokensSinglePass(t *testing.T) {
 	got := Interpolate("cur=%obs.scene%|alt=%obsScene%|prev=%obs.previousScene%|pre=%obs.previewScene%|conn=%obs.connected%", obsCtx)
 	require.Equal(t, "cur=Enhance %user%|alt=Enhance %user%|prev=Main|pre=BRB|conn=true", got)
 }
+
+func TestInterpolateSessionAndActionTokens(t *testing.T) {
+	st, err := OpenStore(":memory:")
+	require.NoError(t, err)
+	defer func() { _ = st.Close() }()
+
+	require.NoError(t, st.SetGlobalVar("total", "int", "99", false))
+	require.NoError(t, st.SetGlobalVar("deaths", "int", "3", true))
+
+	tc := TemplateContext{
+		Store: st,
+		ActionVars: map[string]string{
+			"localMsg": "hi %global.total%",
+			"step":     "2",
+		},
+	}
+
+	out := Interpolate("g=%global.total% s=%session.deaths% a=%action.step% l=%local.localMsg% miss=%action.missing%", tc)
+	require.Equal(t, "g=99 s=3 a=2 l=hi %global.total% miss=", out)
+}

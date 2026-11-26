@@ -135,3 +135,42 @@ func TestSessionBotRawEventBusConsumeAndVoiceTrigger(t *testing.T) {
 	require.False(t, ok, "voice command must not fire when VoiceDetection is disabled")
 	require.True(t, s.Config().Bot.HasEnabledVoiceCommands(), "saved voice commands must be preserved")
 }
+
+func TestSessionDeclaredSessionVarsResetOnStreamStart(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Bot.Enabled = true
+	cfg.Bot.Variables = []config.BotVariableDef{
+		{Name: "globalTotal", Scope: "global", Kind: "int", DefaultValue: "100"},
+		{Name: "sessionHits", Scope: "session", Kind: "int", DefaultValue: "0"},
+	}
+
+	s := NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = s.Close() }()
+
+	memLog, err := eventlog.NewSQLiteBackend(":memory:")
+	require.NoError(t, err)
+	logMgr := eventlog.NewManager(eventlog.RetentionPolicy{}, memLog)
+	defer func() { _ = logMgr.Close() }()
+	s.SetEventLogger(logMgr)
+
+	require.NoError(t, s.Start())
+
+	st := s.BotEngine().Store()
+	require.NoError(t, st.SetGlobalVar("globalTotal", "int", "105", false))
+	require.NoError(t, st.SetGlobalVar("sessionHits", "int", "7", true))
+
+	// First platform going live starts a fresh stream session -> resets Session vars, preserves Global vars.
+	s.UpdatePlatformStreamState("twitch", "streamer", true)
+	gv, ok := st.GetGlobalVar("globalTotal", false)
+	require.True(t, ok)
+	require.Equal(t, "105", gv.Value)
+	sv, ok := st.GetGlobalVar("sessionHits", true)
+	require.True(t, ok)
+	require.Equal(t, "0", sv.Value)
+
+	// Mutate during live stream, then bring a 2nd platform live -> must NOT reset mid-stream.
+	require.NoError(t, st.SetGlobalVar("sessionHits", "int", "4", true))
+	s.UpdatePlatformStreamState("youtube", "ytchan", true)
+	sv, _ = st.GetGlobalVar("sessionHits", true)
+	require.Equal(t, "4", sv.Value)
+}

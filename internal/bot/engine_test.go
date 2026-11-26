@@ -535,3 +535,93 @@ func TestEngineOBSSceneConditionBranching(t *testing.T) {
 	require.Equal(t, 1, zoomedCount)
 	mu.Unlock()
 }
+
+func TestEngineDeclaredGlobalSessionAndPerActionVariables(t *testing.T) {
+	st, err := OpenStore(":memory:")
+	require.NoError(t, err)
+	defer func() { _ = st.Close() }()
+
+	cfg := config.DefaultConfig()
+	cfg.Bot.Enabled = true
+	cfg.Bot.Variables = []config.BotVariableDef{
+		{Name: "lifetime", Scope: "global", Kind: "int", DefaultValue: "10"},
+		{Name: "deaths", Scope: "session", Kind: "int", DefaultValue: "0"},
+	}
+	cfg.Bot.Actions = []config.BotActionDef{
+		{
+			ID:      "act-child",
+			Name:    "Child Action",
+			Enabled: true,
+			Variables: []config.BotVariableDef{
+				{Name: "tmp", Scope: "action", Kind: "string", DefaultValue: "child-def"},
+			},
+			SubActions: []config.BotSubActionDef{
+				{ID: "ch1", Kind: "send_chat", Enabled: true, Platform: "twitch", Text: "child=%action.tmp%"},
+			},
+		},
+		{
+			ID:      "act-main",
+			Name:    "Main Action",
+			Enabled: true,
+			Variables: []config.BotVariableDef{
+				{Name: "tmp", Scope: "action", Kind: "int", DefaultValue: "5"},
+			},
+			SubActions: []config.BotSubActionDef{
+				{ID: "m1", Kind: "inc_var", Enabled: true, Scope: "global", Key: "lifetime", Delta: 1},
+				{ID: "m2", Kind: "inc_var", Enabled: true, Scope: "session", Key: "deaths", Delta: 2},
+				{ID: "m3", Kind: "inc_var", Enabled: true, Scope: "action", Key: "tmp", Delta: 3},
+				{ID: "m4", Kind: "run_action", Enabled: true, TargetActionID: "act-child"},
+				{ID: "m5", Kind: "send_chat", Enabled: true, Platform: "twitch", Text: "g=%global.lifetime% s=%session.deaths% a=%action.tmp%"},
+			},
+		},
+	}
+
+	var sent []string
+	var mu sync.Mutex
+	eng := NewEngine(st, HostBridge{
+		GetConfig: func() *config.Config { return cfg.Clone() },
+		SendChat: func(_ context.Context, _, _, text, _ string, _ bool, _ string) error {
+			mu.Lock()
+			sent = append(sent, text)
+			mu.Unlock()
+			return nil
+		},
+	})
+	defer func() { _ = eng.Close() }()
+
+	eng.SyncConfig()
+	gv, ok := st.GetGlobalVar("lifetime", false)
+	require.True(t, ok)
+	require.Equal(t, "10", gv.Value)
+	sv, ok := st.GetGlobalVar("deaths", true)
+	require.True(t, ok)
+	require.Equal(t, "0", sv.Value)
+
+	// Run 1: lifetime 10->11, deaths 0->2, per-action tmp 5->8 (child has its own tmp="child-def").
+	require.NoError(t, eng.RunActionByID("act-main", nil, true))
+	mu.Lock()
+	require.Equal(t, []string{"child=child-def", "g=11 s=2 a=8"}, sent)
+	sent = nil
+	mu.Unlock()
+
+	// Run 2: lifetime 11->12, deaths 2->4, per-action tmp resets to 5 -> 5+3 = 8!
+	require.NoError(t, eng.RunActionByID("act-main", nil, true))
+	mu.Lock()
+	require.Equal(t, []string{"child=child-def", "g=12 s=4 a=8"}, sent)
+	sent = nil
+	mu.Unlock()
+
+	// Re-syncing config must NOT overwrite live global/session values.
+	eng.SyncConfig()
+	gv, _ = st.GetGlobalVar("lifetime", false)
+	require.Equal(t, "12", gv.Value)
+	sv, _ = st.GetGlobalVar("deaths", true)
+	require.Equal(t, "4", sv.Value)
+
+	// Stream session start resets Session vars back to default (0) while keeping Global vars (12).
+	eng.OnStreamSessionStart()
+	gv, _ = st.GetGlobalVar("lifetime", false)
+	require.Equal(t, "12", gv.Value)
+	sv, _ = st.GetGlobalVar("deaths", true)
+	require.Equal(t, "0", sv.Value)
+}

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -9,6 +10,9 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/mrpoundsign/TownCrier/internal/bot"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
 )
 
 var resHelpQuestion = fyne.NewStaticResource("help_question.svg", []byte(
@@ -445,7 +449,9 @@ func BotTemplateVars() []TemplateVar {
 		{Var: "%reward%", Desc: "Channel point reward or gift name"},
 		{Var: "%timerName%", Desc: "Name of the timer that fired"},
 		{Var: "%chatLines%", Desc: "Session chat line counter"},
-		{Var: "%global.<key>%", Desc: "Global variable lookup (replace <key> with variable name)"},
+		{Var: "%global.<key>%", Desc: "Global variable lookup (persists across restarts)"},
+		{Var: "%session.<key>%", Desc: "Session variable lookup (resets on stream session start)"},
+		{Var: "%action.<key>%", Desc: "Per-action variable lookup (current run of this action)"},
 		{Var: "%user.<key>%", Desc: "Per-user variable lookup (replace <key> with variable name)"},
 		{Var: "%httpStatus%", Desc: "Status code from the last HTTP Request step"},
 		{Var: "%httpResponse%", Desc: "Response body from the last HTTP Request step"},
@@ -454,18 +460,71 @@ func BotTemplateVars() []TemplateVar {
 	}
 }
 
-func withBotVarHelp(win fyne.Window, fieldTitle string, entry *widget.Entry, onStatus func(string)) fyne.CanvasObject {
+// BotTemplateVarsWithDeclared returns declared Global, Session, and Per-Action variables followed by standard bot tokens.
+func BotTemplateVarsWithDeclared(botCfg config.BotAutomationConfig, action *config.BotActionDef, store *bot.Store) []TemplateVar {
+	var out []TemplateVar
+	for _, dv := range botCfg.Variables {
+		name := strings.TrimSpace(dv.Name)
+		if name == "" {
+			continue
+		}
+		if strings.EqualFold(dv.Scope, "session") {
+			val := dv.DefaultValue
+			if store != nil {
+				if ve, ok := store.GetGlobalVar(name, true); ok {
+					val = ve.Value
+				}
+			}
+			out = append(out, TemplateVar{
+				Var:  fmt.Sprintf("%%session.%s%%", name),
+				Desc: fmt.Sprintf("Session (%s) • current=%q (default=%q)", dv.Kind, val, dv.DefaultValue),
+			})
+		} else {
+			val := dv.DefaultValue
+			if store != nil {
+				if ve, ok := store.GetGlobalVar(name, false); ok {
+					val = ve.Value
+				}
+			}
+			out = append(out, TemplateVar{
+				Var:  fmt.Sprintf("%%global.%s%%", name),
+				Desc: fmt.Sprintf("Global (%s) • current=%q (default=%q)", dv.Kind, val, dv.DefaultValue),
+			})
+		}
+	}
+	if action != nil {
+		for _, av := range action.Variables {
+			name := strings.TrimSpace(av.Name)
+			if name == "" {
+				continue
+			}
+			out = append(out, TemplateVar{
+				Var:  fmt.Sprintf("%%action.%s%%", name),
+				Desc: fmt.Sprintf("Per-Action (%s) • default=%q", av.Kind, av.DefaultValue),
+			})
+		}
+	}
+	return append(out, BotTemplateVars()...)
+}
+
+func withBotVarHelpVars(win fyne.Window, fieldTitle string, entry *widget.Entry, vars []TemplateVar, onStatus func(string)) fyne.CanvasObject {
 	if entry == nil {
 		return widget.NewLabel("")
 	}
-	marker := newTemplateHelpMarker(win, "bot_vars", fieldTitle, BotTemplateVars(), onStatus, entry)
+	if len(vars) == 0 {
+		vars = BotTemplateVars()
+	}
+	marker := newTemplateHelpMarker(win, "bot_vars", fieldTitle, vars, onStatus, entry)
 	return container.NewBorder(nil, nil, nil, container.NewCenter(marker), entry)
 }
 
-func withBotVarHelpForSelectEntry(win fyne.Window, fieldTitle string, se *widget.SelectEntry, onStatus func(string)) fyne.CanvasObject {
+func withBotVarHelpSelectVars(win fyne.Window, fieldTitle string, se *widget.SelectEntry, vars []TemplateVar, onStatus func(string)) fyne.CanvasObject {
 	if se == nil {
 		return widget.NewLabel("")
 	}
-	marker := newTemplateHelpMarker(win, "bot_vars", fieldTitle, BotTemplateVars(), onStatus, &se.Entry)
+	if len(vars) == 0 {
+		vars = BotTemplateVars()
+	}
+	marker := newTemplateHelpMarker(win, "bot_vars", fieldTitle, vars, onStatus, &se.Entry)
 	return container.NewBorder(nil, nil, nil, container.NewCenter(marker), se)
 }

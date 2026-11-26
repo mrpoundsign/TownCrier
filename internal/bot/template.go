@@ -8,11 +8,12 @@ import (
 
 // TemplateContext provides variable & argument lookup for single-pass %token% interpolation.
 type TemplateContext struct {
-	Args      map[string]string
-	Store     *Store
-	Platform  string
-	UserID    string
-	LookupOBS func(key string) (string, bool)
+	Args       map[string]string
+	ActionVars map[string]string
+	Store      *Store
+	Platform   string
+	UserID     string
+	LookupOBS  func(key string) (string, bool)
 }
 
 // Interpolate expands %key%, %global.key%, %user.key%, %random(min,max)%, and %pick(a,b,c)%
@@ -95,6 +96,35 @@ func evalToken(token string, ctx TemplateContext) (string, bool) {
 			}
 			if e, ok := ctx.Store.GetGlobalVar(key, true); ok {
 				return e.Value, true
+			}
+			return "", true
+		}
+	}
+
+	if strings.HasPrefix(lower, "session.") {
+		key := strings.TrimSpace(trimmed[len("session."):])
+		if key != "" && ctx.Store != nil {
+			if e, ok := ctx.Store.GetGlobalVar(key, true); ok {
+				return e.Value, true
+			}
+			return "", true
+		}
+	}
+
+	if strings.HasPrefix(lower, "action.") || strings.HasPrefix(lower, "local.") {
+		dot := strings.IndexByte(trimmed, '.')
+		key := ""
+		if dot >= 0 && dot+1 < len(trimmed) {
+			key = strings.TrimSpace(trimmed[dot+1:])
+		}
+		if key != "" && ctx.ActionVars != nil {
+			if val, ok := ctx.ActionVars[key]; ok {
+				return val, true
+			}
+			for k, v := range ctx.ActionVars {
+				if strings.EqualFold(k, key) {
+					return v, true
+				}
 			}
 			return "", true
 		}

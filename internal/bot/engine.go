@@ -99,19 +99,73 @@ func (e *Engine) SetHTTPClient(c *http.Client) {
 	}
 }
 
-// Start launches the background timer scheduler and syncs initial OBS configuration.
+// Start launches the background timer scheduler and syncs initial OBS configuration and declared variables.
 func (e *Engine) Start() {
 	e.SyncConfig()
 	go e.timerLoop()
 }
 
-// SyncConfig updates queue workers and OBS auto-connect state from the latest Session config.
+// SyncConfig updates queue workers, declared variables, and OBS auto-connect state from the latest Session config.
 func (e *Engine) SyncConfig() {
 	cfg := e.currentBotConfig()
 	if e.queues != nil {
 		e.queues.Sync(cfg.Queues)
 	}
+	e.syncDeclaredVars(cfg)
 	e.syncOBS(cfg)
+}
+
+func (e *Engine) syncDeclaredVars(cfg config.BotAutomationConfig) {
+	if e.store == nil {
+		return
+	}
+	for _, v := range cfg.Variables {
+		name := strings.TrimSpace(v.Name)
+		if name == "" {
+			continue
+		}
+		ephem := strings.EqualFold(strings.TrimSpace(v.Scope), "session")
+		_ = e.store.SetGlobalVarIfAbsent(name, v.Kind, v.DefaultValue, ephem)
+	}
+}
+
+// OnStreamSessionStart resets session-scoped variables to their declared defaults when a fresh stream session begins.
+func (e *Engine) OnStreamSessionStart() {
+	e.ResetSessionVars()
+}
+
+// ResetSessionVars clears all session-scoped variables and re-seeds declared session defaults.
+func (e *Engine) ResetSessionVars() {
+	if e.store == nil {
+		return
+	}
+	e.store.ClearEphemeralVars()
+	cfg := e.currentBotConfig()
+	for _, v := range cfg.Variables {
+		if strings.EqualFold(strings.TrimSpace(v.Scope), "session") {
+			name := strings.TrimSpace(v.Name)
+			if name != "" {
+				_ = e.store.SetGlobalVar(name, v.Kind, v.DefaultValue, true)
+			}
+		}
+	}
+}
+
+// ResetDeclaredVar resets a declared global or session variable in the store to its configured default value.
+func (e *Engine) ResetDeclaredVar(scope, name string) error {
+	if e.store == nil {
+		return errors.New("bot variable store unavailable")
+	}
+	cleanName := strings.TrimSpace(name)
+	wantSession := strings.EqualFold(strings.TrimSpace(scope), "session") || strings.EqualFold(strings.TrimSpace(scope), "global_ephemeral")
+	cfg := e.currentBotConfig()
+	for _, v := range cfg.Variables {
+		isSession := strings.EqualFold(strings.TrimSpace(v.Scope), "session")
+		if isSession == wantSession && strings.EqualFold(strings.TrimSpace(v.Name), cleanName) {
+			return e.store.SetGlobalVar(v.Name, v.Kind, v.DefaultValue, isSession)
+		}
+	}
+	return fmt.Errorf("declared variable %q not found", name)
 }
 
 func (e *Engine) syncOBS(cfg config.BotAutomationConfig) {

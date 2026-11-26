@@ -1475,81 +1475,91 @@ func (s *Session) UpdatePlatformStreamState(platform, channel string, live bool)
 
 	elog := s.EventLogger()
 
-	s.streamMu.Lock()
-	defer s.streamMu.Unlock()
+	startedNewStreamSession := func() bool {
+		s.streamMu.Lock()
+		defer s.streamMu.Unlock()
 
-	if s.livePlatforms == nil {
-		s.livePlatforms = make(map[string]string)
-	}
-
-	if live {
-		prevChan, alreadyLive := s.livePlatforms[platform]
-		s.livePlatforms[platform] = channel
-		if s.liveRunID == 0 {
-			s.liveRunID = time.Now().UTC().UnixNano()
+		if s.livePlatforms == nil {
+			s.livePlatforms = make(map[string]string)
 		}
-		if alreadyLive && prevChan == channel && s.activeSessionID > 0 {
-			return
-		}
-		if elog == nil {
-			return
-		}
-		now := time.Now().UTC()
-		if s.activeSessionID == 0 {
-			resumeMinutes := 60
-			cfg := s.Config()
-			if cfg != nil && cfg.Logging.SessionResumeWindowMinutes > 0 {
-				resumeMinutes = cfg.Logging.SessionResumeWindowMinutes
-			}
-			resumeWindow := time.Duration(resumeMinutes) * time.Minute
 
-			var resumedID int64
-			latestSess, lastActive, err := elog.LatestSessionLastActive(context.Background())
-			if err == nil && latestSess != nil && !lastActive.IsZero() && time.Since(lastActive) <= resumeWindow {
-				if resErr := elog.ResumeSession(context.Background(), latestSess.ID, platform, channel); resErr == nil {
-					resumedID = latestSess.ID
-					s.activeSessionID = resumedID
-					log.Printf("[Session] Resumed stream session #%d (%s:%s, last message was %v ago)", latestSess.ID, platform, channel, time.Since(lastActive).Round(time.Second))
-				}
-			} else if latestSess != nil && latestSess.EndedAt.IsZero() {
-				// Cleanly close dangling unclosed session from a previous crash older than resumeWindow
-				_ = elog.EndSession(context.Background(), latestSess.ID, lastActive)
-				log.Printf("[Session] Closed unclosed stream session #%d from previous crash", latestSess.ID)
+		if live {
+			wasOffline := len(s.livePlatforms) == 0
+			prevChan, alreadyLive := s.livePlatforms[platform]
+			s.livePlatforms[platform] = channel
+			if s.liveRunID == 0 {
+				s.liveRunID = time.Now().UTC().UnixNano()
 			}
+			if alreadyLive && prevChan == channel && s.activeSessionID > 0 {
+				return false
+			}
+			if elog == nil {
+				return wasOffline
+			}
+			now := time.Now().UTC()
+			if s.activeSessionID == 0 {
+				resumeMinutes := 60
+				cfg := s.Config()
+				if cfg != nil && cfg.Logging.SessionResumeWindowMinutes > 0 {
+					resumeMinutes = cfg.Logging.SessionResumeWindowMinutes
+				}
+				resumeWindow := time.Duration(resumeMinutes) * time.Minute
 
-			if resumedID == 0 {
-				sess, err := elog.StartSession(context.Background(), now, platform, channel)
-				if err == nil && sess != nil && sess.ID > 0 {
-					s.activeSessionID = sess.ID
-					log.Printf("[Session] Started stream session #%d (%s:%s)", sess.ID, platform, channel)
+				var resumedID int64
+				latestSess, lastActive, err := elog.LatestSessionLastActive(context.Background())
+				if err == nil && latestSess != nil && !lastActive.IsZero() && time.Since(lastActive) <= resumeWindow {
+					if resErr := elog.ResumeSession(context.Background(), latestSess.ID, platform, channel); resErr == nil {
+						resumedID = latestSess.ID
+						s.activeSessionID = resumedID
+						log.Printf("[Session] Resumed stream session #%d (%s:%s, last message was %v ago)", latestSess.ID, platform, channel, time.Since(lastActive).Round(time.Second))
+					}
+				} else if latestSess != nil && latestSess.EndedAt.IsZero() {
+					// Cleanly close dangling unclosed session from a previous crash older than resumeWindow
+					_ = elog.EndSession(context.Background(), latestSess.ID, lastActive)
+					log.Printf("[Session] Closed unclosed stream session #%d from previous crash", latestSess.ID)
 				}
-			}
 
-			for otherPlat, otherChan := range s.livePlatforms {
-				if otherPlat != platform && s.activeSessionID > 0 {
-					_ = elog.AddSessionPlatform(context.Background(), s.activeSessionID, otherPlat, otherChan)
+				startedNew := false
+				if resumedID == 0 {
+					sess, err := elog.StartSession(context.Background(), now, platform, channel)
+					if err == nil && sess != nil && sess.ID > 0 {
+						s.activeSessionID = sess.ID
+						startedNew = true
+						log.Printf("[Session] Started stream session #%d (%s:%s)", sess.ID, platform, channel)
+					}
 				}
+
+				for otherPlat, otherChan := range s.livePlatforms {
+					if otherPlat != platform && s.activeSessionID > 0 {
+						_ = elog.AddSessionPlatform(context.Background(), s.activeSessionID, otherPlat, otherChan)
+					}
+				}
+				return startedNew
 			}
-		} else {
 			_ = elog.AddSessionPlatform(context.Background(), s.activeSessionID, platform, channel)
+			return false
 		}
-		return
-	}
 
-	if _, exists := s.livePlatforms[platform]; !exists {
-		return
-	}
-	delete(s.livePlatforms, platform)
-	if len(s.livePlatforms) == 0 {
-		s.liveRunID = 0
-		if s.activeSessionID > 0 {
-			sid := s.activeSessionID
-			s.activeSessionID = 0
-			if elog != nil {
-				_ = elog.EndSession(context.Background(), sid, time.Now().UTC())
-				log.Printf("[Session] Ended stream session #%d (all platforms offline)", sid)
+		if _, exists := s.livePlatforms[platform]; !exists {
+			return false
+		}
+		delete(s.livePlatforms, platform)
+		if len(s.livePlatforms) == 0 {
+			s.liveRunID = 0
+			if s.activeSessionID > 0 {
+				sid := s.activeSessionID
+				s.activeSessionID = 0
+				if elog != nil {
+					_ = elog.EndSession(context.Background(), sid, time.Now().UTC())
+					log.Printf("[Session] Ended stream session #%d (all platforms offline)", sid)
+				}
 			}
 		}
+		return false
+	}()
+
+	if startedNewStreamSession && s.botEngine != nil {
+		s.botEngine.OnStreamSessionStart()
 	}
 }
 

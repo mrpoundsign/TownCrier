@@ -1283,7 +1283,19 @@ func (v *BotTabView) refreshActions(b config.BotAutomationConfig) {
 			editActBtn,
 			delActBtn,
 		)
-		cardBody := container.NewVBox(hdr, container.NewVBox(subRows...), widget.NewSeparator())
+		var actParts []fyne.CanvasObject
+		actParts = append(actParts, hdr)
+		if len(a.Variables) > 0 {
+			varBadges := make([]string, 0, len(a.Variables))
+			for _, av := range a.Variables {
+				varBadges = append(varBadges, fmt.Sprintf("%%action.%s%% (%s=%q)", av.Name, av.Kind, av.DefaultValue))
+			}
+			varLbl := widget.NewLabelWithStyle("Action Vars: "+strings.Join(varBadges, ", "), fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
+			varLbl.Wrapping = fyne.TextWrapWord
+			actParts = append(actParts, varLbl)
+		}
+		actParts = append(actParts, container.NewVBox(subRows...), widget.NewSeparator())
+		cardBody := container.NewVBox(actParts...)
 		rows = append(rows, cardBody)
 	}
 	v.actionsBox.Objects = rows
@@ -1304,9 +1316,9 @@ func (v *BotTabView) summarizeSubAction(b config.BotAutomationConfig, sa config.
 	case "moderate":
 		return fmt.Sprintf("Moderate %s: %s %s", sa.Platform, botOptionLabel(botModerationOpOptions, sa.Operation), sa.Target)
 	case "set_var":
-		return fmt.Sprintf("Set Var (%s) %s = %q", botOptionLabel(botVarScopeOptions, sa.Scope), sa.Key, sa.Value)
+		return fmt.Sprintf("Set Var (%s) %s = %q", botOptionLabel(botVarScopeOptions, canonicalBotVarScope(sa.Scope)), sa.Key, sa.Value)
 	case "inc_var":
-		return fmt.Sprintf("Inc Var (%s) %s += %g", botOptionLabel(botVarScopeOptions, sa.Scope), sa.Key, sa.Delta)
+		return fmt.Sprintf("Inc Var (%s) %s += %g", botOptionLabel(botVarScopeOptions, canonicalBotVarScope(sa.Scope)), sa.Key, sa.Delta)
 	case "if_else":
 		base := fmt.Sprintf("If %q %s %q", sa.LHS, botOptionLabel(botConditionOperatorOptions, sa.Operator), sa.RHS)
 		if len(sa.ThenSubActions) == 0 && len(sa.ElseSubActions) == 0 {
@@ -1401,6 +1413,7 @@ func (v *BotTabView) openActionDialog(idx int) {
 	} else {
 		cur = config.BotActionDef{ID: newBotItemID("act"), Enabled: true, QueueID: "default"}
 	}
+	curVars := slices.Clone(cur.Variables)
 
 	nameEntry := widget.NewEntry()
 	nameEntry.SetText(cur.Name)
@@ -1413,10 +1426,81 @@ func (v *BotTabView) openActionDialog(idx int) {
 		qSelect.SetSelected(qLabels[0])
 	}
 
-	form := widget.NewForm(
-		widget.NewFormItem("Action Name", nameEntry),
-		widget.NewFormItem("Execution Queue", qSelect),
-	)
+	varNameEntry := widget.NewEntry()
+	varNameEntry.SetPlaceHolder("name (e.g. stepCount)")
+	varKindSel := widget.NewSelect(botOptionLabels(botVarKindOptions), nil)
+	varKindSel.SetSelected(botOptionLabel(botVarKindOptions, "string"))
+	varDefEntry := widget.NewEntry()
+	varDefEntry.SetPlaceHolder("default value")
+	actionVarsBox := container.NewVBox()
+
+	var refreshActionVars func()
+	refreshActionVars = func() {
+		if len(curVars) == 0 {
+			actionVarsBox.Objects = []fyne.CanvasObject{
+				widget.NewLabelWithStyle("No per-action variables declared yet.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
+			}
+			actionVarsBox.Refresh()
+			return
+		}
+		rows := make([]fyne.CanvasObject, 0, len(curVars))
+		for i, av := range curVars {
+			vIdx := i
+			rmBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
+				if vIdx < len(curVars) {
+					curVars = slices.Delete(curVars, vIdx, vIdx+1)
+					refreshActionVars()
+				}
+			})
+			lbl := widget.NewLabel(fmt.Sprintf("%%action.%s%% (%s) • default = %q", av.Name, botOptionLabel(botVarKindOptions, av.Kind), av.DefaultValue))
+			lbl.Wrapping = fyne.TextWrapWord
+			rows = append(rows, container.NewHBox(lbl, layout.NewSpacer(), rmBtn))
+		}
+		actionVarsBox.Objects = rows
+		actionVarsBox.Refresh()
+	}
+	refreshActionVars()
+
+	addActionVarBtn := widget.NewButtonWithIcon("Add Variable", theme.ContentAddIcon(), func() {
+		name := strings.TrimSpace(varNameEntry.Text)
+		if name == "" {
+			return
+		}
+		kind := botOptionKey(botVarKindOptions, varKindSel.Selected)
+		nv := config.BotVariableDef{
+			Name:         name,
+			Scope:        "action",
+			Kind:         kind,
+			DefaultValue: varDefEntry.Text,
+		}
+		replaced := false
+		for i := range curVars {
+			if strings.EqualFold(curVars[i].Name, name) {
+				curVars[i] = nv
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			curVars = append(curVars, nv)
+		}
+		varNameEntry.SetText("")
+		varDefEntry.SetText("")
+		refreshActionVars()
+	})
+
+	form := container.NewVScroll(container.NewVBox(
+		widget.NewForm(
+			widget.NewFormItem("Action Name", nameEntry),
+			widget.NewFormItem("Execution Queue", qSelect),
+		),
+		widget.NewSeparator(),
+		widget.NewLabelWithStyle("Per-Action Variables (reset to default on each run of this action)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewGridWithColumns(4, varNameEntry, varKindSel, varDefEntry, addActionVarBtn),
+		actionVarsBox,
+	))
+	form.SetMinSize(fyne.NewSize(500, 360))
+
 	title := "New Bot Action"
 	if editing {
 		title = "Edit Bot Action"
@@ -1432,6 +1516,7 @@ func (v *BotTabView) openActionDialog(idx int) {
 		if qID, ok := qLabelToID[qSelect.Selected]; ok {
 			cur.QueueID = qID
 		}
+		cur.Variables = curVars
 		_ = v.updateBotConfig(func(b *config.BotAutomationConfig) {
 			if editing && idx < len(b.Actions) {
 				b.Actions[idx] = cur
@@ -1545,14 +1630,136 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 	durEntry := widget.NewEntry()
 	durEntry.SetText(strconv.Itoa(cur.DurationSeconds))
 
+	curAction := &cfg.Actions[actIdx]
+	botVars := BotTemplateVarsWithDeclared(cfg, curAction, v.botStore())
+	condPresets := declaredConditionPresets(cfg, curAction)
+
+	initScope := canonicalBotVarScope(cur.Scope)
 	scopeSelect := widget.NewSelect(botOptionLabels(botVarScopeOptions), nil)
-	scopeSelect.SetSelected(botOptionLabel(botVarScopeOptions, cur.Scope))
-	keyEntry := widget.NewEntry()
-	keyEntry.SetText(cur.Key)
-	valEntry := widget.NewEntry()
-	valEntry.SetText(cur.Value)
+	scopeSelect.SetSelected(botOptionLabel(botVarScopeOptions, initScope))
+
 	varKindSelect := widget.NewSelect(botOptionLabels(botVarKindOptions), nil)
 	varKindSelect.SetSelected(botOptionLabel(botVarKindOptions, cur.VarKind))
+
+	userKeyEntry := widget.NewEntry()
+	userKeyEntry.SetPlaceHolder("Per-user variable name")
+	userKeyEntry.SetText(cur.Key)
+
+	varKeyHintLbl := widget.NewLabel("")
+	varKeyHintLbl.TextStyle = fyne.TextStyle{Italic: true}
+	varKeyHintLbl.Wrapping = fyne.TextWrapWord
+
+	var varOptionToKey map[string]string
+	var varKeyToKind map[string]string
+	var syncingVarKey bool
+	varKeySelect := widget.NewSelect(nil, func(sel string) {
+		if syncingVarKey {
+			return
+		}
+		if k, ok := varOptionToKey[sel]; ok {
+			if kind, hasKind := varKeyToKind[k]; hasKind && kind != "" {
+				varKindSelect.SetSelected(botOptionLabel(botVarKindOptions, kind))
+			}
+		}
+	})
+	varKeyBox := container.NewVBox(varKeySelect, varKeyHintLbl)
+
+	syncVarKeyOptions := func(scopeKey, preferredKey string) {
+		if scopeKey == "user_persistent" {
+			varKeyBox.Objects = []fyne.CanvasObject{userKeyEntry}
+			varKeyBox.Refresh()
+			return
+		}
+		var opts []string
+		varOptionToKey = make(map[string]string)
+		varKeyToKind = make(map[string]string)
+		keyToOpt := make(map[string]string)
+
+		switch scopeKey {
+		case "action":
+			for _, av := range curAction.Variables {
+				lbl := fmt.Sprintf("%s (%s)", av.Name, botOptionLabel(botVarKindOptions, av.Kind))
+				opts = append(opts, lbl)
+				varOptionToKey[lbl] = av.Name
+				varKeyToKind[av.Name] = av.Kind
+				keyToOpt[strings.ToLower(av.Name)] = lbl
+			}
+		case "session":
+			for _, dv := range cfg.Variables {
+				if strings.EqualFold(dv.Scope, "session") {
+					lbl := fmt.Sprintf("%s (%s)", dv.Name, botOptionLabel(botVarKindOptions, dv.Kind))
+					opts = append(opts, lbl)
+					varOptionToKey[lbl] = dv.Name
+					varKeyToKind[dv.Name] = dv.Kind
+					keyToOpt[strings.ToLower(dv.Name)] = lbl
+				}
+			}
+		default:
+			for _, dv := range cfg.Variables {
+				if !strings.EqualFold(dv.Scope, "session") {
+					lbl := fmt.Sprintf("%s (%s)", dv.Name, botOptionLabel(botVarKindOptions, dv.Kind))
+					opts = append(opts, lbl)
+					varOptionToKey[lbl] = dv.Name
+					varKeyToKind[dv.Name] = dv.Kind
+					keyToOpt[strings.ToLower(dv.Name)] = lbl
+				}
+			}
+		}
+
+		cleanPref := strings.TrimSpace(preferredKey)
+		if cleanPref != "" {
+			if _, exists := keyToOpt[strings.ToLower(cleanPref)]; !exists {
+				legacyLbl := cleanPref + " (Undeclared)"
+				opts = append(opts, legacyLbl)
+				varOptionToKey[legacyLbl] = cleanPref
+				keyToOpt[strings.ToLower(cleanPref)] = legacyLbl
+			}
+		}
+
+		syncingVarKey = true
+		varKeySelect.Options = opts
+		if len(opts) == 0 {
+			varKeySelect.ClearSelected()
+			varKeySelect.Disable()
+			if scopeKey == "action" {
+				varKeyHintLbl.SetText("No Per-Action variables declared yet. Click Edit on this Action to declare one.")
+			} else {
+				varKeyHintLbl.SetText("No variables declared for this scope yet. Declare one in Bot → Queues & Variables.")
+			}
+			varKeyHintLbl.Show()
+		} else {
+			varKeySelect.Enable()
+			if lbl, ok := keyToOpt[strings.ToLower(cleanPref)]; ok {
+				varKeySelect.SetSelected(lbl)
+			} else {
+				varKeySelect.SetSelected(opts[0])
+			}
+			varKeyHintLbl.Hide()
+		}
+		varKeySelect.Refresh()
+		syncingVarKey = false
+
+		if selKey, ok := varOptionToKey[varKeySelect.Selected]; ok {
+			if kind, hasKind := varKeyToKind[selKey]; hasKind && kind != "" {
+				varKindSelect.SetSelected(botOptionLabel(botVarKindOptions, kind))
+			}
+		}
+		varKeyBox.Objects = []fyne.CanvasObject{varKeySelect, varKeyHintLbl}
+		varKeyBox.Refresh()
+	}
+
+	syncVarKeyOptions(initScope, cur.Key)
+	scopeSelect.OnChanged = func(sel string) {
+		nextScope := botOptionKey(botVarScopeOptions, sel)
+		pref := strings.TrimSpace(cur.Key)
+		if k, ok := varOptionToKey[varKeySelect.Selected]; ok {
+			pref = k
+		}
+		syncVarKeyOptions(nextScope, pref)
+	}
+
+	valEntry := widget.NewEntry()
+	valEntry.SetText(cur.Value)
 	deltaEntry := widget.NewEntry()
 	if cur.Delta != 0 {
 		deltaEntry.SetText(strconv.FormatFloat(cur.Delta, 'f', -1, 64))
@@ -1576,7 +1783,7 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 	httpSaveVarEntry := widget.NewEntry()
 	httpSaveVarEntry.SetText(cur.SaveVar)
 
-	obsEditor := newOBSSubActionEditor(v.window, v.obsClient(), cur, v.onStatus)
+	obsEditor := newOBSSubActionEditor(v.window, v.obsClient(), cur, botVars, v.onStatus)
 
 	// Cascading Plugin -> Action pickers (no raw UUIDs or Action IDs exposed in UI)
 	pluginLabels, pluginLabelToUUID, pluginUUIDToLabel, pluginByUUID := v.pluginDisplayMap(cur.PluginUUID)
@@ -1672,7 +1879,7 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		targetActSelect.SetSelected(targetActLabels[0])
 	}
 
-	condEditor := newBotConditionEditor(v.window, v.obsClient(), cur, targetActLabels, targetMap, targetRevMap, v.onStatus)
+	condEditor := newBotConditionEditor(v.window, v.obsClient(), cur, targetActLabels, targetMap, targetRevMap, botVars, condPresets, v.onStatus)
 
 	detailsBox := container.NewVBox()
 	rebuildDetails := func(selectedLabel string) {
@@ -1682,13 +1889,13 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		case "send_chat":
 			items = append(items,
 				widget.NewFormItem("Platform", platEntry),
-				widget.NewFormItem("Message Text", withBotVarHelp(v.window, "Chat Message", textEntry, v.onStatus)),
+				widget.NewFormItem("Message Text", withBotVarHelpVars(v.window, "Chat Message", textEntry, botVars, v.onStatus)),
 				widget.NewFormItem("Send As (Twitch)", sendAsSel),
 				widget.NewFormItem("Options", announceChk),
 			)
 		case "speak_tts":
 			items = append(items,
-				widget.NewFormItem("Speech Text", withBotVarHelp(v.window, "TTS Speech", textEntry, v.onStatus)),
+				widget.NewFormItem("Speech Text", withBotVarHelpVars(v.window, "TTS Speech", textEntry, botVars, v.onStatus)),
 				widget.NewFormItem("Voice & Speed", voicePickerRow),
 			)
 		case "play_sound":
@@ -1703,14 +1910,14 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		case "set_var":
 			items = append(items,
 				widget.NewFormItem("Scope", scopeSelect),
-				widget.NewFormItem("Key", keyEntry),
+				widget.NewFormItem("Variable", varKeyBox),
 				widget.NewFormItem("Type", varKindSelect),
-				widget.NewFormItem("Value", withBotVarHelp(v.window, "Variable Value", valEntry, v.onStatus)),
+				widget.NewFormItem("Value", withBotVarHelpVars(v.window, "Variable Value", valEntry, botVars, v.onStatus)),
 			)
 		case "inc_var":
 			items = append(items,
 				widget.NewFormItem("Scope", scopeSelect),
-				widget.NewFormItem("Key", keyEntry),
+				widget.NewFormItem("Variable", varKeyBox),
 				widget.NewFormItem("Delta", deltaEntry),
 			)
 		case "delay":
@@ -1718,8 +1925,8 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		case "http_request":
 			items = append(items,
 				widget.NewFormItem("Method", httpMethodSelect),
-				widget.NewFormItem("URL", withBotVarHelp(v.window, "HTTP URL", httpURLEntry, v.onStatus)),
-				widget.NewFormItem("Body", withBotVarHelp(v.window, "HTTP Body", httpBodyEntry, v.onStatus)),
+				widget.NewFormItem("URL", withBotVarHelpVars(v.window, "HTTP URL", httpURLEntry, botVars, v.onStatus)),
+				widget.NewFormItem("Body", withBotVarHelpVars(v.window, "HTTP Body", httpBodyEntry, botVars, v.onStatus)),
 				widget.NewFormItem("Save Response Var", httpSaveVarEntry),
 			)
 		case "obs":
@@ -1805,7 +2012,11 @@ func (v *BotTabView) openSubActionDialog(actIdx, stepIdx int) {
 		cur.Target = strings.TrimSpace(targetEntry.Text)
 		cur.DurationSeconds, _ = strconv.Atoi(strings.TrimSpace(durEntry.Text))
 		cur.Scope = botOptionKey(botVarScopeOptions, scopeSelect.Selected)
-		cur.Key = strings.TrimSpace(keyEntry.Text)
+		if cur.Scope == "user_persistent" {
+			cur.Key = strings.TrimSpace(userKeyEntry.Text)
+		} else {
+			cur.Key = strings.TrimSpace(varOptionToKey[varKeySelect.Selected])
+		}
 		cur.VarKind = botOptionKey(botVarKindOptions, varKindSelect.Selected)
 		cur.Value = valEntry.Text
 		cur.Delta, _ = strconv.ParseFloat(strings.TrimSpace(deltaEntry.Text), 64)
@@ -2194,31 +2405,68 @@ func (v *BotTabView) buildQueuesAndVarsTab() fyne.CanvasObject {
 	varScopeSelect := widget.NewSelect(botOptionLabels(botGlobalVarScopeOptions), nil)
 	varScopeSelect.SetSelected(botOptionLabel(botGlobalVarScopeOptions, "global_persistent"))
 	varKeyEntry := NewScrollPassEntry()
-	varKeyEntry.SetPlaceHolder("key")
+	varKeyEntry.SetPlaceHolder("variable name (e.g. deathCount)")
 	varKindSelect := widget.NewSelect(botOptionLabels(botVarKindOptions), nil)
 	varKindSelect.SetSelected(botOptionLabel(botVarKindOptions, "string"))
 	varValEntry := NewScrollPassEntry()
-	varValEntry.SetPlaceHolder("value")
-	setVarBtn := widget.NewButton("Set Variable", func() {
-		st := v.botStore()
-		if st == nil {
+	varValEntry.SetPlaceHolder("default value")
+	setVarBtn := widget.NewButtonWithIcon("Declare Variable", theme.ContentAddIcon(), func() {
+		name := strings.TrimSpace(varKeyEntry.Text)
+		if name == "" {
+			v.reportStatus("Variable name cannot be empty.")
 			return
 		}
-		ephem := botOptionKey(botGlobalVarScopeOptions, varScopeSelect.Selected) == "global_ephemeral"
+		scope := "global"
+		if botOptionKey(botGlobalVarScopeOptions, varScopeSelect.Selected) == "session" {
+			scope = "session"
+		}
 		kindKey := botOptionKey(botVarKindOptions, varKindSelect.Selected)
-		if err := st.SetGlobalVar(varKeyEntry.Text, kindKey, varValEntry.Text, ephem); err != nil {
-			v.reportStatus("Set variable failed: " + err.Error())
+		defVal := varValEntry.Text
+		err := v.updateBotConfig(func(b *config.BotAutomationConfig) {
+			nv := config.BotVariableDef{
+				Name:         name,
+				Scope:        scope,
+				Kind:         kindKey,
+				DefaultValue: defVal,
+			}
+			replaced := false
+			for i := range b.Variables {
+				if strings.EqualFold(b.Variables[i].Scope, scope) && strings.EqualFold(b.Variables[i].Name, name) {
+					b.Variables[i] = nv
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				b.Variables = append(b.Variables, nv)
+			}
+		})
+		if err != nil {
+			v.reportStatus("Declare variable failed: " + err.Error())
 			return
+		}
+		if st := v.botStore(); st != nil {
+			_ = st.SetGlobalVar(name, kindKey, defVal, scope == "session")
 		}
 		varKeyEntry.SetText("")
 		varValEntry.SetText("")
 		v.Refresh()
+		v.reportStatus(fmt.Sprintf("✓ Declared %s variable %q.", scope, name))
+	})
+	setVarBtn.Importance = widget.HighImportance
+	resetSessVarsBtn := widget.NewButtonWithIcon("Reset Session Vars", theme.ViewRefreshIcon(), func() {
+		if v.session != nil && v.session.BotEngine() != nil {
+			v.session.BotEngine().ResetSessionVars()
+			v.Refresh()
+			v.reportStatus("✓ Session variables reset to declared defaults.")
+		}
 	})
 	varsCard := widget.NewCard(
-		"Variables Inspector",
-		"Global persistent/ephemeral & per-user variables persisted in bot_state.db",
+		"Declared Variables (Global & Session)",
+		"Global (%global.<name>%) persists across restarts in bot_state.db; Session (%session.<name>%) resets when a new stream session starts. Declare Per-Action (%action.<name>%) variables on individual Actions.",
 		container.NewVBox(
 			container.NewGridWithColumns(5, varScopeSelect, varKeyEntry, varKindSelect, varValEntry, setVarBtn),
+			container.NewHBox(resetSessVarsBtn),
 			v.varsBox,
 		),
 	)
@@ -2301,16 +2549,71 @@ func (v *BotTabView) refreshQueuesAndVars(b config.BotAutomationConfig) {
 
 	st := v.botStore()
 	if v.varsBox != nil {
-		if st == nil {
-			v.varsBox.Objects = []fyne.CanvasObject{widget.NewLabel("Bot variable store unavailable.")}
-		} else {
-			var rows []fyne.CanvasObject
+		var rows []fyne.CanvasObject
+		declaredGlobal := make(map[string]struct{})
+		declaredSession := make(map[string]struct{})
+
+		for _, dv := range b.Variables {
+			name := strings.TrimSpace(dv.Name)
+			if name == "" {
+				continue
+			}
+			isSession := strings.EqualFold(dv.Scope, "session")
+			scopeKey := "global_persistent"
+			tokenPrefix := "%global."
+			if isSession {
+				scopeKey = "session"
+				tokenPrefix = "%session."
+				declaredSession[strings.ToLower(name)] = struct{}{}
+			} else {
+				declaredGlobal[strings.ToLower(name)] = struct{}{}
+			}
+			liveVal := dv.DefaultValue
+			if st != nil {
+				if ve, ok := st.GetGlobalVar(name, isSession); ok {
+					liveVal = ve.Value
+				}
+			}
+			scopeLbl := botOptionLabel(botVarScopeOptions, scopeKey)
+			kindLbl := botOptionLabel(botVarKindOptions, dv.Kind)
+			rowLbl := widget.NewLabel(fmt.Sprintf("[%s] %s%s%% (%s) • default=%q • current=%q", scopeLbl, tokenPrefix, name, kindLbl, dv.DefaultValue, liveVal))
+			rowLbl.Wrapping = fyne.TextWrapWord
+
+			varName := name
+			varScope := dv.Scope
+			resetBtn := widget.NewButton("Reset", func() {
+				if v.session != nil && v.session.BotEngine() != nil {
+					_ = v.session.BotEngine().ResetDeclaredVar(varScope, varName)
+					v.Refresh()
+				}
+			})
+			rmBtn := widget.NewButton("", func() {
+				_ = v.updateBotConfig(func(cfg *config.BotAutomationConfig) {
+					cfg.Variables = slices.DeleteFunc(cfg.Variables, func(item config.BotVariableDef) bool {
+						return strings.EqualFold(item.Scope, varScope) && strings.EqualFold(item.Name, varName)
+					})
+				})
+				if st != nil {
+					_ = st.DeleteGlobalVar(varName, isSession)
+				}
+				v.Refresh()
+			})
+			rmBtn.SetIcon(theme.DeleteIcon())
+			rows = append(rows, container.NewHBox(rowLbl, layout.NewSpacer(), resetBtn, rmBtn))
+		}
+
+		if st != nil {
 			for _, ephem := range []bool{false, true} {
 				scopeLbl := botOptionLabel(botVarScopeOptions, "global_persistent")
+				seenMap := declaredGlobal
 				if ephem {
-					scopeLbl = botOptionLabel(botVarScopeOptions, "global_ephemeral")
+					scopeLbl = botOptionLabel(botVarScopeOptions, "session")
+					seenMap = declaredSession
 				}
 				for _, ve := range st.ListGlobalVars(ephem) {
+					if _, declared := seenMap[strings.ToLower(ve.Key)]; declared {
+						continue
+					}
 					key := ve.Key
 					isE := ephem
 					rm := widget.NewButton("", func() {
@@ -2319,7 +2622,7 @@ func (v *BotTabView) refreshQueuesAndVars(b config.BotAutomationConfig) {
 					})
 					rm.SetIcon(theme.DeleteIcon())
 					rows = append(rows, container.NewHBox(
-						widget.NewLabel(fmt.Sprintf("[%s] %s (%s) = %q", scopeLbl, ve.Key, botOptionLabel(botVarKindOptions, ve.Kind), ve.Value)),
+						widget.NewLabel(fmt.Sprintf("[%s • Runtime] %s (%s) = %q", scopeLbl, ve.Key, botOptionLabel(botVarKindOptions, ve.Kind), ve.Value)),
 						layout.NewSpacer(),
 						rm,
 					))
@@ -2338,11 +2641,12 @@ func (v *BotTabView) refreshQueuesAndVars(b config.BotAutomationConfig) {
 					rm,
 				))
 			}
-			if len(rows) == 0 {
-				rows = append(rows, widget.NewLabel("No variables stored yet."))
-			}
-			v.varsBox.Objects = rows
 		}
+
+		if len(rows) == 0 {
+			rows = append(rows, widget.NewLabel("No variables declared or stored yet."))
+		}
+		v.varsBox.Objects = rows
 		v.varsBox.Refresh()
 	}
 

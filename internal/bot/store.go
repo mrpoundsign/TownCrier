@@ -210,6 +210,43 @@ func (s *Store) SetGlobalVar(key, kind, val string, ephemeral bool) error {
 	return err
 }
 
+// SetGlobalVarIfAbsent seeds a persistent or ephemeral global variable only if it is not already stored.
+func (s *Store) SetGlobalVarIfAbsent(key, kind, val string, ephemeral bool) error {
+	clean := strings.TrimSpace(key)
+	if clean == "" {
+		return errors.New("global variable key cannot be empty")
+	}
+	k := normalizeKind(kind)
+	now := time.Now().UTC().Unix()
+
+	if ephemeral {
+		s.mu.Lock()
+		if _, exists := s.ephem[clean]; !exists {
+			s.ephem[clean] = VarEntry{Key: clean, Kind: k, Value: val, UpdatedAt: now}
+		}
+		s.mu.Unlock()
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return errors.New("bot store is closed")
+	}
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO global_vars(key, kind, value, updated_at) VALUES (?, ?, ?, ?)`,
+		clean, k, val, now,
+	)
+	return err
+}
+
+// ClearEphemeralVars removes all in-memory session/ephemeral variables.
+func (s *Store) ClearEphemeralVars() {
+	s.mu.Lock()
+	clear(s.ephem)
+	s.mu.Unlock()
+}
+
 // DeleteGlobalVar removes a persistent or ephemeral global variable.
 func (s *Store) DeleteGlobalVar(key string, ephemeral bool) error {
 	clean := strings.TrimSpace(key)
