@@ -782,5 +782,42 @@ func TestVoiceSubtitlesConfigAndOverlayFeatureGating(t *testing.T) {
 	}
 }
 
+func TestPluginsConfigDefaultsCloneAndLegacyLoad(t *testing.T) {
+	cfg := DefaultConfig()
+	if !cfg.Plugins.Enabled {
+		t.Fatal("expected Plugins.Enabled to be true by default")
+	}
+
+	cfg.Plugins.ExtraPaths = []string{"/tmp/extra"}
+	cfg.Plugins.DisabledPlugins = []string{"com.example.off"}
+	cfg.Plugins.TrustedNative["com.example.nat"] = TrustedNativePlugin{SHA256: "abc123"}
+	cfg.Plugins.PluginSettings["com.example.nat"] = map[string]any{"k": "v"}
+
+	cloned := cfg.Clone()
+	cloned.Plugins.ExtraPaths[0] = "/tmp/mutated"
+	cloned.Plugins.DisabledPlugins[0] = "mutated"
+	cloned.Plugins.TrustedNative["com.example.nat"] = TrustedNativePlugin{SHA256: "mutated"}
+	cloned.Plugins.PluginSettings["com.example.nat"]["k"] = "mutated"
+
+	if cfg.Plugins.ExtraPaths[0] != "/tmp/extra" ||
+		cfg.Plugins.DisabledPlugins[0] != "com.example.off" ||
+		cfg.Plugins.TrustedNative["com.example.nat"].SHA256 != "abc123" ||
+		cfg.Plugins.PluginSettings["com.example.nat"]["k"] != "v" {
+		t.Fatal("expected Clone() to deep-copy PluginsConfig slices and maps")
+	}
+
+	legacyPath := filepath.Join(t.TempDir(), "legacy_no_plugins.json")
+	if err := os.WriteFile(legacyPath, []byte(`{"version": 2}`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	loaded, err := Load(legacyPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !loaded.Plugins.Enabled {
+		t.Fatal("expected legacy config missing plugins section to default Plugins.Enabled=true")
+	}
+}
+
 
 

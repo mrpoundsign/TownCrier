@@ -224,6 +224,35 @@ func (s *Server) BroadcastSubtitleEvent(ev SubtitleEvent) {
 	}
 }
 
+// BroadcastPluginEvent pushes a plugin overlay broadcast event to all connected /api/overlay/stream SSE subscribers.
+func (s *Server) BroadcastPluginEvent(pluginUUID, eventName, jsonPayload string) {
+	var raw json.RawMessage
+	trimmed := strings.TrimSpace(jsonPayload)
+	if trimmed != "" && json.Valid([]byte(trimmed)) {
+		raw = json.RawMessage(trimmed)
+	} else if trimmed != "" {
+		if b, err := json.Marshal(trimmed); err == nil {
+			raw = b
+		}
+	}
+	ev := OverlayStreamEvent{
+		Kind: "plugin",
+		Plugin: &PluginOverlayEvent{
+			PluginUUID: pluginUUID,
+			EventName:  eventName,
+			Payload:    raw,
+		},
+	}
+	s.overlaySubsMu.Lock()
+	defer s.overlaySubsMu.Unlock()
+	for _, ch := range s.overlaySubs {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+}
+
 // SetSubtitlesOverlayEnabled dynamically enables or disables the /overlay/subtitles endpoints without restarting the listener.
 func (s *Server) SetSubtitlesOverlayEnabled(enabled bool) {
 	s.mu.Lock()
@@ -336,6 +365,9 @@ func (s *Server) Start(host string, port int, authToken string) error {
 	mux.Handle("/api/panic", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPPanic))))
 	mux.Handle("/api/queue", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPQueue))))
 	mux.Handle("/api/volume", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPVolume))))
+	mux.Handle("/api/actions", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPListActions))))
+	mux.Handle("/api/bot/run", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPRunBotAction))))
+	mux.Handle("/api/plugins/run", s.withCORSAndAuth(s.withControlRequired(http.HandlerFunc(s.handleHTTPRunPluginAction))))
 
 	// OBS Browser Source Overlay endpoints
 	mux.Handle("/overlay", s.withCORSAndAuth(http.HandlerFunc(s.handleOverlayUnified)))
@@ -348,6 +380,7 @@ func (s *Server) Start(host string, port int, authToken string) error {
 	mux.Handle("/api/overlay/subtitles", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlaySubtitles)))
 	mux.Handle("/api/overlay/subtitles/stream", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlaySubtitlesStream)))
 	mux.Handle("/api/overlay/style", s.withCORSAndAuth(http.HandlerFunc(s.handleAPIOverlayStyle)))
+	mux.Handle("/plugins/", s.withCORSAndAuth(http.HandlerFunc(s.handlePluginRoutes)))
 
 	// Local pprof diagnostic endpoints (http://127.0.0.1:8765/debug/pprof/)
 	mux.Handle("/debug/pprof/", s.withCORSAndAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

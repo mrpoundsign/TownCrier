@@ -1,0 +1,165 @@
+syntax = "proto3";
+
+package towncrier.plugin.v1;
+
+option go_package = "github.com/mrpoundsign/TownCrier/pkg/pluginv1;pluginv1";
+
+import "plugin/v1/version.proto";
+
+// RuntimeKind identifies the execution backend hosting a plugin.
+enum RuntimeKind {
+  RUNTIME_KIND_UNSPECIFIED = 0;
+  RUNTIME_KIND_WASM = 1;
+  RUNTIME_KIND_NATIVE = 2;
+}
+
+// Permissions declares explicit sandbox capabilities requested by a plugin.
+message Permissions {
+  repeated string allowed_hosts = 1;
+  bool speak_tts = 2;
+  bool read_events = 3;
+  bool send_chat = 4;
+  bool moderate = 5;
+  bool kv_storage = 6;
+  bool overlay_broadcast = 7;
+  bool run_actions = 8;
+  bool ui_views = 9;
+}
+
+// SettingFieldType identifies the UI widget type for a declarative setting field.
+enum SettingFieldType {
+  SETTING_FIELD_TYPE_UNSPECIFIED = 0;
+  SETTING_FIELD_TYPE_TEXT = 1;
+  SETTING_FIELD_TYPE_MULTILINE = 2;
+  SETTING_FIELD_TYPE_PASSWORD = 3;
+  SETTING_FIELD_TYPE_NUMBER = 4;
+  SETTING_FIELD_TYPE_BOOL = 5;
+  SETTING_FIELD_TYPE_SELECT = 6;
+  SETTING_FIELD_TYPE_COLOR = 7;
+  SETTING_FIELD_TYPE_FILE = 8;
+  SETTING_FIELD_TYPE_HOTKEY = 9;
+  SETTING_FIELD_TYPE_INFO = 10;
+  SETTING_FIELD_TYPE_LINK = 11;
+  SETTING_FIELD_TYPE_BUTTON = 12;
+}
+
+// SelectOption defines one dropdown choice for SETTING_FIELD_TYPE_SELECT.
+message SelectOption {
+  string label = 1;
+  string value = 2;
+}
+
+// InfoValue defines a read-only display value with optional clipboard copy button.
+message InfoValue {
+  string text = 1;
+  bool copyable = 2;
+}
+
+// LinkValue defines a clickable http/https hyperlink field value.
+message LinkValue {
+  string url = 1;
+  string label = 2;
+}
+
+// ButtonValue defines an interactive config action button label and disabled state.
+message ButtonValue {
+  string label = 1;
+  bool disabled = 2;
+}
+
+// SettingValue holds a typed setting value across config, keyring, and UI forms.
+message SettingValue {
+  oneof kind {
+    string string_val = 1;
+    double number_val = 2;
+    bool bool_val = 3;
+    InfoValue info_val = 4;
+    LinkValue link_val = 5;
+    ButtonValue button_val = 6;
+  }
+}
+
+// SettingsMap stores plugin settings keyed by field key.
+message SettingsMap {
+  map<string, SettingValue> values = 1;
+}
+
+// SettingField declaratively defines one configuration field in a plugin's settings form.
+message SettingField {
+  string key = 1;
+  string label = 2;
+  SettingFieldType type = 3;
+  string section = 4;
+  SettingValue default_value = 5;
+  string placeholder = 6;
+  string help = 7;
+  repeated SelectOption options = 8;
+  repeated string file_extensions = 9;
+  bool required = 10;
+}
+
+// ActionDescriptor describes an automatable action exposed by a plugin.
+message ActionDescriptor {
+  string id = 1;
+  string name = 2;
+  string category = 3;
+  string description = 4;
+  repeated SettingField params_schema = 5;
+  repeated string controllers = 6;
+  string default_title = 7;
+  string default_color = 8;
+  string default_image = 9;
+  bool hide_title = 10;
+}
+
+// TriggerDescriptor describes a custom trigger event emitted by a plugin.
+message TriggerDescriptor {
+  string id = 1;
+  string name = 2;
+  string category = 3;
+  string description = 4;
+}
+
+// CommandDescriptor describes a default chat command provided by a plugin.
+message CommandDescriptor {
+  string id = 1;
+  string command = 2;
+  string description = 3;
+  bool consume_tts = 4;
+}
+
+// ViewPlacement identifies where a declarative plugin UI view mounts in TownCrier.
+enum ViewPlacement {
+  VIEW_PLACEMENT_UNSPECIFIED = 0;
+  VIEW_PLACEMENT_MAIN_TAB = 1;
+  VIEW_PLACEMENT_SETTINGS_SUBTAB = 2;
+}
+
+// ViewDescriptor declares a UI view rendered via the Declarative Fyne UI schema.
+message ViewDescriptor {
+  string id = 1;
+  string title = 2;
+  string icon_name = 3;
+  ViewPlacement placement = 4;
+}
+
+// Manifest declares plugin metadata, API requirements, permissions, and extensions.
+message Manifest {
+  string uuid = 1;
+  string name = 2;
+  string version = 3;
+  string author = 4;
+  string description = 5;
+  bytes icon_png = 6;
+  string icon_svg = 7;
+  ProtocolVersion api_version = 8;
+  repeated string required_capabilities = 9;
+  repeated string subscribed_events = 10;
+  Permissions permissions = 11;
+  uint32 max_memory_mb = 12;
+  repeated SettingField global_settings_schema = 13;
+  repeated ActionDescriptor actions = 14;
+  repeated TriggerDescriptor triggers = 15;
+  repeated CommandDescriptor commands = 16;
+  repeated ViewDescriptor views = 17;
+}

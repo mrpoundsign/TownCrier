@@ -24,9 +24,11 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/pluginhost"
 	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
 	"github.com/mrpoundsign/TownCrier/pkg/audio"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/pluginv1"
 	"github.com/mrpoundsign/TownCrier/pkg/stt"
 	"github.com/mrpoundsign/TownCrier/pkg/translate"
 	"github.com/mrpoundsign/TownCrier/pkg/tts"
@@ -57,12 +59,18 @@ type SettingsView struct {
 	subTabs               *container.AppTabs
 	generalTabItem        *container.TabItem
 	obsTabItem            *container.TabItem
+	pluginsTabItem        *container.TabItem
 	ttsTabItem            *container.TabItem
 	translationTabItem    *container.TabItem
 	voiceSubtitlesTabItem *container.TabItem
 	rulesTabItem          *container.TabItem
 	logsTabItem           *container.TabItem
-	twitchTab         *TwitchTabView
+	pluginsTab            *PluginsTabView
+	pluginSubTabs         map[string]*mountedPluginSettingsTab
+	pluginSubOrder        []string
+	pluginSubImageCache   *PluginImageCache
+	pluginSubUnsub        func()
+	twitchTab             *TwitchTabView
 	youtubeTab        *YouTubeTabView
 	tiktokTab         *TikTokTabView
 	kickTab           *KickTabView
@@ -101,6 +109,8 @@ type SettingsView struct {
 
 	onTTSChanged           func(enabled bool)
 	onLoggingChanged       func(enabled bool)
+	onBotChanged           func(enabled bool)
+	onPluginOpenTab        func(viewKey string)
 	onChatScaleChanged     func(pct int)
 	onAnimateEmotesChanged func(enabled bool)
 	featuresCard         *widget.Card
@@ -155,6 +165,7 @@ type SettingsView struct {
 	ttsBox                *fyne.Container
 	enableTTSCheck            *widget.Check
 	enableLogCheck            *widget.Check
+	enableBotCheck            *widget.Check
 	enableTranslationCheck    *widget.Check
 	enableVoiceSubtitlesCheck *widget.Check
 	checkUpdatesCheck         *widget.Check
@@ -255,6 +266,7 @@ type SettingsView struct {
 	onBackupApplied      func(newCfg *config.Config, dbRestored bool)
 	ttsEnabled            bool
 	loggingEnabled        bool
+	botEnabled            bool
 	translationEnabled    bool
 	voiceSubtitlesEnabled bool
 
@@ -348,6 +360,19 @@ func (v *SettingsView) SetTTSChangedHandler(fn func(enabled bool)) {
 // SetLoggingChangedHandler registers a callback invoked when Event Logging is enabled or disabled from Settings.
 func (v *SettingsView) SetLoggingChangedHandler(fn func(enabled bool)) {
 	v.onLoggingChanged = fn
+}
+
+// SetBotChangedHandler registers a callback invoked when the Bot Automation Engine is enabled or disabled.
+func (v *SettingsView) SetBotChangedHandler(fn func(enabled bool)) {
+	v.onBotChanged = fn
+}
+
+// SetPluginOpenTabHandler registers a callback invoked when the user clicks "Open <View>" on a running plugin card.
+func (v *SettingsView) SetPluginOpenTabHandler(fn func(viewKey string)) {
+	v.onPluginOpenTab = fn
+	if v.pluginsTab != nil {
+		v.pluginsTab.SetOnOpenTab(fn)
+	}
 }
 
 // SetChatScaleChangedHandler registers a callback invoked when the default chat panel scale is updated in Settings.
@@ -494,6 +519,9 @@ func (v *SettingsView) SyncPlatformTabVisibility() {
 	if v.obsTabItem != nil {
 		items = append(items, v.obsTabItem)
 	}
+	if v.pluginsTabItem != nil {
+		items = append(items, v.pluginsTabItem)
+	}
 
 	if v.ttsEnabled && v.ttsTabItem != nil {
 		items = append(items, v.ttsTabItem)
@@ -528,7 +556,104 @@ func (v *SettingsView) SyncPlatformTabVisibility() {
 	if v.loggingEnabled && v.logsTabItem != nil {
 		items = append(items, v.logsTabItem)
 	}
+	items = append(items, v.syncPluginSettingsSubTabs()...)
 	v.subTabs.SetItems(items)
+}
+
+type mountedPluginSettingsTab struct {
+	key  string
+	host *PluginTabHost
+	item *container.TabItem
+}
+
+func (v *SettingsView) syncPluginSettingsSubTabs() []*container.TabItem {
+	if v.session == nil || v.session.PluginManager() == nil {
+		return nil
+	}
+	mgr := v.session.PluginManager()
+	if v.pluginSubTabs == nil {
+		v.pluginSubTabs = make(map[string]*mountedPluginSettingsTab)
+	}
+	if v.pluginSubImageCache == nil {
+		v.pluginSubImageCache = NewPluginImageCache(nil)
+	}
+
+	type wantSub struct {
+		key        string
+		pluginUUID string
+		pluginName string
+		desc       *pluginv1.ViewDescriptor
+	}
+	var desired []wantSub
+	desiredSet := make(map[string]bool)
+	for _, st := range mgr.Plugins() {
+		if st.State == pluginhost.StatusDisabled || st.State == pluginhost.StatusAwaitingTrust {
+			continue
+		}
+		for _, vd := range st.Views {
+			if vd == nil || vd.GetPlacement() != pluginv1.ViewPlacement_VIEW_PLACEMENT_SETTINGS_SUBTAB {
+				continue
+			}
+			k := st.UUID + ":" + vd.GetId()
+			desired = append(desired, wantSub{
+				key:        k,
+				pluginUUID: st.UUID,
+				pluginName: st.Name,
+				desc:       vd,
+			})
+			desiredSet[k] = true
+		}
+	}
+
+	for key, ps := range v.pluginSubTabs {
+		if !desiredSet[key] {
+			if ps.host != nil {
+				ps.host.Close()
+			}
+			delete(v.pluginSubTabs, key)
+		}
+	}
+
+	out := make([]*container.TabItem, 0, len(desired))
+	var order []string
+	for _, wv := range desired {
+		ps := v.pluginSubTabs[wv.key]
+		if ps == nil {
+			title := strings.TrimSpace(wv.desc.GetTitle())
+			if title == "" {
+				title = wv.pluginName
+			}
+			host := NewPluginTabHost(mgr, v.window, v.pluginSubImageCache, wv.pluginUUID, wv.pluginName, wv.desc.GetId(), v.setStatus)
+			iconRes := resolvePluginIcon(wv.desc.GetIconName())
+			var item *container.TabItem
+			if iconRes != nil {
+				item = container.NewTabItemWithIcon(title, iconRes, host.Root())
+			} else {
+				item = container.NewTabItem(title, host.Root())
+			}
+			ps = &mountedPluginSettingsTab{key: wv.key, host: host, item: item}
+			v.pluginSubTabs[wv.key] = ps
+		}
+		order = append(order, wv.key)
+		out = append(out, ps.item)
+	}
+	v.pluginSubOrder = order
+	return out
+}
+
+// closePluginSubTabs releases all mounted plugin Settings sub-tabs and status subscriptions.
+func (v *SettingsView) closePluginSubTabs() {
+	if v.pluginSubUnsub != nil {
+		v.pluginSubUnsub()
+		v.pluginSubUnsub = nil
+	}
+	for _, ps := range v.pluginSubTabs {
+		if ps.host != nil {
+			ps.host.Close()
+		}
+	}
+	clear(v.pluginSubTabs)
+	v.pluginSubOrder = nil
 }
 
 func (v *SettingsView) currentConfig() *config.Config {
@@ -848,6 +973,9 @@ func (v *SettingsView) SyncFromConfig() {
 	if v.wsSubtitlesOverlayCheck != nil {
 		v.wsSubtitlesOverlayCheck.SetChecked(v.cfg.WebSocket.SubtitlesOverlayEnabled)
 	}
+	if v.pluginsTab != nil {
+		v.pluginsTab.Refresh()
+	}
 	v.syncVoiceSubtitlesControlsFromConfig()
 	if v.translationTargetSelect != nil {
 		v.translationTargetSelect.SetSelected(FormatTranslationTargetLangOption(v.cfg.Translation.TargetLang))
@@ -977,6 +1105,9 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 
 	v.generalTabItem = container.NewTabItemWithIcon("General", theme.SettingsIcon(), generalTabContent)
 	v.obsTabItem = container.NewTabItemWithIcon("OBS & Overlays", theme.ComputerIcon(), obsTabContent)
+	v.pluginsTab = NewPluginsTabView(v.window, v.session, v.setStatus)
+	v.pluginsTab.SetOnOpenTab(v.onPluginOpenTab)
+	v.pluginsTabItem = container.NewTabItemWithIcon("Plugins", theme.StorageIcon(), v.pluginsTab.Build())
 	v.ttsTabItem = container.NewTabItemWithIcon("TTS & Hardware", theme.VolumeUpIcon(), ttsTabContent)
 	v.voiceSubtitlesTabItem = container.NewTabItemWithIcon("Voice Subtitles", theme.MediaRecordIcon(), v.buildVoiceSubtitlesTab())
 	v.translationTabItem = container.NewTabItemWithIcon("Translation", resLogTranslated, v.buildTranslationTab())
@@ -997,6 +1128,11 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	}
 
 	v.subTabs = container.NewAppTabs(v.generalTabItem, v.ttsTabItem, v.rulesTabItem, v.logsTabItem)
+	if v.session != nil && v.session.PluginManager() != nil && v.pluginSubUnsub == nil {
+		v.pluginSubUnsub = v.session.PluginManager().SubscribeStatusChange(func() {
+			fyne.Do(v.SyncPlatformTabVisibility)
+		})
+	}
 	v.SyncPlatformTabVisibility()
 	v.SyncTTSState(v.ttsEnabled)
 
@@ -1092,6 +1228,26 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 	})
 	v.enableLogCheck.SetChecked(cfg.Logging.Enabled)
 
+	v.enableBotCheck = widget.NewCheck("Enable Bot Automation Engine (Commands, Actions, Timers, OBS, Voice Triggers)", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.Bot.Enabled = checked
+		})
+		v.botEnabled = checked
+		if v.onBotChanged != nil {
+			v.onBotChanged(checked)
+		}
+		if checked {
+			v.setStatus("✓ Bot Automation Engine enabled. Open the Bot tab in the top navigation bar.")
+		} else {
+			v.setStatus("Bot Automation Engine disabled.")
+		}
+	})
+	v.enableBotCheck.SetChecked(cfg.Bot.Enabled)
+	v.botEnabled = cfg.Bot.Enabled
+
 	v.enableTranslationCheck = widget.NewCheck("Enable Chat Translation (Auto-Detect & Translate Foreign Chat)", func(checked bool) {
 		if v.initializing {
 			return
@@ -1157,6 +1313,7 @@ func (v *SettingsView) buildFeaturesCard() *widget.Card {
 	cardContent := container.NewVBox(
 		v.enableTTSCheck,
 		v.enableLogCheck,
+		v.enableBotCheck,
 		v.enableTranslationCheck,
 		v.enableVoiceSubtitlesCheck,
 		updateRow,

@@ -17,6 +17,7 @@ import (
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
+	"github.com/mrpoundsign/TownCrier/pkg/platform/twitch"
 )
 
 // TwitchTabView provides the full Fyne UI controls for Twitch platform integration.
@@ -30,6 +31,9 @@ type TwitchTabView struct {
 	statusBadge         *widget.Label
 	oauthStatusLabel    *widget.Label
 	connectBtn          *widget.Button
+	botScopeRow         *fyne.Container
+	botAccountStatusLbl *widget.Label
+	botConnectBtn       *widget.Button
 	enableCheck         *widget.Check
 	allChatCheck        *widget.Check
 	ignorePrefixCheck   *widget.Check
@@ -246,6 +250,35 @@ func (v *TwitchTabView) syncOAuthState() {
 		}
 	}
 
+	if v.botScopeRow != nil {
+		if authed && v.session != nil && v.session.TwitchOAuth() != nil && len(v.session.TwitchOAuth().MissingScopes(twitch.BotWriteTwitchScopes)) > 0 {
+			v.botScopeRow.Show()
+		} else {
+			v.botScopeRow.Hide()
+		}
+	}
+
+	if v.botAccountStatusLbl != nil && v.session != nil && v.session.TwitchBotOAuth() != nil {
+		botAuthed := v.session.TwitchBotOAuth().HasToken()
+		if botAuthed {
+			_, botLogin, _ := v.session.TwitchBotOAuth().StoredUser()
+			if botLogin != "" {
+				v.botAccountStatusLbl.SetText("🤖 Secondary Bot Account: Connected (@" + botLogin + ")")
+			} else {
+				v.botAccountStatusLbl.SetText("🤖 Secondary Bot Account: Connected")
+			}
+		} else {
+			v.botAccountStatusLbl.SetText("🤖 Secondary Bot Account: Not connected (optional — uses broadcaster account if unset)")
+		}
+		if v.botConnectBtn != nil {
+			if botAuthed {
+				v.botConnectBtn.SetText("Disconnect Bot Account")
+			} else {
+				v.botConnectBtn.SetText("Connect Bot Account")
+			}
+		}
+	}
+
 	if v.connectBtn != nil {
 		if authed {
 			v.connectBtn.SetText("Disconnect Twitch OAuth")
@@ -379,11 +412,50 @@ func (v *TwitchTabView) buildConnectionCard(pCfg config.PlatformConfig) *widget.
 		})
 	}
 
+	grantScopesBtn := widget.NewButtonWithIcon("Grant Bot Permissions", theme.ConfirmIcon(), func() {
+		v.startOAuthFlow()
+	})
+	grantScopesBtn.Importance = widget.HighImportance
+	scopeWarnLbl := widget.NewLabel("⚠️ Connected account is missing Twitch Bot write permissions (chat/announcements/clips/redemptions).")
+	scopeWarnLbl.Wrapping = fyne.TextWrapWord
+	v.botScopeRow = container.NewBorder(nil, nil, nil, grantScopesBtn, scopeWarnLbl)
+	v.botScopeRow.Hide()
+
+	v.botAccountStatusLbl = widget.NewLabel("🤖 Secondary Bot Account: Not connected (optional — uses broadcaster account if unset)")
+	v.botAccountStatusLbl.Wrapping = fyne.TextWrapWord
+	v.botConnectBtn = widget.NewButtonWithIcon("Connect Bot Account", theme.LoginIcon(), func() {
+		if v.session == nil || v.session.TwitchBotOAuth() == nil {
+			return
+		}
+		botOAuth := v.session.TwitchBotOAuth()
+		if botOAuth.HasToken() {
+			dialog.ShowConfirm("Disconnect Secondary Bot Account", "Remove stored Twitch Bot OAuth credentials?", func(ok bool) {
+				if !ok {
+					return
+				}
+				_ = botOAuth.ClearTokens()
+				v.syncOAuthState()
+				if v.onStatus != nil {
+					v.onStatus("Secondary Twitch bot account disconnected.")
+				}
+			}, v.window)
+			return
+		}
+		v.startOAuthFlowFor(botOAuth, v.botConnectBtn, "Secondary Twitch Bot Account")
+	})
+	if v.session != nil && v.session.TwitchBotOAuth() != nil {
+		v.session.TwitchBotOAuth().SetOnAuthChange(func() {
+			fyne.Do(v.syncOAuthState)
+		})
+	}
+
 	cardContent := container.NewVBox(
 		v.enableCheck,
 		v.channelRow,
 		container.NewBorder(nil, nil, v.statusBadge, nil, v.connectBtn),
 		v.oauthStatusLabel,
+		v.botScopeRow,
+		container.NewBorder(nil, nil, nil, v.botConnectBtn, v.botAccountStatusLbl),
 		v.hintLabel,
 	)
 
@@ -412,8 +484,16 @@ func (v *TwitchTabView) startOAuthFlow() {
 	if v.session == nil || v.session.TwitchOAuth() == nil {
 		return
 	}
-	oauthMgr := v.session.TwitchOAuth()
-	v.connectBtn.Disable()
+	v.startOAuthFlowFor(v.session.TwitchOAuth(), v.connectBtn, "TownCrier on Twitch")
+}
+
+func (v *TwitchTabView) startOAuthFlowFor(oauthMgr *twitch.OAuthManager, btn *widget.Button, modalSuffix string) {
+	if oauthMgr == nil {
+		return
+	}
+	if btn != nil {
+		btn.Disable()
+	}
 	if v.onStatus != nil {
 		v.onStatus("Requesting Twitch Device Code...")
 	}
@@ -425,7 +505,9 @@ func (v *TwitchTabView) startOAuthFlow() {
 
 		if err != nil {
 			fyne.Do(func() {
-				v.connectBtn.Enable()
+				if btn != nil {
+					btn.Enable()
+				}
 				if v.onStatus != nil {
 					v.onStatus(fmt.Sprintf("Twitch OAuth error: %v", err))
 				}
@@ -437,7 +519,9 @@ func (v *TwitchTabView) startOAuthFlow() {
 		pollCtx, pollCancel := context.WithTimeout(context.Background(), time.Duration(dResp.ExpiresIn)*time.Second)
 
 		fyne.Do(func() {
-			v.connectBtn.Enable()
+			if btn != nil {
+				btn.Enable()
+			}
 
 			codeLabel := widget.NewLabelWithStyle(dResp.UserCode, fyne.TextAlignCenter, fyne.TextStyle{Bold: true, Monospace: true})
 			waitLabel := widget.NewLabelWithStyle("⏳ Waiting for authorization in browser...", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
@@ -477,7 +561,7 @@ func (v *TwitchTabView) startOAuthFlow() {
 				}
 			})
 
-			modal = dialog.NewCustomWithoutButtons("Authorize TownCrier on Twitch", container.NewVBox(content, cancelBtn), v.window)
+			modal = dialog.NewCustomWithoutButtons("Authorize "+modalSuffix, container.NewVBox(content, cancelBtn), v.window)
 			modal.Show()
 
 			go func() {
@@ -499,8 +583,8 @@ func (v *TwitchTabView) startOAuthFlow() {
 						return
 					}
 
-					if v.session != nil && v.session.TwitchOAuth() != nil {
-						if _, login, _ := v.session.TwitchOAuth().StoredUser(); login != "" && v.channelEntry != nil {
+					if v.session != nil && oauthMgr == v.session.TwitchOAuth() {
+						if _, login, _ := oauthMgr.StoredUser(); login != "" && v.channelEntry != nil {
 							v.channelEntry.SetText(login)
 						}
 					}

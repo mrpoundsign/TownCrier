@@ -42,6 +42,9 @@
               ...msg.payload?.settings
             };
             this.populateGlobalFields();
+            if (this.actionInfo?.action === "com.github.mrpoundsign.towncrier.action") {
+              void this.refreshActionCatalog();
+            }
           } else if (msg.event === "didReceiveSettings") {
             this.settings = msg.payload?.settings ?? {};
             this.populateFields();
@@ -79,6 +82,58 @@
         }
       });
     }
+    persistSettings() {
+      this.send({
+        event: "setSettings",
+        context: this.uuid,
+        payload: this.settings
+      });
+    }
+    async refreshActionCatalog() {
+      const picker = document.getElementById("tc-action-picker");
+      if (!picker) return;
+      const host = this.globalSettings.host || "127.0.0.1";
+      const port = this.globalSettings.port || 8765;
+      const token = this.globalSettings.token || "";
+      const headers = {};
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+      picker.innerHTML = '<option value="">Loading live actions...</option>';
+      try {
+        const resp = await fetch(`http://${host}:${port}/api/actions`, { headers });
+        if (!resp.ok) {
+          picker.innerHTML = `<option value="">TownCrier API error (HTTP ${resp.status})</option>`;
+          return;
+        }
+        const cat = await resp.json();
+        picker.innerHTML = '<option value="">-- Select a Bot or Plugin action --</option>';
+        for (const pa of cat.plugin_actions ?? []) {
+          const opt = document.createElement("option");
+          opt.value = JSON.stringify({
+            targetType: "plugin",
+            pluginUuid: pa.plugin_uuid,
+            actionId: pa.action_id,
+            label: pa.action_name
+          });
+          opt.textContent = `[${pa.plugin_name}] ${pa.action_name} (${pa.action_id})`;
+          picker.appendChild(opt);
+        }
+        for (const ba of cat.bot_actions ?? []) {
+          const opt = document.createElement("option");
+          opt.value = JSON.stringify({
+            targetType: "bot",
+            pluginUuid: "",
+            actionId: ba.id,
+            label: ba.name || ba.id
+          });
+          opt.textContent = `[Bot] ${ba.name || ba.id}`;
+          picker.appendChild(opt);
+        }
+      } catch {
+        picker.innerHTML = '<option value="">TownCrier unreachable \u2014 verify host/port</option>';
+      }
+    }
     bindInputListeners() {
       const inputs = document.querySelectorAll("[data-setting]");
       inputs.forEach((el) => {
@@ -86,14 +141,28 @@
           const key = el.dataset.setting;
           if (!key) return;
           this.settings[key] = el.type === "number" ? Number(el.value) : el.value;
-          this.send({
-            event: "setSettings",
-            context: this.uuid,
-            payload: this.settings
-          });
+          this.persistSettings();
         };
         el.addEventListener("input", persist);
         el.addEventListener("change", persist);
+      });
+      const picker = document.getElementById("tc-action-picker");
+      picker?.addEventListener("change", () => {
+        if (!picker.value) return;
+        try {
+          const picked = JSON.parse(picker.value);
+          this.settings.targetType = picked.targetType;
+          this.settings.pluginUuid = picked.pluginUuid;
+          this.settings.actionId = picked.actionId;
+          this.settings.label = picked.label;
+          this.populateFields();
+          this.persistSettings();
+        } catch {
+        }
+      });
+      const refreshBtn = document.getElementById("tc-refresh-actions");
+      refreshBtn?.addEventListener("click", () => {
+        void this.refreshActionCatalog();
       });
       const saveGlobal = () => {
         const hostEl = document.getElementById("tc-host");

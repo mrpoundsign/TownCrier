@@ -1,0 +1,332 @@
+syntax = "proto3";
+
+package towncrier.plugin.v1;
+
+option go_package = "github.com/mrpoundsign/TownCrier/pkg/pluginv1;pluginv1";
+
+// SemanticTone maps plugin UI accents onto TownCrier's Obsidian Slate theme palette.
+enum SemanticTone {
+  TONE_DEFAULT = 0;
+  TONE_MUTED = 1;
+  TONE_ACCENT = 2;
+  TONE_SUCCESS = 3;
+  TONE_WARNING = 4;
+  TONE_DANGER = 5;
+}
+
+// TextAlign specifies horizontal text alignment.
+enum TextAlign {
+  TEXT_ALIGN_LEADING = 0;
+  TEXT_ALIGN_CENTER = 1;
+  TEXT_ALIGN_TRAILING = 2;
+}
+
+// ButtonImportance maps button emphasis onto native Fyne ButtonImportance.
+enum ButtonImportance {
+  BUTTON_IMPORTANCE_MEDIUM = 0;
+  BUTTON_IMPORTANCE_HIGH = 1;
+  BUTTON_IMPORTANCE_LOW = 2;
+  BUTTON_IMPORTANCE_WARNING = 3;
+  BUTTON_IMPORTANCE_DANGER = 4;
+}
+
+// Orientation specifies horizontal vs vertical split layout.
+enum Orientation {
+  ORIENTATION_HORIZONTAL = 0;
+  ORIENTATION_VERTICAL = 1;
+}
+
+// ImageFillMode controls image scaling inside its allocated bounds.
+enum ImageFillMode {
+  IMAGE_FILL_CONTAIN = 0;
+  IMAGE_FILL_COVER = 1;
+  IMAGE_FILL_ORIGINAL = 2;
+}
+
+// UIEventKind identifies user interaction events dispatched from TownCrier to a plugin UI view.
+enum UIEventKind {
+  UI_EVENT_KIND_UNSPECIFIED = 0;
+  UI_EVENT_KIND_CLICK = 1;
+  UI_EVENT_KIND_CHANGE = 2;
+  UI_EVENT_KIND_CHANGE_ENDED = 3;
+  UI_EVENT_KIND_SUBMIT = 4;
+  UI_EVENT_KIND_TAB_SELECTED = 5;
+  UI_EVENT_KIND_DIALOG_CONFIRMED = 6;
+  UI_EVENT_KIND_DIALOG_CANCELLED = 7;
+}
+
+message VBoxNode {
+  repeated UINode children = 1;
+}
+
+message HBoxNode {
+  repeated UINode children = 1;
+}
+
+message BorderNode {
+  UINode top = 1;
+  UINode bottom = 2;
+  UINode left = 3;
+  UINode right = 4;
+  UINode center = 5;
+}
+
+message SplitNode {
+  Orientation orientation = 1;
+  double offset = 2;
+  UINode leading = 3;
+  UINode trailing = 4;
+}
+
+message TabItem {
+  string id = 1;
+  string title = 2;
+  string icon = 3;
+  UINode content = 4;
+}
+
+message TabsNode {
+  repeated TabItem tabs = 1;
+  string selected_id = 2;
+}
+
+message ScrollNode {
+  UINode content = 1;
+  bool horizontal = 2;
+  float min_width = 3;
+  float min_height = 4;
+}
+
+message GridNode {
+  int32 columns = 1;
+  repeated UINode children = 2;
+}
+
+message CardNode {
+  string title = 1;
+  string subtitle = 2;
+  UINode content = 3;
+}
+
+message PaddedNode {
+  UINode content = 1;
+}
+
+message SpacerNode {}
+
+message SeparatorNode {}
+
+message TextNode {
+  string text = 1;
+  float size = 2;
+  bool bold = 3;
+  bool italic = 4;
+  bool monospace = 5;
+  TextAlign align = 6;
+  bool wrap = 7;
+  SemanticTone tone = 8;
+  bool truncate = 9;
+}
+
+message BadgeNode {
+  string text = 1;
+  SemanticTone tone = 2;
+}
+
+message ImageNode {
+  string url = 1;
+  bytes data = 2;
+  string icon_name = 3;
+  float width = 4;
+  float height = 5;
+  ImageFillMode fill_mode = 6;
+}
+
+message ProgressNode {
+  double value = 1;
+  bool indeterminate = 2;
+}
+
+message MeterNode {
+  double value = 1;
+  double peak = 2;
+  string label = 3;
+  SemanticTone tone = 4;
+}
+
+message MarkdownNode {
+  string markdown = 1;
+}
+
+message EmptyStateNode {
+  string title = 1;
+  string subtitle = 2;
+  string icon_name = 3;
+  string action_id = 4;
+  string action_label = 5;
+}
+
+message ButtonNode {
+  string label = 1;
+  string icon_name = 2;
+  ButtonImportance importance = 3;
+  string tooltip = 4;
+  bool disabled = 5;
+}
+
+message TextInputNode {
+  string placeholder = 1;
+  string value = 2;
+  bool multiline = 3;
+  bool password = 4;
+  uint32 debounce_ms = 5;
+  bool disabled = 6;
+  bool force_value = 7;
+}
+
+message CheckboxNode {
+  string label = 1;
+  bool checked = 2;
+  bool disabled = 3;
+}
+
+message SelectNode {
+  repeated string options = 1;
+  string selected = 2;
+  string placeholder = 3;
+  bool disabled = 4;
+}
+
+message SliderNode {
+  double min = 1;
+  double max = 2;
+  double step = 3;
+  double value = 4;
+  bool disabled = 5;
+}
+
+message VirtualListRow {
+  string key = 1;
+  UINode content = 2;
+}
+
+message VirtualListNode {
+  repeated VirtualListRow rows = 1;
+  float min_height = 2;
+}
+
+message UINode {
+  string id = 1;
+  bool hidden = 2;
+  oneof kind {
+    VBoxNode vbox = 10;
+    HBoxNode hbox = 11;
+    BorderNode border = 12;
+    SplitNode split = 13;
+    TabsNode tabs = 14;
+    ScrollNode scroll = 15;
+    GridNode grid = 16;
+    CardNode card = 17;
+    PaddedNode padded = 18;
+    SpacerNode spacer = 19;
+    SeparatorNode separator = 20;
+    TextNode text = 21;
+    BadgeNode badge = 22;
+    ImageNode image = 23;
+    ProgressNode progress = 24;
+    MeterNode meter = 25;
+    MarkdownNode markdown = 26;
+    EmptyStateNode empty_state = 27;
+    ButtonNode button = 28;
+    TextInputNode text_input = 29;
+    CheckboxNode checkbox = 30;
+    SelectNode select = 31;
+    SliderNode slider = 32;
+    VirtualListNode virtual_list = 33;
+  }
+}
+
+message RenderViewRequest {
+  string view_id = 1;
+}
+
+message UISnapshot {
+  string view_id = 1;
+  uint64 revision = 2;
+  UINode root = 3;
+}
+
+message SetPropsOp {
+  string target_id = 1;
+  optional bool hidden = 2;
+  optional string text = 3;
+  optional string label = 4;
+  optional string value = 5;
+  bool force_value = 6;
+  optional double number_value = 7;
+  optional bool bool_value = 8;
+  optional bool disabled = 9;
+  optional SemanticTone tone = 10;
+  optional ButtonImportance importance = 11;
+  optional string icon_name = 12;
+  optional string image_url = 13;
+  optional string tooltip = 14;
+  optional string selected_tab_id = 15;
+  repeated string options = 16;
+  bool replace_options = 17;
+}
+
+message ReplaceSubtreeOp {
+  string target_id = 1;
+  UINode node = 2;
+}
+
+message InsertChildOp {
+  string parent_id = 1;
+  int32 index = 2;
+  UINode node = 3;
+}
+
+message RemoveChildOp {
+  string target_id = 1;
+}
+
+message ShowToastOp {
+  string message = 1;
+  SemanticTone tone = 2;
+}
+
+message ShowDialogOp {
+  string dialog_id = 1;
+  string title = 2;
+  string body = 3;
+  string confirm_label = 4;
+  string cancel_label = 5;
+}
+
+message UIPatchOp {
+  oneof op {
+    SetPropsOp set_props = 1;
+    ReplaceSubtreeOp replace_subtree = 2;
+    InsertChildOp insert_child = 3;
+    RemoveChildOp remove_child = 4;
+    ShowToastOp show_toast = 5;
+    ShowDialogOp show_dialog = 6;
+  }
+}
+
+message UIPatchBatch {
+  string view_id = 1;
+  uint64 base_revision = 2;
+  uint64 revision = 3;
+  repeated UIPatchOp ops = 4;
+}
+
+message UIEvent {
+  string view_id = 1;
+  string node_id = 2;
+  UIEventKind kind = 3;
+  string string_value = 4;
+  double number_value = 5;
+  bool bool_value = 6;
+}

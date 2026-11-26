@@ -25,8 +25,9 @@ const (
 	OutcomeTTSDisabled       EventOutcome = "tts_disabled"
 
 	// Rejected by pre-queue filters
-	OutcomeDroppedBot       EventOutcome = "dropped_bot"
-	OutcomeDroppedReadRules EventOutcome = "dropped_read_rules"
+	OutcomeDroppedBot        EventOutcome = "dropped_bot"
+	OutcomeDroppedBotCommand EventOutcome = "dropped_bot_command"
+	OutcomeDroppedReadRules  EventOutcome = "dropped_read_rules"
 	OutcomeDroppedDisabled  EventOutcome = "dropped_disabled"
 	OutcomeDroppedThreshold EventOutcome = "dropped_threshold"
 	OutcomeDroppedSanitized EventOutcome = "dropped_sanitized"
@@ -57,6 +58,8 @@ func OutcomeDisplayLabel(outcome EventOutcome) string {
 		return "🔇 TTS Disabled"
 	case OutcomeDroppedBot:
 		return "🤖 Ignored (Bot / Muted)"
+	case OutcomeDroppedBotCommand:
+		return "🤖 Handled (Bot Command / Plugin)"
 	case OutcomeDroppedReadRules:
 		return "📏 Filtered (Read Rules)"
 	case OutcomeDroppedDisabled:

@@ -2,8 +2,8 @@
   "SDKVersion": 2,
   "Author": "TownCrier",
   "Name": "TownCrier TTS Control",
-  "Description": "Control TownCrier neural TTS output mode (Always On, Auto-AFK, Always Off), Emergency Panic Mute, Speech Queue, Custom Announcements, and Master Volume via binary Protocol Buffers.",
-  "Version": "1.0.0.0",
+  "Description": "Control TownCrier neural TTS, Panic Mute, Speech Queue, Volume, Bot Automation Actions, and installed Plugin Actions (e.g. CrowdDJ).",
+  "Version": "1.1.0.0",
   "Category": "TownCrier",
   "CategoryIcon": "imgs/plugin",
   "Icon": "imgs/plugin",
@@ -106,6 +106,21 @@
       "States": [
         {
           "Image": "imgs/volume",
+          "ShowTitle": false,
+          "TitleAlignment": "middle",
+          "FontSize": "11"
+        }
+      ]
+    },
+    {
+      "UUID": "com.github.mrpoundsign.towncrier.action",
+      "Name": "Run Bot / Plugin Action",
+      "Tooltip": "Trigger any TownCrier Bot Action or installed Plugin Action (e.g., CrowdDJ Play/Pause, Skip, Stop, Requests)",
+      "Icon": "imgs/plugin",
+      "Controllers": ["Keypad"],
+      "States": [
+        {
+          "Image": "imgs/plugin",
           "ShowTitle": false,
           "TitleAlignment": "middle",
           "FontSize": "11"

@@ -54,12 +54,20 @@ type UnifiedLayoutProvider interface {
 	SaveUnifiedLayout(width, height int, layoutJSON string) error
 }
 
+// PluginOverlayEvent represents a custom JSON payload broadcast by a plugin to overlay subscribers.
+type PluginOverlayEvent struct {
+	PluginUUID string          `json:"plugin_uuid"`
+	EventName  string          `json:"event_name"`
+	Payload    json.RawMessage `json:"payload,omitempty"`
+}
+
 // OverlayStreamEvent represents a real-time Server-Sent Event pushed to /api/overlay/stream subscribers.
 type OverlayStreamEvent struct {
-	Kind    string                  `json:"kind"` // "append", "outcome", or "reload"
+	Kind    string                  `json:"kind"` // "append", "outcome", "reload", or "plugin"
 	Entry   *eventlog.Entry         `json:"entry,omitempty"`
 	EventID string                  `json:"event_id,omitempty"`
 	Update  *eventlog.OutcomeUpdate `json:"update,omitempty"`
+	Plugin  *PluginOverlayEvent     `json:"plugin,omitempty"`
 }
 
 // OverlayProvider is an optional interface implemented by Controller (such as app.Session)

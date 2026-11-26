@@ -34,6 +34,8 @@ type Config struct {
 	WebSocket       WebSocketConfig           `json:"websocket"`
 	Translation     TranslationConfig         `json:"translation"`
 	VoiceSubtitles  VoiceSubtitlesConfig      `json:"voice_subtitles"`
+	Plugins         PluginsConfig             `json:"plugins"`
+	Bot             BotAutomationConfig       `json:"bot"`
 	GlobalChatRules GlobalChatRules           `json:"global_chat_rules"`
 	Viewers         map[string]ViewerConfig   `json:"viewers"`
 	Platforms       map[string]PlatformConfig `json:"platforms"`
@@ -362,6 +364,22 @@ const (
 	DefaultVoiceSubtitleFadeSeconds = 10
 	DefaultVoiceSubtitleScale       = 100
 )
+
+// TrustedNativePlugin records explicit user approval for an unsandboxed native plugin binary.
+type TrustedNativePlugin struct {
+	SHA256     string `json:"sha256"`
+	ApprovedAt string `json:"approved_at,omitempty"`
+	BinaryPath string `json:"binary_path,omitempty"`
+}
+
+// PluginsConfig configures WASM and Native Subprocess plugins and persisted plugin settings.
+type PluginsConfig struct {
+	Enabled         bool                           `json:"enabled"`
+	ExtraPaths      []string                       `json:"extra_paths,omitempty"`
+	DisabledPlugins []string                       `json:"disabled_plugins,omitempty"`
+	TrustedNative   map[string]TrustedNativePlugin `json:"trusted_native,omitempty"`
+	PluginSettings  map[string]map[string]any      `json:"plugin_settings,omitempty"`
+}
 
 // VoiceSubtitlesConfig configures offline microphone Speech-to-Text (Silero VAD + Whisper)
 // and multi-language OBS Browser Source subtitle fan-out.
@@ -1212,6 +1230,12 @@ func DefaultConfig() *Config {
 			OverlayFadeSeconds: DefaultVoiceSubtitleFadeSeconds,
 			OverlayScale:       DefaultVoiceSubtitleScale,
 		},
+		Plugins: PluginsConfig{
+			Enabled:        true,
+			TrustedNative:  make(map[string]TrustedNativePlugin),
+			PluginSettings: make(map[string]map[string]any),
+		},
+		Bot: DefaultBotAutomationConfig(),
 		GlobalChatRules: GlobalChatRules{
 			SpeakNames:                        true,
 			NaturalizeNames:                   true,
@@ -1877,6 +1901,18 @@ func (c *Config) Clone() *Config {
 	clone.Translation.Providers = slices.Clone(c.Translation.Providers)
 	clone.VoiceSubtitles.SpokenLanguages = slices.Clone(c.VoiceSubtitles.SpokenLanguages)
 	clone.VoiceSubtitles.TargetLanguages = slices.Clone(c.VoiceSubtitles.TargetLanguages)
+	clone.Plugins.ExtraPaths = slices.Clone(c.Plugins.ExtraPaths)
+	clone.Plugins.DisabledPlugins = slices.Clone(c.Plugins.DisabledPlugins)
+	if c.Plugins.TrustedNative != nil {
+		clone.Plugins.TrustedNative = maps.Clone(c.Plugins.TrustedNative)
+	}
+	if c.Plugins.PluginSettings != nil {
+		clone.Plugins.PluginSettings = make(map[string]map[string]any, len(c.Plugins.PluginSettings))
+		for k, ps := range c.Plugins.PluginSettings {
+			clone.Plugins.PluginSettings[k] = maps.Clone(ps)
+		}
+	}
+	clone.Bot = cloneBotAutomationConfig(c.Bot)
 
 	if c.Viewers != nil {
 		clone.Viewers = make(map[string]ViewerConfig, len(c.Viewers))
@@ -2272,6 +2308,13 @@ func migrate(cfg *Config) error {
 	cfg.GlobalChatRules.IgnoreMentionsMode = NormalizeIgnoreMentionsMode(cfg.GlobalChatRules.IgnoreMentionsMode)
 	NormalizeTranslationProviders(&cfg.Translation)
 	NormalizeVoiceSubtitlesConfig(&cfg.VoiceSubtitles)
+	if cfg.Plugins.TrustedNative == nil {
+		cfg.Plugins.TrustedNative = make(map[string]TrustedNativePlugin)
+	}
+	if cfg.Plugins.PluginSettings == nil {
+		cfg.Plugins.PluginSettings = make(map[string]map[string]any)
+	}
+	NormalizeBotAutomationConfig(&cfg.Bot)
 
 	return nil
 }

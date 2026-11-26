@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package towncrier.plugin.v1;
+
+option go_package = "github.com/mrpoundsign/TownCrier/pkg/pluginv1;pluginv1";
+
+// Host API version v1.0.0 constants:
+//   HOST_API_MAJOR = 1
+//   HOST_API_MINOR = 0
+//   HOST_API_PATCH = 0
+
+// ProtocolVersion identifies a plugin's target API version and minimum host compatibility.
+message ProtocolVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+  uint32 patch = 3;
+  uint32 min_host_minor = 4;
+}
+
+// ErrorCode categorizes structured host/plugin errors into actionable classes.
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_UNSUPPORTED_API_VERSION = 1;
+  ERROR_CODE_UNSUPPORTED_CAPABILITY = 2;
+  ERROR_CODE_PERMISSION_DENIED = 3;
+  ERROR_CODE_INVALID_ARGUMENT = 4;
+  ERROR_CODE_NOT_FOUND = 5;
+  ERROR_CODE_TIMEOUT = 6;
+  ERROR_CODE_RATE_LIMITED = 7;
+  ERROR_CODE_HOST_NOT_READY = 8;
+  ERROR_CODE_INTERNAL = 9;
+}
+
+// APIError provides structured, user-readable error details across the plugin boundary.
+message APIError {
+  ErrorCode code = 1;
+  string message = 2;
+  string detail = 3;
+  uint32 required_major = 4;
+  uint32 required_minor = 5;
+  string missing_capability = 6;
+}
+
+// HandshakeResponse is returned immediately after the native TCP binary preamble.
+message HandshakeResponse {
+  bool ok = 1;
+  APIError error = 2;
+  uint32 host_major = 3;
+  uint32 host_minor = 4;
+  uint32 host_patch = 5;
+  repeated string supported_capabilities = 6;
+}

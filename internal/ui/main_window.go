@@ -21,8 +21,10 @@ import (
 	"github.com/mrpoundsign/appinstaller/pkg/updater"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
+	"github.com/mrpoundsign/TownCrier/internal/pluginhost"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 	"github.com/mrpoundsign/TownCrier/pkg/platform/youtube"
+	"github.com/mrpoundsign/TownCrier/pkg/pluginv1"
 )
 
 // Tab index constants for the top-level main window views.
@@ -31,6 +33,7 @@ const (
 	TabIndexViewers   = 1
 	TabIndexLogs      = 2
 	TabIndexSettings  = 3
+	TabIndexBot       = 4
 )
 
 // MainWindow coordinates the primary Fyne desktop window, tabs, header bar, and global panic hotkeys.
@@ -39,22 +42,34 @@ type MainWindow struct {
 	Session *app.Session
 
 	headerBar        *fyne.Container
+	navButtons       *fyne.Container
+	leftSide         *fyne.Container
 	contentContainer *fyne.Container
 	statusBar        *fyne.Container
 	statusLabel      *widget.Label
 
 	currentTab   int
 	dashboardBtn *widget.Button
+	botBtn       *widget.Button
 	viewersBtn   *widget.Button
 	logsBtn      *widget.Button
 	settingsBtn  *widget.Button
 
+	pluginNavBox       *fyne.Container
+	pluginImageCache   *PluginImageCache
+	pluginTabs         map[string]*mountedPluginMainTab
+	pluginTabsOrder    []string
+	activePluginViewID string
+	pluginStatusUnsub  func()
+
 	dashboardObj fyne.CanvasObject
+	botObj       fyne.CanvasObject
 	viewersObj   fyne.CanvasObject
 	chatLogsObj  fyne.CanvasObject
 	settingsObj  fyne.CanvasObject
 
 	dashboardTab *DashboardView
+	botTab       *BotTabView
 	twitchTab    *TwitchTabView
 	youtubeTab   *YouTubeTabView
 	tiktokTab    *TikTokTabView
@@ -109,6 +124,7 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	mw.initShortcuts()
 	mw.syncTTSState(session.Config().TTS.Enabled)
 	mw.syncLoggingState(session.Config().Logging.Enabled)
+	mw.syncBotState(session.Config().Bot.Enabled)
 	log.Println("[MainWindow] Setting window content...")
 
 	uiRenderMu.Lock()
@@ -164,11 +180,22 @@ func NewMainWindow(fyneApp fyne.App, session *app.Session) *MainWindow {
 	}
 
 	w.SetCloseIntercept(func() {
+		if mw.pluginStatusUnsub != nil {
+			mw.pluginStatusUnsub()
+			mw.pluginStatusUnsub = nil
+		}
+		mw.closeAllPluginTabs()
 		if mw.dashboardTab != nil {
 			mw.dashboardTab.Close()
 		}
 		if mw.chatLogsTab != nil {
 			mw.chatLogsTab.Close()
+		}
+		if mw.settingsTab != nil {
+			mw.settingsTab.closePluginSubTabs()
+			if mw.settingsTab.pluginsTab != nil {
+				mw.settingsTab.pluginsTab.Close()
+			}
 		}
 		w.Hide()
 		done := make(chan struct{})
@@ -446,6 +473,12 @@ func (mw *MainWindow) initViews() {
 	mw.settingsTab.SetLoggingChangedHandler(func(enabled bool) {
 		mw.syncLoggingState(enabled)
 	})
+	mw.settingsTab.SetBotChangedHandler(func(enabled bool) {
+		mw.syncBotState(enabled)
+	})
+	mw.settingsTab.SetPluginOpenTabHandler(func(viewKey string) {
+		mw.SelectPluginView(viewKey)
+	})
 	mw.settingsTab.SetChatScaleChangedHandler(func(_ int) {
 		if mw.chatLogsTab != nil {
 			mw.chatLogsTab.ApplyChatScale()
@@ -519,29 +552,35 @@ func (mw *MainWindow) initViews() {
 	})
 
 	mw.settingsTab.SetPlatformTabs(mw.twitchTab, mw.youtubeTab, mw.tiktokTab, mw.kickTab)
+	mw.botTab = NewBotTabView(mw.Window, mw.Session, mw.SetStatus)
 
 	mw.dashboardObj = mw.dashboardTab.Build()
+	mw.botObj = mw.botTab.Build()
 	mw.viewersObj = newWidthClampContainer(mw.viewersTab.Build())
 	mw.chatLogsObj = newWidthClampContainer(mw.chatLogsTab.Build())
 	mw.settingsObj = mw.settingsTab.Build()
 
 	mw.contentContainer = container.NewStack(
 		mw.dashboardObj,
+		mw.botObj,
 		mw.viewersObj,
 		mw.chatLogsObj,
 		mw.settingsObj,
 	)
 
 	mw.dashboardBtn = widget.NewButtonWithIcon("Dashboard", theme.HomeIcon(), func() { mw.SelectTab(TabIndexDashboard) })
+	mw.botBtn = widget.NewButtonWithIcon("Bot", theme.ComputerIcon(), func() { mw.SelectTab(TabIndexBot) })
 	mw.viewersBtn = widget.NewButtonWithIcon("Viewers", theme.AccountIcon(), func() { mw.SelectTab(TabIndexViewers) })
 	mw.logsBtn = widget.NewButtonWithIcon("Logs", theme.DocumentIcon(), func() { mw.SelectTab(TabIndexLogs) })
 	mw.settingsBtn = widget.NewButtonWithIcon("", theme.SettingsIcon(), func() { mw.SelectTab(TabIndexSettings) })
 
 	mw.SelectTab(TabIndexDashboard)
+	mw.initPluginTabs()
 }
 
-// SelectTab activates the specified main view (Dashboard, Viewers, Logs, or Settings).
+// SelectTab activates the specified main view (Dashboard, Bot, Viewers, Logs, or Settings).
 func (mw *MainWindow) SelectTab(index int) {
+	mw.activePluginViewID = ""
 	mw.currentTab = index
 	if mw.dashboardTab != nil {
 		mw.dashboardTab.SetTabActive(index == TabIndexDashboard)
@@ -552,6 +591,9 @@ func (mw *MainWindow) SelectTab(index int) {
 
 	if mw.dashboardObj != nil {
 		mw.dashboardObj.Hide()
+	}
+	if mw.botObj != nil {
+		mw.botObj.Hide()
 	}
 	if mw.viewersObj != nil {
 		mw.viewersObj.Hide()
@@ -565,6 +607,9 @@ func (mw *MainWindow) SelectTab(index int) {
 
 	if mw.dashboardBtn != nil {
 		mw.dashboardBtn.Importance = widget.MediumImportance
+	}
+	if mw.botBtn != nil {
+		mw.botBtn.Importance = widget.MediumImportance
 	}
 	if mw.viewersBtn != nil {
 		mw.viewersBtn.Importance = widget.MediumImportance
@@ -583,6 +628,16 @@ func (mw *MainWindow) SelectTab(index int) {
 		}
 		if mw.dashboardBtn != nil {
 			mw.dashboardBtn.Importance = widget.HighImportance
+		}
+	case TabIndexBot:
+		if mw.botObj != nil {
+			mw.botObj.Show()
+		}
+		if mw.botBtn != nil {
+			mw.botBtn.Importance = widget.HighImportance
+		}
+		if mw.botTab != nil {
+			mw.botTab.Refresh()
 		}
 	case TabIndexViewers:
 		if mw.viewersObj != nil {
@@ -619,6 +674,9 @@ func (mw *MainWindow) SelectTab(index int) {
 	if mw.dashboardBtn != nil {
 		mw.dashboardBtn.Refresh()
 	}
+	if mw.botBtn != nil {
+		mw.botBtn.Refresh()
+	}
 	if mw.viewersBtn != nil {
 		mw.viewersBtn.Refresh()
 	}
@@ -631,6 +689,7 @@ func (mw *MainWindow) SelectTab(index int) {
 	if mw.contentContainer != nil {
 		mw.contentContainer.Refresh()
 	}
+	mw.syncPluginTabVisibilityAndHighlight()
 }
 
 func (mw *MainWindow) syncServiceVisibility() {
@@ -860,26 +919,266 @@ func (mw *MainWindow) initHeader() {
 		ShowAboutDialog(mw.Window, mw.Session)
 	})
 
-	navButtons := container.NewHBox(
+	mw.pluginNavBox = container.NewHBox()
+	mw.pluginNavBox.Hide()
+
+	mw.navButtons = container.NewHBox(
 		mw.dashboardBtn,
+		mw.botBtn,
+		mw.pluginNavBox,
 		mw.viewersBtn,
 		mw.logsBtn,
 		mw.settingsBtn,
 	)
-	leftSide := container.NewHBox(
+	mw.leftSide = container.NewHBox(
 		mw.twitchStatusDot,
 		mw.youtubeStatusDot,
 		mw.tiktokStatusDot,
 		mw.kickStatusDot,
 		widget.NewSeparator(),
-		navButtons,
+		mw.navButtons,
 	)
 	rightSide := container.NewHBox(volContainer, mw.updateBtn, aboutBtn)
 
 	mw.headerBar = container.NewVBox(
-		container.NewHBox(leftSide, layout.NewSpacer(), rightSide),
+		container.NewHBox(mw.leftSide, layout.NewSpacer(), rightSide),
 		widget.NewSeparator(),
 	)
+	mw.applyBotTabVisibility(cfg.Bot.Enabled)
+	mw.syncPluginMainTabs()
+}
+
+type mountedPluginMainTab struct {
+	key        string
+	pluginUUID string
+	viewID     string
+	title      string
+	iconName   string
+	host       *PluginTabHost
+	obj        fyne.CanvasObject
+	btn        *widget.Button
+}
+
+const maxInlinePluginTabs = 3
+
+func (mw *MainWindow) initPluginTabs() {
+	if mw.Session == nil || mw.Session.PluginManager() == nil {
+		return
+	}
+	mw.pluginImageCache = NewPluginImageCache(nil)
+	mw.pluginTabs = make(map[string]*mountedPluginMainTab)
+	mw.pluginStatusUnsub = mw.Session.PluginManager().SubscribeStatusChange(func() {
+		fyne.Do(mw.syncPluginMainTabs)
+	})
+	mw.syncPluginMainTabs()
+}
+
+func (mw *MainWindow) closeAllPluginTabs() {
+	for _, pt := range mw.pluginTabs {
+		if pt.host != nil {
+			pt.host.Close()
+		}
+	}
+	clear(mw.pluginTabs)
+	mw.pluginTabsOrder = nil
+}
+
+// SelectPluginView activates a mounted plugin main tab by key ("<uuid>:<view_id>").
+func (mw *MainWindow) SelectPluginView(key string) {
+	mw.currentTab = -1
+	mw.activePluginViewID = key
+	if mw.dashboardTab != nil {
+		mw.dashboardTab.SetTabActive(false)
+	}
+	if mw.chatLogsTab != nil {
+		mw.chatLogsTab.SetTabActive(false)
+	}
+	for _, o := range []fyne.CanvasObject{mw.dashboardObj, mw.botObj, mw.viewersObj, mw.chatLogsObj, mw.settingsObj} {
+		if o != nil {
+			o.Hide()
+		}
+	}
+	for _, b := range []*widget.Button{mw.dashboardBtn, mw.botBtn, mw.viewersBtn, mw.logsBtn, mw.settingsBtn} {
+		if b != nil {
+			b.Importance = widget.MediumImportance
+			b.Refresh()
+		}
+	}
+	mw.syncPluginTabVisibilityAndHighlight()
+	if mw.contentContainer != nil {
+		mw.contentContainer.Refresh()
+	}
+}
+
+func (mw *MainWindow) syncPluginTabVisibilityAndHighlight() {
+	for _, key := range mw.pluginTabsOrder {
+		pt := mw.pluginTabs[key]
+		if pt == nil {
+			continue
+		}
+		active := mw.activePluginViewID != "" && mw.activePluginViewID == key
+		if pt.obj != nil {
+			if active {
+				pt.obj.Show()
+			} else {
+				pt.obj.Hide()
+			}
+		}
+		if pt.btn != nil {
+			if active {
+				pt.btn.Importance = widget.HighImportance
+			} else {
+				pt.btn.Importance = widget.MediumImportance
+			}
+			pt.btn.Refresh()
+		}
+	}
+}
+
+func (mw *MainWindow) syncPluginMainTabs() {
+	if mw.Session == nil || mw.Session.PluginManager() == nil || mw.contentContainer == nil || mw.pluginNavBox == nil {
+		return
+	}
+	mgr := mw.Session.PluginManager()
+	if mw.pluginTabs == nil {
+		mw.pluginTabs = make(map[string]*mountedPluginMainTab)
+	}
+	if mw.pluginImageCache == nil {
+		mw.pluginImageCache = NewPluginImageCache(nil)
+	}
+
+	type wantView struct {
+		key        string
+		pluginUUID string
+		pluginName string
+		desc       *pluginv1.ViewDescriptor
+	}
+	var desired []wantView
+	desiredSet := make(map[string]bool)
+	for _, st := range mgr.Plugins() {
+		if st.State == pluginhost.StatusDisabled || st.State == pluginhost.StatusAwaitingTrust {
+			// Keep already-mounted crashed views so user sees isolated Restart / View Logs banner,
+			// unless intentionally disabled or untrusted.
+			continue
+		}
+		for _, vd := range st.Views {
+			if vd == nil || vd.GetPlacement() != pluginv1.ViewPlacement_VIEW_PLACEMENT_MAIN_TAB {
+				continue
+			}
+			k := st.UUID + ":" + vd.GetId()
+			desired = append(desired, wantView{
+				key:        k,
+				pluginUUID: st.UUID,
+				pluginName: st.Name,
+				desc:       vd,
+			})
+			desiredSet[k] = true
+		}
+	}
+
+	// Remove tabs that are no longer desired.
+	for key, pt := range mw.pluginTabs {
+		if !desiredSet[key] {
+			if pt.obj != nil {
+				mw.contentContainer.Remove(pt.obj)
+			}
+			if pt.host != nil {
+				pt.host.Close()
+			}
+			delete(mw.pluginTabs, key)
+			if mw.activePluginViewID == key {
+				mw.SelectTab(TabIndexDashboard)
+			}
+		}
+	}
+
+	var order []string
+	var navObjs []fyne.CanvasObject
+	var overflow []*mountedPluginMainTab
+
+	for i, wv := range desired {
+		pt := mw.pluginTabs[wv.key]
+		if pt == nil {
+			title := strings.TrimSpace(wv.desc.GetTitle())
+			if title == "" {
+				title = wv.pluginName
+			}
+			host := NewPluginTabHost(mgr, mw.Window, mw.pluginImageCache, wv.pluginUUID, wv.pluginName, wv.desc.GetId(), mw.SetStatus)
+			wrapped := newWidthClampContainer(host.Root())
+			wrapped.Hide()
+			mw.contentContainer.Add(wrapped)
+
+			keyCopy := wv.key
+			iconRes := resolvePluginIcon(wv.desc.GetIconName())
+			var btn *widget.Button
+			if iconRes != nil {
+				btn = widget.NewButtonWithIcon(title, iconRes, func() { mw.SelectPluginView(keyCopy) })
+			} else {
+				btn = widget.NewButton(title, func() { mw.SelectPluginView(keyCopy) })
+			}
+
+			pt = &mountedPluginMainTab{
+				key:        wv.key,
+				pluginUUID: wv.pluginUUID,
+				viewID:     wv.desc.GetId(),
+				title:      title,
+				iconName:   wv.desc.GetIconName(),
+				host:       host,
+				obj:        wrapped,
+				btn:        btn,
+			}
+			mw.pluginTabs[wv.key] = pt
+		}
+		order = append(order, wv.key)
+		if i < maxInlinePluginTabs {
+			navObjs = append(navObjs, pt.btn)
+		} else {
+			overflow = append(overflow, pt)
+		}
+	}
+	mw.pluginTabsOrder = order
+
+	if len(overflow) > 0 {
+		overflowItems := make([]*fyne.MenuItem, 0, len(overflow))
+		for _, pt := range overflow {
+			keyCopy := pt.key
+			item := fyne.NewMenuItem(pt.title, func() {
+				mw.SelectPluginView(keyCopy)
+			})
+			if res := resolvePluginIcon(pt.iconName); res != nil {
+				item.Icon = res
+			}
+			overflowItems = append(overflowItems, item)
+		}
+		var overflowBtn *widget.Button
+		overflowBtn = widget.NewButton("Plugins ▾", func() {
+			if mw.Window == nil || mw.Window.Canvas() == nil {
+				return
+			}
+			menu := fyne.NewMenu("", overflowItems...)
+			pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(overflowBtn).Add(fyne.NewPos(0, overflowBtn.Size().Height))
+			widget.ShowPopUpMenuAtPosition(menu, mw.Window.Canvas(), pos)
+		})
+		navObjs = append(navObjs, overflowBtn)
+	}
+
+	mw.pluginNavBox.Objects = navObjs
+	if len(navObjs) == 0 {
+		mw.pluginNavBox.Hide()
+	} else {
+		mw.pluginNavBox.Show()
+	}
+	mw.pluginNavBox.Refresh()
+	mw.syncPluginTabVisibilityAndHighlight()
+	if mw.navButtons != nil {
+		mw.navButtons.Refresh()
+	}
+	if mw.leftSide != nil {
+		mw.leftSide.Refresh()
+	}
+	if mw.headerBar != nil {
+		mw.headerBar.Refresh()
+	}
 }
 
 func (mw *MainWindow) triggerTogglePanic() {
@@ -960,6 +1259,34 @@ func (mw *MainWindow) syncLoggingState(enabled bool) {
 		if mw.settingsTab != nil {
 			mw.settingsTab.SyncLoggingState(enabled)
 		}
+	})
+}
+
+func (mw *MainWindow) applyBotTabVisibility(enabled bool) {
+	if mw.botBtn != nil {
+		if enabled {
+			mw.botBtn.Show()
+		} else {
+			mw.botBtn.Hide()
+		}
+	}
+	if !enabled && mw.currentTab == TabIndexBot {
+		mw.SelectTab(TabIndexDashboard)
+	}
+	if mw.navButtons != nil {
+		mw.navButtons.Refresh()
+	}
+	if mw.leftSide != nil {
+		mw.leftSide.Refresh()
+	}
+	if mw.headerBar != nil {
+		mw.headerBar.Refresh()
+	}
+}
+
+func (mw *MainWindow) syncBotState(enabled bool) {
+	fyne.Do(func() {
+		mw.applyBotTabVisibility(enabled)
 	})
 }
 
