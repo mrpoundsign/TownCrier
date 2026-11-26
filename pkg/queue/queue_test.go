@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -690,6 +691,115 @@ func TestQueueMicGatePausesMidSpeechAndResumesSentence(t *testing.T) {
 	case <-finished:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for item to finish")
+	}
+}
+
+func TestQueuePopNextMicGateNoLostWakeupDeterministic(t *testing.T) {
+	player := &mockPlayer{}
+	engine := &mockEngine{}
+	cfg := config.DefaultConfig()
+
+	q := NewQueue(player, engine, func() *config.Config { return cfg })
+	defer q.Close()
+
+	var gated atomic.Bool
+	var armed atomic.Bool
+	enteredFn := make(chan struct{})
+	releaseFn := make(chan struct{})
+
+	q.SetMicGateFunc(func() bool {
+		if armed.CompareAndSwap(true, false) {
+			close(enteredFn)
+			<-releaseFn
+			// Return stale true even though NotifyMicGateChanged already cleared mic gate.
+			return true
+		}
+		return gated.Load()
+	})
+
+	finished := make(chan string, 1)
+	q.SetOnItemFinished(func(it *Item) {
+		finished <- it.ID
+	})
+
+	armed.Store(true)
+	if err := q.Enqueue(&Item{ID: "no-lost-wakeup", Priority: 1, Text: "hello"}); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	select {
+	case <-enteredFn:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for popNext to enter micGateFn")
+	}
+
+	// Simulate mic transitioning inactive -> Broadcast() while popNext is unlocked inside micGateFn().
+	gated.Store(false)
+	q.NotifyMicGateChanged()
+	close(releaseFn)
+
+	select {
+	case got := <-finished:
+		if got != "no-lost-wakeup" {
+			t.Fatalf("expected item no-lost-wakeup, got %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("lost wakeup: dispatcher wedged in micPaused after concurrent NotifyMicGateChanged")
+	}
+
+	if q.IsMicPaused() {
+		t.Fatal("expected IsMicPaused()=false after gate cleared")
+	}
+}
+
+func TestQueueMicGateConcurrentStress(t *testing.T) {
+	player := &mockPlayer{}
+	engine := &mockEngine{}
+	cfg := config.DefaultConfig()
+
+	q := NewQueue(player, engine, func() *config.Config { return cfg })
+	defer q.Close()
+
+	var gated atomic.Bool
+	q.SetMicGateFunc(gated.Load)
+
+	const totalItems = 40
+	finished := make(chan string, totalItems)
+	q.SetOnItemFinished(func(it *Item) {
+		finished <- it.ID
+	})
+
+	var wg sync.WaitGroup
+	for g := range 3 {
+		workerID := g
+		wg.Go(func() {
+			for step := range 60 {
+				gated.Store((workerID+step)%2 == 0)
+				q.NotifyMicGateChanged()
+			}
+		})
+	}
+	wg.Go(func() {
+		for i := range totalItems {
+			if err := q.Enqueue(&Item{ID: "stress-" + strconv.Itoa(i), Priority: 1, Text: "hi"}); err != nil {
+				t.Errorf("Enqueue failed: %v", err)
+			}
+		}
+	})
+	wg.Wait()
+
+	gated.Store(false)
+	q.NotifyMicGateChanged()
+
+	for i := range totalItems {
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for stress item %d/%d (micPaused=%v, depth=%d)", i, totalItems, q.IsMicPaused(), q.Depth())
+		}
+	}
+	if q.IsMicPaused() {
+		t.Fatal("expected IsMicPaused()=false after final clear")
 	}
 }
 
