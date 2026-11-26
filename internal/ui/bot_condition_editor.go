@@ -97,6 +97,8 @@ func (e *botConditionEditor) Close() {
 	if e.cancel != nil {
 		e.cancel()
 	}
+	uiRenderMu.Lock()
+	uiRenderMu.Unlock() //nolint:staticcheck // barrier ensuring any in-flight fyne.Do batch completes before Close returns
 }
 
 // CanvasObject returns the condition editor UI container.
@@ -257,6 +259,11 @@ func (e *botConditionEditor) syncRightValueOptions(forceRefresh bool) {
 			return
 		}
 		e.rhsRefreshBtn.Enable()
+		if len(snap.Scenes) > 0 {
+			e.rhsHintLbl.SetText(fmt.Sprintf("🟢 Pick from %d OBS scenes or type a scene name / %%value%%.", len(snap.Scenes)))
+		} else {
+			e.rhsHintLbl.SetText("🟡 Loading OBS scenes...")
+		}
 		gen := e.scenesGen.Add(1)
 		go func() {
 			reqCtx, cancel := context.WithTimeout(e.ctx, 3*time.Second)
@@ -269,6 +276,8 @@ func (e *botConditionEditor) syncRightValueOptions(forceRefresh bool) {
 			e.obsScenes = slices.Clone(scenes)
 			e.mu.Unlock()
 			fyne.Do(func() {
+				uiRenderMu.Lock()
+				defer uiRenderMu.Unlock()
 				if e.ctx.Err() != nil || e.scenesGen.Load() != gen {
 					return
 				}
@@ -276,11 +285,6 @@ func (e *botConditionEditor) syncRightValueOptions(forceRefresh bool) {
 				e.rhsHintLbl.SetText(fmt.Sprintf("🟢 Pick from %d OBS scenes or type a scene name / %%value%%.", len(scenes)))
 			})
 		}()
-		if len(snap.Scenes) > 0 {
-			e.rhsHintLbl.SetText(fmt.Sprintf("🟢 Pick from %d OBS scenes or type a scene name / %%value%%.", len(snap.Scenes)))
-		} else {
-			e.rhsHintLbl.SetText("🟡 Loading OBS scenes...")
-		}
 
 	case isOBSConnectedToken(lhs):
 		e.rhsRefreshBtn.Hide()

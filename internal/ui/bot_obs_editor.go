@@ -108,6 +108,8 @@ func (e *obsSubActionEditor) Close() {
 	if e.cancel != nil {
 		e.cancel()
 	}
+	uiRenderMu.Lock()
+	uiRenderMu.Unlock() //nolint:staticcheck // barrier ensuring any in-flight fyne.Do batch completes before Close returns
 }
 
 // CanvasObject returns the root canvas object for embedding inside the sub-action dialog.
@@ -503,6 +505,8 @@ func (e *obsSubActionEditor) hydrateInitial(forceRefresh bool) {
 		e.mu.Unlock()
 
 		fyne.Do(func() {
+			uiRenderMu.Lock()
+			defer uiRenderMu.Unlock()
 			if e.ctx.Err() != nil {
 				return
 			}
@@ -524,12 +528,13 @@ func (e *obsSubActionEditor) hydrateInitial(forceRefresh bool) {
 				}
 				e.updateStatusText(fmt.Sprintf("🟢 OBS Connected — %d scenes, %d inputs, %d transitions (Active: %s)", len(scenes), len(inputs), len(transitions), cur))
 			}
-		})
 
-		e.triggerSceneItemsRefresh(e.normalizeSceneText(), forceRefresh)
-		if e.currentOp() == "set_filter_enabled" {
-			e.triggerFilterRefresh(forceRefresh)
-		}
+			nextScene := e.normalizeSceneText()
+			e.triggerSceneItemsRefresh(nextScene, forceRefresh)
+			if e.currentOp() == "set_filter_enabled" {
+				e.triggerFilterRefreshForTarget(e.resolveFilterTarget())
+			}
+		})
 	}()
 }
 
@@ -560,6 +565,8 @@ func (e *obsSubActionEditor) triggerSceneItemsRefresh(scene string, forceRefresh
 			opts = append(opts, it.SourceName)
 		}
 		fyne.Do(func() {
+			uiRenderMu.Lock()
+			defer uiRenderMu.Unlock()
 			if e.ctx.Err() != nil || e.itemsGen.Load() != gen {
 				return
 			}
@@ -568,18 +575,26 @@ func (e *obsSubActionEditor) triggerSceneItemsRefresh(scene string, forceRefresh
 	}()
 }
 
-func (e *obsSubActionEditor) triggerFilterRefresh(_ bool) {
-	if e.obsClient == nil || !e.obsClient.IsConnected() {
-		return
-	}
+func (e *obsSubActionEditor) resolveFilterTarget() string {
 	target := strings.TrimSpace(e.sourceEntry.Text)
 	if target == "" {
 		target = e.normalizeSceneText()
 	}
-	if target == "" {
+	if target == "" && e.obsClient != nil {
 		target = e.obsClient.CurrentProgramScene()
 	}
-	if target == "" {
+	return target
+}
+
+func (e *obsSubActionEditor) triggerFilterRefresh(_ bool) {
+	if e.obsClient == nil || !e.obsClient.IsConnected() {
+		return
+	}
+	e.triggerFilterRefreshForTarget(e.resolveFilterTarget())
+}
+
+func (e *obsSubActionEditor) triggerFilterRefreshForTarget(target string) {
+	if e.obsClient == nil || !e.obsClient.IsConnected() || target == "" {
 		return
 	}
 
@@ -601,6 +616,8 @@ func (e *obsSubActionEditor) triggerFilterRefresh(_ bool) {
 			opts = append(opts, f.Name)
 		}
 		fyne.Do(func() {
+			uiRenderMu.Lock()
+			defer uiRenderMu.Unlock()
 			if e.ctx.Err() != nil || e.filtersGen.Load() != gen {
 				return
 			}
@@ -628,6 +645,8 @@ func (e *obsSubActionEditor) snapshotTransformFromOBS() {
 
 		tr, err := e.obsClient.GetSceneItemTransform(ctx, scene, source)
 		fyne.Do(func() {
+			uiRenderMu.Lock()
+			defer uiRenderMu.Unlock()
 			if e.ctx.Err() != nil {
 				return
 			}

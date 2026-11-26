@@ -462,6 +462,9 @@ func TestOBSSubActionEditorLiveDiscoverySnapshotAndApply(t *testing.T) {
 	fyneApp := test.NewApp()
 	defer fyneApp.Quit()
 
+	win := fyneApp.NewWindow("OBS Editor Test")
+	defer win.Close()
+
 	ed := newOBSSubActionEditor(nil, client, config.BotSubActionDef{
 		Kind:         "obs",
 		OBSOperation: "set_filter_enabled",
@@ -470,11 +473,13 @@ func TestOBSSubActionEditorLiveDiscoverySnapshotAndApply(t *testing.T) {
 	}, nil, nil)
 	defer ed.Close()
 
-	win := fyneApp.NewWindow("OBS Editor Test")
+	uiRenderMu.Lock()
 	win.SetContent(ed.CanvasObject())
-	defer win.Close()
+	uiRenderMu.Unlock()
 
 	require.Eventually(t, func() bool {
+		uiRenderMu.Lock()
+		status := ed.statusLbl.Text
 		ed.mu.RLock()
 		nScenes := len(ed.scenes)
 		nItems := len(ed.sceneItems)
@@ -482,7 +487,8 @@ func TestOBSSubActionEditorLiveDiscoverySnapshotAndApply(t *testing.T) {
 		nInputs := len(ed.inputs)
 		nTrans := len(ed.transitions)
 		ed.mu.RUnlock()
-		return strings.Contains(ed.statusLbl.Text, "OBS Connected") &&
+		uiRenderMu.Unlock()
+		return strings.Contains(status, "OBS Connected") &&
 			nScenes >= 2 &&
 			nItems >= 1 &&
 			nFilters >= 1 &&
@@ -490,16 +496,25 @@ func TestOBSSubActionEditorLiveDiscoverySnapshotAndApply(t *testing.T) {
 			nTrans >= 1
 	}, 3*time.Second, 20*time.Millisecond)
 
+	uiRenderMu.Lock()
 	ed.opSelect.SetSelected(botOptionLabel(botOBSOperationOptions, "set_transform"))
 	ed.snapshotTransformFromOBS()
+	uiRenderMu.Unlock()
 
 	require.Eventually(t, func() bool {
-		return ed.posXEntry.Text == "140.5" && ed.scaleXEntry.Text == "1.35"
+		uiRenderMu.Lock()
+		snapStatus := ed.snapshotStatLbl.Text
+		posX := ed.posXEntry.Text
+		scaleX := ed.scaleXEntry.Text
+		uiRenderMu.Unlock()
+		return strings.Contains(snapStatus, "Captured") && posX == "140.5" && scaleX == "1.35"
 	}, 3*time.Second, 20*time.Millisecond)
 
 	var saved config.BotSubActionDef
 	saved.Kind = "obs"
+	uiRenderMu.Lock()
 	ed.ApplyTo(&saved)
+	uiRenderMu.Unlock()
 	require.Equal(t, "set_transform", saved.OBSOperation)
 	require.Equal(t, "Main", saved.OBSScene)
 	require.Equal(t, "Camera", saved.OBSSource)
@@ -578,25 +593,33 @@ func TestBotConditionEditorOBSScenesAndBranches(t *testing.T) {
 
 	ed := newBotConditionEditor(win, client, config.BotSubActionDef{Kind: "if_else"}, actLabels, actToID, idToAct, nil, nil, nil)
 	defer ed.Close()
-	win.SetContent(ed.CanvasObject())
 
+	uiRenderMu.Lock()
+	win.SetContent(ed.CanvasObject())
 	// Picking Current OBS Scene preset normalizes LHS to %obs.scene% and loads OBS scenes for RHS.
 	ed.lhsEntry.SetText(botOptionLabel(botConditionLHSPresetOptions, "%obs.scene%"))
-	require.Equal(t, "%obs.scene%", ed.lhsEntry.Text)
+	lhsText := ed.lhsEntry.Text
+	uiRenderMu.Unlock()
+	require.Equal(t, "%obs.scene%", lhsText)
+
 	require.Eventually(t, func() bool {
+		uiRenderMu.Lock()
+		hint := ed.rhsHintLbl.Text
 		ed.mu.RLock()
 		n := len(ed.obsScenes)
 		ed.mu.RUnlock()
-		return n == 2 && strings.Contains(ed.rhsHintLbl.Text, "2 OBS scenes")
+		uiRenderMu.Unlock()
+		return n == 2 && strings.Contains(hint, "2 OBS scenes")
 	}, 3*time.Second, 20*time.Millisecond)
-
-	ed.rhsEntry.SetText("Enhance")
-	ed.thenBranch.modeSelect.SetSelected(botOptionLabel(botConditionBranchModeOptions, "run_action_break"))
-	ed.elseBranch.modeSelect.SetSelected(botOptionLabel(botConditionBranchModeOptions, "continue"))
 
 	var saved config.BotSubActionDef
 	saved.Kind = "if_else"
+	uiRenderMu.Lock()
+	ed.rhsEntry.SetText("Enhance")
+	ed.thenBranch.modeSelect.SetSelected(botOptionLabel(botConditionBranchModeOptions, "run_action_break"))
+	ed.elseBranch.modeSelect.SetSelected(botOptionLabel(botConditionBranchModeOptions, "continue"))
 	ed.ApplyTo(&saved)
+	uiRenderMu.Unlock()
 	require.Equal(t, "%obs.scene%", saved.LHS)
 	require.Equal(t, "eq", saved.Operator)
 	require.Equal(t, "Enhance", saved.RHS)
@@ -609,8 +632,12 @@ func TestBotConditionEditorOBSScenesAndBranches(t *testing.T) {
 	// Re-opening preserves branch mode and target action; custom multi-step branches stay intact.
 	ed2 := newBotConditionEditor(win, client, saved, actLabels, actToID, idToAct, nil, nil, nil)
 	defer ed2.Close()
-	require.Equal(t, botOptionLabel(botConditionBranchModeOptions, "run_action_break"), ed2.thenBranch.modeSelect.Selected)
-	require.Equal(t, "Enhance Zoom", ed2.thenBranch.actSelect.Selected)
+	uiRenderMu.Lock()
+	thenMode := ed2.thenBranch.modeSelect.Selected
+	thenAct := ed2.thenBranch.actSelect.Selected
+	uiRenderMu.Unlock()
+	require.Equal(t, botOptionLabel(botConditionBranchModeOptions, "run_action_break"), thenMode)
+	require.Equal(t, "Enhance Zoom", thenAct)
 
 	customStep := saved
 	customStep.ThenSubActions = []config.BotSubActionDef{
@@ -619,9 +646,12 @@ func TestBotConditionEditorOBSScenesAndBranches(t *testing.T) {
 	}
 	ed3 := newBotConditionEditor(win, client, customStep, actLabels, actToID, idToAct, nil, nil, nil)
 	defer ed3.Close()
-	require.True(t, strings.HasPrefix(ed3.thenBranch.modeSelect.Selected, keepCustomBranchPrefix))
 	var roundTripped config.BotSubActionDef
+	uiRenderMu.Lock()
+	customMode := ed3.thenBranch.modeSelect.Selected
 	ed3.ApplyTo(&roundTripped)
+	uiRenderMu.Unlock()
+	require.True(t, strings.HasPrefix(customMode, keepCustomBranchPrefix))
 	require.Len(t, roundTripped.ThenSubActions, 2)
 	require.Equal(t, "delay", roundTripped.ThenSubActions[0].Kind)
 	require.Equal(t, 250, roundTripped.ThenSubActions[0].DelayMs)
