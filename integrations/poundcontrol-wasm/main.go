@@ -60,7 +60,7 @@ const (
 )
 
 // PluginVersion is overridden at build time via -ldflags "-X main.PluginVersion=...".
-var PluginVersion = "0.1.0-dev"
+var PluginVersion = "0.1.0"
 
 type slotInstance struct {
 	Context    string
