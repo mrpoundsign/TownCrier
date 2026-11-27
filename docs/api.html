@@ -45,7 +45,8 @@
                   <li><a class="sidebar-sublink" href="#websocket">5. WebSocket Protocol (/ws)</a></li>
                   <li><a class="sidebar-sublink" href="#schemas">6. Schemas &amp; Protobuf</a></li>
                   <li><a class="sidebar-sublink" href="#overlays">7. OBS Overlay Endpoints</a></li>
-                  <li><a class="sidebar-sublink" href="#recipes">8. Integration Recipes</a></li>
+                  <li><a class="sidebar-sublink" href="#plugin-abi">8. Plugin ABI v1.1.0 &amp; Widgets</a></li>
+                  <li><a class="sidebar-sublink" href="#recipes">9. Integration Recipes</a></li>
                 </ul>
               </li>
             </ul>
@@ -162,7 +163,7 @@
                     <th scope="row"><code>/api/plugins/run</code></th>
                     <td><span class="method-badge method-post">POST</span></td>
                     <td>Control API</td>
-                    <td>Invoke an exported v1.0.0 plugin action (including native companion plugins)</td>
+                    <td>Invoke an exported v1.1.0 plugin action (including native companion plugins)</td>
                   </tr>
                   <tr>
                     <th scope="row"><code>/ws</code></th>
@@ -174,7 +175,7 @@
                     <th scope="row"><code>/overlay</code></th>
                     <td><span class="method-badge method-get">GET</span></td>
                     <td>Unified OBS Canvas</td>
-                    <td>Combined transparent OBS Browser Source uniting TTS, Live Chat, and Voice Subtitles</td>
+                    <td>Combined transparent OBS Browser Source uniting TTS, Live Chat, Voice Subtitles, and Plugin Widgets</td>
                   </tr>
                   <tr>
                     <th scope="row"><code>/overlay/tts</code></th>
@@ -186,7 +187,7 @@
                     <th scope="row"><code>/overlay/chat</code></th>
                     <td><span class="method-badge method-get">GET</span></td>
                     <td>Chat Overlay + Logging</td>
-                    <td>OBS Browser Source page rendering a filtered live chat and alerts feed</td>
+                    <td>OBS Browser Source page rendering a filtered live chat, native emotes/cheermotes, and alerts feed</td>
                   </tr>
                   <tr>
                     <th scope="row"><code>/overlay/subtitles</code></th>
@@ -198,7 +199,13 @@
                     <th scope="row"><code>/overlay/designer</code></th>
                     <td><span class="method-badge method-get">GET</span></td>
                     <td>Any Overlay</td>
-                    <td>Tabbed browser UI for customizing overlay layout, colors, typography, and scoped CSS</td>
+                    <td>Tabbed browser UI for customizing overlay layout, colors, typography, plugin widgets, and scoped CSS</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/overlay/assets/&lt;file&gt;</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td>Any Overlay</td>
+                    <td>Shared embedded overlay assets including <code>sdk.js</code> (Plugin Widget SDK) and <code>emotes.js</code></td>
                   </tr>
                   <tr>
                     <th scope="row"><code>/api/overlay/chat</code></th>
@@ -232,9 +239,9 @@
                   </tr>
                   <tr>
                     <th scope="row"><code>/plugins/&lt;uuid&gt;/*</code></th>
-                    <td><span class="method-badge method-get">GET</span> <span class="method-badge method-post">POST</span></td>
+                    <td><span class="method-badge method-get">GET</span> <span class="method-badge method-sse">SSE</span></td>
                     <td>Plugins Enabled</td>
-                    <td>Plugin-scoped HTTP routes and custom OBS Browser Source overlays (e.g. CrowdDJ Now Playing)</td>
+                    <td>Plugin-scoped overlay assets (<code>/overlay/*</code>), widget state (<code>/state</code>), resolved style (<code>/widget-style</code>), and SSE stream (<code>/events</code>)</td>
                   </tr>
                 </tbody>
               </table>
@@ -571,7 +578,7 @@
 
             <h3><code>GET /api/actions</code></h3>
             <p>
-              Returns JSON listing all enabled Bot Automation actions (<code>bot_actions</code>) and running v1.0.0 plugin actions (<code>plugin_actions</code>, including controller types and dynamic live tile visuals) for PoundControl, Stream Deck, or scripts.
+              Returns JSON listing all enabled Bot Automation actions (<code>bot_actions</code>) and running v1.1.0 plugin actions (<code>plugin_actions</code>, including controller types and dynamic live tile visuals) for PoundControl, Stream Deck, or scripts.
             </p>
 
             <h3><code>POST /api/bot/run</code> &amp; <code>POST /api/plugins/run</code></h3>
@@ -1100,7 +1107,7 @@ message ServerEnvelope {
                     <th scope="row"><code>/overlay</code></th>
                     <td><span class="method-badge method-get">GET</span></td>
                     <td><code>?token=</code></td>
-                    <td>Unified drag-and-resize OBS Canvas combining TTS captions, Live Chat, and Voice Subtitles</td>
+                    <td>Unified drag-and-resize OBS Canvas combining TTS captions, Live Chat, Voice Subtitles, and declared Plugin Widgets</td>
                   </tr>
                   <tr>
                     <th scope="row"><code>/overlay/tts</code></th>
@@ -1112,7 +1119,7 @@ message ServerEnvelope {
                     <th scope="row"><code>/overlay/chat</code></th>
                     <td><span class="method-badge method-get">GET</span></td>
                     <td><code>?preset=</code>, <code>?summary=1|0</code>, <code>?limit=5..100</code> (default <code>25</code>), <code>?fade=&lt;sec&gt;</code>, <code>?scale=50..300</code>, <code>?token=</code></td>
-                    <td>Transparent live chat &amp; alerts overlay matching any configured Live Log preset</td>
+                    <td>Transparent live chat &amp; alerts overlay with native Twitch/YouTube/Kick emotes &amp; cheermotes via <code>/overlay/assets/emotes.js</code></td>
                   </tr>
                   <tr>
                     <th scope="row"><code>/overlay/subtitles</code></th>
@@ -1124,13 +1131,37 @@ message ServerEnvelope {
                     <th scope="row"><code>/overlay/designer</code></th>
                     <td><span class="method-badge method-get">GET</span></td>
                     <td><code>?token=</code></td>
-                    <td>Tabbed Overlay Style Designer syncing per-module scoped CSS, typography, and layout live</td>
+                    <td>Tabbed Overlay Style Designer syncing per-module &amp; per-widget scoped CSS, theme toggles, typography, and layout live</td>
                   </tr>
                   <tr>
-                    <th scope="row"><code>/plugins/&lt;uuid&gt;/*</code></th>
-                    <td><span class="method-badge method-get">GET</span> <span class="method-badge method-post">POST</span></td>
+                    <th scope="row"><code>/overlay/assets/sdk.js</code><br><code>/overlay/assets/emotes.js</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td>None</td>
+                    <td>Shared overlay browser assets: <code>sdk.js</code> (<code>TownCrierOverlay.connect</code> widget SDK) and <code>emotes.js</code> (Twitch/YouTube/Kick emote &amp; cheermote parser)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/plugins/&lt;uuid&gt;/overlay</code><br><code>/plugins/&lt;uuid&gt;/overlay/&lt;asset&gt;</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td><code>?widget=</code>, <code>?embedded=1</code>, <code>?preview=1</code>, <code>?token=</code></td>
+                    <td>Serves plugin-embedded overlay HTML, CSS, JS, JSON, and image assets (defaults to <code>index.html</code>)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/plugins/&lt;uuid&gt;/state</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
                     <td><code>?token=</code></td>
-                    <td>Plugin-scoped HTTP routes and custom OBS Browser Source pages (e.g. CrowdDJ Now Playing)</td>
+                    <td>Returns plugin-supplied JSON state snapshot for standalone or embedded overlay widgets</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/plugins/&lt;uuid&gt;/widget-style</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td><code>?widget=&lt;id&gt;</code>, <code>?token=</code></td>
+                    <td>Returns resolved host theme CSS variables (<code>--tc-*</code>), <code>use_host_theme</code>, widget schema values, and scoped custom CSS</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/plugins/&lt;uuid&gt;/events</code></th>
+                    <td><span class="method-badge method-sse">SSE</span></td>
+                    <td><code>?widget=&lt;id&gt;</code>, <code>?token=</code></td>
+                    <td>Server-Sent Events stream pushing <code>style</code> updates, host <code>reload</code> triggers, and named plugin events</td>
                   </tr>
                   <tr>
                     <th scope="row"><code>/api/overlay/chat</code></th>
@@ -1147,8 +1178,8 @@ message ServerEnvelope {
                   <tr>
                     <th scope="row"><code>/api/overlay/style</code></th>
                     <td><span class="method-badge method-get">GET</span> <span class="method-badge method-post">POST</span></td>
-                    <td>JSON body: <code>tts_position</code>, <code>custom_css</code>, <code>style_json</code></td>
-                    <td>Reads or saves persisted overlay styling; <code>POST</code> broadcasts <code>reload</code> to SSE and WebSocket overlays</td>
+                    <td>JSON body: <code>tts_position</code>, <code>custom_css</code>, <code>style_json</code>, or <code>target: "plugin_widget"</code> (<code>plugin_uuid</code>, <code>widget_id</code>, <code>plugin_style</code>)</td>
+                    <td>Reads or saves persisted overlay styling; <code>GET</code> includes <code>host_theme</code> &amp; <code>plugin_widgets</code>; <code>POST</code> broadcasts <code>reload</code> / <code>style</code> events to SSE and WebSocket overlays and notifies plugins via <code>OnOverlayStyleChanged</code></td>
                   </tr>
                 </tbody>
               </table>
@@ -1182,10 +1213,109 @@ es.onmessage = (event) =&gt; {
             </figure>
           </section>
 
-          <!-- 8. Integration Recipes -->
+          <!-- 8. Plugin ABI v1.1.0 & Overlay Widgets -->
+          <section id="plugin-abi" class="card">
+            <span class="badge">proto/plugin/v1 &middot; v1.1.0</span>
+            <h2>8. Plugin ABI v1.1.0 &amp; Overlay Widgets</h2>
+            <p>
+              TownCrier&rsquo;s <code>proto/plugin/v1</code> host protocol is at <strong>Host API v1.1.0</strong> (<code>HOST_API_MAJOR = 1</code>, <code>HOST_API_MINOR = 1</code>, <code>HOST_API_PATCH = 0</code>), remaining backwards-compatible with all <code>v1.0.x</code> WASM and Native Subprocess plugins. Both backends support the same manifest, lifecycle, bot automation, and overlay capabilities.
+            </p>
+
+            <h3>Supported Capabilities</h3>
+            <p>Declare required and optional feature strings in your plugin <code>Manifest</code>:</p>
+            <pre><code>core.v1        events.v1        kv.v1             http.v1
+tts.v1         overlay.v1       ui.v1             overlay.routes.v1
+overlay.widgets.v1
+bot.events.v1  bot.before_tts.v1  bot.chat.v1     bot.moderate.v1
+bot.variables.v1  bot.actions.v1</code></pre>
+
+            <h3><code>OverlayWidgetDescriptor</code> (<code>overlay.widgets.v1</code>)</h3>
+            <p>
+              Adding entries to <code>Manifest.overlay_widgets</code> (field <code>18</code>) registers plugin-supplied browser widgets directly on the Unified OBS Canvas (<code>/overlay</code>) and in the Tabbed Style Designer (<code>/overlay/designer</code>). Plugins must also enable <code>permissions.overlay_broadcast</code> or declare <code>overlay.widgets.v1</code> / <code>overlay.routes.v1</code>.
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Field</th>
+                    <th>Type</th>
+                    <th>Notes &amp; Constraints</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><code>id</code></th>
+                    <td><code>string</code></td>
+                    <td>Required; unique per plugin, matches <code>[A-Za-z0-9_-]+</code>, max 64 characters</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>name</code> / <code>description</code></th>
+                    <td><code>string</code></td>
+                    <td>Human-readable widget title and tooltip shown in the Style Designer</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>entry_asset</code></th>
+                    <td><code>string</code></td>
+                    <td>Relative asset path inside the plugin overlay bundle (defaults to <code>index.html</code>)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>default_x</code>, <code>default_y</code>, <code>default_w</code>, <code>default_h</code></th>
+                    <td><code>double</code></td>
+                    <td>Default canvas placement and size; pair with optional <code>min_w</code> / <code>min_h</code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>default_hidden</code></th>
+                    <td><code>bool</code></td>
+                    <td>When <code>true</code>, widget starts hidden on <code>/overlay</code> until enabled by the user</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>supports_host_theme</code></th>
+                    <td><code>bool</code></td>
+                    <td>Allows users to inherit TownCrier&rsquo;s <code>--tc-*</code> CSS theme variables</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>style_schema</code></th>
+                    <td><code>repeated SettingField</code></td>
+                    <td>Declarative style controls rendered automatically inside <code>/overlay/designer</code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>disable_custom_css</code></th>
+                    <td><code>bool</code></td>
+                    <td>Hides the per-widget custom CSS editor in the Style Designer</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Go SDK &amp; Host Theme CSS Variables</h3>
+            <ul>
+              <li><strong>Optional Go Interface (<code>pkg/pluginsdk</code>):</strong> Implement <code>OverlayAssetPlugin</code> (<code>GetOverlayAsset(assetPath string)</code>) to serve HTML/CSS/JS/image assets, and optionally <code>OverlayStylePlugin</code> (<code>OnOverlayStyleChanged(req *pluginv1.OnOverlayStyleChangedRequest)</code>) to react live when the user updates <code>widget_id</code>, <code>values</code> (<code>SettingsMap</code>), <code>custom_css</code>, or <code>use_host_theme</code> in <code>/overlay/designer</code>.</li>
+              <li><strong>Host Theme CSS Custom Properties:</strong> When <code>use_host_theme</code> is active, <code>/overlay/assets/sdk.js</code> sets <code>data-tc-host-theme=&quot;1&quot;</code> on <code>&lt;html&gt;</code> and injects:
+                <code>--tc-bg</code>, <code>--tc-bg-solid</code>, <code>--tc-bg-opacity</code>, <code>--tc-border</code>, <code>--tc-accent</code>, <code>--tc-text</code>, <code>--tc-muted</code>, <code>--tc-radius</code>, <code>--tc-font-scale</code>.
+                It also applies <code>.tc-embedded</code> when loaded inside <code>/overlay</code> (<code>?embedded=1</code>) and <code>.tc-preview</code> in Style Designer previews (<code>?preview=1</code>).</li>
+            </ul>
+
+            <h3>Widget Browser SDK Example (<code>/overlay/assets/sdk.js</code>)</h3>
+            <pre><code>&lt;script src="/overlay/assets/sdk.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+  const conn = window.TownCrierOverlay.connect({
+    widgetId: "now-playing", // or pass pluginUUID explicitly
+    events: ["track", "progress"],
+    onStyle(stylePayload) {
+      // stylePayload: { widget_id, use_host_theme, values, custom_css, host_theme }
+      console.log("Updated widget style:", stylePayload.values);
+    },
+    onEvent(eventName, data, rawEvent) {
+      if (eventName === "track") renderTrack(data);
+    },
+  });
+&lt;/script&gt;</code></pre>
+          </section>
+
+          <!-- 9. Integration Recipes -->
           <section id="recipes" class="card">
             <span class="badge">Examples</span>
-            <h2>8. Integration Recipes</h2>
+            <h2>9. Integration Recipes</h2>
 
             <h3>PowerShell (<code>Invoke-RestMethod</code>)</h3>
             <figure class="code-figure">

@@ -346,7 +346,7 @@
               Enable transparent OBS Browser Sources, open the visual style designer, and connect external deck controllers:
             </p>
             <ul>
-              <li><strong>Unified OBS Canvas (<code>/overlay</code>) &amp; Tabbed Style Designer (<code>/overlay/designer</code>):</strong> Combine the <em>Now Speaking</em> TTS card, <em>Live Chat</em> feed, and <em>Voice Subtitles</em> on a single drag-and-resize Browser Source, or embed individual routes (<code>/overlay/tts</code>, <code>/overlay/chat</code>, <code>/overlay/subtitles</code>).</li>
+              <li><strong>Unified OBS Canvas (<code>/overlay</code>) &amp; Tabbed Style Designer (<code>/overlay/designer</code>):</strong> Combine the <em>Now Speaking</em> TTS card, <em>Live Chat</em> feed (with native Twitch, YouTube, and Kick emotes plus Twitch cheermotes), <em>Voice Subtitles</em>, and registered <em>Plugin Widgets</em> on a single drag-and-resize Browser Source, or embed individual routes (<code>/overlay/tts</code>, <code>/overlay/chat</code>, <code>/overlay/subtitles</code>).</li>
               <li><strong>PoundControl Curated WASM Plugin:</strong> Install <strong>TownCrier &amp; Plugins</strong> from PoundControl's <strong>Settings &rarr; Plugins &rarr; Curated Catalog</strong> and point <strong>Settings &rarr; TownCrier</strong> to <code>127.0.0.1:8765</code> (plus your optional Auth Token). TownCrier automatically exports active Bot Automation and Plugin actions (including live tile SVG status badges).</li>
               <li><strong>1-Click Elgato Stream Deck Installer:</strong> Click <strong>Install / Update Elgato Stream Deck Plugin</strong> to install <code>com.github.mrpoundsign.towncrier.sdPlugin</code>.</li>
               <li><strong>Dual-Mode WebSocket &amp; HTTP REST Server:</strong> Runs on <code>127.0.0.1:8765</code> with optional Bearer authentication. See the <a href="api.html">Control API Reference</a>.</li>
@@ -397,12 +397,12 @@
             <h2>12. Managing WASM &amp; Trusted Native Plugins</h2>
             <div class="path-pill">Location: Settings &rarr; Plugins &bull; Header &ldquo;Plugins &#9662;&rdquo; Menu</div>
             <p>
-              TownCrier hosts both zero-trust WebAssembly modules and opt-in native companion apps (such as <strong>CrowdDJ</strong>) over a versioned <code>proto/plugin/v1</code> bus:
+              TownCrier hosts both zero-trust WebAssembly modules and opt-in native companion apps (such as <strong>CrowdDJ</strong>) over a versioned <code>proto/plugin/v1</code> bus (currently <strong>ABI v1.1.0</strong>; see the <a href="api.html#plugin-abi">Plugin ABI v1.1.0 &amp; Widgets Reference</a>):
             </p>
             <ul>
               <li><strong>Installing Plugins:</strong> Enable <strong>Enable Plugins (WASM &amp; Native Subprocess)</strong>, then place <code>.wasm</code> modules in <code>plugins/wasm/</code> or native bundles / <code>.link.json</code> pointers in <code>plugins/native/</code> (or click <strong>Add Folder...</strong> and <strong>Reload All</strong>).</li>
               <li><strong>Native Binary Trust Gate:</strong> Native subprocess plugins start paused for security review. Click <strong>Approve &amp; Trust</strong> on the plugin card in <strong>Settings &rarr; Plugins</strong> to pin its SHA-256 executable digest. Whenever a native companion app updates, TownCrier prompts once to re-approve the updated hash.</li>
-              <li><strong>Native UI Tabs &amp; OBS Overlays:</strong> Running plugins mount interactive tabs under Settings / the top <strong>Plugins &#9662;</strong> menu, persist state in isolated SQLite KV storage, expose OBS overlays under <code>/plugins/&lt;uuid&gt;/*</code>, and publish buttons straight to Elgato Stream Deck and PoundControl.</li>
+              <li><strong>Native UI Tabs &amp; Unified OBS Widgets (<code>overlay.widgets.v1</code>):</strong> Running plugins mount interactive tabs under Settings / the top <strong>Plugins &#9662;</strong> menu, persist state in isolated SQLite KV storage, register themeable OBS Canvas widgets and standalone routes under <code>/plugins/&lt;uuid&gt;/*</code>, and publish buttons straight to Elgato Stream Deck and PoundControl.</li>
             </ul>
           </section>
         </main>
