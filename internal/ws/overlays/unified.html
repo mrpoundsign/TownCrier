@@ -35,6 +35,14 @@
     flex-direction: column;
   }
   .hidden { display: none !important; }
+  .plugin-widget-frame {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: transparent;
+    display: block;
+    overflow: hidden;
+  }
 
   /* --- Now Speaking Widget --- */
   #widgetTTS {
@@ -387,8 +395,62 @@
   let chatConnected = false;
   let subConnected = false;
   let wsConnected = false;
+  let pluginReloadES = null;
+  let pluginReloadUUID = '';
   let subFadeSeconds = 10;
   let subFadeTimer = null;
+  const pluginSlots = Object.create(null);
+
+  function sanitizeAssetPath(raw) {
+    const clean = String(raw || '').trim().replace(/^\/+/, '');
+    if (!clean || clean.includes('..') || clean.includes('\\') || /^[a-zA-Z]+:/.test(clean)) {
+      return 'index.html';
+    }
+    return clean;
+  }
+
+  function buildPluginWidgetURL(w) {
+    const asset = sanitizeAssetPath(w.entry_asset);
+    const q = new URLSearchParams();
+    q.set('embedded', '1');
+    if (w.widget_id) q.set('widget', w.widget_id);
+    if (token) q.set('token', token);
+    return '/plugins/' + encodeURIComponent(w.plugin_uuid) + '/overlay/' + asset + '?' + q.toString();
+  }
+
+  function postStyleToPluginFrame(entry, hostTheme) {
+    if (!entry || !entry.iframe || !entry.iframe.contentWindow) return;
+    try {
+      entry.iframe.contentWindow.postMessage({
+        type: 'tc:overlay:style',
+        widget_id: entry.widget.widget_id,
+        style: entry.widget.style || {},
+        host_theme: hostTheme || {}
+      }, window.location.origin);
+    } catch (_) {}
+  }
+
+  function ensurePluginReloadStream(widgets) {
+    if (chatConnected || subConnected || wsConnected) {
+      return;
+    }
+    if (!Array.isArray(widgets) || widgets.length === 0) {
+      return;
+    }
+    const targetUUID = widgets[0].plugin_uuid;
+    if (pluginReloadES && pluginReloadUUID === targetUUID) {
+      return;
+    }
+    if (pluginReloadES) {
+      try { pluginReloadES.close(); } catch (_) {}
+      pluginReloadES = null;
+    }
+    pluginReloadUUID = targetUUID;
+    pluginReloadES = new EventSource('/plugins/' + encodeURIComponent(targetUUID) + '/events' + qSuffix);
+    pluginReloadES.addEventListener('reload', function() {
+      loadAllMeta();
+    });
+  }
 
   function scopeCSS(rawCSS, containerSelector) {
     if (!rawCSS) return '';
@@ -638,18 +700,82 @@
         subtitlesScopedCSS.textContent = scopeCSS(data.subtitles_custom_css || '', '#widgetSubtitles');
 
         let layout = JSON.parse(JSON.stringify(defaultLayout));
+        let parsedLayout = {};
         if (data.unified_layout_json) {
           try {
-            const parsed = JSON.parse(data.unified_layout_json);
-            if (parsed.tts) layout.tts = Object.assign(layout.tts, parsed.tts);
-            if (parsed.chat) layout.chat = Object.assign(layout.chat, parsed.chat);
-            if (parsed.subtitles) layout.subtitles = Object.assign(layout.subtitles, parsed.subtitles);
+            parsedLayout = JSON.parse(data.unified_layout_json) || {};
+            if (parsedLayout.tts) layout.tts = Object.assign(layout.tts, parsedLayout.tts);
+            if (parsedLayout.chat) layout.chat = Object.assign(layout.chat, parsedLayout.chat);
+            if (parsedLayout.subtitles) layout.subtitles = Object.assign(layout.subtitles, parsedLayout.subtitles);
           } catch (_) {}
         }
 
         if (applySlot(slotTTS, widgetTTS, layout.tts, !!data.tts_enabled)) ensureTTSWS();
         if (applySlot(slotChat, widgetChat, layout.chat, !!data.chat_enabled)) ensureChatStream();
         if (applySlot(slotSubtitles, widgetSubtitles, layout.subtitles, !!data.subtitles_enabled)) ensureSubtitlesStream();
+
+        const pluginWidgets = Array.isArray(data.plugin_widgets) ? data.plugin_widgets : [];
+        const hostTheme = data.host_theme || {};
+        const seenPluginKeys = Object.create(null);
+
+        pluginWidgets.forEach(function(w) {
+          if (!w || !w.key || !w.plugin_uuid || !w.widget_id) return;
+          seenPluginKeys[w.key] = true;
+          const defSlot = {
+            x: (typeof w.default_x === 'number') ? w.default_x : 0,
+            y: (typeof w.default_y === 'number') ? w.default_y : 0,
+            w: (typeof w.default_w === 'number' && w.default_w > 0) ? w.default_w : 30,
+            h: (typeof w.default_h === 'number' && w.default_h > 0) ? w.default_h : 20,
+            scale: 100,
+            visible: w.default_visible !== false
+          };
+          const slotCfg = parsedLayout[w.key] ? Object.assign({}, defSlot, parsedLayout[w.key]) : defSlot;
+          const baseSrc = buildPluginWidgetURL(w);
+
+          let entry = pluginSlots[w.key];
+          if (!entry) {
+            const slotEl = document.createElement('div');
+            slotEl.className = 'widget-slot hidden';
+            slotEl.dataset.pluginWidget = w.key;
+            const innerEl = document.createElement('div');
+            innerEl.className = 'widget-inner';
+            const iframe = document.createElement('iframe');
+            iframe.className = 'plugin-widget-frame';
+            iframe.setAttribute('allowtransparency', 'true');
+            iframe.setAttribute('frameborder', '0');
+            iframe.setAttribute('scrolling', 'no');
+            iframe.title = w.name || w.widget_id;
+            innerEl.appendChild(iframe);
+            slotEl.appendChild(innerEl);
+            canvasEl.appendChild(slotEl);
+            entry = { slotEl: slotEl, innerEl: innerEl, iframe: iframe, baseSrc: '', widget: w, hostTheme: hostTheme };
+            iframe.addEventListener('load', function() {
+              postStyleToPluginFrame(entry, entry.hostTheme);
+            });
+            pluginSlots[w.key] = entry;
+          }
+          entry.widget = w;
+          entry.hostTheme = hostTheme;
+          if (entry.baseSrc !== baseSrc) {
+            entry.baseSrc = baseSrc;
+            entry.iframe.src = baseSrc;
+          } else {
+            postStyleToPluginFrame(entry, hostTheme);
+          }
+          applySlot(entry.slotEl, entry.innerEl, slotCfg, slotCfg.visible !== false);
+        });
+
+        Object.keys(pluginSlots).forEach(function(k) {
+          if (!seenPluginKeys[k]) {
+            const stale = pluginSlots[k];
+            if (stale && stale.slotEl && stale.slotEl.parentNode) {
+              stale.slotEl.parentNode.removeChild(stale.slotEl);
+            }
+            delete pluginSlots[k];
+          }
+        });
+
+        ensurePluginReloadStream(pluginWidgets);
       })
       .catch(function() {});
   }

@@ -7,7 +7,7 @@ func (s *Server) handleOverlayUnified(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.isTTSOverlayEnabled() && !s.isChatOverlayEnabled() && !s.IsSubtitlesOverlayEnabled() {
+	if !s.hasAnyOverlayEnabled() {
 		http.Error(w, "OBS Overlays are disabled in TownCrier Settings", http.StatusNotFound)
 		return
 	}

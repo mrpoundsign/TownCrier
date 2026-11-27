@@ -26,19 +26,24 @@ type ChatOverlaySnapshot struct {
 
 // OverlayStyleConfig holds the persisted visual style and custom CSS for OBS Browser Source overlays.
 type OverlayStyleConfig struct {
-	TTSEnabled         bool     `json:"tts_enabled"`
-	ChatEnabled        bool     `json:"chat_enabled"`
-	SubtitlesEnabled   bool     `json:"subtitles_enabled"`
-	TargetLanguages    []string `json:"target_languages,omitempty"`
-	TTSPosition        string   `json:"tts_position"`
-	CustomCSS          string   `json:"custom_css"`
-	StyleJSON          string   `json:"style_json,omitempty"`
-	SubtitlesCustomCSS string   `json:"subtitles_custom_css,omitempty"`
-	SubtitlesStyleJSON string   `json:"subtitles_style_json,omitempty"`
-	UnifiedWidth       int      `json:"unified_width,omitempty"`
-	UnifiedHeight      int      `json:"unified_height,omitempty"`
-	UnifiedLayoutJSON  string   `json:"unified_layout_json,omitempty"`
-	Target             string   `json:"target,omitempty"`
+	TTSEnabled         bool                       `json:"tts_enabled"`
+	ChatEnabled        bool                       `json:"chat_enabled"`
+	SubtitlesEnabled   bool                       `json:"subtitles_enabled"`
+	TargetLanguages    []string                   `json:"target_languages,omitempty"`
+	TTSPosition        string                     `json:"tts_position"`
+	CustomCSS          string                     `json:"custom_css"`
+	StyleJSON          string                     `json:"style_json,omitempty"`
+	SubtitlesCustomCSS string                     `json:"subtitles_custom_css,omitempty"`
+	SubtitlesStyleJSON string                     `json:"subtitles_style_json,omitempty"`
+	UnifiedWidth       int                        `json:"unified_width,omitempty"`
+	UnifiedHeight      int                        `json:"unified_height,omitempty"`
+	UnifiedLayoutJSON  string                     `json:"unified_layout_json,omitempty"`
+	PluginWidgets      []PluginOverlayWidget      `json:"plugin_widgets,omitempty"`
+	HostTheme          map[string]string          `json:"host_theme,omitempty"`
+	Target             string                     `json:"target,omitempty"`
+	PluginUUID         string                     `json:"plugin_uuid,omitempty"`
+	WidgetID           string                     `json:"widget_id,omitempty"`
+	PluginStyle        *config.PluginOverlayStyle `json:"plugin_style,omitempty"`
 }
 
 // OverlayStyleProvider is an optional interface implemented by Controller (such as app.Session)
@@ -63,11 +68,12 @@ type PluginOverlayEvent struct {
 
 // OverlayStreamEvent represents a real-time Server-Sent Event pushed to /api/overlay/stream subscribers.
 type OverlayStreamEvent struct {
-	Kind    string                  `json:"kind"` // "append", "outcome", "reload", or "plugin"
-	Entry   *eventlog.Entry         `json:"entry,omitempty"`
-	EventID string                  `json:"event_id,omitempty"`
-	Update  *eventlog.OutcomeUpdate `json:"update,omitempty"`
-	Plugin  *PluginOverlayEvent     `json:"plugin,omitempty"`
+	Kind        string                   `json:"kind"` // "append", "outcome", "reload", "plugin", or "plugin_style"
+	Entry       *eventlog.Entry          `json:"entry,omitempty"`
+	EventID     string                   `json:"event_id,omitempty"`
+	Update      *eventlog.OutcomeUpdate  `json:"update,omitempty"`
+	Plugin      *PluginOverlayEvent      `json:"plugin,omitempty"`
+	PluginStyle *PluginOverlayStyleEvent `json:"plugin_style,omitempty"`
 }
 
 // OverlayProvider is an optional interface implemented by Controller (such as app.Session)
@@ -106,11 +112,103 @@ func (s *Server) handleOverlayDesigner(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.isTTSOverlayEnabled() && !s.isChatOverlayEnabled() && !s.IsSubtitlesOverlayEnabled() {
+	if !s.hasAnyOverlayEnabled() {
 		http.Error(w, "OBS Overlays are disabled in TownCrier Settings", http.StatusNotFound)
 		return
 	}
 	s.serveEmbeddedOverlayHTML(w, "designer.html")
+}
+
+// ResolveHostThemeVars parses TownCrier's Obsidian Slate Designer StyleJSON and returns
+// standardized --tc-* CSS custom properties for plugin widgets with supports_host_theme.
+func ResolveHostThemeVars(styleJSON string) map[string]string {
+	type parsedStyle struct {
+		BgColor         string   `json:"bgColor"`
+		BgOpacity       *float64 `json:"bgOpacity"`
+		BorderColor     string   `json:"borderColor"`
+		NameColor       string   `json:"nameColor"`
+		TextColor       string   `json:"textColor"`
+		ShowCardBorders *bool    `json:"showCardBorders"`
+		FontScale       *float64 `json:"fontScale"`
+		CardRadius      *float64 `json:"cardRadius"`
+	}
+	bgColor := "#0f172a"
+	bgOpacity := 86.0
+	borderColor := "#38bdf8"
+	nameColor := "#38bdf8"
+	textColor := "#f8fafc"
+	showBorders := true
+	fontScale := 100.0
+	cardRadius := 10.0
+
+	if trimmed := strings.TrimSpace(styleJSON); trimmed != "" {
+		var p parsedStyle
+		if json.Unmarshal([]byte(trimmed), &p) == nil {
+			if strings.TrimSpace(p.BgColor) != "" {
+				bgColor = strings.TrimSpace(p.BgColor)
+			}
+			if p.BgOpacity != nil {
+				bgOpacity = max(0, min(100, *p.BgOpacity))
+			}
+			if strings.TrimSpace(p.BorderColor) != "" {
+				borderColor = strings.TrimSpace(p.BorderColor)
+			}
+			if strings.TrimSpace(p.NameColor) != "" {
+				nameColor = strings.TrimSpace(p.NameColor)
+			}
+			if strings.TrimSpace(p.TextColor) != "" {
+				textColor = strings.TrimSpace(p.TextColor)
+			}
+			if p.ShowCardBorders != nil {
+				showBorders = *p.ShowCardBorders
+			}
+			if p.FontScale != nil && *p.FontScale > 0 {
+				fontScale = *p.FontScale
+			}
+			if p.CardRadius != nil && *p.CardRadius >= 0 {
+				cardRadius = *p.CardRadius
+			}
+		}
+	}
+
+	hexToRGBA := func(hex string, alphaPct float64) string {
+		clean := strings.TrimPrefix(strings.TrimSpace(hex), "#")
+		if len(clean) != 6 {
+			return fmt.Sprintf("rgba(15, 23, 42, %.2f)", max(0, min(100, alphaPct))/100.0)
+		}
+		rv, err1 := strconv.ParseInt(clean[0:2], 16, 64)
+		gv, err2 := strconv.ParseInt(clean[2:4], 16, 64)
+		bv, err3 := strconv.ParseInt(clean[4:6], 16, 64)
+		if err1 != nil || err2 != nil || err3 != nil {
+			return fmt.Sprintf("rgba(15, 23, 42, %.2f)", max(0, min(100, alphaPct))/100.0)
+		}
+		a := max(0, min(100, alphaPct)) / 100.0
+		return fmt.Sprintf("rgba(%d, %d, %d, %.2f)", rv, gv, bv, a)
+	}
+
+	borderVal := "transparent"
+	if showBorders {
+		borderVal = hexToRGBA(borderColor, 65)
+	}
+	return map[string]string{
+		"--tc-bg":         hexToRGBA(bgColor, bgOpacity),
+		"--tc-bg-solid":   bgColor,
+		"--tc-bg-opacity": fmt.Sprintf("%.2f", bgOpacity/100.0),
+		"--tc-border":     borderVal,
+		"--tc-accent":     nameColor,
+		"--tc-text":       textColor,
+		"--tc-muted":      "#94A3B8",
+		"--tc-radius":     fmt.Sprintf("%dpx", int(cardRadius)),
+		"--tc-font-scale": fmt.Sprintf("%.2f", fontScale/100.0),
+	}
+}
+
+func (s *Server) resolvedHostTheme() map[string]string {
+	var styleJSON string
+	if styleProv, ok := s.ctrl.(OverlayStyleProvider); ok && styleProv != nil {
+		styleJSON = styleProv.GetOverlayStyle().StyleJSON
+	}
+	return ResolveHostThemeVars(styleJSON)
 }
 
 func (s *Server) populateOverlayStyleMeta(cfg *OverlayStyleConfig) {
@@ -133,16 +231,21 @@ func (s *Server) populateOverlayStyleMeta(cfg *OverlayStyleConfig) {
 			cfg.TargetLanguages = snap.TargetLanguages
 		}
 	}
+	cfg.HostTheme = ResolveHostThemeVars(cfg.StyleJSON)
+	if pwProv, ok := s.ctrl.(PluginOverlayWidgetProvider); ok && pwProv != nil {
+		cfg.PluginWidgets = pwProv.ListPluginOverlayWidgets()
+	}
 }
 
 func (s *Server) handleAPIOverlayStyle(w http.ResponseWriter, r *http.Request) {
-	if !s.isTTSOverlayEnabled() && !s.isChatOverlayEnabled() && !s.IsSubtitlesOverlayEnabled() {
+	if !s.hasAnyOverlayEnabled() {
 		http.Error(w, "OBS Overlays are disabled in TownCrier Settings", http.StatusNotFound)
 		return
 	}
 	styleProv, hasProv := s.ctrl.(OverlayStyleProvider)
 	subStyleProv, hasSubProv := s.ctrl.(SubtitlesStyleProvider)
 	layoutProv, hasLayoutProv := s.ctrl.(UnifiedLayoutProvider)
+	pwProv, hasPWProv := s.ctrl.(PluginOverlayWidgetProvider)
 	switch r.Method {
 	case http.MethodGet:
 		var cfg OverlayStyleConfig
@@ -159,7 +262,8 @@ func (s *Server) handleAPIOverlayStyle(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid JSON payload", http.StatusBadRequest)
 			return
 		}
-		switch strings.ToLower(strings.TrimSpace(req.Target)) {
+		target := strings.ToLower(strings.TrimSpace(req.Target))
+		switch target {
 		case "subtitles":
 			if hasSubProv && subStyleProv != nil {
 				if err := subStyleProv.SaveSubtitlesOverlayStyle(req.SubtitlesCustomCSS, req.SubtitlesStyleJSON); err != nil {
@@ -179,6 +283,21 @@ func (s *Server) handleAPIOverlayStyle(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+		case "plugin_widget":
+			if !hasPWProv || pwProv == nil {
+				http.Error(w, "plugin overlay widget provider unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			pluginUUID := strings.TrimSpace(req.PluginUUID)
+			widgetID := strings.TrimSpace(req.WidgetID)
+			if pluginUUID == "" || widgetID == "" || req.PluginStyle == nil {
+				http.Error(w, "plugin_uuid, widget_id, and plugin_style are required", http.StatusBadRequest)
+				return
+			}
+			if err := pwProv.SavePluginOverlayStyle(pluginUUID, widgetID, *req.PluginStyle); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		default:
 			if hasProv && styleProv != nil {
 				if err := styleProv.SaveOverlayStyle(req.CustomCSS, req.StyleJSON); err != nil {
@@ -194,6 +313,15 @@ func (s *Server) handleAPIOverlayStyle(w http.ResponseWriter, r *http.Request) {
 			out = req
 		}
 		s.populateOverlayStyleMeta(&out)
+		if target == "plugin_widget" && req.PluginStyle != nil {
+			s.BroadcastPluginStyle(req.PluginUUID, req.WidgetID, *req.PluginStyle, out.HostTheme)
+		} else if target == "" || target == "chat_tts" {
+			for _, pw := range out.PluginWidgets {
+				if pw.SupportsHostTheme && pw.Style.UseHostTheme {
+					s.BroadcastPluginStyle(pw.PluginUUID, pw.WidgetID, pw.Style, out.HostTheme)
+				}
+			}
+		}
 		s.BroadcastOverlayReload()
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")

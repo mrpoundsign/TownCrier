@@ -298,24 +298,32 @@ const (
 	DefaultWebSocketPort = 8765
 )
 
+// PluginOverlayStyle holds persisted OBS Designer styling for one plugin-provided overlay widget.
+type PluginOverlayStyle struct {
+	Values       map[string]any `json:"values,omitempty"`
+	CustomCSS    string         `json:"custom_css,omitempty"`
+	UseHostTheme bool           `json:"use_host_theme,omitempty"`
+}
+
 // WebSocketConfig configures the local dual-mode (Protobuf + JSON) WebSocket, HTTP REST control server,
 // and OBS Browser Source overlay endpoints.
 type WebSocketConfig struct {
-	Enabled                 bool   `json:"enabled"`                             // External Control API & Elgato Stream Deck (/ws, /api/*)
-	TTSOverlayEnabled       bool   `json:"tts_overlay_enabled,omitempty"`       // OBS "Now Speaking" Caption Overlay (/overlay/tts)
-	TTSOverlayPosition      string `json:"tts_overlay_position,omitempty"`      // "bottom" (default) or "top"
-	ChatOverlayEnabled      bool   `json:"chat_overlay_enabled,omitempty"`      // OBS Live Chat & Alerts Overlay (/overlay/chat)
-	ChatOverlayPresetID     string `json:"chat_overlay_preset_id,omitempty"`    // Selected LiveLogPreset ID for /overlay/chat
-	ChatOverlayShowSummary  bool   `json:"chat_overlay_show_summary,omitempty"` // Whether /overlay/chat displays the Events Summary banner
-	SubtitlesOverlayEnabled bool   `json:"subtitles_overlay_enabled,omitempty"` // OBS Multi-Language Voice Subtitles Overlay (/overlay/subtitles)
-	UnifiedOverlayWidth     int    `json:"unified_overlay_width,omitempty"`     // Unified OBS Canvas Overlay width (default 1920)
-	UnifiedOverlayHeight    int    `json:"unified_overlay_height,omitempty"`    // Unified OBS Canvas Overlay height (default 1080)
-	UnifiedLayoutJSON       string `json:"unified_layout_json,omitempty"`       // Unified OBS Canvas per-widget positions/sizes JSON
-	OverlayCustomCSS        string `json:"overlay_custom_css,omitempty"`        // Custom CSS applied to OBS overlays
-	OverlayStyleJSON        string `json:"overlay_style_json,omitempty"`        // Visual style designer state JSON
-	Host                    string `json:"host"`
-	Port                    int    `json:"port"`
-	AuthToken               string `json:"auth_token,omitempty"`
+	Enabled                 bool                          `json:"enabled"`                             // External Control API & Elgato Stream Deck (/ws, /api/*)
+	TTSOverlayEnabled       bool                          `json:"tts_overlay_enabled,omitempty"`       // OBS "Now Speaking" Caption Overlay (/overlay/tts)
+	TTSOverlayPosition      string                        `json:"tts_overlay_position,omitempty"`      // "bottom" (default) or "top"
+	ChatOverlayEnabled      bool                          `json:"chat_overlay_enabled,omitempty"`      // OBS Live Chat & Alerts Overlay (/overlay/chat)
+	ChatOverlayPresetID     string                        `json:"chat_overlay_preset_id,omitempty"`    // Selected LiveLogPreset ID for /overlay/chat
+	ChatOverlayShowSummary  bool                          `json:"chat_overlay_show_summary,omitempty"` // Whether /overlay/chat displays the Events Summary banner
+	SubtitlesOverlayEnabled bool                          `json:"subtitles_overlay_enabled,omitempty"` // OBS Multi-Language Voice Subtitles Overlay (/overlay/subtitles)
+	UnifiedOverlayWidth     int                           `json:"unified_overlay_width,omitempty"`     // Unified OBS Canvas Overlay width (default 1920)
+	UnifiedOverlayHeight    int                           `json:"unified_overlay_height,omitempty"`    // Unified OBS Canvas Overlay height (default 1080)
+	UnifiedLayoutJSON       string                        `json:"unified_layout_json,omitempty"`       // Unified OBS Canvas per-widget positions/sizes JSON
+	OverlayCustomCSS        string                        `json:"overlay_custom_css,omitempty"`        // Custom CSS applied to OBS overlays
+	OverlayStyleJSON        string                        `json:"overlay_style_json,omitempty"`        // Visual style designer state JSON
+	PluginOverlayStyles     map[string]PluginOverlayStyle `json:"plugin_overlay_styles,omitempty"`     // Per-plugin-widget styles keyed by "<plugin_uuid>:<widget_id>"
+	Host                    string                        `json:"host"`
+	Port                    int                           `json:"port"`
+	AuthToken               string                        `json:"auth_token,omitempty"`
 }
 
 // NormalizeUnifiedOverlaySize clamps custom unified canvas dimensions to sensible bounds, defaulting to 1920x1080.
@@ -1338,9 +1346,10 @@ func DefaultConfig() *Config {
 		},
 		WebSocket: WebSocketConfig{
 			Enabled:   true,
-			Host:      DefaultWebSocketHost,
-			Port:      DefaultWebSocketPort,
-			AuthToken: "",
+			Host:                DefaultWebSocketHost,
+			Port:                DefaultWebSocketPort,
+			AuthToken:           "",
+			PluginOverlayStyles: make(map[string]PluginOverlayStyle),
 		},
 		Translation: TranslationConfig{
 			Enabled:              false,
@@ -2053,6 +2062,15 @@ func (c *Config) Clone() *Config {
 	if c.Plugins.TrustedNative != nil {
 		clone.Plugins.TrustedNative = maps.Clone(c.Plugins.TrustedNative)
 	}
+	if c.WebSocket.PluginOverlayStyles != nil {
+		clone.WebSocket.PluginOverlayStyles = make(map[string]PluginOverlayStyle, len(c.WebSocket.PluginOverlayStyles))
+		for k, st := range c.WebSocket.PluginOverlayStyles {
+			if st.Values != nil {
+				st.Values = maps.Clone(st.Values)
+			}
+			clone.WebSocket.PluginOverlayStyles[k] = st
+		}
+	}
 	if c.Plugins.PluginSettings != nil {
 		clone.Plugins.PluginSettings = make(map[string]map[string]any, len(c.Plugins.PluginSettings))
 		for k, ps := range c.Plugins.PluginSettings {
@@ -2459,6 +2477,9 @@ func migrate(cfg *Config) error {
 	NormalizeVoiceSubtitlesConfig(&cfg.VoiceSubtitles)
 	if cfg.Plugins.TrustedNative == nil {
 		cfg.Plugins.TrustedNative = make(map[string]TrustedNativePlugin)
+	}
+	if cfg.WebSocket.PluginOverlayStyles == nil {
+		cfg.WebSocket.PluginOverlayStyles = make(map[string]PluginOverlayStyle)
 	}
 	if cfg.Plugins.PluginSettings == nil {
 		cfg.Plugins.PluginSettings = make(map[string]map[string]any)

@@ -507,6 +507,56 @@
     flex-direction: column;
     gap: 8px;
   }
+  .plugin-input, .plugin-textarea {
+    background: #090D16;
+    color: var(--ui-text);
+    border: 1px solid var(--ui-border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 0.85rem;
+  }
+  .plugin-input {
+    width: 170px;
+  }
+  .plugin-textarea {
+    width: 100%;
+    min-height: 76px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    resize: vertical;
+  }
+  .plugin-help {
+    font-size: 0.76rem;
+    color: var(--ui-muted);
+    margin-top: -6px;
+    line-height: 1.35;
+  }
+  .plugin-mini-btn {
+    padding: 3px 8px;
+    font-size: 0.76rem;
+  }
+  .plugin-range-val {
+    min-width: 36px;
+    text-align: right;
+    font-size: 0.78rem;
+    color: var(--ui-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  #previewPluginWidgetView {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    min-height: 440px;
+  }
+  #pluginPreviewFrame {
+    width: 100%;
+    height: 100%;
+    flex: 1;
+    min-height: 440px;
+    border: none;
+    background: transparent;
+  }
   .hidden { display: none !important; }
 </style>
 <style id="designerDynamicCSS"></style>
@@ -720,10 +770,14 @@
         <input type="range" id="uniScaleSubtitles" min="50" max="200" value="100">
       </div>
     </div>
+    <div id="uniPluginCards" style="display:flex;flex-direction:column;gap:14px;"></div>
     <p style="font-size:0.80rem;color:var(--ui-muted);line-height:1.4;">
-      Drag widgets to position them and use the bottom-right corner handle to resize. Colors and fonts come from the Chat &amp; Now-Speaking and Voice Subtitles tabs.
+      Drag widgets to position them and use the bottom-right corner handle to resize. Colors and fonts come from each widget's Style tab.
     </p>
   </div>
+
+  <!-- Controls Panel: Plugin Widget Style (Dynamic) -->
+  <div id="controlsPluginWidget" class="panel hidden"></div>
 
   <!-- Live Preview Panel -->
   <div class="panel">
@@ -817,6 +871,11 @@
           </div>
         </div>
       </div>
+
+      <!-- Plugin Widget Live Preview View -->
+      <div id="previewPluginWidgetView" class="hidden">
+        <iframe id="pluginPreviewFrame" allowtransparency="true" frameborder="0" scrolling="no" title="Plugin Overlay Preview"></iframe>
+      </div>
     </div>
   </div>
 </div>
@@ -901,15 +960,23 @@
   const controlsLayout = document.getElementById('controlsLayout');
   const controlsChatTTS = document.getElementById('controlsChatTTS');
   const controlsSubtitles = document.getElementById('controlsSubtitles');
+  const controlsPluginWidget = document.getElementById('controlsPluginWidget');
   const previewLayoutView = document.getElementById('previewLayoutView');
   const previewChatTTSView = document.getElementById('previewChatTTSView');
   const previewSubtitlesView = document.getElementById('previewSubtitlesView');
+  const previewPluginWidgetView = document.getElementById('previewPluginWidgetView');
+  const pluginPreviewFrame = document.getElementById('pluginPreviewFrame');
   const previewTTSCardWrap = document.getElementById('previewTTSCardWrap');
   const previewChatFeedWrap = document.getElementById('previewChatFeedWrap');
   const previewSubtitlesRows = document.getElementById('previewSubtitlesRows');
+  const uniPluginCards = document.getElementById('uniPluginCards');
 
   let activeTab = 'chat_tts';
   let saveTimer = null;
+  let pluginWidgets = [];
+  let pluginWidgetsByKey = Object.create(null);
+  let hostThemeVars = {};
+  let activePluginPreviewSrc = '';
 
   // --- Unified Canvas State ---
   const defaultUniLayout = {
@@ -949,6 +1016,326 @@
     chat: document.getElementById('uniRectChat'),
     subtitles: document.getElementById('uniRectSubtitles')
   };
+  const uniMinSizes = {};
+
+  function sanitizeAssetPath(raw) {
+    const clean = String(raw || '').trim().replace(/^\/+/, '');
+    if (!clean || clean.includes('..') || clean.includes('\\') || /^[a-zA-Z]+:/.test(clean)) {
+      return 'index.html';
+    }
+    return clean;
+  }
+
+  function buildPluginPreviewURL(w) {
+    const asset = sanitizeAssetPath(w.entry_asset);
+    const q = new URLSearchParams();
+    q.set('preview', '1');
+    q.set('embedded', '1');
+    if (w.widget_id) q.set('widget', w.widget_id);
+    if (token) q.set('token', token);
+    return '/plugins/' + encodeURIComponent(w.plugin_uuid) + '/overlay/' + asset + '?' + q.toString();
+  }
+
+  function defaultsFromPluginSchema(w) {
+    const vals = {};
+    if (w && Array.isArray(w.style_schema)) {
+      w.style_schema.forEach(function(f) {
+        if (f && f.key && f.default !== undefined && f.default !== null) {
+          vals[f.key] = f.default;
+        }
+      });
+    }
+    return vals;
+  }
+
+  function normalizedPluginStyle(w) {
+    const st = (w && w.style) ? w.style : {};
+    return {
+      values: Object.assign(defaultsFromPluginSchema(w), st.values || {}),
+      custom_css: String(st.custom_css || ''),
+      use_host_theme: !!(w && w.supports_host_theme && st.use_host_theme)
+    };
+  }
+
+  function postPluginPreviewStyle(w, st) {
+    if (!w || !pluginPreviewFrame || !pluginPreviewFrame.contentWindow) return;
+    try {
+      pluginPreviewFrame.contentWindow.postMessage({
+        type: 'tc:overlay:style',
+        widget_id: w.widget_id,
+        style: st,
+        host_theme: hostThemeVars || {}
+      }, window.location.origin);
+    } catch (_) {}
+  }
+
+  pluginPreviewFrame.addEventListener('load', function() {
+    const w = pluginWidgetsByKey[activeTab];
+    if (w) {
+      postPluginPreviewStyle(w, normalizedPluginStyle(w));
+    }
+  });
+
+  function schedulePluginStyleSave(w, st, statusMsg) {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(function() {
+      saveStylePayload({
+        target: 'plugin_widget',
+        plugin_uuid: w.plugin_uuid,
+        widget_id: w.widget_id,
+        plugin_style: st
+      }, statusMsg || ('✓ Auto-saved & Live-Updated ' + (w.name || w.widget_id)));
+    }, 150);
+  }
+
+  function renderPluginWidgetEditor(w) {
+    controlsPluginWidget.innerHTML = '';
+    if (!w) return;
+
+    const st = normalizedPluginStyle(w);
+    w.style = st;
+
+    const hdr = document.createElement('h2');
+    hdr.textContent = (w.name || w.widget_id) + (w.plugin_name ? (' (' + w.plugin_name + ')') : '');
+    controlsPluginWidget.appendChild(hdr);
+
+    if (w.description) {
+      const desc = document.createElement('p');
+      desc.className = 'plugin-help';
+      desc.style.marginTop = '0';
+      desc.textContent = w.description;
+      controlsPluginWidget.appendChild(desc);
+    }
+
+    function applyChange(immediateSaveMsg) {
+      w.style = st;
+      postPluginPreviewStyle(w, st);
+      schedulePluginStyleSave(w, st, immediateSaveMsg);
+    }
+
+    let currentSection = '';
+    const schema = Array.isArray(w.style_schema) ? w.style_schema : [];
+    schema.forEach(function(f, idx) {
+      if (!f || !f.key) return;
+      const sec = String(f.section || '').trim();
+      if (sec && sec !== currentSection) {
+        currentSection = sec;
+        const sh = document.createElement('h2');
+        sh.textContent = sec;
+        controlsPluginWidget.appendChild(sh);
+      }
+      if (f.type === 'section') {
+        const sh = document.createElement('h2');
+        sh.textContent = f.label || f.key;
+        controlsPluginWidget.appendChild(sh);
+        return;
+      }
+
+      const inputId = 'pwField_' + idx + '_' + f.key.replace(/[^A-Za-z0-9_-]/g, '_');
+      const row = document.createElement('div');
+      row.className = 'field-row';
+      const lbl = document.createElement('label');
+      lbl.setAttribute('for', inputId);
+      const val = st.values[f.key];
+
+      if (f.type === 'bool') {
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.id = inputId;
+        cb.checked = !!val;
+        cb.addEventListener('change', function() {
+          st.values[f.key] = cb.checked;
+          applyChange();
+        });
+        lbl.appendChild(cb);
+        lbl.appendChild(document.createTextNode(f.label || f.key));
+        row.appendChild(lbl);
+        controlsPluginWidget.appendChild(row);
+      } else if (f.type === 'color') {
+        lbl.textContent = f.label || f.key;
+        const inp = document.createElement('input');
+        inp.type = 'color';
+        inp.id = inputId;
+        inp.value = (typeof val === 'string' && /^#[0-9a-fA-F]{6}$/.test(val.trim())) ? val.trim() : '#38bdf8';
+        inp.addEventListener('input', function() {
+          st.values[f.key] = inp.value;
+          applyChange();
+        });
+        inp.addEventListener('change', function() {
+          st.values[f.key] = inp.value;
+          applyChange();
+        });
+        row.appendChild(lbl);
+        row.appendChild(inp);
+        controlsPluginWidget.appendChild(row);
+      } else if (f.type === 'number') {
+        lbl.textContent = f.label || f.key;
+        row.appendChild(lbl);
+        const hasRange = (typeof f.min === 'number' && typeof f.max === 'number' && f.max > f.min);
+        if (hasRange) {
+          const wrap = document.createElement('div');
+          wrap.style.display = 'flex';
+          wrap.style.alignItems = 'center';
+          wrap.style.gap = '6px';
+          const rng = document.createElement('input');
+          rng.type = 'range';
+          rng.id = inputId;
+          rng.min = String(f.min);
+          rng.max = String(f.max);
+          if (typeof f.step === 'number' && f.step > 0) rng.step = String(f.step);
+          rng.value = (val !== undefined && val !== null) ? String(val) : String(f.min);
+          const readout = document.createElement('span');
+          readout.className = 'plugin-range-val';
+          readout.textContent = rng.value;
+          rng.addEventListener('input', function() {
+            const num = Number(rng.value);
+            readout.textContent = rng.value;
+            st.values[f.key] = num;
+            applyChange();
+          });
+          wrap.appendChild(rng);
+          wrap.appendChild(readout);
+          row.appendChild(wrap);
+        } else {
+          const numInp = document.createElement('input');
+          numInp.type = 'number';
+          numInp.id = inputId;
+          if (typeof f.min === 'number') numInp.min = String(f.min);
+          if (typeof f.max === 'number') numInp.max = String(f.max);
+          if (typeof f.step === 'number' && f.step > 0) numInp.step = String(f.step);
+          numInp.value = (val !== undefined && val !== null) ? String(val) : '0';
+          numInp.addEventListener('input', function() {
+            const num = Number(numInp.value);
+            if (!Number.isNaN(num)) {
+              st.values[f.key] = num;
+              applyChange();
+            }
+          });
+          row.appendChild(numInp);
+        }
+        controlsPluginWidget.appendChild(row);
+      } else if (f.type === 'select') {
+        lbl.textContent = f.label || f.key;
+        const sel = document.createElement('select');
+        sel.id = inputId;
+        (Array.isArray(f.options) ? f.options : []).forEach(function(opt) {
+          if (!opt) return;
+          const o = document.createElement('option');
+          o.value = String(opt.value || '');
+          o.textContent = String(opt.label || opt.value || '');
+          sel.appendChild(o);
+        });
+        if (val !== undefined && val !== null) {
+          sel.value = String(val);
+        }
+        sel.addEventListener('change', function() {
+          st.values[f.key] = sel.value;
+          applyChange();
+        });
+        row.appendChild(lbl);
+        row.appendChild(sel);
+        controlsPluginWidget.appendChild(row);
+      } else if (f.type === 'multiline') {
+        lbl.textContent = f.label || f.key;
+        row.appendChild(lbl);
+        controlsPluginWidget.appendChild(row);
+        const ta = document.createElement('textarea');
+        ta.className = 'plugin-textarea';
+        ta.id = inputId;
+        if (f.placeholder) ta.placeholder = f.placeholder;
+        ta.value = (val !== undefined && val !== null) ? String(val) : '';
+        ta.addEventListener('input', function() {
+          st.values[f.key] = ta.value;
+          applyChange();
+        });
+        controlsPluginWidget.appendChild(ta);
+      } else if (f.type === 'info') {
+        lbl.textContent = f.label || f.key;
+        const infoSpan = document.createElement('span');
+        infoSpan.style.fontSize = '0.82rem';
+        infoSpan.style.color = 'var(--ui-muted)';
+        infoSpan.textContent = (val !== undefined && val !== null) ? String(val) : '';
+        row.appendChild(lbl);
+        row.appendChild(infoSpan);
+        controlsPluginWidget.appendChild(row);
+      } else {
+        lbl.textContent = f.label || f.key;
+        const txt = document.createElement('input');
+        txt.type = 'text';
+        txt.className = 'plugin-input';
+        txt.id = inputId;
+        if (f.placeholder) txt.placeholder = f.placeholder;
+        txt.value = (val !== undefined && val !== null) ? String(val) : '';
+        txt.addEventListener('input', function() {
+          st.values[f.key] = txt.value;
+          applyChange();
+        });
+        row.appendChild(lbl);
+        row.appendChild(txt);
+        controlsPluginWidget.appendChild(row);
+      }
+
+      if (f.help) {
+        const helpEl = document.createElement('div');
+        helpEl.className = 'plugin-help';
+        helpEl.textContent = f.help;
+        controlsPluginWidget.appendChild(helpEl);
+      }
+    });
+
+    if (w.supports_host_theme || w.allow_custom_css) {
+      const advHdr = document.createElement('h2');
+      advHdr.textContent = 'Theme & Custom CSS';
+      controlsPluginWidget.appendChild(advHdr);
+    }
+
+    if (w.supports_host_theme) {
+      const themeRow = document.createElement('div');
+      themeRow.className = 'field-row';
+      const themeLbl = document.createElement('label');
+      const themeCb = document.createElement('input');
+      themeCb.type = 'checkbox';
+      themeCb.checked = !!st.use_host_theme;
+      themeCb.addEventListener('change', function() {
+        st.use_host_theme = themeCb.checked;
+        applyChange();
+      });
+      themeLbl.appendChild(themeCb);
+      themeLbl.appendChild(document.createTextNode('🎨 Match TownCrier Overlay Theme'));
+      themeRow.appendChild(themeLbl);
+      controlsPluginWidget.appendChild(themeRow);
+    }
+
+    if (w.allow_custom_css) {
+      const cssRow = document.createElement('div');
+      cssRow.className = 'field-row';
+      const cssLbl = document.createElement('label');
+      cssLbl.setAttribute('for', 'pluginCustomCSSEditor');
+      cssLbl.textContent = 'Custom CSS';
+      cssRow.appendChild(cssLbl);
+      controlsPluginWidget.appendChild(cssRow);
+
+      const cssTA = document.createElement('textarea');
+      cssTA.id = 'pluginCustomCSSEditor';
+      cssTA.className = 'plugin-textarea';
+      cssTA.rows = 4;
+      cssTA.placeholder = '.card { border-radius: 16px; }';
+      cssTA.value = st.custom_css || '';
+      cssTA.addEventListener('input', function() {
+        st.custom_css = cssTA.value;
+        applyChange();
+      });
+      controlsPluginWidget.appendChild(cssTA);
+    }
+
+    const previewSrc = buildPluginPreviewURL(w);
+    if (activePluginPreviewSrc !== previewSrc) {
+      activePluginPreviewSrc = previewSrc;
+      pluginPreviewFrame.src = previewSrc;
+    } else {
+      postPluginPreviewStyle(w, st);
+    }
+  }
 
   function hexToRgba(hex, alphaPct) {
     const clean = (hex || '#0f172a').replace('#', '');
@@ -960,19 +1347,33 @@
   }
 
   function setActiveTab(tab) {
-    if (tab === 'subtitles') activeTab = 'subtitles';
-    else if (tab === 'layout') activeTab = 'layout';
-    else activeTab = 'chat_tts';
+    const isPluginTab = !!pluginWidgetsByKey[tab];
+    if (tab === 'subtitles' || tab === 'layout' || isPluginTab) {
+      activeTab = tab;
+    } else {
+      activeTab = 'chat_tts';
+    }
 
     tabBtnLayout.classList.toggle('active', activeTab === 'layout');
     tabBtnChatTTS.classList.toggle('active', activeTab === 'chat_tts');
     tabBtnSubtitles.classList.toggle('active', activeTab === 'subtitles');
+    tabBar.querySelectorAll('.plugin-tab-btn').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.tab === activeTab);
+    });
+
     controlsLayout.classList.toggle('hidden', activeTab !== 'layout');
     controlsChatTTS.classList.toggle('hidden', activeTab !== 'chat_tts');
     controlsSubtitles.classList.toggle('hidden', activeTab !== 'subtitles');
+    controlsPluginWidget.classList.toggle('hidden', !isPluginTab);
+
     previewLayoutView.classList.toggle('hidden', activeTab !== 'layout');
     previewChatTTSView.classList.toggle('hidden', activeTab !== 'chat_tts');
     previewSubtitlesView.classList.toggle('hidden', activeTab !== 'subtitles');
+    previewPluginWidgetView.classList.toggle('hidden', !isPluginTab);
+
+    if (isPluginTab) {
+      renderPluginWidgetEditor(pluginWidgetsByKey[activeTab]);
+    }
   }
 
   tabBtnLayout.addEventListener('click', function() { setActiveTab('layout'); });
@@ -981,6 +1382,193 @@
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
   function snapVal(v) { return uniSnapGrid.checked ? Math.round(v / 2) * 2 : Math.round(v * 10) / 10; }
+
+  function allUnifiedWidgetKeys() {
+    const keys = ['tts', 'chat', 'subtitles'];
+    pluginWidgets.forEach(function(w) {
+      if (w && w.key) keys.push(w.key);
+    });
+    return keys;
+  }
+
+  function buildDefaultUniLayout() {
+    const out = JSON.parse(JSON.stringify(defaultUniLayout));
+    pluginWidgets.forEach(function(w) {
+      if (!w || !w.key) return;
+      out[w.key] = {
+        x: (typeof w.default_x === 'number') ? w.default_x : 0,
+        y: (typeof w.default_y === 'number') ? w.default_y : 0,
+        w: (typeof w.default_w === 'number' && w.default_w > 0) ? w.default_w : 30,
+        h: (typeof w.default_h === 'number' && w.default_h > 0) ? w.default_h : 20,
+        scale: 100,
+        visible: w.default_visible !== false
+      };
+    });
+    return out;
+  }
+
+  function bindUnifiedWidget(k) {
+    const vis = uniVis[k];
+    const scale = uniScale[k];
+    const box = dragBoxes[k];
+    if (!vis || !scale || !box || box.dataset.bound === '1') return;
+    box.dataset.bound = '1';
+
+    vis.addEventListener('change', function() {
+      uniState[k].visible = vis.checked;
+      saveUnifiedLayout(true);
+    });
+    scale.addEventListener('input', function() {
+      uniState[k].scale = Number(scale.value);
+      saveUnifiedLayout(true);
+    });
+
+    box.addEventListener('pointerdown', function(ev) {
+      ev.preventDefault();
+      Object.values(dragBoxes).forEach(function(b) { if (b) b.classList.remove('selected'); });
+      box.classList.add('selected');
+      const isResize = ev.target.classList.contains('resize-handle');
+      const rect = layoutStage.getBoundingClientRect();
+      const startX = ev.clientX;
+      const startY = ev.clientY;
+      const orig = Object.assign({}, uniState[k]);
+      const limits = uniMinSizes[k] || { minW: 10, minH: 8 };
+
+      function onMove(mv) {
+        const dxPct = ((mv.clientX - startX) / rect.width) * 100;
+        const dyPct = ((mv.clientY - startY) / rect.height) * 100;
+        if (isResize) {
+          uniState[k].w = clamp(snapVal(orig.w + dxPct), limits.minW, 100 - orig.x);
+          uniState[k].h = clamp(snapVal(orig.h + dyPct), limits.minH, 100 - orig.y);
+        } else {
+          uniState[k].x = clamp(snapVal(orig.x + dxPct), 0, 100 - orig.w);
+          uniState[k].y = clamp(snapVal(orig.y + dyPct), 0, 100 - orig.h);
+        }
+        renderUnifiedStage();
+      }
+      function onUp() {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        saveUnifiedLayout(true);
+      }
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+  }
+
+  function rebuildPluginDesignerNodes(widgets) {
+    tabBar.querySelectorAll('.plugin-tab-btn').forEach(function(b) {
+      if (b.parentNode) b.parentNode.removeChild(b);
+    });
+    uniPluginCards.innerHTML = '';
+    layoutStage.querySelectorAll('.plugin-drag-box').forEach(function(b) {
+      if (b.parentNode) b.parentNode.removeChild(b);
+    });
+
+    Object.keys(dragBoxes).forEach(function(k) {
+      if (k.startsWith('plugin:')) {
+        delete dragBoxes[k];
+        delete uniCards[k];
+        delete uniVis[k];
+        delete uniScale[k];
+        delete uniRectLbl[k];
+        delete uniModules[k];
+        delete uniMinSizes[k];
+      }
+    });
+
+    pluginWidgets = Array.isArray(widgets) ? widgets : [];
+    pluginWidgetsByKey = Object.create(null);
+
+    pluginWidgets.forEach(function(w) {
+      if (!w || !w.key) return;
+      pluginWidgetsByKey[w.key] = w;
+      uniModules[w.key] = true;
+      uniMinSizes[w.key] = {
+        minW: (typeof w.min_w === 'number' && w.min_w > 0) ? w.min_w : 10,
+        minH: (typeof w.min_h === 'number' && w.min_h > 0) ? w.min_h : 8
+      };
+
+      const tabBtn = document.createElement('button');
+      tabBtn.type = 'button';
+      tabBtn.className = 'tab-btn plugin-tab-btn';
+      tabBtn.dataset.tab = w.key;
+      tabBtn.textContent = '🧩 ' + (w.name || w.widget_id);
+      tabBtn.addEventListener('click', function() { setActiveTab(w.key); });
+      tabBar.appendChild(tabBtn);
+
+      const card = document.createElement('div');
+      card.className = 'widget-cfg-card';
+      const topRow = document.createElement('div');
+      topRow.className = 'field-row';
+      const visLbl = document.createElement('label');
+      const visCb = document.createElement('input');
+      visCb.type = 'checkbox';
+      visCb.checked = w.default_visible !== false;
+      visLbl.appendChild(visCb);
+      visLbl.appendChild(document.createTextNode('🧩 ' + (w.name || w.widget_id)));
+      const rectSpan = document.createElement('span');
+      rectSpan.style.fontSize = '0.78rem';
+      rectSpan.style.color = 'var(--ui-muted)';
+      topRow.appendChild(visLbl);
+      topRow.appendChild(rectSpan);
+
+      const scaleRow = document.createElement('div');
+      scaleRow.className = 'field-row';
+      const scaleLbl = document.createElement('label');
+      scaleLbl.textContent = 'Widget Scale';
+      const scaleInp = document.createElement('input');
+      scaleInp.type = 'range';
+      scaleInp.min = '50';
+      scaleInp.max = '200';
+      scaleInp.value = '100';
+      const styleBtn = document.createElement('button');
+      styleBtn.type = 'button';
+      styleBtn.className = 'plugin-mini-btn';
+      styleBtn.textContent = '🎨 Style';
+      styleBtn.addEventListener('click', function() { setActiveTab(w.key); });
+      const rightCtrl = document.createElement('div');
+      rightCtrl.style.display = 'flex';
+      rightCtrl.style.alignItems = 'center';
+      rightCtrl.style.gap = '6px';
+      rightCtrl.appendChild(scaleInp);
+      rightCtrl.appendChild(styleBtn);
+      scaleRow.appendChild(scaleLbl);
+      scaleRow.appendChild(rightCtrl);
+
+      card.appendChild(topRow);
+      card.appendChild(scaleRow);
+      uniPluginCards.appendChild(card);
+
+      const box = document.createElement('div');
+      box.className = 'drag-box plugin-drag-box';
+      box.dataset.widget = w.key;
+      const boxHdr = document.createElement('div');
+      boxHdr.className = 'drag-box-hdr';
+      const titleSpan = document.createElement('span');
+      titleSpan.textContent = '🧩 ' + (w.name || w.widget_id);
+      const dimSpan = document.createElement('span');
+      dimSpan.className = 'dim-lbl';
+      boxHdr.appendChild(titleSpan);
+      boxHdr.appendChild(dimSpan);
+      const boxBody = document.createElement('div');
+      boxBody.className = 'drag-box-body';
+      boxBody.textContent = w.description || (w.plugin_name ? (w.plugin_name + ' Overlay Widget') : 'Plugin Overlay Widget');
+      const resizeHandle = document.createElement('div');
+      resizeHandle.className = 'resize-handle';
+      box.appendChild(boxHdr);
+      box.appendChild(boxBody);
+      box.appendChild(resizeHandle);
+      layoutStage.appendChild(box);
+
+      dragBoxes[w.key] = box;
+      uniCards[w.key] = card;
+      uniVis[w.key] = visCb;
+      uniScale[w.key] = scaleInp;
+      uniRectLbl[w.key] = rectSpan;
+      bindUnifiedWidget(w.key);
+    });
+  }
 
   function renderUnifiedStage() {
     const w = clamp(parseInt(uniWidthEl.value, 10) || 1920, 640, 7680);
@@ -999,8 +1587,9 @@
     }
     if (!foundPreset) uniResPreset.value = 'custom';
 
-    ['tts', 'chat', 'subtitles'].forEach(function(k) {
+    allUnifiedWidgetKeys().forEach(function(k) {
       const enabled = !!uniModules[k];
+      if (!uniCards[k] || !dragBoxes[k] || !uniState[k]) return;
       uniCards[k].classList.toggle('hidden', !enabled);
       const st = uniState[k];
       uniVis[k].checked = st.visible !== false;
@@ -1043,48 +1632,7 @@
   uniWidthEl.addEventListener('change', function() { saveUnifiedLayout(true); });
   uniHeightEl.addEventListener('change', function() { saveUnifiedLayout(true); });
 
-  ['tts', 'chat', 'subtitles'].forEach(function(k) {
-    uniVis[k].addEventListener('change', function() {
-      uniState[k].visible = uniVis[k].checked;
-      saveUnifiedLayout(true);
-    });
-    uniScale[k].addEventListener('input', function() {
-      uniState[k].scale = Number(uniScale[k].value);
-      saveUnifiedLayout(true);
-    });
-
-    const box = dragBoxes[k];
-    box.addEventListener('pointerdown', function(ev) {
-      ev.preventDefault();
-      Object.values(dragBoxes).forEach(function(b) { b.classList.remove('selected'); });
-      box.classList.add('selected');
-      const isResize = ev.target.classList.contains('resize-handle');
-      const rect = layoutStage.getBoundingClientRect();
-      const startX = ev.clientX;
-      const startY = ev.clientY;
-      const orig = Object.assign({}, uniState[k]);
-
-      function onMove(mv) {
-        const dxPct = ((mv.clientX - startX) / rect.width) * 100;
-        const dyPct = ((mv.clientY - startY) / rect.height) * 100;
-        if (isResize) {
-          uniState[k].w = clamp(snapVal(orig.w + dxPct), 10, 100 - orig.x);
-          uniState[k].h = clamp(snapVal(orig.h + dyPct), 8, 100 - orig.y);
-        } else {
-          uniState[k].x = clamp(snapVal(orig.x + dxPct), 0, 100 - orig.w);
-          uniState[k].y = clamp(snapVal(orig.y + dyPct), 0, 100 - orig.h);
-        }
-        renderUnifiedStage();
-      }
-      function onUp() {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        saveUnifiedLayout(true);
-      }
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
-    });
-  });
+  ['tts', 'chat', 'subtitles'].forEach(bindUnifiedWidget);
 
   function renderSubtitlePreviewRows(langs) {
     const codes = (Array.isArray(langs) && langs.length > 0) ? langs : ['en', 'es', 'ja'];
@@ -1273,6 +1821,12 @@
     })
       .then(function(r) {
         if (!r.ok) throw new Error('Save failed');
+        return r.json();
+      })
+      .then(function(out) {
+        if (out && out.host_theme) {
+          hostThemeVars = out.host_theme;
+        }
         saveStatus.textContent = statusMsg || '✓ Auto-saved & Live-Updated OBS';
       })
       .catch(function() {
@@ -1329,7 +1883,7 @@
   document.getElementById('resetBtn').addEventListener('click', function() {
     if (saveTimer) clearTimeout(saveTimer);
     if (activeTab === 'layout') {
-      uniState = JSON.parse(JSON.stringify(defaultUniLayout));
+      uniState = buildDefaultUniLayout();
       uniWidthEl.value = 1920;
       uniHeightEl.value = 1080;
       renderUnifiedStage();
@@ -1339,6 +1893,22 @@
         unified_height: 1080,
         unified_layout_json: ''
       }, '✓ Reset Unified Canvas Layout to 1920×1080 Default');
+    } else if (pluginWidgetsByKey[activeTab]) {
+      const w = pluginWidgetsByKey[activeTab];
+      const defStyle = {
+        values: defaultsFromPluginSchema(w),
+        custom_css: '',
+        use_host_theme: false
+      };
+      w.style = defStyle;
+      renderPluginWidgetEditor(w);
+      postPluginPreviewStyle(w, defStyle);
+      saveStylePayload({
+        target: 'plugin_widget',
+        plugin_uuid: w.plugin_uuid,
+        widget_id: w.widget_id,
+        plugin_style: defStyle
+      }, '✓ Reset ' + (w.name || w.widget_id) + ' to Default');
     } else if (activeTab === 'subtitles') {
       applySubStateToControls(subDefaults);
       subDynamicCSS.textContent = '';
@@ -1365,16 +1935,23 @@
       const chatOn = data.chat_enabled !== false;
       const subOn = !!data.subtitles_enabled;
       const hasChatTTS = ttsOn || chatOn;
-      const anyOn = hasChatTTS || subOn;
+      hostThemeVars = data.host_theme || {};
 
-      uniModules = { tts: ttsOn, chat: chatOn, subtitles: subOn };
+      rebuildPluginDesignerNodes(data.plugin_widgets || []);
+      const hasPluginWidgets = pluginWidgets.length > 0;
+      const anyOn = hasChatTTS || subOn || hasPluginWidgets;
+
+      uniModules.tts = ttsOn;
+      uniModules.chat = chatOn;
+      uniModules.subtitles = subOn;
+      uniState = buildDefaultUniLayout();
       uniWidthEl.value = data.unified_width || 1920;
       uniHeightEl.value = data.unified_height || 1080;
       if (data.unified_layout_json) {
         try {
           const parsed = JSON.parse(data.unified_layout_json);
-          ['tts', 'chat', 'subtitles'].forEach(function(k) {
-            if (parsed[k]) uniState[k] = Object.assign({}, defaultUniLayout[k], parsed[k]);
+          allUnifiedWidgetKeys().forEach(function(k) {
+            if (parsed[k]) uniState[k] = Object.assign({}, uniState[k] || {}, parsed[k]);
           });
         } catch (_) {}
       }
@@ -1391,10 +1968,17 @@
         renderSubtitlePreviewRows(data.target_languages);
       }
 
-      if (requestedTab === 'layout' && anyOn) {
+      const matchedPluginTab = Object.keys(pluginWidgetsByKey).find(function(k) {
+        return k.toLowerCase() === requestedTab;
+      });
+      if (matchedPluginTab) {
+        setActiveTab(matchedPluginTab);
+      } else if (requestedTab === 'layout' && anyOn) {
         setActiveTab('layout');
-      } else if ((requestedTab === 'subtitles' && subOn) || (!hasChatTTS && subOn)) {
+      } else if ((requestedTab === 'subtitles' && subOn) || (!hasChatTTS && subOn && !hasPluginWidgets)) {
         setActiveTab('subtitles');
+      } else if (!hasChatTTS && !subOn && hasPluginWidgets) {
+        setActiveTab(pluginWidgets[0].key);
       } else {
         setActiveTab('chat_tts');
       }

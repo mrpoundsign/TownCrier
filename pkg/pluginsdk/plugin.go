@@ -35,6 +35,11 @@ type OverlayAssetPlugin interface {
 	GetOverlayAsset(assetPath string) (contentType string, body []byte, found bool, err error)
 }
 
+// OverlayStylePlugin is an optional interface implemented by plugins that react to Designer overlay style updates ("overlay.widgets.v1").
+type OverlayStylePlugin interface {
+	OnOverlayStyleChanged(req *pluginv1.OnOverlayStyleChangedRequest) error
+}
+
 // BeforeTTSPlugin is an optional interface implemented by plugins that intercept or rewrite TTS utterances ("bot.before_tts.v1").
 type BeforeTTSPlugin interface {
 	BeforeTTS(req *pluginv1.BeforeTTSRequest) (*pluginv1.BeforeTTSResponse, error)
@@ -273,6 +278,18 @@ func dispatchEnvelope(p Plugin, host *Host, env *pluginv1.HostEnvelope) *pluginv
 				},
 			},
 		}
+
+	case *pluginv1.HostEnvelope_OnOverlayStyleChanged:
+		if sp, ok := p.(OverlayStylePlugin); ok {
+			req := payload.OnOverlayStyleChanged
+			if req == nil {
+				req = &pluginv1.OnOverlayStyleChangedRequest{}
+			}
+			if err := sp.OnOverlayStyleChanged(req); err != nil {
+				return ackError(reqID, err)
+			}
+		}
+		return ackOK(reqID)
 
 	case *pluginv1.HostEnvelope_BeforeTts:
 		bp, ok := p.(BeforeTTSPlugin)

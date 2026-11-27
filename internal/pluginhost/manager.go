@@ -467,6 +467,7 @@ func (m *Manager) Plugins() []PluginStatus {
 		var actions []*pluginv1.ActionDescriptor
 		var triggers []*pluginv1.TriggerDescriptor
 		var views []*pluginv1.ViewDescriptor
+		var overlayWidgets []*pluginv1.OverlayWidgetDescriptor
 		apiVer := ""
 		if ent.manifest != nil {
 			perms = ent.manifest.GetPermissions()
@@ -477,6 +478,7 @@ func (m *Manager) Plugins() []PluginStatus {
 			actions = slices.Clone(ent.manifest.GetActions())
 			triggers = slices.Clone(ent.manifest.GetTriggers())
 			views = slices.Clone(ent.manifest.GetViews())
+			overlayWidgets = slices.Clone(ent.manifest.GetOverlayWidgets())
 			apiVer = FormatVersion(ent.manifest.GetApiVersion())
 		}
 		var visuals map[string]*pluginv1.ActionVisualState
@@ -510,6 +512,7 @@ func (m *Manager) Plugins() []PluginStatus {
 			ActionVisuals:     visuals,
 			Triggers:          triggers,
 			Views:             views,
+			OverlayWidgets:    overlayWidgets,
 			State:             ent.state,
 			Error:             ent.errMsg,
 			APIError:          ent.apiErr,
@@ -1377,11 +1380,13 @@ func (m *Manager) GetOverlayAsset(ctx context.Context, pluginUUID, assetPath str
 	if err != nil {
 		return "", nil, false, err
 	}
-	hasCap := slices.Contains(man.GetRequiredCapabilities(), "overlay.routes.v1")
+	hasCap := slices.Contains(man.GetRequiredCapabilities(), "overlay.routes.v1") ||
+		slices.Contains(man.GetRequiredCapabilities(), "overlay.widgets.v1") ||
+		len(man.GetOverlayWidgets()) > 0
 	if !man.GetPermissions().GetOverlayBroadcast() && !hasCap {
 		return "", nil, false, pluginsdk.FromProto(&pluginv1.APIError{
 			Code:    pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED,
-			Message: "plugin does not declare overlay_broadcast or overlay.routes.v1",
+			Message: "plugin does not declare overlay_broadcast, overlay.routes.v1, or overlay.widgets.v1",
 		})
 	}
 	resp, err := be.Dispatch(ctx, &pluginv1.HostEnvelope{
@@ -1406,6 +1411,62 @@ func (m *Manager) GetOverlayAsset(ctx context.Context, pluginUUID, assetPath str
 		return "", nil, false, pluginsdk.FromProto(assetResp.GetError())
 	}
 	return assetResp.GetContentType(), assetResp.GetBody(), assetResp.GetFound(), nil
+}
+
+// HasRunningOverlayWidgets reports whether any currently running plugin declares OBS overlay widgets.
+func (m *Manager) HasRunningOverlayWidgets() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, ent := range m.entries {
+		if ent == nil {
+			continue
+		}
+		ent.mu.RLock()
+		has := ent.state == StatusRunning && ent.manifest != nil && len(ent.manifest.GetOverlayWidgets()) > 0
+		ent.mu.RUnlock()
+		if has {
+			return true
+		}
+	}
+	return false
+}
+
+// NotifyOverlayStyleChanged notifies a running plugin that a declared overlay widget's Designer style changed.
+func (m *Manager) NotifyOverlayStyleChanged(ctx context.Context, pluginUUID, widgetID string, values map[string]any, customCSS string, useHostTheme bool) error {
+	_, be, man, err := m.runningBackend(pluginUUID)
+	if err != nil {
+		return err
+	}
+	var schema []*pluginv1.SettingField
+	for _, w := range man.GetOverlayWidgets() {
+		if w != nil && w.GetId() == widgetID {
+			schema = w.GetStyleSchema()
+			break
+		}
+	}
+	resp, err := be.Dispatch(ctx, &pluginv1.HostEnvelope{
+		Payload: &pluginv1.HostEnvelope_OnOverlayStyleChanged{
+			OnOverlayStyleChanged: &pluginv1.OnOverlayStyleChangedRequest{
+				WidgetId:     widgetID,
+				Values:       mapToSettingsProto(values, schema),
+				CustomCss:    customCSS,
+				UseHostTheme: useHostTheme,
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if ack := resp.GetAck(); ack != nil && !ack.GetOk() {
+		if ack.GetError() != nil {
+			return pluginsdk.FromProto(ack.GetError())
+		}
+		return errors.New("plugin rejected overlay style change")
+	}
+	return nil
 }
 
 // SubscribeUIUpdate registers a listener invoked whenever a plugin pushes a UI snapshot or patch batch.

@@ -2656,6 +2656,75 @@ func (x *ActionVisualState) GetFeedbackValue() string {
 	return ""
 }
 
+// OnOverlayStyleChangedRequest notifies a plugin that a widget's overlay style changed in the Designer.
+type OnOverlayStyleChangedRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	WidgetId      string                 `protobuf:"bytes,1,opt,name=widget_id,json=widgetId,proto3" json:"widget_id,omitempty"`
+	Values        *SettingsMap           `protobuf:"bytes,2,opt,name=values,proto3" json:"values,omitempty"`
+	CustomCss     string                 `protobuf:"bytes,3,opt,name=custom_css,json=customCss,proto3" json:"custom_css,omitempty"`
+	UseHostTheme  bool                   `protobuf:"varint,4,opt,name=use_host_theme,json=useHostTheme,proto3" json:"use_host_theme,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OnOverlayStyleChangedRequest) Reset() {
+	*x = OnOverlayStyleChangedRequest{}
+	mi := &file_plugin_v1_bot_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OnOverlayStyleChangedRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OnOverlayStyleChangedRequest) ProtoMessage() {}
+
+func (x *OnOverlayStyleChangedRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_bot_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OnOverlayStyleChangedRequest.ProtoReflect.Descriptor instead.
+func (*OnOverlayStyleChangedRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_bot_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *OnOverlayStyleChangedRequest) GetWidgetId() string {
+	if x != nil {
+		return x.WidgetId
+	}
+	return ""
+}
+
+func (x *OnOverlayStyleChangedRequest) GetValues() *SettingsMap {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+func (x *OnOverlayStyleChangedRequest) GetCustomCss() string {
+	if x != nil {
+		return x.CustomCss
+	}
+	return ""
+}
+
+func (x *OnOverlayStyleChangedRequest) GetUseHostTheme() bool {
+	if x != nil {
+		return x.UseHostTheme
+	}
+	return false
+}
+
 var File_plugin_v1_bot_proto protoreflect.FileDescriptor
 
 const file_plugin_v1_bot_proto_rawDesc = "" +
@@ -2867,7 +2936,13 @@ const file_plugin_v1_bot_proto_rawDesc = "" +
 	"\fhas_progress\x18\b \x01(\bR\vhasProgress\x12)\n" +
 	"\x10progress_percent\x18\t \x01(\x05R\x0fprogressPercent\x12%\n" +
 	"\x0efeedback_value\x18\n" +
-	" \x01(\tR\rfeedbackValue*w\n" +
+	" \x01(\tR\rfeedbackValue\"\xba\x01\n" +
+	"\x1cOnOverlayStyleChangedRequest\x12\x1b\n" +
+	"\twidget_id\x18\x01 \x01(\tR\bwidgetId\x128\n" +
+	"\x06values\x18\x02 \x01(\v2 .towncrier.plugin.v1.SettingsMapR\x06values\x12\x1d\n" +
+	"\n" +
+	"custom_css\x18\x03 \x01(\tR\tcustomCss\x12$\n" +
+	"\x0euse_host_theme\x18\x04 \x01(\bR\fuseHostTheme*w\n" +
 	"\bLogLevel\x12\x19\n" +
 	"\x15LOG_LEVEL_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fLOG_LEVEL_DEBUG\x10\x01\x12\x12\n" +
@@ -2893,63 +2968,64 @@ func file_plugin_v1_bot_proto_rawDescGZIP() []byte {
 }
 
 var file_plugin_v1_bot_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_plugin_v1_bot_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
+var file_plugin_v1_bot_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_plugin_v1_bot_proto_goTypes = []any{
-	(LogLevel)(0),                     // 0: towncrier.plugin.v1.LogLevel
-	(VarScope)(0),                     // 1: towncrier.plugin.v1.VarScope
-	(*EmoteSpan)(nil),                 // 2: towncrier.plugin.v1.EmoteSpan
-	(*StreamEvent)(nil),               // 3: towncrier.plugin.v1.StreamEvent
-	(*ModerationEvent)(nil),           // 4: towncrier.plugin.v1.ModerationEvent
-	(*TTSSpeechLifecycleEvent)(nil),   // 5: towncrier.plugin.v1.TTSSpeechLifecycleEvent
-	(*ActionValue)(nil),               // 6: towncrier.plugin.v1.ActionValue
-	(*ActionArgs)(nil),                // 7: towncrier.plugin.v1.ActionArgs
-	(*LogRequest)(nil),                // 8: towncrier.plugin.v1.LogRequest
-	(*GetGlobalSettingsRequest)(nil),  // 9: towncrier.plugin.v1.GetGlobalSettingsRequest
-	(*GetGlobalSettingsResponse)(nil), // 10: towncrier.plugin.v1.GetGlobalSettingsResponse
-	(*SaveGlobalSettingsRequest)(nil), // 11: towncrier.plugin.v1.SaveGlobalSettingsRequest
-	(*SetTimerRequest)(nil),           // 12: towncrier.plugin.v1.SetTimerRequest
-	(*HTTPRequest)(nil),               // 13: towncrier.plugin.v1.HTTPRequest
-	(*HTTPResponse)(nil),              // 14: towncrier.plugin.v1.HTTPResponse
-	(*SpeakRequest)(nil),              // 15: towncrier.plugin.v1.SpeakRequest
-	(*KVGetRequest)(nil),              // 16: towncrier.plugin.v1.KVGetRequest
-	(*KVGetResponse)(nil),             // 17: towncrier.plugin.v1.KVGetResponse
-	(*KVSetRequest)(nil),              // 18: towncrier.plugin.v1.KVSetRequest
-	(*KVDeleteRequest)(nil),           // 19: towncrier.plugin.v1.KVDeleteRequest
-	(*KVListRequest)(nil),             // 20: towncrier.plugin.v1.KVListRequest
-	(*KVListResponse)(nil),            // 21: towncrier.plugin.v1.KVListResponse
-	(*OverlayBroadcastRequest)(nil),   // 22: towncrier.plugin.v1.OverlayBroadcastRequest
-	(*GetOverlayAssetRequest)(nil),    // 23: towncrier.plugin.v1.GetOverlayAssetRequest
-	(*GetOverlayAssetResponse)(nil),   // 24: towncrier.plugin.v1.GetOverlayAssetResponse
-	(*RunActionRequest)(nil),          // 25: towncrier.plugin.v1.RunActionRequest
-	(*RunActionResponse)(nil),         // 26: towncrier.plugin.v1.RunActionResponse
-	(*BeforeTTSRequest)(nil),          // 27: towncrier.plugin.v1.BeforeTTSRequest
-	(*BeforeTTSResponse)(nil),         // 28: towncrier.plugin.v1.BeforeTTSResponse
-	(*SendChatRequest)(nil),           // 29: towncrier.plugin.v1.SendChatRequest
-	(*ModerateRequest)(nil),           // 30: towncrier.plugin.v1.ModerateRequest
-	(*GetVarRequest)(nil),             // 31: towncrier.plugin.v1.GetVarRequest
-	(*GetVarResponse)(nil),            // 32: towncrier.plugin.v1.GetVarResponse
-	(*SetVarRequest)(nil),             // 33: towncrier.plugin.v1.SetVarRequest
-	(*EmitTriggerRequest)(nil),        // 34: towncrier.plugin.v1.EmitTriggerRequest
-	(*RunBotActionRequest)(nil),       // 35: towncrier.plugin.v1.RunBotActionRequest
-	(*ActionVisualState)(nil),         // 36: towncrier.plugin.v1.ActionVisualState
-	nil,                               // 37: towncrier.plugin.v1.ActionArgs.ArgsEntry
-	nil,                               // 38: towncrier.plugin.v1.HTTPRequest.HeadersEntry
-	nil,                               // 39: towncrier.plugin.v1.HTTPResponse.HeadersEntry
-	(*SettingsMap)(nil),               // 40: towncrier.plugin.v1.SettingsMap
-	(*APIError)(nil),                  // 41: towncrier.plugin.v1.APIError
+	(LogLevel)(0),                        // 0: towncrier.plugin.v1.LogLevel
+	(VarScope)(0),                        // 1: towncrier.plugin.v1.VarScope
+	(*EmoteSpan)(nil),                    // 2: towncrier.plugin.v1.EmoteSpan
+	(*StreamEvent)(nil),                  // 3: towncrier.plugin.v1.StreamEvent
+	(*ModerationEvent)(nil),              // 4: towncrier.plugin.v1.ModerationEvent
+	(*TTSSpeechLifecycleEvent)(nil),      // 5: towncrier.plugin.v1.TTSSpeechLifecycleEvent
+	(*ActionValue)(nil),                  // 6: towncrier.plugin.v1.ActionValue
+	(*ActionArgs)(nil),                   // 7: towncrier.plugin.v1.ActionArgs
+	(*LogRequest)(nil),                   // 8: towncrier.plugin.v1.LogRequest
+	(*GetGlobalSettingsRequest)(nil),     // 9: towncrier.plugin.v1.GetGlobalSettingsRequest
+	(*GetGlobalSettingsResponse)(nil),    // 10: towncrier.plugin.v1.GetGlobalSettingsResponse
+	(*SaveGlobalSettingsRequest)(nil),    // 11: towncrier.plugin.v1.SaveGlobalSettingsRequest
+	(*SetTimerRequest)(nil),              // 12: towncrier.plugin.v1.SetTimerRequest
+	(*HTTPRequest)(nil),                  // 13: towncrier.plugin.v1.HTTPRequest
+	(*HTTPResponse)(nil),                 // 14: towncrier.plugin.v1.HTTPResponse
+	(*SpeakRequest)(nil),                 // 15: towncrier.plugin.v1.SpeakRequest
+	(*KVGetRequest)(nil),                 // 16: towncrier.plugin.v1.KVGetRequest
+	(*KVGetResponse)(nil),                // 17: towncrier.plugin.v1.KVGetResponse
+	(*KVSetRequest)(nil),                 // 18: towncrier.plugin.v1.KVSetRequest
+	(*KVDeleteRequest)(nil),              // 19: towncrier.plugin.v1.KVDeleteRequest
+	(*KVListRequest)(nil),                // 20: towncrier.plugin.v1.KVListRequest
+	(*KVListResponse)(nil),               // 21: towncrier.plugin.v1.KVListResponse
+	(*OverlayBroadcastRequest)(nil),      // 22: towncrier.plugin.v1.OverlayBroadcastRequest
+	(*GetOverlayAssetRequest)(nil),       // 23: towncrier.plugin.v1.GetOverlayAssetRequest
+	(*GetOverlayAssetResponse)(nil),      // 24: towncrier.plugin.v1.GetOverlayAssetResponse
+	(*RunActionRequest)(nil),             // 25: towncrier.plugin.v1.RunActionRequest
+	(*RunActionResponse)(nil),            // 26: towncrier.plugin.v1.RunActionResponse
+	(*BeforeTTSRequest)(nil),             // 27: towncrier.plugin.v1.BeforeTTSRequest
+	(*BeforeTTSResponse)(nil),            // 28: towncrier.plugin.v1.BeforeTTSResponse
+	(*SendChatRequest)(nil),              // 29: towncrier.plugin.v1.SendChatRequest
+	(*ModerateRequest)(nil),              // 30: towncrier.plugin.v1.ModerateRequest
+	(*GetVarRequest)(nil),                // 31: towncrier.plugin.v1.GetVarRequest
+	(*GetVarResponse)(nil),               // 32: towncrier.plugin.v1.GetVarResponse
+	(*SetVarRequest)(nil),                // 33: towncrier.plugin.v1.SetVarRequest
+	(*EmitTriggerRequest)(nil),           // 34: towncrier.plugin.v1.EmitTriggerRequest
+	(*RunBotActionRequest)(nil),          // 35: towncrier.plugin.v1.RunBotActionRequest
+	(*ActionVisualState)(nil),            // 36: towncrier.plugin.v1.ActionVisualState
+	(*OnOverlayStyleChangedRequest)(nil), // 37: towncrier.plugin.v1.OnOverlayStyleChangedRequest
+	nil,                                  // 38: towncrier.plugin.v1.ActionArgs.ArgsEntry
+	nil,                                  // 39: towncrier.plugin.v1.HTTPRequest.HeadersEntry
+	nil,                                  // 40: towncrier.plugin.v1.HTTPResponse.HeadersEntry
+	(*SettingsMap)(nil),                  // 41: towncrier.plugin.v1.SettingsMap
+	(*APIError)(nil),                     // 42: towncrier.plugin.v1.APIError
 }
 var file_plugin_v1_bot_proto_depIdxs = []int32{
 	2,  // 0: towncrier.plugin.v1.StreamEvent.emote_spans:type_name -> towncrier.plugin.v1.EmoteSpan
-	37, // 1: towncrier.plugin.v1.ActionArgs.args:type_name -> towncrier.plugin.v1.ActionArgs.ArgsEntry
+	38, // 1: towncrier.plugin.v1.ActionArgs.args:type_name -> towncrier.plugin.v1.ActionArgs.ArgsEntry
 	0,  // 2: towncrier.plugin.v1.LogRequest.level:type_name -> towncrier.plugin.v1.LogLevel
-	40, // 3: towncrier.plugin.v1.GetGlobalSettingsResponse.settings:type_name -> towncrier.plugin.v1.SettingsMap
-	40, // 4: towncrier.plugin.v1.SaveGlobalSettingsRequest.settings:type_name -> towncrier.plugin.v1.SettingsMap
-	38, // 5: towncrier.plugin.v1.HTTPRequest.headers:type_name -> towncrier.plugin.v1.HTTPRequest.HeadersEntry
-	39, // 6: towncrier.plugin.v1.HTTPResponse.headers:type_name -> towncrier.plugin.v1.HTTPResponse.HeadersEntry
-	41, // 7: towncrier.plugin.v1.GetOverlayAssetResponse.error:type_name -> towncrier.plugin.v1.APIError
+	41, // 3: towncrier.plugin.v1.GetGlobalSettingsResponse.settings:type_name -> towncrier.plugin.v1.SettingsMap
+	41, // 4: towncrier.plugin.v1.SaveGlobalSettingsRequest.settings:type_name -> towncrier.plugin.v1.SettingsMap
+	39, // 5: towncrier.plugin.v1.HTTPRequest.headers:type_name -> towncrier.plugin.v1.HTTPRequest.HeadersEntry
+	40, // 6: towncrier.plugin.v1.HTTPResponse.headers:type_name -> towncrier.plugin.v1.HTTPResponse.HeadersEntry
+	42, // 7: towncrier.plugin.v1.GetOverlayAssetResponse.error:type_name -> towncrier.plugin.v1.APIError
 	7,  // 8: towncrier.plugin.v1.RunActionRequest.args:type_name -> towncrier.plugin.v1.ActionArgs
 	7,  // 9: towncrier.plugin.v1.RunActionResponse.updated_args:type_name -> towncrier.plugin.v1.ActionArgs
-	41, // 10: towncrier.plugin.v1.RunActionResponse.error:type_name -> towncrier.plugin.v1.APIError
+	42, // 10: towncrier.plugin.v1.RunActionResponse.error:type_name -> towncrier.plugin.v1.APIError
 	3,  // 11: towncrier.plugin.v1.BeforeTTSRequest.event:type_name -> towncrier.plugin.v1.StreamEvent
 	1,  // 12: towncrier.plugin.v1.GetVarRequest.scope:type_name -> towncrier.plugin.v1.VarScope
 	6,  // 13: towncrier.plugin.v1.GetVarResponse.value:type_name -> towncrier.plugin.v1.ActionValue
@@ -2957,12 +3033,13 @@ var file_plugin_v1_bot_proto_depIdxs = []int32{
 	6,  // 15: towncrier.plugin.v1.SetVarRequest.value:type_name -> towncrier.plugin.v1.ActionValue
 	7,  // 16: towncrier.plugin.v1.EmitTriggerRequest.args:type_name -> towncrier.plugin.v1.ActionArgs
 	7,  // 17: towncrier.plugin.v1.RunBotActionRequest.args:type_name -> towncrier.plugin.v1.ActionArgs
-	6,  // 18: towncrier.plugin.v1.ActionArgs.ArgsEntry.value:type_name -> towncrier.plugin.v1.ActionValue
-	19, // [19:19] is the sub-list for method output_type
-	19, // [19:19] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	41, // 18: towncrier.plugin.v1.OnOverlayStyleChangedRequest.values:type_name -> towncrier.plugin.v1.SettingsMap
+	6,  // 19: towncrier.plugin.v1.ActionArgs.ArgsEntry.value:type_name -> towncrier.plugin.v1.ActionValue
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_plugin_v1_bot_proto_init() }
@@ -2984,7 +3061,7 @@ func file_plugin_v1_bot_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plugin_v1_bot_proto_rawDesc), len(file_plugin_v1_bot_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   38,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

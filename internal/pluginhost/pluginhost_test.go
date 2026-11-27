@@ -784,3 +784,104 @@ func TestRunPluginActionAndBotHostCalls(t *testing.T) {
 	require.NotNil(t, plugins[0].ActionVisuals["do_thing"])
 	require.Equal(t, "PLAYING", plugins[0].ActionVisuals["do_thing"].GetSubtitle())
 }
+
+func TestOverlayWidgetsCapabilityValidationAndStyleNotify(t *testing.T) {
+	t.Parallel()
+	require.Nil(t, CheckVersion(1, 1))
+	require.Nil(t, CheckCapabilities([]string{"core.v1", "overlay.widgets.v1"}))
+
+	// Declaring overlay_widgets without overlay permission/capability is rejected.
+	errNoPerm := ValidateManifest(&pluginv1.Manifest{
+		Uuid: "com.example.noperm",
+		Name: "NoPerm",
+		OverlayWidgets: []*pluginv1.OverlayWidgetDescriptor{
+			{Id: "now_playing", Name: "Now Playing"},
+		},
+	})
+	require.NotNil(t, errNoPerm)
+	require.Equal(t, pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED, errNoPerm.GetCode())
+
+	// Invalid widget id is rejected.
+	errBadID := ValidateManifest(&pluginv1.Manifest{
+		Uuid:                 "com.example.badid",
+		Name:                 "BadID",
+		RequiredCapabilities: []string{"overlay.widgets.v1"},
+		OverlayWidgets: []*pluginv1.OverlayWidgetDescriptor{
+			{Id: "../evil", Name: "Bad"},
+		},
+	})
+	require.NotNil(t, errBadID)
+	require.Equal(t, pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, errBadID.GetCode())
+
+	// Duplicate widget id is rejected.
+	errDup := ValidateManifest(&pluginv1.Manifest{
+		Uuid:                 "com.example.dup",
+		Name:                 "Dup",
+		RequiredCapabilities: []string{"overlay.widgets.v1"},
+		OverlayWidgets: []*pluginv1.OverlayWidgetDescriptor{
+			{Id: "card", Name: "Card 1"},
+			{Id: "card", Name: "Card 2"},
+		},
+	})
+	require.NotNil(t, errDup)
+	require.Equal(t, pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, errDup.GetCode())
+
+	// Valid manifest passes.
+	validMan := &pluginv1.Manifest{
+		Uuid:                 "com.example.widget",
+		Name:                 "WidgetPlugin",
+		RequiredCapabilities: []string{"overlay.widgets.v1"},
+		Permissions:          &pluginv1.Permissions{OverlayBroadcast: true},
+		OverlayWidgets: []*pluginv1.OverlayWidgetDescriptor{
+			{
+				Id:                "now_playing",
+				Name:              "Now Playing",
+				SupportsHostTheme: true,
+				StyleSchema: []*pluginv1.SettingField{
+					{Key: "accent", Type: pluginv1.SettingFieldType_SETTING_FIELD_TYPE_COLOR},
+					{Key: "opacity", Type: pluginv1.SettingFieldType_SETTING_FIELD_TYPE_NUMBER, MinValue: 0, MaxValue: 100, Step: 5},
+				},
+			},
+		},
+	}
+	require.Nil(t, ValidateManifest(validMan))
+
+	mgr := NewManager(Options{})
+	defer func() { _ = mgr.Close() }()
+	require.False(t, mgr.HasRunningOverlayWidgets())
+
+	var gotStyleReq *pluginv1.OnOverlayStyleChangedRequest
+	mgr.entries[validMan.GetUuid()] = &pluginEntry{
+		uuid:     validMan.GetUuid(),
+		name:     validMan.GetName(),
+		state:    StatusRunning,
+		manifest: validMan,
+		backend: &stubBackend{
+			dispatchFn: func(_ context.Context, env *pluginv1.HostEnvelope) (*pluginv1.PluginEnvelope, error) {
+				gotStyleReq = env.GetOnOverlayStyleChanged()
+				return &pluginv1.PluginEnvelope{
+					RequestId: env.GetRequestId(),
+					Payload:   &pluginv1.PluginEnvelope_Ack{Ack: &pluginv1.AckResponse{Ok: true}},
+				}, nil
+			},
+		},
+	}
+
+	require.True(t, mgr.HasRunningOverlayWidgets())
+	listed := mgr.Plugins()
+	require.Len(t, listed, 1)
+	require.Len(t, listed[0].OverlayWidgets, 1)
+	require.Equal(t, "now_playing", listed[0].OverlayWidgets[0].GetId())
+
+	err := mgr.NotifyOverlayStyleChanged(context.Background(), validMan.GetUuid(), "now_playing", map[string]any{
+		"accent":  "#38BDF8",
+		"opacity": 85,
+	}, ".card { color: red; }", true)
+	require.NoError(t, err)
+	require.NotNil(t, gotStyleReq)
+	require.Equal(t, "now_playing", gotStyleReq.GetWidgetId())
+	require.Equal(t, ".card { color: red; }", gotStyleReq.GetCustomCss())
+	require.True(t, gotStyleReq.GetUseHostTheme())
+	require.Equal(t, "#38BDF8", pluginsdk.GetSettingString(gotStyleReq.GetValues(), "accent", ""))
+	require.Equal(t, 85.0, pluginsdk.GetSettingNumber(gotStyleReq.GetValues(), "opacity", 0))
+}

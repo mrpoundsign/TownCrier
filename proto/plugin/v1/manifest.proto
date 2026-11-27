@@ -96,6 +96,9 @@ message SettingField {
   repeated SelectOption options = 8;
   repeated string file_extensions = 9;
   bool required = 10;
+  double min_value = 11;
+  double max_value = 12;
+  double step = 13;
 }
 
 // ActionDescriptor describes an automatable action exposed by a plugin.
@@ -143,6 +146,26 @@ message ViewDescriptor {
   ViewPlacement placement = 4;
 }
 
+// OverlayWidgetDescriptor declares an OBS Browser Source widget exposed by a plugin
+// for unified canvas placement (/overlay) and live style editing (/overlay/designer).
+message OverlayWidgetDescriptor {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string icon_name = 4;
+  string entry_asset = 5;
+  double default_x = 6;
+  double default_y = 7;
+  double default_w = 8;
+  double default_h = 9;
+  double min_w = 10;
+  double min_h = 11;
+  bool default_hidden = 12;
+  bool supports_host_theme = 13;
+  repeated SettingField style_schema = 14;
+  bool disable_custom_css = 15;
+}
+
 // Manifest declares plugin metadata, API requirements, permissions, and extensions.
 message Manifest {
   string uuid = 1;
@@ -162,4 +185,5 @@ message Manifest {
   repeated TriggerDescriptor triggers = 15;
   repeated CommandDescriptor commands = 16;
   repeated ViewDescriptor views = 17;
+  repeated OverlayWidgetDescriptor overlay_widgets = 18;
 }

@@ -79,6 +79,7 @@ type PluginStatus struct {
 	ActionVisuals     map[string]*pluginv1.ActionVisualState
 	Triggers          []*pluginv1.TriggerDescriptor
 	Views             []*pluginv1.ViewDescriptor
+	OverlayWidgets    []*pluginv1.OverlayWidgetDescriptor
 	State             RunState
 	Error             string
 	APIError          *pluginv1.APIError

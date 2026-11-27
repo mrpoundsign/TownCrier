@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/pprof"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -149,11 +151,12 @@ type Server struct {
 	stopCh                  chan struct{}
 	clients                 map[*wsClient]struct{}
 
-	overlaySubsMu  sync.Mutex
-	overlaySubs    map[uint64]chan OverlayStreamEvent
-	overlaySubSeq  uint64
-	subtitleSubs   map[uint64]chan SubtitleEvent
-	subtitleSubSeq uint64
+	overlaySubsMu    sync.Mutex
+	overlaySubs      map[uint64]chan OverlayStreamEvent
+	overlaySubSeq    uint64
+	subtitleSubs     map[uint64]chan SubtitleEvent
+	subtitleSubSeq   uint64
+	pluginLastEvents map[string]map[string]PluginOverlayEvent
 }
 
 // NewServer creates a new WebSocket & HTTP control server bound to the given Controller.
@@ -169,6 +172,7 @@ func NewServer(ctrl Controller) *Server {
 		clients:                 make(map[*wsClient]struct{}),
 		overlaySubs:             make(map[uint64]chan OverlayStreamEvent),
 		subtitleSubs:            make(map[uint64]chan SubtitleEvent),
+		pluginLastEvents:        make(map[string]map[string]PluginOverlayEvent),
 	}
 }
 
@@ -224,8 +228,11 @@ func (s *Server) BroadcastSubtitleEvent(ev SubtitleEvent) {
 	}
 }
 
-// BroadcastPluginEvent pushes a plugin overlay broadcast event to all connected /api/overlay/stream SSE subscribers.
+// BroadcastPluginEvent pushes a plugin overlay broadcast event to all connected /api/overlay/stream
+// and /plugins/<uuid>/events SSE subscribers, and caches the latest payload per event name for replay.
 func (s *Server) BroadcastPluginEvent(pluginUUID, eventName, jsonPayload string) {
+	pluginUUID = strings.TrimSpace(pluginUUID)
+	eventName = strings.TrimSpace(eventName)
 	var raw json.RawMessage
 	trimmed := strings.TrimSpace(jsonPayload)
 	if trimmed != "" && json.Valid([]byte(trimmed)) {
@@ -235,12 +242,59 @@ func (s *Server) BroadcastPluginEvent(pluginUUID, eventName, jsonPayload string)
 			raw = b
 		}
 	}
+	pluginEv := &PluginOverlayEvent{
+		PluginUUID: pluginUUID,
+		EventName:  eventName,
+		Payload:    raw,
+	}
 	ev := OverlayStreamEvent{
-		Kind: "plugin",
-		Plugin: &PluginOverlayEvent{
-			PluginUUID: pluginUUID,
-			EventName:  eventName,
-			Payload:    raw,
+		Kind:   "plugin",
+		Plugin: pluginEv,
+	}
+	s.overlaySubsMu.Lock()
+	defer s.overlaySubsMu.Unlock()
+	if pluginUUID != "" {
+		if s.pluginLastEvents == nil {
+			s.pluginLastEvents = make(map[string]map[string]PluginOverlayEvent)
+		}
+		perPlugin := s.pluginLastEvents[pluginUUID]
+		if perPlugin == nil {
+			perPlugin = make(map[string]PluginOverlayEvent)
+			s.pluginLastEvents[pluginUUID] = perPlugin
+		}
+		if _, exists := perPlugin[eventName]; exists || len(perPlugin) < 32 {
+			perPlugin[eventName] = PluginOverlayEvent{
+				PluginUUID: pluginUUID,
+				EventName:  eventName,
+				Payload:    slices.Clone(raw),
+			}
+		}
+	}
+	for _, ch := range s.overlaySubs {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+}
+
+// BroadcastPluginStyle pushes updated Designer styling and resolved host theme CSS variables
+// to connected plugin overlay SSE subscribers.
+func (s *Server) BroadcastPluginStyle(pluginUUID, widgetID string, style config.PluginOverlayStyle, hostTheme map[string]string) {
+	styleCopy := config.PluginOverlayStyle{
+		CustomCSS:    style.CustomCSS,
+		UseHostTheme: style.UseHostTheme,
+	}
+	if style.Values != nil {
+		styleCopy.Values = maps.Clone(style.Values)
+	}
+	ev := OverlayStreamEvent{
+		Kind: "plugin_style",
+		PluginStyle: &PluginOverlayStyleEvent{
+			PluginUUID: strings.TrimSpace(pluginUUID),
+			WidgetID:   strings.TrimSpace(widgetID),
+			Style:      styleCopy,
+			HostTheme:  maps.Clone(hostTheme),
 		},
 	}
 	s.overlaySubsMu.Lock()
@@ -251,6 +305,36 @@ func (s *Server) BroadcastPluginEvent(pluginUUID, eventName, jsonPayload string)
 		default:
 		}
 	}
+}
+
+func (s *Server) snapshotPluginEvents(pluginUUID string) []PluginOverlayEvent {
+	s.overlaySubsMu.Lock()
+	defer s.overlaySubsMu.Unlock()
+	perPlugin := s.pluginLastEvents[strings.TrimSpace(pluginUUID)]
+	if len(perPlugin) == 0 {
+		return nil
+	}
+	out := make([]PluginOverlayEvent, 0, len(perPlugin))
+	for _, ev := range perPlugin {
+		out = append(out, PluginOverlayEvent{
+			PluginUUID: ev.PluginUUID,
+			EventName:  ev.EventName,
+			Payload:    slices.Clone(ev.Payload),
+		})
+	}
+	slices.SortFunc(out, func(a, b PluginOverlayEvent) int {
+		return strings.Compare(a.EventName, b.EventName)
+	})
+	return out
+}
+
+func (s *Server) hasActivePluginWidgets() bool {
+	pwProv, ok := s.ctrl.(PluginOverlayWidgetProvider)
+	return ok && pwProv != nil && len(pwProv.ListPluginOverlayWidgets()) > 0
+}
+
+func (s *Server) hasAnyOverlayEnabled() bool {
+	return s.isTTSOverlayEnabled() || s.isChatOverlayEnabled() || s.IsSubtitlesOverlayEnabled() || s.hasActivePluginWidgets()
 }
 
 // SetSubtitlesOverlayEnabled dynamically enables or disables the /overlay/subtitles endpoints without restarting the listener.

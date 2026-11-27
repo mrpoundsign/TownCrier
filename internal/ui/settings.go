@@ -161,6 +161,7 @@ type SettingsView struct {
 	wsSubtitlesOverlaySection *fyne.Container
 	wsSubtitlesOverlayLink    *widget.Hyperlink
 	wsCopySubtitlesOverlayBtn *widget.Button
+	wsPluginOverlaysSection   *fyne.Container
 	wsEnabledCheck            *widget.Check
 	wsControlSection          *fyne.Container
 	wsNetSection              *fyne.Container
@@ -1232,7 +1233,10 @@ func (v *SettingsView) Build() fyne.CanvasObject {
 	v.subTabs = container.NewAppTabs(v.generalTabItem, v.ttsTabItem, v.rulesTabItem, v.logsTabItem)
 	if v.session != nil && v.session.PluginManager() != nil && v.pluginSubUnsub == nil {
 		v.pluginSubUnsub = v.session.PluginManager().SubscribeStatusChange(func() {
-			fyne.Do(v.SyncPlatformTabVisibility)
+			fyne.Do(func() {
+				v.SyncPlatformTabVisibility()
+				v.refreshWSStatusLabel()
+			})
 		})
 	}
 	v.SyncPlatformTabVisibility()
@@ -1806,6 +1810,8 @@ func (v *SettingsView) refreshWSStatusLabel() {
 			v.wsSubtitlesOverlaySection.Hide()
 		}
 	}
+	pluginWidgetsOn := v.refreshPluginOverlaysSection()
+	anyOn = anyOn || pluginWidgetsOn
 	if v.wsControlSection != nil {
 		if controlOn {
 			v.wsControlSection.Show()
@@ -1820,7 +1826,7 @@ func (v *SettingsView) refreshWSStatusLabel() {
 			v.wsNetSection.Hide()
 		}
 	}
-	anyOverlayOn := ttsOverlayOn || chatOverlayOn || subtitlesOverlayOn
+	anyOverlayOn := ttsOverlayOn || chatOverlayOn || subtitlesOverlayOn || pluginWidgetsOn
 	if v.wsOpenDesignerBtn != nil {
 		if anyOverlayOn {
 			v.wsOpenDesignerBtn.Enable()
@@ -1881,6 +1887,9 @@ func (v *SettingsView) refreshWSStatusLabel() {
 	if subtitlesOverlayOn {
 		activeFeatures = append(activeFeatures, "Voice Subtitles Overlay")
 	}
+	if pluginWidgetsOn {
+		activeFeatures = append(activeFeatures, "Plugin Overlays")
+	}
 	if controlOn {
 		activeFeatures = append(activeFeatures, "Control API / Stream Deck")
 	}
@@ -1901,6 +1910,67 @@ func (v *SettingsView) refreshWSStatusLabel() {
 		return
 	}
 	v.wsStatusLabel.SetText(fmt.Sprintf("🟢 Configured for http://%s:%d [%s]", host, port, featSummary))
+}
+
+func (v *SettingsView) refreshPluginOverlaysSection() bool {
+	if v.wsPluginOverlaysSection == nil {
+		return false
+	}
+	if v.session == nil {
+		v.wsPluginOverlaysSection.RemoveAll()
+		v.wsPluginOverlaysSection.Hide()
+		return false
+	}
+	widgets := v.session.ListPluginOverlayWidgets()
+	v.wsPluginOverlaysSection.RemoveAll()
+	if len(widgets) == 0 {
+		v.wsPluginOverlaysSection.Hide()
+		return false
+	}
+	v.wsPluginOverlaysSection.Add(widget.NewSeparator())
+	v.wsPluginOverlaysSection.Add(widget.NewLabelWithStyle("Plugin OBS Overlays (Active Plugins)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
+
+	for _, pw := range widgets {
+		w := pw
+		asset := strings.TrimSpace(strings.TrimPrefix(w.EntryAsset, "/"))
+		pathRoute := "/plugins/" + url.PathEscape(w.PluginUUID) + "/overlay"
+		if asset != "" && asset != "index.html" {
+			pathRoute += "/" + asset
+		}
+		targetURL := v.overlayURL(pathRoute, map[string]string{"widget": w.WidgetID})
+		title := w.Name
+		if strings.TrimSpace(title) == "" {
+			title = w.WidgetID
+		}
+		if strings.TrimSpace(w.PluginName) != "" {
+			title = fmt.Sprintf("%s (%s)", title, w.PluginName)
+		}
+
+		copyBtn := widget.NewButtonWithIcon("📋 Copy URL", theme.ContentCopyIcon(), func() {
+			if app := fyne.CurrentApp(); app != nil && app.Clipboard() != nil {
+				app.Clipboard().SetContent(targetURL)
+			}
+			v.setStatus("✓ Copied Plugin Overlay URL: " + targetURL)
+		})
+		copyBtn.Importance = widget.HighImportance
+
+		customizeBtn := widget.NewButtonWithIcon("🎨 Customize Style", theme.ColorPaletteIcon(), func() {
+			v.openOverlayDesignerTab(w.Key)
+		})
+
+		link := widget.NewHyperlink(targetURL, nil)
+		if parsed, err := url.Parse(targetURL); err == nil {
+			link.SetURL(parsed)
+		}
+
+		v.wsPluginOverlaysSection.Add(container.NewVBox(
+			container.NewBorder(nil, nil, nil, container.NewHBox(copyBtn, customizeBtn), widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})),
+			container.NewHBox(widget.NewLabel("URL:"), link),
+		))
+	}
+	v.wsPluginOverlaysSection.Show()
+	v.wsPluginOverlaysSection.Refresh()
+	return true
 }
 
 // RefreshChatOverlayPresets reloads the saved Live Log presets dropdown in the OBS Chat Overlay settings section.
@@ -2272,6 +2342,9 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 		v.wsSubtitlesOverlaySection,
 	)
 
+	v.wsPluginOverlaysSection = container.NewVBox()
+	v.wsPluginOverlaysSection.Hide()
+
 	// 3. External Control API & Elgato Stream Deck toggle + section
 	v.wsEnabledCheck = widget.NewCheck("Enable External Control API & Elgato Stream Deck (/ws, /api/*)", func(checked bool) {
 		if v.initializing {
@@ -2559,6 +2632,7 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 		v.wsTTSOverlayGroup,
 		v.wsChatOverlayGroup,
 		v.wsSubtitlesOverlayGroup,
+		v.wsPluginOverlaysSection,
 		v.wsEnabledCheck,
 		v.wsControlSection,
 		v.wsNetSection,

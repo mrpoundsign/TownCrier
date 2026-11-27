@@ -1109,8 +1109,8 @@ func TestSettingsView_GranularWebServerAndOverlayToggles(t *testing.T) {
 	if sess.WSServer().IsRunning() {
 		t.Fatal("expected WSServer not to be running when all 3 toggles are off")
 	}
-	if view.wsTTSOverlaySection.Visible() || view.wsChatOverlaySection.Visible() || view.wsControlSection.Visible() || view.wsNetSection.Visible() {
-		t.Fatal("expected all overlay/control/network sections to be hidden when all 3 toggles are off")
+	if view.wsTTSOverlaySection.Visible() || view.wsChatOverlaySection.Visible() || view.wsControlSection.Visible() || view.wsNetSection.Visible() || view.wsPluginOverlaysSection.Visible() {
+		t.Fatal("expected all overlay/control/network/plugin sections to be hidden when all 3 toggles are off")
 	}
 
 	// 2. Enable TTS Overlay -> server starts, only wsTTSOverlaySection and wsNetSection are visible
