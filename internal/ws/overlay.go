@@ -26,19 +26,24 @@ type ChatOverlaySnapshot struct {
 
 // OverlayStyleConfig holds the persisted visual style and custom CSS for OBS Browser Source overlays.
 type OverlayStyleConfig struct {
-	TTSEnabled         bool     `json:"tts_enabled"`
-	ChatEnabled        bool     `json:"chat_enabled"`
-	SubtitlesEnabled   bool     `json:"subtitles_enabled"`
-	TargetLanguages    []string `json:"target_languages,omitempty"`
-	TTSPosition        string   `json:"tts_position"`
-	CustomCSS          string   `json:"custom_css"`
-	StyleJSON          string   `json:"style_json,omitempty"`
-	SubtitlesCustomCSS string   `json:"subtitles_custom_css,omitempty"`
-	SubtitlesStyleJSON string   `json:"subtitles_style_json,omitempty"`
-	UnifiedWidth       int      `json:"unified_width,omitempty"`
-	UnifiedHeight      int      `json:"unified_height,omitempty"`
-	UnifiedLayoutJSON  string   `json:"unified_layout_json,omitempty"`
-	Target             string   `json:"target,omitempty"`
+	TTSEnabled         bool                       `json:"tts_enabled"`
+	ChatEnabled        bool                       `json:"chat_enabled"`
+	SubtitlesEnabled   bool                       `json:"subtitles_enabled"`
+	TargetLanguages    []string                   `json:"target_languages,omitempty"`
+	TTSPosition        string                     `json:"tts_position"`
+	CustomCSS          string                     `json:"custom_css"`
+	StyleJSON          string                     `json:"style_json,omitempty"`
+	SubtitlesCustomCSS string                     `json:"subtitles_custom_css,omitempty"`
+	SubtitlesStyleJSON string                     `json:"subtitles_style_json,omitempty"`
+	UnifiedWidth       int                        `json:"unified_width,omitempty"`
+	UnifiedHeight      int                        `json:"unified_height,omitempty"`
+	UnifiedLayoutJSON  string                     `json:"unified_layout_json,omitempty"`
+	PluginWidgets      []PluginOverlayWidget      `json:"plugin_widgets,omitempty"`
+	HostTheme          map[string]string          `json:"host_theme,omitempty"`
+	Target             string                     `json:"target,omitempty"`
+	PluginUUID         string                     `json:"plugin_uuid,omitempty"`
+	WidgetID           string                     `json:"widget_id,omitempty"`
+	PluginStyle        *config.PluginOverlayStyle `json:"plugin_style,omitempty"`
 }
 
 // OverlayStyleProvider is an optional interface implemented by Controller (such as app.Session)
@@ -63,11 +68,12 @@ type PluginOverlayEvent struct {
 
 // OverlayStreamEvent represents a real-time Server-Sent Event pushed to /api/overlay/stream subscribers.
 type OverlayStreamEvent struct {
-	Kind    string                  `json:"kind"` // "append", "outcome", "reload", or "plugin"
-	Entry   *eventlog.Entry         `json:"entry,omitempty"`
-	EventID string                  `json:"event_id,omitempty"`
-	Update  *eventlog.OutcomeUpdate `json:"update,omitempty"`
-	Plugin  *PluginOverlayEvent     `json:"plugin,omitempty"`
+	Kind        string                   `json:"kind"` // "append", "outcome", "reload", "plugin", or "plugin_style"
+	Entry       *eventlog.Entry          `json:"entry,omitempty"`
+	EventID     string                   `json:"event_id,omitempty"`
+	Update      *eventlog.OutcomeUpdate  `json:"update,omitempty"`
+	Plugin      *PluginOverlayEvent      `json:"plugin,omitempty"`
+	PluginStyle *PluginOverlayStyleEvent `json:"plugin_style,omitempty"`
 }
 
 // OverlayProvider is an optional interface implemented by Controller (such as app.Session)
@@ -86,10 +92,7 @@ func (s *Server) handleOverlayTTS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "OBS Now-Speaking Overlay is disabled in TownCrier Settings", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(ttsOverlayHTML))
+	s.serveEmbeddedOverlayHTML(w, "tts.html")
 }
 
 func (s *Server) handleOverlayChat(w http.ResponseWriter, r *http.Request) {
@@ -101,10 +104,7 @@ func (s *Server) handleOverlayChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "OBS Live Chat Overlay is disabled in TownCrier Settings", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(chatOverlayHTML))
+	s.serveEmbeddedOverlayHTML(w, "chat.html")
 }
 
 func (s *Server) handleOverlayDesigner(w http.ResponseWriter, r *http.Request) {
@@ -112,14 +112,103 @@ func (s *Server) handleOverlayDesigner(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.isTTSOverlayEnabled() && !s.isChatOverlayEnabled() && !s.IsSubtitlesOverlayEnabled() {
+	if !s.hasAnyOverlayEnabled() {
 		http.Error(w, "OBS Overlays are disabled in TownCrier Settings", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(overlayDesignerHTML))
+	s.serveEmbeddedOverlayHTML(w, "designer.html")
+}
+
+// ResolveHostThemeVars parses TownCrier's Obsidian Slate Designer StyleJSON and returns
+// standardized --tc-* CSS custom properties for plugin widgets with supports_host_theme.
+func ResolveHostThemeVars(styleJSON string) map[string]string {
+	type parsedStyle struct {
+		BgColor         string   `json:"bgColor"`
+		BgOpacity       *float64 `json:"bgOpacity"`
+		BorderColor     string   `json:"borderColor"`
+		NameColor       string   `json:"nameColor"`
+		TextColor       string   `json:"textColor"`
+		ShowCardBorders *bool    `json:"showCardBorders"`
+		FontScale       *float64 `json:"fontScale"`
+		CardRadius      *float64 `json:"cardRadius"`
+	}
+	bgColor := "#0f172a"
+	bgOpacity := 86.0
+	borderColor := "#38bdf8"
+	nameColor := "#38bdf8"
+	textColor := "#f8fafc"
+	showBorders := true
+	fontScale := 100.0
+	cardRadius := 10.0
+
+	if trimmed := strings.TrimSpace(styleJSON); trimmed != "" {
+		var p parsedStyle
+		if json.Unmarshal([]byte(trimmed), &p) == nil {
+			if strings.TrimSpace(p.BgColor) != "" {
+				bgColor = strings.TrimSpace(p.BgColor)
+			}
+			if p.BgOpacity != nil {
+				bgOpacity = max(0, min(100, *p.BgOpacity))
+			}
+			if strings.TrimSpace(p.BorderColor) != "" {
+				borderColor = strings.TrimSpace(p.BorderColor)
+			}
+			if strings.TrimSpace(p.NameColor) != "" {
+				nameColor = strings.TrimSpace(p.NameColor)
+			}
+			if strings.TrimSpace(p.TextColor) != "" {
+				textColor = strings.TrimSpace(p.TextColor)
+			}
+			if p.ShowCardBorders != nil {
+				showBorders = *p.ShowCardBorders
+			}
+			if p.FontScale != nil && *p.FontScale > 0 {
+				fontScale = *p.FontScale
+			}
+			if p.CardRadius != nil && *p.CardRadius >= 0 {
+				cardRadius = *p.CardRadius
+			}
+		}
+	}
+
+	hexToRGBA := func(hex string, alphaPct float64) string {
+		clean := strings.TrimPrefix(strings.TrimSpace(hex), "#")
+		if len(clean) != 6 {
+			return fmt.Sprintf("rgba(15, 23, 42, %.2f)", max(0, min(100, alphaPct))/100.0)
+		}
+		rv, err1 := strconv.ParseInt(clean[0:2], 16, 64)
+		gv, err2 := strconv.ParseInt(clean[2:4], 16, 64)
+		bv, err3 := strconv.ParseInt(clean[4:6], 16, 64)
+		if err1 != nil || err2 != nil || err3 != nil {
+			return fmt.Sprintf("rgba(15, 23, 42, %.2f)", max(0, min(100, alphaPct))/100.0)
+		}
+		a := max(0, min(100, alphaPct)) / 100.0
+		return fmt.Sprintf("rgba(%d, %d, %d, %.2f)", rv, gv, bv, a)
+	}
+
+	borderVal := "transparent"
+	if showBorders {
+		borderVal = hexToRGBA(borderColor, 65)
+	}
+	return map[string]string{
+		"--tc-bg":         hexToRGBA(bgColor, bgOpacity),
+		"--tc-bg-solid":   bgColor,
+		"--tc-bg-opacity": fmt.Sprintf("%.2f", bgOpacity/100.0),
+		"--tc-border":     borderVal,
+		"--tc-accent":     nameColor,
+		"--tc-text":       textColor,
+		"--tc-muted":      "#94A3B8",
+		"--tc-radius":     fmt.Sprintf("%dpx", int(cardRadius)),
+		"--tc-font-scale": fmt.Sprintf("%.2f", fontScale/100.0),
+	}
+}
+
+func (s *Server) resolvedHostTheme() map[string]string {
+	var styleJSON string
+	if styleProv, ok := s.ctrl.(OverlayStyleProvider); ok && styleProv != nil {
+		styleJSON = styleProv.GetOverlayStyle().StyleJSON
+	}
+	return ResolveHostThemeVars(styleJSON)
 }
 
 func (s *Server) populateOverlayStyleMeta(cfg *OverlayStyleConfig) {
@@ -142,16 +231,21 @@ func (s *Server) populateOverlayStyleMeta(cfg *OverlayStyleConfig) {
 			cfg.TargetLanguages = snap.TargetLanguages
 		}
 	}
+	cfg.HostTheme = ResolveHostThemeVars(cfg.StyleJSON)
+	if pwProv, ok := s.ctrl.(PluginOverlayWidgetProvider); ok && pwProv != nil {
+		cfg.PluginWidgets = pwProv.ListPluginOverlayWidgets()
+	}
 }
 
 func (s *Server) handleAPIOverlayStyle(w http.ResponseWriter, r *http.Request) {
-	if !s.isTTSOverlayEnabled() && !s.isChatOverlayEnabled() && !s.IsSubtitlesOverlayEnabled() {
+	if !s.hasAnyOverlayEnabled() {
 		http.Error(w, "OBS Overlays are disabled in TownCrier Settings", http.StatusNotFound)
 		return
 	}
 	styleProv, hasProv := s.ctrl.(OverlayStyleProvider)
 	subStyleProv, hasSubProv := s.ctrl.(SubtitlesStyleProvider)
 	layoutProv, hasLayoutProv := s.ctrl.(UnifiedLayoutProvider)
+	pwProv, hasPWProv := s.ctrl.(PluginOverlayWidgetProvider)
 	switch r.Method {
 	case http.MethodGet:
 		var cfg OverlayStyleConfig
@@ -168,7 +262,8 @@ func (s *Server) handleAPIOverlayStyle(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid JSON payload", http.StatusBadRequest)
 			return
 		}
-		switch strings.ToLower(strings.TrimSpace(req.Target)) {
+		target := strings.ToLower(strings.TrimSpace(req.Target))
+		switch target {
 		case "subtitles":
 			if hasSubProv && subStyleProv != nil {
 				if err := subStyleProv.SaveSubtitlesOverlayStyle(req.SubtitlesCustomCSS, req.SubtitlesStyleJSON); err != nil {
@@ -188,6 +283,21 @@ func (s *Server) handleAPIOverlayStyle(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+		case "plugin_widget":
+			if !hasPWProv || pwProv == nil {
+				http.Error(w, "plugin overlay widget provider unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			pluginUUID := strings.TrimSpace(req.PluginUUID)
+			widgetID := strings.TrimSpace(req.WidgetID)
+			if pluginUUID == "" || widgetID == "" || req.PluginStyle == nil {
+				http.Error(w, "plugin_uuid, widget_id, and plugin_style are required", http.StatusBadRequest)
+				return
+			}
+			if err := pwProv.SavePluginOverlayStyle(pluginUUID, widgetID, *req.PluginStyle); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		default:
 			if hasProv && styleProv != nil {
 				if err := styleProv.SaveOverlayStyle(req.CustomCSS, req.StyleJSON); err != nil {
@@ -203,6 +313,15 @@ func (s *Server) handleAPIOverlayStyle(w http.ResponseWriter, r *http.Request) {
 			out = req
 		}
 		s.populateOverlayStyleMeta(&out)
+		if target == "plugin_widget" && req.PluginStyle != nil {
+			s.BroadcastPluginStyle(req.PluginUUID, req.WidgetID, *req.PluginStyle, out.HostTheme)
+		} else if target == "" || target == "chat_tts" {
+			for _, pw := range out.PluginWidgets {
+				if pw.SupportsHostTheme && pw.Style.UseHostTheme {
+					s.BroadcastPluginStyle(pw.PluginUUID, pw.WidgetID, pw.Style, out.HostTheme)
+				}
+			}
+		}
 		s.BroadcastOverlayReload()
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
@@ -337,1989 +456,3 @@ func (s *Server) handleAPIOverlayStream(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 }
-
-const ttsOverlayHTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TownCrier — Now Speaking Overlay</title>
-<style>
-  :root {
-    --bg: rgba(15, 23, 42, 0.92);
-    --border: rgba(56, 189, 248, 0.48);
-    --text: #F8FAFC;
-    --muted: #94A3B8;
-    --accent: #38BDF8;
-    --scale: 1;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body {
-    width: 100%;
-    height: 100%;
-    background: transparent;
-    overflow: hidden;
-    font-family: 'Segoe UI', Inter, system-ui, -apple-system, sans-serif;
-    color: var(--text);
-  }
-  .stage {
-    position: fixed;
-    left: 24px;
-    right: 24px;
-    bottom: 24px;
-    display: flex;
-    justify-content: flex-start;
-    pointer-events: none;
-  }
-  .stage.top {
-    bottom: auto;
-    top: 24px;
-  }
-  .stage.center {
-    justify-content: center;
-  }
-  .card {
-    max-width: min(820px, 95vw);
-    background: var(--bg);
-    border: 1.5px solid var(--border);
-    border-radius: 14px;
-    padding: 14px 20px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 20px rgba(56, 189, 248, 0.16);
-    backdrop-filter: blur(10px);
-    transform: translateY(18px) scale(var(--scale));
-    transform-origin: bottom left;
-    opacity: 0;
-    transition: opacity 220ms cubic-bezier(0.16, 1, 0.3, 1), transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
-  }
-  .stage.top .card {
-    transform: translateY(-18px) scale(var(--scale));
-    transform-origin: top left;
-  }
-  .card.visible {
-    opacity: 1;
-    transform: translateY(0) scale(var(--scale));
-  }
-  .header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 6px;
-  }
-  .badge {
-    font-size: 0.72rem;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    padding: 2px 8px;
-    border-radius: 6px;
-    background: #334155;
-    color: #F8FAFC;
-  }
-  .badge.twitch { background: #9146FF; }
-  .badge.youtube { background: #FF0033; }
-  .badge.kick { background: #53FC18; color: #090D16; }
-  .badge.tiktok { background: #00F2FE; color: #090D16; }
-  .speaker {
-    font-size: 1.02rem;
-    font-weight: 700;
-    color: var(--accent);
-  }
-  .voice-pill {
-    font-size: 0.74rem;
-    color: var(--muted);
-    background: rgba(148, 163, 184, 0.14);
-    padding: 2px 8px;
-    border-radius: 999px;
-  }
-  .eq {
-    display: inline-flex;
-    align-items: flex-end;
-    gap: 3px;
-    height: 14px;
-    margin-left: auto;
-  }
-  .eq span {
-    width: 3px;
-    background: var(--accent);
-    border-radius: 2px;
-    animation: bounce 0.85s ease-in-out infinite;
-  }
-  .eq span:nth-child(1) { height: 6px; animation-delay: 0s; }
-  .eq span:nth-child(2) { height: 13px; animation-delay: 0.15s; }
-  .eq span:nth-child(3) { height: 9px; animation-delay: 0.3s; }
-  .eq span:nth-child(4) { height: 12px; animation-delay: 0.45s; }
-  @keyframes bounce {
-    0%, 100% { transform: scaleY(0.45); }
-    50% { transform: scaleY(1); }
-  }
-  .caption {
-    font-size: 1.22rem;
-    line-height: 1.4;
-    font-weight: 600;
-    color: var(--text);
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
-    word-break: break-word;
-  }
-</style>
-<style id="customOverlayCSS"></style>
-</head>
-<body>
-<div id="stage" class="stage">
-  <div id="card" class="card" role="status" aria-live="polite">
-    <div class="header">
-      <span id="platBadge" class="badge">TTS</span>
-      <span id="speakerName" class="speaker">Now Speaking</span>
-      <span id="voicePill" class="voice-pill"></span>
-      <div class="eq" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
-    </div>
-    <div id="captionText" class="caption"></div>
-  </div>
-</div>
-<script>
-(function() {
-  const params = new URLSearchParams(window.location.search);
-  const token = params.get('token') || '';
-  const stage = document.getElementById('stage');
-  const card = document.getElementById('card');
-  const platBadge = document.getElementById('platBadge');
-  const speakerName = document.getElementById('speakerName');
-  const voicePill = document.getElementById('voicePill');
-  const captionText = document.getElementById('captionText');
-  const customStyleEl = document.getElementById('customOverlayCSS');
-
-  const posVal = (params.get('pos') || params.get('position') || '').toLowerCase();
-  if (posVal === 'top') {
-    stage.classList.add('top');
-  }
-  if ((params.get('align') || '').toLowerCase() === 'center') {
-    stage.classList.add('center');
-  }
-  const scalePct = parseInt(params.get('scale') || '100', 10);
-  if (!isNaN(scalePct) && scalePct >= 50 && scalePct <= 300) {
-    document.documentElement.style.setProperty('--scale', (scalePct / 100).toFixed(2));
-  }
-
-  function loadStyle() {
-    const styleUrl = '/api/overlay/style' + (token ? '?token=' + encodeURIComponent(token) : '');
-    fetch(styleUrl, { cache: 'no-store' })
-      .then(function(r) { return r.json(); })
-      .then(function(st) {
-        if (!posVal) {
-          const srvPos = (st.tts_position || 'bottom').toLowerCase();
-          stage.classList.toggle('top', srvPos === 'top');
-        }
-        if (customStyleEl) {
-          customStyleEl.textContent = st.custom_css || '';
-        }
-      })
-      .catch(function() {});
-  }
-  loadStyle();
-
-  let activeId = '';
-  let hideTimer = null;
-
-  function showSpeech(ev) {
-    if (hideTimer) {
-      clearTimeout(hideTimer);
-      hideTimer = null;
-    }
-    activeId = ev.id || '';
-    const plat = (ev.platform || 'tts').toLowerCase();
-    platBadge.textContent = plat.toUpperCase();
-    platBadge.className = 'badge ' + plat;
-    speakerName.textContent = ev.username || 'Chat TTS';
-    speakerName.className = 'speaker ' + plat;
-    if (ev.voiceId) {
-      voicePill.textContent = ev.voiceId;
-      voicePill.style.display = 'inline-block';
-    } else {
-      voicePill.style.display = 'none';
-    }
-    captionText.textContent = ev.text || '';
-    card.classList.add('visible');
-    hideTimer = setTimeout(hideSpeech, 30000);
-  }
-
-  function hideSpeech() {
-    if (hideTimer) {
-      clearTimeout(hideTimer);
-      hideTimer = null;
-    }
-    activeId = '';
-    card.classList.remove('visible');
-  }
-
-  function connect() {
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = proto + '//' + window.location.host + '/ws' + (token ? '?token=' + encodeURIComponent(token) : '');
-    const ws = new WebSocket(wsUrl);
-
-    ws.onmessage = function(e) {
-      try {
-        const env = JSON.parse(e.data);
-        if (env.speechEvent) {
-          const se = env.speechEvent;
-          if (se.finished) {
-            if (!activeId || se.id === activeId) {
-              hideSpeech();
-            }
-          } else if (se.text) {
-            showSpeech(se);
-          }
-        } else if (env.state) {
-          loadStyle();
-          const st = env.state;
-          if (st.panicked || !st.currentlySpeaking) {
-            hideSpeech();
-          } else if (!activeId && st.currentlySpeaking) {
-            showSpeech({
-              id: 'state-init',
-              text: st.currentlySpeaking,
-              voiceId: st.currentVoice || '',
-              username: 'Now Speaking',
-              platform: 'tts'
-            });
-          }
-        }
-      } catch (_) {}
-    };
-
-    ws.onclose = function() {
-      setTimeout(connect, 2000);
-    };
-  }
-
-  connect();
-})();
-</script>
-</body>
-</html>
-`
-
-const chatOverlayHTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TownCrier — Live Chat Overlay</title>
-<style>
-  :root {
-    --bg-row: rgba(15, 23, 42, 0.86);
-    --bg-paid: rgba(30, 41, 59, 0.94);
-    --border-row: rgba(51, 65, 85, 0.65);
-    --border-paid: rgba(56, 189, 248, 0.75);
-    --text: #F8FAFC;
-    --muted: #94A3B8;
-    --accent: #38BDF8;
-    --trans-color: #BAE6FD;
-    --font-scale: 1;
-    --card-radius: 10px;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body {
-    width: 100%;
-    height: 100%;
-    background: transparent;
-    overflow: hidden;
-    font-family: 'Segoe UI', Inter, system-ui, -apple-system, sans-serif;
-    font-size: calc(15px * var(--font-scale));
-    color: var(--text);
-  }
-  .wrapper {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    padding: 12px;
-    gap: 8px;
-  }
-  .summary-bar {
-    display: none;
-    flex-wrap: wrap;
-    gap: 10px;
-    background: rgba(15, 23, 42, 0.92);
-    border: 1px solid rgba(56, 189, 248, 0.45);
-    border-radius: var(--card-radius);
-    padding: 6px 12px;
-    font-size: 0.85em;
-    font-weight: 700;
-    color: var(--text);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  }
-  .summary-bar.visible {
-    display: flex;
-  }
-  .feed {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-    gap: 6px;
-    overflow: hidden;
-  }
-  .msg {
-    background: var(--bg-row);
-    border: 1px solid var(--border-row);
-    border-radius: var(--card-radius);
-    padding: 8px 12px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.42);
-    backdrop-filter: blur(8px);
-    line-height: 1.38;
-    word-break: break-word;
-    transition: opacity 300ms ease;
-  }
-  .msg.paid {
-    background: var(--bg-paid);
-    border-color: var(--border-paid);
-  }
-  .msg.fading {
-    opacity: 0;
-  }
-  .plat {
-    display: inline-block;
-    font-size: 0.72em;
-    font-weight: 800;
-    text-transform: uppercase;
-    padding: 1px 6px;
-    border-radius: 5px;
-    margin-right: 6px;
-    vertical-align: middle;
-    background: #334155;
-    color: #F8FAFC;
-  }
-  .plat.twitch { background: #9146FF; }
-  .plat.youtube { background: #FF0033; }
-  .plat.kick { background: #53FC18; color: #090D16; }
-  .plat.tiktok { background: #00F2FE; color: #090D16; }
-  .user {
-    font-weight: 700;
-    color: var(--accent);
-    margin-right: 6px;
-  }
-  .text {
-    color: var(--text);
-  }
-  .trans {
-    display: block;
-    font-size: 0.9em;
-    color: var(--trans-color);
-    margin-top: 2px;
-  }
-  .status {
-    float: right;
-    font-size: 0.78em;
-    color: var(--muted);
-    margin-left: 8px;
-  }
-</style>
-<style id="customOverlayCSS"></style>
-</head>
-<body>
-<div class="wrapper">
-  <div id="summaryBar" class="summary-bar"></div>
-  <div id="feed" class="feed" role="log" aria-live="polite"></div>
-</div>
-<script>
-(function() {
-  const params = new URLSearchParams(window.location.search);
-  const preset = params.get('preset') || '';
-  const summaryParam = (params.get('summary') || '').toLowerCase();
-  const token = params.get('token') || '';
-  const maxRows = Math.min(100, Math.max(5, parseInt(params.get('limit') || '25', 10) || 25));
-  const fadeSec = Math.max(0, parseInt(params.get('fade') || '0', 10) || 0);
-
-  const summaryBar = document.getElementById('summaryBar');
-  const feed = document.getElementById('feed');
-  const customStyleEl = document.getElementById('customOverlayCSS');
-  let showSummary = false;
-  let summaryState = {};
-
-  function applyScale(pct) {
-    const clean = (!isNaN(pct) && pct >= 50 && pct <= 300) ? pct : 100;
-    document.documentElement.style.setProperty('--font-scale', (clean / 100).toFixed(2));
-  }
-
-  function renderSummary(s) {
-    if (!showSummary || !s) {
-      summaryBar.classList.remove('visible');
-      return;
-    }
-    const parts = [];
-    if (s.total_subs > 0) parts.push('⭐ ' + s.total_subs + ' Subs');
-    if (s.total_gift_subs > 0) parts.push('🎁 ' + s.total_gift_subs + ' Gift Subs');
-    if (s.total_bits > 0) parts.push('🪙 ' + Math.round(s.total_bits) + ' Bits');
-    if (s.total_kicks > 0) parts.push('🟢 ' + Math.round(s.total_kicks) + ' Kicks');
-    if (s.total_diamonds > 0) parts.push('💎 ' + Math.round(s.total_diamonds) + ' Diamonds');
-    if (s.total_jewels > 0) parts.push('💠 ' + Math.round(s.total_jewels) + ' Jewels');
-    if (s.super_chat_by_curr) {
-      Object.keys(s.super_chat_by_curr).sort().forEach(function(c) {
-        const v = s.super_chat_by_curr[c];
-        if (v > 0) parts.push('💵 ' + c + ' ' + v.toFixed(2));
-      });
-    }
-    if (s.total_raids > 0) parts.push('🚀 ' + s.total_raids + ' Raids (' + (s.total_raid_viewers || 0) + ')');
-    if (s.total_follows > 0) parts.push('❤️ ' + s.total_follows + ' Follows');
-    if (parts.length === 0) {
-      summaryBar.classList.remove('visible');
-      return;
-    }
-    summaryBar.textContent = parts.join('   •   ');
-    summaryBar.classList.add('visible');
-  }
-
-  function outcomeIcon(outcome, spoken) {
-    if (spoken || outcome === 'spoken') return '🗣️';
-    if (outcome === 'queued') return '⏳';
-    return '';
-  }
-
-  function createRow(entry) {
-    const div = document.createElement('div');
-    div.className = 'msg' + (entry.is_paid_or_event ? ' paid' : '');
-    div.dataset.id = entry.id || '';
-
-    const st = document.createElement('span');
-    st.className = 'status';
-    st.textContent = outcomeIcon(entry.outcome, entry.spoken);
-    div.appendChild(st);
-
-    const plat = (entry.platform || 'chat').toLowerCase();
-    const badge = document.createElement('span');
-    badge.className = 'plat ' + plat;
-    badge.textContent = plat;
-    div.appendChild(badge);
-
-    const user = document.createElement('span');
-    user.className = 'user ' + plat;
-    user.textContent = (entry.display_name || entry.user_name || 'Chat') + ':';
-    div.appendChild(user);
-
-    const hasTrans = !!(entry.translated_text && entry.translated_text !== entry.raw_text);
-    const txt = document.createElement('span');
-    txt.className = 'text';
-    txt.textContent = hasTrans ? entry.translated_text : (entry.raw_text || entry.spoken_text || '');
-    div.appendChild(txt);
-
-    if (hasTrans && entry.raw_text) {
-      const tr = document.createElement('span');
-      tr.className = 'trans';
-      tr.textContent = '🌐 ' + entry.raw_text;
-      div.appendChild(tr);
-    }
-
-    if (fadeSec > 0) {
-      setTimeout(function() {
-        div.classList.add('fading');
-        setTimeout(function() {
-          if (div.parentNode) div.parentNode.removeChild(div);
-        }, 350);
-      }, fadeSec * 1000);
-    }
-    return div;
-  }
-
-  function appendEntry(entry) {
-    if (!entry) return;
-    if (entry.id && feed.querySelector('[data-id="' + CSS.escape(entry.id) + '"]')) {
-      return;
-    }
-    const row = createRow(entry);
-    feed.appendChild(row);
-    while (feed.children.length > maxRows) {
-      feed.removeChild(feed.firstChild);
-    }
-  }
-
-  function buildQuery() {
-    const q = new URLSearchParams();
-    if (preset) q.set('preset', preset);
-    if (summaryParam) q.set('summary', summaryParam);
-    q.set('limit', String(maxRows));
-    if (token) q.set('token', token);
-    return q.toString();
-  }
-
-  function resolveShowSummary(snap) {
-    if (summaryParam === '1' || summaryParam === 'true' || summaryParam === 'on' || summaryParam === 'yes') {
-      return true;
-    }
-    if (summaryParam === '0' || summaryParam === 'false' || summaryParam === 'off' || summaryParam === 'no') {
-      return false;
-    }
-    if (snap && typeof snap.show_summary === 'boolean') {
-      return snap.show_summary;
-    }
-    return !!(snap && snap.preset && snap.preset.show_summary);
-  }
-
-  function loadSnapshot() {
-    fetch('/api/overlay/chat?' + buildQuery(), { cache: 'no-store' })
-      .then(function(r) { return r.json(); })
-      .then(function(snap) {
-        const scaleOverride = parseInt(params.get('scale') || '0', 10);
-        applyScale(scaleOverride > 0 ? scaleOverride : (snap.scale || 100));
-        if (customStyleEl) {
-          customStyleEl.textContent = snap.custom_css || '';
-        }
-        showSummary = resolveShowSummary(snap);
-        summaryState = snap.summary || {};
-        renderSummary(summaryState);
-        feed.innerHTML = '';
-        const list = (snap.entries || []).slice().reverse();
-        list.forEach(appendEntry);
-      })
-      .catch(function() {});
-  }
-
-  function refreshSummaryOnly() {
-    if (!showSummary) return;
-    fetch('/api/overlay/chat?' + buildQuery(), { cache: 'no-store' })
-      .then(function(r) { return r.json(); })
-      .then(function(snap) {
-        showSummary = resolveShowSummary(snap);
-        summaryState = snap.summary || {};
-        renderSummary(summaryState);
-      })
-      .catch(function() {});
-  }
-
-  loadSnapshot();
-
-  function connectStream() {
-    const es = new EventSource('/api/overlay/stream?' + buildQuery());
-    es.onmessage = function(e) {
-      try {
-        const ev = JSON.parse(e.data);
-        if (ev.kind === 'reload') {
-          loadSnapshot();
-        } else if (ev.kind === 'append' && ev.entry) {
-          appendEntry(ev.entry);
-          if (showSummary && ev.entry.is_paid_or_event) {
-            refreshSummaryOnly();
-          }
-        } else if (ev.kind === 'outcome' && ev.event_id && ev.update) {
-          const row = feed.querySelector('[data-id="' + CSS.escape(ev.event_id) + '"]');
-          if (row) {
-            const st = row.querySelector('.status');
-            if (st) st.textContent = outcomeIcon(ev.update.outcome, ev.update.spoken);
-          }
-        }
-      } catch (_) {}
-    };
-  }
-
-  connectStream();
-})();
-</script>
-</body>
-</html>
-`
-
-const overlayDesignerHTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TownCrier — OBS Overlay Style Designer</title>
-<style>
-  :root {
-    --ui-bg: #0B1120;
-    --ui-surface: #0F172A;
-    --ui-border: #334155;
-    --ui-text: #F8FAFC;
-    --ui-muted: #94A3B8;
-    --ui-accent: #38BDF8;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: var(--ui-bg);
-    color: var(--ui-text);
-    font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', Inter, system-ui, -apple-system, sans-serif;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-  }
-  header {
-    background: var(--ui-surface);
-    border-bottom: 1px solid var(--ui-border);
-    padding: 14px 24px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-  header h1 {
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: var(--ui-accent);
-  }
-  header p {
-    font-size: 0.85rem;
-    color: var(--ui-muted);
-  }
-  .header-right {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex-wrap: wrap;
-  }
-  .tab-bar {
-    display: flex;
-    background: #090D16;
-    border: 1px solid var(--ui-border);
-    border-radius: 10px;
-    padding: 3px;
-    gap: 4px;
-  }
-  .tab-btn {
-    border: none;
-    background: transparent;
-    color: var(--ui-muted);
-    padding: 7px 14px;
-    border-radius: 7px;
-    font-size: 0.86rem;
-    font-weight: 700;
-    cursor: pointer;
-    transition: all 140ms ease;
-  }
-  .tab-btn:hover {
-    color: var(--ui-text);
-    background: rgba(51, 65, 85, 0.45);
-  }
-  .tab-btn.active {
-    background: var(--ui-accent);
-    color: #090D16;
-  }
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  button {
-    cursor: pointer;
-    border: 1px solid var(--ui-border);
-    background: #1E293B;
-    color: var(--ui-text);
-    padding: 8px 14px;
-    border-radius: 8px;
-    font-size: 0.88rem;
-    font-weight: 600;
-    transition: all 150ms ease;
-  }
-  button:hover {
-    border-color: var(--ui-accent);
-    background: #334155;
-  }
-  .status-pill {
-    font-size: 0.84rem;
-    color: #34D399;
-    font-weight: 600;
-  }
-  .main {
-    flex: 1;
-    display: grid;
-    grid-template-columns: 390px 1fr;
-    gap: 20px;
-    padding: 20px 24px;
-  }
-  @media (max-width: 960px) {
-    .main { grid-template-columns: 1fr; }
-  }
-  .panel {
-    background: var(--ui-surface);
-    border: 1px solid var(--ui-border);
-    border-radius: 12px;
-    padding: 18px;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-  .panel h2 {
-    font-size: 0.96rem;
-    font-weight: 700;
-    color: var(--ui-accent);
-    border-bottom: 1px solid rgba(51, 65, 85, 0.6);
-    padding-bottom: 6px;
-  }
-  .field-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    font-size: 0.88rem;
-  }
-  .field-row label {
-    color: var(--ui-text);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
-  }
-  input[type="color"] {
-    width: 38px;
-    height: 28px;
-    border: 1px solid var(--ui-border);
-    border-radius: 6px;
-    background: transparent;
-    cursor: pointer;
-  }
-  input[type="range"] {
-    width: 130px;
-    accent-color: var(--ui-accent);
-  }
-  input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--ui-accent);
-    cursor: pointer;
-  }
-  .preview-stage {
-    position: relative;
-    flex: 1;
-    min-height: 460px;
-    border-radius: 12px;
-    border: 1px solid var(--ui-border);
-    padding: 24px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    overflow: hidden;
-  }
-  .preview-stage.checker {
-    background-image:
-      linear-gradient(45deg, #1e293b 25%, transparent 25%),
-      linear-gradient(-45deg, #1e293b 25%, transparent 25%),
-      linear-gradient(45deg, transparent 75%, #1e293b 75%),
-      linear-gradient(-45deg, transparent 75%, #1e293b 75%);
-    background-size: 24px 24px;
-    background-position: 0 0, 0 12px, 12px -12px, -12px 0;
-    background-color: #0f172a;
-  }
-  .preview-stage.dark { background: #090D16; }
-  .preview-stage.light { background: #E2E8F0; }
-
-  /* Chat & TTS Overlay Classes inside Preview */
-  .preview-scope {
-    --bg: rgba(15, 23, 42, 0.92);
-    --border: rgba(56, 189, 248, 0.48);
-    --bg-row: rgba(15, 23, 42, 0.86);
-    --bg-paid: rgba(30, 41, 59, 0.94);
-    --border-row: rgba(51, 65, 85, 0.65);
-    --border-paid: rgba(56, 189, 248, 0.75);
-    --text: #F8FAFC;
-    --muted: #94A3B8;
-    --accent: #38BDF8;
-    --trans-color: #BAE6FD;
-    --font-scale: 1;
-    --card-radius: 10px;
-    font-size: calc(15px * var(--font-scale));
-    color: var(--text);
-  }
-  .preview-scope .card {
-    max-width: 680px;
-    background: var(--bg);
-    border: 1.5px solid var(--border);
-    border-radius: 14px;
-    padding: 14px 20px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
-    margin-bottom: 18px;
-  }
-  .preview-scope .header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 6px;
-  }
-  .preview-scope .badge, .preview-scope .plat {
-    display: inline-block;
-    font-size: 0.72em;
-    font-weight: 800;
-    text-transform: uppercase;
-    padding: 2px 7px;
-    border-radius: 5px;
-    background: #334155;
-    color: #F8FAFC;
-  }
-  .preview-scope .plat { margin-right: 6px; }
-  .preview-scope .badge.twitch, .preview-scope .plat.twitch { background: #9146FF; }
-  .preview-scope .badge.youtube, .preview-scope .plat.youtube { background: #FF0033; }
-  .preview-scope .badge.kick, .preview-scope .plat.kick { background: #53FC18; color: #090D16; }
-  .preview-scope .badge.tiktok, .preview-scope .plat.tiktok { background: #00F2FE; color: #090D16; }
-  .preview-scope .speaker, .preview-scope .user {
-    font-weight: 700;
-    color: var(--accent);
-    margin-right: 6px;
-  }
-  .preview-scope .voice-pill {
-    font-size: 0.74rem;
-    color: var(--muted);
-    background: rgba(148, 163, 184, 0.14);
-    padding: 2px 8px;
-    border-radius: 999px;
-  }
-  .preview-scope .caption {
-    font-size: 1.15em;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .preview-scope .feed {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-width: 520px;
-  }
-  .preview-scope .msg {
-    background: var(--bg-row);
-    border: 1px solid var(--border-row);
-    border-radius: var(--card-radius);
-    padding: 8px 12px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.42);
-    line-height: 1.38;
-  }
-  .preview-scope .msg.paid {
-    background: var(--bg-paid);
-    border-color: var(--border-paid);
-  }
-  .preview-scope .text { color: var(--text); }
-  .preview-scope .trans {
-    display: block;
-    font-size: 0.9em;
-    color: var(--trans-color);
-    margin-top: 2px;
-  }
-  .preview-scope .status {
-    float: right;
-    font-size: 0.78em;
-    color: var(--muted);
-    margin-left: 8px;
-  }
-
-  /* Voice Subtitles Overlay Classes inside Preview */
-  .subtitles-preview-scope {
-    --bg: rgba(15, 23, 42, 0.90);
-    --border: rgba(56, 189, 248, 0.50);
-    --text: #F8FAFC;
-    --orig-text: #F8FAFC;
-    --muted: #94A3B8;
-    --accent: #38BDF8;
-    --badge-bg: rgba(56, 189, 248, 0.18);
-    --badge-border: rgba(56, 189, 248, 0.42);
-    --orig-badge-bg: rgba(56, 189, 248, 0.32);
-    --orig-badge-text: #F8FAFC;
-    --row-divider: rgba(51, 65, 85, 0.55);
-    --pill-bg: rgba(15, 23, 42, 0.85);
-    --pill-text: #38BDF8;
-    --card-radius: 14px;
-    --scale: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 12px;
-    height: 100%;
-    flex: 1;
-  }
-  .subtitles-preview-scope .mic-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--pill-bg);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 5px 14px;
-    font-size: calc(0.80rem * var(--scale));
-    font-weight: 700;
-    color: var(--pill-text);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
-  }
-  .subtitles-preview-scope .eq {
-    display: inline-flex;
-    align-items: flex-end;
-    gap: 2.5px;
-    height: 12px;
-  }
-  .subtitles-preview-scope .eq span {
-    width: 3px;
-    background: var(--pill-text);
-    border-radius: 2px;
-    animation: subBounce 0.8s ease-in-out infinite;
-  }
-  .subtitles-preview-scope .eq span:nth-child(1) { height: 5px; animation-delay: 0s; }
-  .subtitles-preview-scope .eq span:nth-child(2) { height: 12px; animation-delay: 0.15s; }
-  .subtitles-preview-scope .eq span:nth-child(3) { height: 8px; animation-delay: 0.30s; }
-  @keyframes subBounce {
-    0%, 100% { transform: scaleY(0.45); }
-    50% { transform: scaleY(1); }
-  }
-  .subtitles-preview-scope .card {
-    width: min(820px, 100%);
-    background: var(--bg);
-    border: 1.5px solid var(--border);
-    border-radius: var(--card-radius);
-    padding: 14px 20px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.58), 0 0 22px rgba(56, 189, 248, 0.14);
-    backdrop-filter: blur(10px);
-  }
-  .subtitles-preview-scope .rows {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .subtitles-preview-scope .lang-row {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    padding-top: 8px;
-    border-top: 1px solid var(--row-divider);
-  }
-  .subtitles-preview-scope .lang-row:first-child {
-    padding-top: 0;
-    border-top: none;
-  }
-  .subtitles-preview-scope .lang-badge {
-    flex: 0 0 auto;
-    min-width: calc(42px * var(--scale));
-    text-align: center;
-    font-size: calc(0.74rem * var(--scale));
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    padding: 2px 8px;
-    border-radius: 6px;
-    background: var(--badge-bg);
-    border: 1px solid var(--badge-border);
-    color: var(--accent);
-  }
-  .subtitles-preview-scope .lang-row.original .lang-badge {
-    background: var(--orig-badge-bg);
-    color: var(--orig-badge-text);
-  }
-  .subtitles-preview-scope .lang-text {
-    flex: 1 1 auto;
-    font-size: calc(1.24rem * var(--scale));
-    line-height: 1.42;
-    font-weight: 600;
-    color: var(--text);
-    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.72);
-    word-break: break-word;
-  }
-  .subtitles-preview-scope .lang-row.original .lang-text {
-    color: var(--orig-text);
-  }
-
-  /* Unified Canvas Layout Editor */
-  select, input[type="number"] {
-    background: #090D16;
-    color: var(--ui-text);
-    border: 1px solid var(--ui-border);
-    border-radius: 6px;
-    padding: 5px 8px;
-    font-size: 0.85rem;
-  }
-  .layout-stage-wrap {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 420px;
-  }
-  .layout-stage {
-    position: relative;
-    width: 100%;
-    max-width: 960px;
-    aspect-ratio: 16 / 9;
-    border-radius: 10px;
-    border: 1.5px dashed rgba(56, 189, 248, 0.45);
-    overflow: hidden;
-    user-select: none;
-    background-image:
-      linear-gradient(to right, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
-    background-size: 5% 5%;
-  }
-  .drag-box {
-    position: absolute;
-    border: 2px solid rgba(56, 189, 248, 0.72);
-    border-radius: 10px;
-    background: rgba(15, 23, 42, 0.76);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-    cursor: move;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    transition: border-color 120ms ease;
-  }
-  .drag-box.selected {
-    border-color: #34D399;
-    box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.28), 0 10px 26px rgba(0, 0, 0, 0.55);
-  }
-  .drag-box-hdr {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 4px 8px;
-    background: rgba(30, 41, 59, 0.92);
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: #38BDF8;
-    border-bottom: 1px solid rgba(51, 65, 85, 0.65);
-  }
-  .drag-box.selected .drag-box-hdr {
-    color: #34D399;
-  }
-  .drag-box-body {
-    flex: 1;
-    padding: 8px 10px;
-    font-size: 0.78rem;
-    color: var(--ui-muted);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    line-height: 1.35;
-  }
-  .resize-handle {
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    width: 16px;
-    height: 16px;
-    cursor: nwse-resize;
-    background: linear-gradient(135deg, transparent 45%, #38BDF8 45%, #38BDF8 65%, transparent 65%, transparent 80%, #38BDF8 80%);
-  }
-  .drag-box.selected .resize-handle {
-    background: linear-gradient(135deg, transparent 45%, #34D399 45%, #34D399 65%, transparent 65%, transparent 80%, #34D399 80%);
-  }
-  .widget-cfg-card {
-    background: #090D16;
-    border: 1px solid var(--ui-border);
-    border-radius: 8px;
-    padding: 10px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .hidden { display: none !important; }
-</style>
-<style id="designerDynamicCSS"></style>
-<style id="subtitlesDynamicCSS"></style>
-</head>
-<body>
-<header>
-  <div>
-    <h1>🎨 TownCrier — OBS Overlay Style Designer</h1>
-    <p>Adjust colors, tags, and layout below. Changes save automatically and live-refresh your OBS Browser Sources.</p>
-  </div>
-  <div class="header-right">
-    <div id="tabBar" class="tab-bar">
-      <button type="button" id="tabBtnLayout" class="tab-btn" data-tab="layout">📐 Unified Canvas</button>
-      <button type="button" id="tabBtnChatTTS" class="tab-btn active" data-tab="chat_tts">💬 Chat & Now-Speaking</button>
-      <button type="button" id="tabBtnSubtitles" class="tab-btn" data-tab="subtitles">🎙️ Voice Subtitles</button>
-    </div>
-    <div class="actions">
-      <span id="saveStatus" class="status-pill">✓ Live-synced with OBS</span>
-      <button id="resetBtn" type="button">↺ Reset to Default</button>
-    </div>
-  </div>
-</header>
-
-<div class="main">
-  <!-- Controls Panel: Chat & Now-Speaking -->
-  <div id="controlsChatTTS" class="panel">
-    <h2>Colors & Backgrounds</h2>
-    <div class="field-row">
-      <label for="bgColor">Message Background</label>
-      <div style="display:flex;align-items:center;gap:6px;">
-        <input type="color" id="bgColor" value="#0f172a">
-        <input type="range" id="bgOpacity" min="0" max="100" value="86" title="Background Opacity">
-      </div>
-    </div>
-    <div class="field-row">
-      <label for="paidBgColor">Paid / Alert Background</label>
-      <div style="display:flex;align-items:center;gap:6px;">
-        <input type="color" id="paidBgColor" value="#1e293b">
-        <input type="range" id="paidBgOpacity" min="0" max="100" value="94" title="Paid Background Opacity">
-      </div>
-    </div>
-    <div class="field-row">
-      <label for="borderColor">Card Border Color</label>
-      <input type="color" id="borderColor" value="#38bdf8">
-    </div>
-    <div class="field-row">
-      <label for="nameColor">Username / Speaker Color</label>
-      <input type="color" id="nameColor" value="#38bdf8">
-    </div>
-    <div class="field-row">
-      <label for="textColor">Primary Message Text Color</label>
-      <input type="color" id="textColor" value="#f8fafc">
-    </div>
-    <div class="field-row">
-      <label for="transColor">Original Foreign Text (🌐) Color</label>
-      <input type="color" id="transColor" value="#bae6fd">
-    </div>
-
-    <h2>Elements & Visibility</h2>
-    <div class="field-row">
-      <label><input type="checkbox" id="showPlatformTag" checked> Show Platform Tag (TWITCH, YOUTUBE...)</label>
-    </div>
-    <div class="field-row">
-      <label><input type="checkbox" id="platformNameColors"> Color Usernames by Platform</label>
-    </div>
-    <div class="field-row">
-      <label><input type="checkbox" id="showStatusIcon" checked> Show TTS Status Icons (🗣️ / ⏳)</label>
-    </div>
-    <div class="field-row">
-      <label><input type="checkbox" id="showOriginalTrans" checked> Show Original Foreign Text Line (🌐)</label>
-    </div>
-    <div class="field-row">
-      <label><input type="checkbox" id="showVoicePill" checked> Show Voice Badge on Now-Speaking</label>
-    </div>
-    <div class="field-row">
-      <label><input type="checkbox" id="showCardBorders" checked> Show Card Borders & Drop Shadow</label>
-    </div>
-
-    <h2>Typography & Shape</h2>
-    <div class="field-row">
-      <label for="fontScale">Font Size Scale</label>
-      <input type="range" id="fontScale" min="70" max="200" value="100">
-    </div>
-    <div class="field-row">
-      <label for="cardRadius">Corner Radius</label>
-      <input type="range" id="cardRadius" min="0" max="24" value="10">
-    </div>
-  </div>
-
-  <!-- Controls Panel: Voice Subtitles -->
-  <div id="controlsSubtitles" class="panel hidden">
-    <h2>Subtitle Card & Badge Colors</h2>
-    <div class="field-row">
-      <label for="subBgColor">Card Background</label>
-      <div style="display:flex;align-items:center;gap:6px;">
-        <input type="color" id="subBgColor" value="#0f172a">
-        <input type="range" id="subBgOpacity" min="0" max="100" value="90" title="Card Background Opacity">
-      </div>
-    </div>
-    <div class="field-row">
-      <label for="subBorderColor">Card Border & Accent</label>
-      <input type="color" id="subBorderColor" value="#38bdf8">
-    </div>
-    <div class="field-row">
-      <label for="subBadgeColor">Language Tag ([EN] / [JA]) Color</label>
-      <div style="display:flex;align-items:center;gap:6px;">
-        <input type="color" id="subBadgeColor" value="#38bdf8">
-        <input type="range" id="subBadgeOpacity" min="0" max="100" value="18" title="Language Tag Background Opacity">
-      </div>
-    </div>
-    <div class="field-row">
-      <label for="subTextColor">Translated Text Color</label>
-      <input type="color" id="subTextColor" value="#f8fafc">
-    </div>
-    <div class="field-row">
-      <label for="subOrigTextColor">Spoken (Original) Text Color</label>
-      <input type="color" id="subOrigTextColor" value="#f8fafc">
-    </div>
-    <div class="field-row">
-      <label for="subDividerColor">Language Row Divider Color</label>
-      <input type="color" id="subDividerColor" value="#334155">
-    </div>
-    <div class="field-row">
-      <label for="subPillColor">"Listening" Indicator Color</label>
-      <input type="color" id="subPillColor" value="#38bdf8">
-    </div>
-
-    <h2>Elements & Visibility</h2>
-    <div class="field-row">
-      <label><input type="checkbox" id="subShowMicPill" checked> Show "Listening" Mic Indicator Pill</label>
-    </div>
-    <div class="field-row">
-      <label><input type="checkbox" id="subShowLangBadges" checked> Show Language Tags ([EN], [ES], [JA]...)</label>
-    </div>
-    <div class="field-row">
-      <label><input type="checkbox" id="subHighlightOriginal" checked> Highlight Spoken Language Tag</label>
-    </div>
-    <div class="field-row">
-      <label><input type="checkbox" id="subShowDividers" checked> Show Horizontal Dividers Between Languages</label>
-    </div>
-    <div class="field-row">
-      <label><input type="checkbox" id="subShowCardBorders" checked> Show Card Background, Border & Blur</label>
-    </div>
-
-    <h2>Typography & Shape</h2>
-    <div class="field-row">
-      <label for="subFontScale">Subtitle Font Scale</label>
-      <input type="range" id="subFontScale" min="60" max="220" value="100">
-    </div>
-    <div class="field-row">
-      <label for="subCardRadius">Card Corner Radius</label>
-      <input type="range" id="subCardRadius" min="0" max="28" value="14">
-    </div>
-  </div>
-
-  <!-- Controls Panel: Unified Canvas Layout -->
-  <div id="controlsLayout" class="panel hidden">
-    <h2>Canvas Resolution (/overlay)</h2>
-    <div class="field-row">
-      <label for="uniResPreset">Preset</label>
-      <select id="uniResPreset">
-        <option value="1920x1080">1920 × 1080 (1080p)</option>
-        <option value="1280x720">1280 × 720 (720p)</option>
-        <option value="2560x1440">2560 × 1440 (1440p)</option>
-        <option value="3840x2160">3840 × 2160 (4K)</option>
-        <option value="1080x1920">1080 × 1920 (Vertical)</option>
-        <option value="custom">Custom...</option>
-      </select>
-    </div>
-    <div class="field-row">
-      <label>Width × Height (px)</label>
-      <div style="display:flex;align-items:center;gap:6px;">
-        <input type="number" id="uniWidth" min="640" max="7680" value="1920" style="width:76px;">
-        <span>×</span>
-        <input type="number" id="uniHeight" min="360" max="4320" value="1080" style="width:76px;">
-      </div>
-    </div>
-    <div class="field-row">
-      <label><input type="checkbox" id="uniSnapGrid" checked> Snap Drag & Resize to 2% Grid</label>
-    </div>
-
-    <h2>Enabled Modules (Drag on Canvas)</h2>
-    <div id="uniCardTTS" class="widget-cfg-card">
-      <div class="field-row">
-        <label><input type="checkbox" id="uniVisTTS" checked> 🗣️ Now Speaking</label>
-        <span id="uniRectTTS" style="font-size:0.78rem;color:var(--ui-muted);">24%, 4%</span>
-      </div>
-      <div class="field-row">
-        <label for="uniScaleTTS">Widget Scale</label>
-        <input type="range" id="uniScaleTTS" min="50" max="200" value="100">
-      </div>
-    </div>
-    <div id="uniCardChat" class="widget-cfg-card">
-      <div class="field-row">
-        <label><input type="checkbox" id="uniVisChat" checked> 💬 Live Chat</label>
-        <span id="uniRectChat" style="font-size:0.78rem;color:var(--ui-muted);">2%, 36%</span>
-      </div>
-      <div class="field-row">
-        <label for="uniScaleChat">Widget Scale</label>
-        <input type="range" id="uniScaleChat" min="50" max="200" value="100">
-      </div>
-    </div>
-    <div id="uniCardSubtitles" class="widget-cfg-card">
-      <div class="field-row">
-        <label><input type="checkbox" id="uniVisSubtitles" checked> 🎙️ Voice Subtitles</label>
-        <span id="uniRectSubtitles" style="font-size:0.78rem;color:var(--ui-muted);">22%, 74%</span>
-      </div>
-      <div class="field-row">
-        <label for="uniScaleSubtitles">Widget Scale</label>
-        <input type="range" id="uniScaleSubtitles" min="50" max="200" value="100">
-      </div>
-    </div>
-    <p style="font-size:0.80rem;color:var(--ui-muted);line-height:1.4;">
-      Drag widgets to position them and use the bottom-right corner handle to resize. Colors and fonts come from the Chat &amp; Now-Speaking and Voice Subtitles tabs.
-    </p>
-  </div>
-
-  <!-- Live Preview Panel -->
-  <div class="panel">
-    <div style="display:flex;align-items:center;justify-content:space-between;">
-      <h2 id="previewTitle">Live Overlay Preview</h2>
-      <div style="display:flex;gap:6px;">
-        <button type="button" data-bg="checker" class="bg-btn">Checkerboard</button>
-        <button type="button" data-bg="dark" class="bg-btn">Dark</button>
-        <button type="button" data-bg="light" class="bg-btn">Light</button>
-      </div>
-    </div>
-
-    <div id="previewStage" class="preview-stage checker">
-      <!-- Chat & TTS Preview View -->
-      <div id="previewChatTTSView" class="preview-scope" style="display:flex;flex-direction:column;justify-content:space-between;flex:1;">
-        <div id="previewTTSCardWrap">
-          <div class="card">
-            <div class="header">
-              <span class="badge twitch">TWITCH</span>
-              <span class="speaker twitch">StreamerFan42</span>
-              <span class="voice-pill">kokoro:af_heart</span>
-            </div>
-            <div class="caption">StreamerFan42 says: This stream overlay looks awesome!</div>
-          </div>
-        </div>
-
-        <div id="previewChatFeedWrap" class="feed">
-          <div class="msg">
-            <span class="status">🗣️</span>
-            <span class="plat twitch">twitch</span>
-            <span class="user twitch">NightOwl:</span>
-            <span class="text">Let's gooo! Great raid earlier!</span>
-          </div>
-          <div class="msg">
-            <span class="status">🗣️</span>
-            <span class="plat youtube">youtube</span>
-            <span class="user youtube">Carlos_MX:</span>
-            <span class="text">Hello friends, this stream is amazing today!</span>
-            <span class="trans">🌐 ¡Hola amigos, este directo está increíble hoy!</span>
-          </div>
-          <div class="msg paid">
-            <span class="status">⏳</span>
-            <span class="plat kick">kick</span>
-            <span class="user kick">PixelHero:</span>
-            <span class="text">Raided with 45 viewers</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Voice Subtitles Preview View -->
-      <div id="previewSubtitlesView" class="subtitles-preview-scope hidden">
-        <div class="mic-pill">
-          <div class="eq"><span></span><span></span><span></span></div>
-          <span>Listening</span>
-        </div>
-        <div class="card">
-          <div id="previewSubtitlesRows" class="rows">
-            <div class="lang-row original">
-              <span class="lang-badge">EN</span>
-              <span class="lang-text">Hello everyone, welcome back to the stream!</span>
-            </div>
-            <div class="lang-row">
-              <span class="lang-badge">ES</span>
-              <span class="lang-text">¡Hola a todos, bienvenidos de nuevo al directo!</span>
-            </div>
-            <div class="lang-row">
-              <span class="lang-badge">JA</span>
-              <span class="lang-text">皆さんこんにちは、配信にお帰りなさい！</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Unified Canvas Layout View -->
-      <div id="previewLayoutView" class="layout-stage-wrap hidden">
-        <div id="layoutStage" class="layout-stage">
-          <div id="dragTTS" class="drag-box" data-widget="tts">
-            <div class="drag-box-hdr"><span>🗣️ Now Speaking</span><span class="dim-lbl"></span></div>
-            <div class="drag-box-body">StreamerFan42 says: This stream overlay looks awesome!</div>
-            <div class="resize-handle"></div>
-          </div>
-          <div id="dragChat" class="drag-box" data-widget="chat">
-            <div class="drag-box-hdr"><span>💬 Live Chat</span><span class="dim-lbl"></span></div>
-            <div class="drag-box-body">NightOwl: Let's gooo!<br>Carlos_MX: ¡Hola amigos!</div>
-            <div class="resize-handle"></div>
-          </div>
-          <div id="dragSubtitles" class="drag-box" data-widget="subtitles">
-            <div class="drag-box-hdr"><span>🎙️ Voice Subtitles</span><span class="dim-lbl"></span></div>
-            <div class="drag-box-body">[EN] Hello everyone!<br>[ES] ¡Hola a todos!</div>
-            <div class="resize-handle"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-(function() {
-  const params = new URLSearchParams(window.location.search);
-  const token = params.get('token') || '';
-  const requestedTab = (params.get('tab') || '').toLowerCase();
-  const apiUrl = '/api/overlay/style' + (token ? '?token=' + encodeURIComponent(token) : '');
-
-  const defaults = {
-    bgColor: '#0f172a',
-    bgOpacity: 86,
-    paidBgColor: '#1e293b',
-    paidBgOpacity: 94,
-    borderColor: '#38bdf8',
-    nameColor: '#38bdf8',
-    textColor: '#f8fafc',
-    transColor: '#bae6fd',
-    showPlatformTag: true,
-    platformNameColors: false,
-    showStatusIcon: true,
-    showOriginalTrans: true,
-    showVoicePill: true,
-    showCardBorders: true,
-    fontScale: 100,
-    cardRadius: 10
-  };
-
-  const subDefaults = {
-    subBgColor: '#0f172a',
-    subBgOpacity: 90,
-    subBorderColor: '#38bdf8',
-    subBadgeColor: '#38bdf8',
-    subBadgeOpacity: 18,
-    subTextColor: '#f8fafc',
-    subOrigTextColor: '#f8fafc',
-    subDividerColor: '#334155',
-    subPillColor: '#38bdf8',
-    subShowMicPill: true,
-    subShowLangBadges: true,
-    subHighlightOriginal: true,
-    subShowDividers: true,
-    subShowCardBorders: true,
-    subFontScale: 100,
-    subCardRadius: 14
-  };
-
-  const sampleSentences = {
-    en: { badge: 'EN', text: 'Hello everyone, welcome back to the stream!' },
-    es: { badge: 'ES', text: '¡Hola a todos, bienvenidos de nuevo al directo!' },
-    tl: { badge: 'FIL', text: 'Kumusta sa inyong lahat, maligayang pagbabalik sa stream!' },
-    ja: { badge: 'JA', text: '皆さんこんにちは、配信にお帰りなさい！' },
-    fr: { badge: 'FR', text: 'Bonjour à tous, bon retour sur le stream !' },
-    de: { badge: 'DE', text: 'Hallo zusammen, willkommen zurück im Stream!' },
-    it: { badge: 'IT', text: 'Ciao a tutti, bentornati nella live!' },
-    pt: { badge: 'PT', text: 'Olá a todos, bem-vindos de volta à live!' },
-    ko: { badge: 'KO', text: '여러분 안녕하세요, 방송에 다시 오신 것을 환영합니다!' },
-    zh: { badge: 'ZH', text: '大家好，欢迎回到直播间！' },
-    ru: { badge: 'RU', text: 'Всем привет, с возвращением на стрим!' },
-    hi: { badge: 'HI', text: 'सभी को नमस्ते, स्ट्रीम में आपका फिर से स्वागत है!' }
-  };
-
-  const els = {};
-  Object.keys(defaults).forEach(function(k) {
-    els[k] = document.getElementById(k);
-  });
-  const subEls = {};
-  Object.keys(subDefaults).forEach(function(k) {
-    subEls[k] = document.getElementById(k);
-  });
-
-  const dynamicCSS = document.getElementById('designerDynamicCSS');
-  const subDynamicCSS = document.getElementById('subtitlesDynamicCSS');
-  const saveStatus = document.getElementById('saveStatus');
-  const previewStage = document.getElementById('previewStage');
-  const tabBar = document.getElementById('tabBar');
-  const tabBtnLayout = document.getElementById('tabBtnLayout');
-  const tabBtnChatTTS = document.getElementById('tabBtnChatTTS');
-  const tabBtnSubtitles = document.getElementById('tabBtnSubtitles');
-  const controlsLayout = document.getElementById('controlsLayout');
-  const controlsChatTTS = document.getElementById('controlsChatTTS');
-  const controlsSubtitles = document.getElementById('controlsSubtitles');
-  const previewLayoutView = document.getElementById('previewLayoutView');
-  const previewChatTTSView = document.getElementById('previewChatTTSView');
-  const previewSubtitlesView = document.getElementById('previewSubtitlesView');
-  const previewTTSCardWrap = document.getElementById('previewTTSCardWrap');
-  const previewChatFeedWrap = document.getElementById('previewChatFeedWrap');
-  const previewSubtitlesRows = document.getElementById('previewSubtitlesRows');
-
-  let activeTab = 'chat_tts';
-  let saveTimer = null;
-
-  // --- Unified Canvas State ---
-  const defaultUniLayout = {
-    tts:       { x: 24, y: 4,  w: 52, h: 16, scale: 100, visible: true },
-    chat:      { x: 2,  y: 36, w: 28, h: 60, scale: 100, visible: true },
-    subtitles: { x: 22, y: 74, w: 56, h: 22, scale: 100, visible: true }
-  };
-  let uniState = JSON.parse(JSON.stringify(defaultUniLayout));
-  let uniModules = { tts: true, chat: true, subtitles: false };
-  const layoutStage = document.getElementById('layoutStage');
-  const uniResPreset = document.getElementById('uniResPreset');
-  const uniWidthEl = document.getElementById('uniWidth');
-  const uniHeightEl = document.getElementById('uniHeight');
-  const uniSnapGrid = document.getElementById('uniSnapGrid');
-  const dragBoxes = {
-    tts: document.getElementById('dragTTS'),
-    chat: document.getElementById('dragChat'),
-    subtitles: document.getElementById('dragSubtitles')
-  };
-  const uniCards = {
-    tts: document.getElementById('uniCardTTS'),
-    chat: document.getElementById('uniCardChat'),
-    subtitles: document.getElementById('uniCardSubtitles')
-  };
-  const uniVis = {
-    tts: document.getElementById('uniVisTTS'),
-    chat: document.getElementById('uniVisChat'),
-    subtitles: document.getElementById('uniVisSubtitles')
-  };
-  const uniScale = {
-    tts: document.getElementById('uniScaleTTS'),
-    chat: document.getElementById('uniScaleChat'),
-    subtitles: document.getElementById('uniScaleSubtitles')
-  };
-  const uniRectLbl = {
-    tts: document.getElementById('uniRectTTS'),
-    chat: document.getElementById('uniRectChat'),
-    subtitles: document.getElementById('uniRectSubtitles')
-  };
-
-  function hexToRgba(hex, alphaPct) {
-    const clean = (hex || '#0f172a').replace('#', '');
-    const r = parseInt(clean.substring(0, 2), 16) || 15;
-    const g = parseInt(clean.substring(2, 4), 16) || 23;
-    const b = parseInt(clean.substring(4, 6), 16) || 42;
-    const a = (Math.max(0, Math.min(100, Number(alphaPct))) / 100).toFixed(2);
-    return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + a + ')';
-  }
-
-  function setActiveTab(tab) {
-    if (tab === 'subtitles') activeTab = 'subtitles';
-    else if (tab === 'layout') activeTab = 'layout';
-    else activeTab = 'chat_tts';
-
-    tabBtnLayout.classList.toggle('active', activeTab === 'layout');
-    tabBtnChatTTS.classList.toggle('active', activeTab === 'chat_tts');
-    tabBtnSubtitles.classList.toggle('active', activeTab === 'subtitles');
-    controlsLayout.classList.toggle('hidden', activeTab !== 'layout');
-    controlsChatTTS.classList.toggle('hidden', activeTab !== 'chat_tts');
-    controlsSubtitles.classList.toggle('hidden', activeTab !== 'subtitles');
-    previewLayoutView.classList.toggle('hidden', activeTab !== 'layout');
-    previewChatTTSView.classList.toggle('hidden', activeTab !== 'chat_tts');
-    previewSubtitlesView.classList.toggle('hidden', activeTab !== 'subtitles');
-  }
-
-  tabBtnLayout.addEventListener('click', function() { setActiveTab('layout'); });
-  tabBtnChatTTS.addEventListener('click', function() { setActiveTab('chat_tts'); });
-  tabBtnSubtitles.addEventListener('click', function() { setActiveTab('subtitles'); });
-
-  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-  function snapVal(v) { return uniSnapGrid.checked ? Math.round(v / 2) * 2 : Math.round(v * 10) / 10; }
-
-  function renderUnifiedStage() {
-    const w = clamp(parseInt(uniWidthEl.value, 10) || 1920, 640, 7680);
-    const h = clamp(parseInt(uniHeightEl.value, 10) || 1080, 360, 4320);
-    layoutStage.style.aspectRatio = w + ' / ' + h;
-    layoutStage.style.maxWidth = (h > w) ? '420px' : '960px';
-
-    const presetVal = w + 'x' + h;
-    let foundPreset = false;
-    for (let i = 0; i < uniResPreset.options.length; i++) {
-      if (uniResPreset.options[i].value === presetVal) {
-        uniResPreset.value = presetVal;
-        foundPreset = true;
-        break;
-      }
-    }
-    if (!foundPreset) uniResPreset.value = 'custom';
-
-    ['tts', 'chat', 'subtitles'].forEach(function(k) {
-      const enabled = !!uniModules[k];
-      uniCards[k].classList.toggle('hidden', !enabled);
-      const st = uniState[k];
-      uniVis[k].checked = st.visible !== false;
-      uniScale[k].value = st.scale || 100;
-      const box = dragBoxes[k];
-      box.classList.toggle('hidden', !enabled || st.visible === false);
-      box.style.left = st.x + '%';
-      box.style.top = st.y + '%';
-      box.style.width = st.w + '%';
-      box.style.height = st.h + '%';
-      const dim = Math.round(st.w * w / 100) + '×' + Math.round(st.h * h / 100) + ' (' + (st.scale || 100) + '%)';
-      box.querySelector('.dim-lbl').textContent = dim;
-      uniRectLbl[k].textContent = Math.round(st.x) + '%, ' + Math.round(st.y) + '% • ' + dim;
-    });
-  }
-
-  function saveUnifiedLayout(autoSave) {
-    renderUnifiedStage();
-    if (!autoSave) return;
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(function() {
-      saveStylePayload({
-        target: 'unified',
-        unified_width: clamp(parseInt(uniWidthEl.value, 10) || 1920, 640, 7680),
-        unified_height: clamp(parseInt(uniHeightEl.value, 10) || 1080, 360, 4320),
-        unified_layout_json: JSON.stringify(uniState)
-      }, '✓ Auto-saved & Live-Updated Unified Canvas');
-    }, 150);
-  }
-
-  uniResPreset.addEventListener('change', function() {
-    if (uniResPreset.value === 'custom') return;
-    const parts = uniResPreset.value.split('x');
-    if (parts.length === 2) {
-      uniWidthEl.value = parts[0];
-      uniHeightEl.value = parts[1];
-      saveUnifiedLayout(true);
-    }
-  });
-  uniWidthEl.addEventListener('change', function() { saveUnifiedLayout(true); });
-  uniHeightEl.addEventListener('change', function() { saveUnifiedLayout(true); });
-
-  ['tts', 'chat', 'subtitles'].forEach(function(k) {
-    uniVis[k].addEventListener('change', function() {
-      uniState[k].visible = uniVis[k].checked;
-      saveUnifiedLayout(true);
-    });
-    uniScale[k].addEventListener('input', function() {
-      uniState[k].scale = Number(uniScale[k].value);
-      saveUnifiedLayout(true);
-    });
-
-    const box = dragBoxes[k];
-    box.addEventListener('pointerdown', function(ev) {
-      ev.preventDefault();
-      Object.values(dragBoxes).forEach(function(b) { b.classList.remove('selected'); });
-      box.classList.add('selected');
-      const isResize = ev.target.classList.contains('resize-handle');
-      const rect = layoutStage.getBoundingClientRect();
-      const startX = ev.clientX;
-      const startY = ev.clientY;
-      const orig = Object.assign({}, uniState[k]);
-
-      function onMove(mv) {
-        const dxPct = ((mv.clientX - startX) / rect.width) * 100;
-        const dyPct = ((mv.clientY - startY) / rect.height) * 100;
-        if (isResize) {
-          uniState[k].w = clamp(snapVal(orig.w + dxPct), 10, 100 - orig.x);
-          uniState[k].h = clamp(snapVal(orig.h + dyPct), 8, 100 - orig.y);
-        } else {
-          uniState[k].x = clamp(snapVal(orig.x + dxPct), 0, 100 - orig.w);
-          uniState[k].y = clamp(snapVal(orig.y + dyPct), 0, 100 - orig.h);
-        }
-        renderUnifiedStage();
-      }
-      function onUp() {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        saveUnifiedLayout(true);
-      }
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
-    });
-  });
-
-  function renderSubtitlePreviewRows(langs) {
-    const codes = (Array.isArray(langs) && langs.length > 0) ? langs : ['en', 'es', 'ja'];
-    previewSubtitlesRows.innerHTML = '';
-    codes.forEach(function(rawCode, idx) {
-      const code = (rawCode || 'en').toLowerCase();
-      const sample = sampleSentences[code] || { badge: code.toUpperCase(), text: sampleSentences.en.text };
-      const row = document.createElement('div');
-      row.className = 'lang-row' + (idx === 0 ? ' original' : '');
-      const b = document.createElement('span');
-      b.className = 'lang-badge';
-      b.textContent = sample.badge;
-      const t = document.createElement('span');
-      t.className = 'lang-text';
-      t.textContent = sample.text;
-      row.appendChild(b);
-      row.appendChild(t);
-      previewSubtitlesRows.appendChild(row);
-    });
-  }
-
-  function readState() {
-    return {
-      bgColor: els.bgColor.value,
-      bgOpacity: Number(els.bgOpacity.value),
-      paidBgColor: els.paidBgColor.value,
-      paidBgOpacity: Number(els.paidBgOpacity.value),
-      borderColor: els.borderColor.value,
-      nameColor: els.nameColor.value,
-      textColor: els.textColor.value,
-      transColor: els.transColor.value,
-      showPlatformTag: els.showPlatformTag.checked,
-      platformNameColors: els.platformNameColors.checked,
-      showStatusIcon: els.showStatusIcon.checked,
-      showOriginalTrans: els.showOriginalTrans.checked,
-      showVoicePill: els.showVoicePill.checked,
-      showCardBorders: els.showCardBorders.checked,
-      fontScale: Number(els.fontScale.value),
-      cardRadius: Number(els.cardRadius.value)
-    };
-  }
-
-  function applyStateToControls(st) {
-    const merged = Object.assign({}, defaults, st || {});
-    Object.keys(defaults).forEach(function(k) {
-      if (typeof defaults[k] === 'boolean') {
-        els[k].checked = !!merged[k];
-      } else {
-        els[k].value = merged[k];
-      }
-    });
-  }
-
-  function generateCSS(st, scopeSelector) {
-    const scope = scopeSelector || ':root, .preview-scope';
-    const bgRow = hexToRgba(st.bgColor, st.bgOpacity);
-    const bgPaid = hexToRgba(st.paidBgColor, st.paidBgOpacity);
-    const borderRgba = hexToRgba(st.borderColor, st.showCardBorders ? 65 : 0);
-    const pfx = scopeSelector ? (scopeSelector + ' ') : '';
-    const lines = [
-      scope + ' {',
-      '  --bg: ' + bgRow + ';',
-      '  --bg-row: ' + bgRow + ';',
-      '  --bg-paid: ' + bgPaid + ';',
-      '  --border: ' + borderRgba + ';',
-      '  --border-row: ' + borderRgba + ';',
-      '  --border-paid: ' + hexToRgba(st.borderColor, st.showCardBorders ? 85 : 0) + ';',
-      '  --accent: ' + st.nameColor + ';',
-      '  --text: ' + st.textColor + ';',
-      '  --trans-color: ' + st.transColor + ';',
-      '  --font-scale: ' + (st.fontScale / 100).toFixed(2) + ';',
-      '  --card-radius: ' + st.cardRadius + 'px;',
-      '}'
-    ];
-    if (!st.showPlatformTag) {
-      lines.push(pfx + '.plat, ' + pfx + '.badge { display: none !important; }');
-    }
-    if (st.platformNameColors) {
-      lines.push(pfx + '.user.twitch, ' + pfx + '.speaker.twitch { color: #B983FF !important; }');
-      lines.push(pfx + '.user.youtube, ' + pfx + '.speaker.youtube { color: #FF4D6D !important; }');
-      lines.push(pfx + '.user.kick, ' + pfx + '.speaker.kick { color: #53FC18 !important; }');
-      lines.push(pfx + '.user.tiktok, ' + pfx + '.speaker.tiktok { color: #00F2FE !important; }');
-    }
-    if (!st.showStatusIcon) {
-      lines.push(pfx + '.status { display: none !important; }');
-    }
-    if (!st.showOriginalTrans) {
-      lines.push(pfx + '.trans { display: none !important; }');
-    }
-    if (!st.showVoicePill) {
-      lines.push(pfx + '.voice-pill { display: none !important; }');
-    }
-    if (!st.showCardBorders) {
-      lines.push(pfx + '.msg, ' + pfx + '.card { border-color: transparent !important; box-shadow: none !important; }');
-      lines.push(pfx + '.text, ' + pfx + '.user, ' + pfx + '.speaker, ' + pfx + '.caption { text-shadow: 0 2px 4px rgba(0,0,0,0.9) !important; }');
-    }
-    return lines.join('\n');
-  }
-
-  function readSubState() {
-    return {
-      subBgColor: subEls.subBgColor.value,
-      subBgOpacity: Number(subEls.subBgOpacity.value),
-      subBorderColor: subEls.subBorderColor.value,
-      subBadgeColor: subEls.subBadgeColor.value,
-      subBadgeOpacity: Number(subEls.subBadgeOpacity.value),
-      subTextColor: subEls.subTextColor.value,
-      subOrigTextColor: subEls.subOrigTextColor.value,
-      subDividerColor: subEls.subDividerColor.value,
-      subPillColor: subEls.subPillColor.value,
-      subShowMicPill: subEls.subShowMicPill.checked,
-      subShowLangBadges: subEls.subShowLangBadges.checked,
-      subHighlightOriginal: subEls.subHighlightOriginal.checked,
-      subShowDividers: subEls.subShowDividers.checked,
-      subShowCardBorders: subEls.subShowCardBorders.checked,
-      subFontScale: Number(subEls.subFontScale.value),
-      subCardRadius: Number(subEls.subCardRadius.value)
-    };
-  }
-
-  function applySubStateToControls(st) {
-    const merged = Object.assign({}, subDefaults, st || {});
-    Object.keys(subDefaults).forEach(function(k) {
-      if (typeof subDefaults[k] === 'boolean') {
-        subEls[k].checked = !!merged[k];
-      } else {
-        subEls[k].value = merged[k];
-      }
-    });
-  }
-
-  function generateSubtitlesCSS(st, scopeSelector) {
-    const scope = scopeSelector || ':root, .subtitles-preview-scope';
-    const pfx = scopeSelector ? (scopeSelector + ' ') : '';
-    const bgCard = hexToRgba(st.subBgColor, st.subShowCardBorders ? st.subBgOpacity : 0);
-    const borderRgba = hexToRgba(st.subBorderColor, st.subShowCardBorders ? 55 : 0);
-    const badgeBg = hexToRgba(st.subBadgeColor, st.subBadgeOpacity);
-    const badgeBorder = hexToRgba(st.subBadgeColor, Math.min(100, st.subBadgeOpacity + 28));
-    const origBadgeBg = st.subHighlightOriginal
-      ? hexToRgba(st.subBadgeColor, Math.min(100, st.subBadgeOpacity + 22))
-      : badgeBg;
-    const origBadgeText = st.subHighlightOriginal ? '#F8FAFC' : st.subBadgeColor;
-    const dividerRgba = hexToRgba(st.subDividerColor, st.subShowDividers ? 60 : 0);
-    const pillBg = hexToRgba(st.subBgColor, 85);
-
-    const lines = [
-      scope + ' {',
-      '  --bg: ' + bgCard + ';',
-      '  --border: ' + borderRgba + ';',
-      '  --accent: ' + st.subBadgeColor + ';',
-      '  --badge-bg: ' + badgeBg + ';',
-      '  --badge-border: ' + badgeBorder + ';',
-      '  --orig-badge-bg: ' + origBadgeBg + ';',
-      '  --orig-badge-text: ' + origBadgeText + ';',
-      '  --text: ' + st.subTextColor + ';',
-      '  --orig-text: ' + st.subOrigTextColor + ';',
-      '  --row-divider: ' + dividerRgba + ';',
-      '  --pill-bg: ' + pillBg + ';',
-      '  --pill-text: ' + st.subPillColor + ';',
-      '  --scale: ' + (st.subFontScale / 100).toFixed(2) + ';',
-      '  --card-radius: ' + st.subCardRadius + 'px;',
-      '}'
-    ];
-    if (!st.subShowMicPill) {
-      lines.push(pfx + '.mic-pill { display: none !important; }');
-    }
-    if (!st.subShowLangBadges) {
-      lines.push(pfx + '.lang-badge { display: none !important; }');
-    }
-    if (!st.subShowDividers) {
-      lines.push(pfx + '.lang-row { border-top-color: transparent !important; }');
-    }
-    if (!st.subShowCardBorders) {
-      lines.push(pfx + '.card { background: transparent !important; border-color: transparent !important; box-shadow: none !important; backdrop-filter: none !important; }');
-      lines.push(pfx + '.lang-text { text-shadow: 0 2px 6px rgba(0,0,0,0.95), 0 0 12px rgba(0,0,0,0.85) !important; }');
-    }
-    return lines.join('\n');
-  }
-
-  function saveStylePayload(payload, statusMsg) {
-    saveStatus.textContent = '⏳ Saving & updating OBS...';
-    fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    })
-      .then(function(r) {
-        if (!r.ok) throw new Error('Save failed');
-        saveStatus.textContent = statusMsg || '✓ Auto-saved & Live-Updated OBS';
-      })
-      .catch(function() {
-        saveStatus.textContent = '⚠️ Save failed';
-      });
-  }
-
-  function syncChatTTSFromControls(autoSave) {
-    const st = readState();
-    dynamicCSS.textContent = generateCSS(st, '.preview-scope');
-    if (autoSave) {
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(function() {
-        saveStylePayload({
-          target: 'chat_tts',
-          custom_css: generateCSS(st, ''),
-          style_json: JSON.stringify(st)
-        }, '✓ Auto-saved & Live-Updated OBS');
-      }, 150);
-    }
-  }
-
-  function syncSubtitlesFromControls(autoSave) {
-    const st = readSubState();
-    subDynamicCSS.textContent = generateSubtitlesCSS(st, '.subtitles-preview-scope');
-    if (autoSave) {
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(function() {
-        saveStylePayload({
-          target: 'subtitles',
-          subtitles_custom_css: generateSubtitlesCSS(st, ''),
-          subtitles_style_json: JSON.stringify(st)
-        }, '✓ Auto-saved & Live-Updated OBS Subtitles');
-      }, 150);
-    }
-  }
-
-  Object.keys(els).forEach(function(k) {
-    els[k].addEventListener('input', function() { syncChatTTSFromControls(true); });
-    els[k].addEventListener('change', function() { syncChatTTSFromControls(true); });
-  });
-
-  Object.keys(subEls).forEach(function(k) {
-    subEls[k].addEventListener('input', function() { syncSubtitlesFromControls(true); });
-    subEls[k].addEventListener('change', function() { syncSubtitlesFromControls(true); });
-  });
-
-  document.querySelectorAll('.bg-btn').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-      previewStage.className = 'preview-stage ' + (btn.dataset.bg || 'checker');
-    });
-  });
-
-  document.getElementById('resetBtn').addEventListener('click', function() {
-    if (saveTimer) clearTimeout(saveTimer);
-    if (activeTab === 'layout') {
-      uniState = JSON.parse(JSON.stringify(defaultUniLayout));
-      uniWidthEl.value = 1920;
-      uniHeightEl.value = 1080;
-      renderUnifiedStage();
-      saveStylePayload({
-        target: 'unified',
-        unified_width: 1920,
-        unified_height: 1080,
-        unified_layout_json: ''
-      }, '✓ Reset Unified Canvas Layout to 1920×1080 Default');
-    } else if (activeTab === 'subtitles') {
-      applySubStateToControls(subDefaults);
-      subDynamicCSS.textContent = '';
-      saveStylePayload({
-        target: 'subtitles',
-        subtitles_custom_css: '',
-        subtitles_style_json: ''
-      }, '✓ Reset Subtitles to Default Obsidian Slate');
-    } else {
-      applyStateToControls(defaults);
-      dynamicCSS.textContent = '';
-      saveStylePayload({
-        target: 'chat_tts',
-        custom_css: '',
-        style_json: ''
-      }, '✓ Reset to Default Obsidian Slate');
-    }
-  });
-
-  fetch(apiUrl, { cache: 'no-store' })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      const ttsOn = data.tts_enabled !== false;
-      const chatOn = data.chat_enabled !== false;
-      const subOn = !!data.subtitles_enabled;
-      const hasChatTTS = ttsOn || chatOn;
-      const anyOn = hasChatTTS || subOn;
-
-      uniModules = { tts: ttsOn, chat: chatOn, subtitles: subOn };
-      uniWidthEl.value = data.unified_width || 1920;
-      uniHeightEl.value = data.unified_height || 1080;
-      if (data.unified_layout_json) {
-        try {
-          const parsed = JSON.parse(data.unified_layout_json);
-          ['tts', 'chat', 'subtitles'].forEach(function(k) {
-            if (parsed[k]) uniState[k] = Object.assign({}, defaultUniLayout[k], parsed[k]);
-          });
-        } catch (_) {}
-      }
-      renderUnifiedStage();
-
-      previewTTSCardWrap.classList.toggle('hidden', !ttsOn);
-      previewChatFeedWrap.classList.toggle('hidden', !chatOn);
-      tabBtnLayout.classList.toggle('hidden', !anyOn);
-      tabBtnChatTTS.classList.toggle('hidden', !hasChatTTS);
-      tabBtnSubtitles.classList.toggle('hidden', !subOn);
-      tabBar.classList.toggle('hidden', !anyOn);
-
-      if (Array.isArray(data.target_languages) && data.target_languages.length > 0) {
-        renderSubtitlePreviewRows(data.target_languages);
-      }
-
-      if (requestedTab === 'layout' && anyOn) {
-        setActiveTab('layout');
-      } else if ((requestedTab === 'subtitles' && subOn) || (!hasChatTTS && subOn)) {
-        setActiveTab('subtitles');
-      } else {
-        setActiveTab('chat_tts');
-      }
-
-      if (data.style_json) {
-        try {
-          applyStateToControls(JSON.parse(data.style_json));
-        } catch (_) {
-          applyStateToControls(defaults);
-        }
-      } else {
-        applyStateToControls(defaults);
-      }
-      syncChatTTSFromControls(false);
-
-      if (data.subtitles_style_json) {
-        try {
-          applySubStateToControls(JSON.parse(data.subtitles_style_json));
-        } catch (_) {
-          applySubStateToControls(subDefaults);
-        }
-      } else {
-        applySubStateToControls(subDefaults);
-      }
-      syncSubtitlesFromControls(false);
-    })
-    .catch(function() {
-      syncChatTTSFromControls(false);
-      syncSubtitlesFromControls(false);
-    });
-})();
-</script>
-</body>
-</html>
-`

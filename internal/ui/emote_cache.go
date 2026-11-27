@@ -4,11 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"image"
+	"image/color"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -682,6 +684,8 @@ type inlineToken struct {
 	text     string
 	name     string
 	imageURL string
+	bits     int
+	colorHex string
 }
 
 // tokenizeMessageWithEmotes splits rawText and rune-indexed EmoteSpans into word and emote tokens.
@@ -717,6 +721,8 @@ func tokenizeMessageWithEmotes(platform, rawText string, emotes []chat.EmoteSpan
 			isEmote:  true,
 			name:     name,
 			imageURL: sp.ImageURL(platform),
+			bits:     sp.Bits,
+			colorHex: sp.Color,
 		})
 		pos = end
 	}
@@ -800,6 +806,35 @@ func (c *emoteMessageCell) effectiveScale() float32 {
 	return c.scale
 }
 
+func setFlowObjectsOnScreen(objs []fyne.CanvasObject, visible bool) {
+	for _, obj := range objs {
+		switch x := obj.(type) {
+		case *emoteInlineWidget:
+			x.SetOnScreen(visible)
+		case *fyne.Container:
+			setFlowObjectsOnScreen(x.Objects, visible)
+		}
+	}
+}
+
+func parseEmoteHexColor(hexStr string, fallback color.NRGBA) color.NRGBA {
+	s := strings.TrimPrefix(strings.TrimSpace(hexStr), "#")
+	if len(s) == 3 {
+		s = string([]byte{s[0], s[0], s[1], s[1], s[2], s[2]})
+	}
+	if len(s) != 6 && len(s) != 8 {
+		return fallback
+	}
+	v, err := strconv.ParseUint(s, 16, 32)
+	if err != nil {
+		return fallback
+	}
+	if len(s) == 6 {
+		return color.NRGBA{R: uint8(v >> 16), G: uint8(v >> 8), B: uint8(v), A: 255}
+	}
+	return color.NRGBA{R: uint8(v >> 24), G: uint8(v >> 16), B: uint8(v >> 8), A: uint8(v)}
+}
+
 // SetOnScreen propagates viewport visibility to all inline emote widgets in this message cell.
 func (c *emoteMessageCell) SetOnScreen(visible bool) {
 	if c == nil {
@@ -810,11 +845,7 @@ func (c *emoteMessageCell) SetOnScreen(visible bool) {
 	objs := slices.Clone(c.flowBox.Objects)
 	c.mu.Unlock()
 
-	for _, obj := range objs {
-		if ew, ok := obj.(*emoteInlineWidget); ok {
-			ew.SetOnScreen(visible)
-		}
-	}
+	setFlowObjectsOnScreen(objs, visible)
 }
 
 // SetContent updates the cell to display rawText with inline emotes and an optional tooltip/subtext.
@@ -826,11 +857,7 @@ func (c *emoteMessageCell) SetContent(platform, rawText string, emotes []chat.Em
 	c.mu.Lock()
 	prevObjs := slices.Clone(c.flowBox.Objects)
 	c.mu.Unlock()
-	for _, obj := range prevObjs {
-		if ew, ok := obj.(*emoteInlineWidget); ok {
-			ew.SetOnScreen(false)
-		}
-	}
+	setFlowObjectsOnScreen(prevObjs, false)
 
 	if len(emotes) == 0 {
 		c.mu.Lock()
@@ -857,7 +884,15 @@ func (c *emoteMessageCell) SetContent(platform, rawText string, emotes []chat.Em
 	objs := make([]fyne.CanvasObject, 0, len(tokens))
 	for _, tok := range tokens {
 		if tok.isEmote {
-			objs = append(objs, newScaledEmoteInlineWidget(c.cache, tok.name, tok.imageURL, s, c.onHover))
+			ew := newScaledEmoteInlineWidget(c.cache, tok.name, tok.imageURL, s, c.onHover)
+			if tok.bits > 0 {
+				bitsLbl := canvas.NewText(strconv.Itoa(tok.bits), parseEmoteHexColor(tok.colorHex, colorSkyBlue))
+				bitsLbl.TextSize = (theme.TextSize() - 1) * s
+				bitsLbl.TextStyle = fyne.TextStyle{Bold: true}
+				objs = append(objs, container.NewHBox(ew, bitsLbl))
+			} else {
+				objs = append(objs, ew)
+			}
 		} else {
 			lbl := canvas.NewText(tok.text, colorChromeWhite)
 			lbl.TextSize = theme.TextSize() * s
@@ -869,11 +904,7 @@ func (c *emoteMessageCell) SetContent(platform, rawText string, emotes []chat.Em
 	c.flowBox.Objects = objs
 	c.mu.Unlock()
 	if onScreen {
-		for _, obj := range objs {
-			if ew, ok := obj.(*emoteInlineWidget); ok {
-				ew.SetOnScreen(true)
-			}
-		}
+		setFlowObjectsOnScreen(objs, true)
 	}
 	c.flowBox.Show()
 	c.flowBox.Refresh()

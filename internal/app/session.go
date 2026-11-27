@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -510,6 +511,14 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 	s.queue.AddOnStateChanged(func(_, _ bool) {
 		s.wsServer.BroadcastState()
 	})
+	if s.pluginMgr != nil {
+		s.pluginMgr.SubscribeStatusChange(func() {
+			s.syncWSServer(s.Config())
+			if s.wsServer != nil && s.wsServer.IsRunning() {
+				s.wsServer.BroadcastOverlayReload()
+			}
+		})
+	}
 	return s
 }
 
@@ -1874,6 +1883,9 @@ func (s *Session) syncWSServer(cfg *config.Config) {
 		return
 	}
 	controlOn, ttsOverlayOn, chatOverlayOn, anyOn := cfg.EffectiveWebSocketFeatures()
+	if s.pluginMgr != nil && s.pluginMgr.HasRunningOverlayWidgets() {
+		anyOn = true
+	}
 	s.wsServer.SetFeatures(controlOn, ttsOverlayOn, chatOverlayOn)
 	s.wsServer.SetSubtitlesOverlayEnabled(cfg.EffectiveSubtitlesOverlayEnabled())
 	s.wsServer.SetAuthToken(cfg.WebSocket.AuthToken)
@@ -2084,6 +2096,195 @@ func (s *Session) SaveUnifiedLayout(width, height int, layoutJSON string) error 
 		c.WebSocket.UnifiedOverlayHeight = uh
 		c.WebSocket.UnifiedLayoutJSON = layoutJSON
 	})
+}
+
+func protoFieldTypeToDesignerType(ft pluginv1.SettingFieldType) string {
+	switch ft {
+	case pluginv1.SettingFieldType_SETTING_FIELD_TYPE_COLOR:
+		return "color"
+	case pluginv1.SettingFieldType_SETTING_FIELD_TYPE_NUMBER:
+		return "number"
+	case pluginv1.SettingFieldType_SETTING_FIELD_TYPE_BOOL:
+		return "bool"
+	case pluginv1.SettingFieldType_SETTING_FIELD_TYPE_SELECT:
+		return "select"
+	case pluginv1.SettingFieldType_SETTING_FIELD_TYPE_MULTILINE:
+		return "multiline"
+	case pluginv1.SettingFieldType_SETTING_FIELD_TYPE_INFO:
+		return "info"
+	default:
+		return "text"
+	}
+}
+
+func settingValueToAny(sv *pluginv1.SettingValue) any {
+	if sv == nil {
+		return nil
+	}
+	switch v := sv.Kind.(type) {
+	case *pluginv1.SettingValue_StringVal:
+		return v.StringVal
+	case *pluginv1.SettingValue_NumberVal:
+		return v.NumberVal
+	case *pluginv1.SettingValue_BoolVal:
+		return v.BoolVal
+	case *pluginv1.SettingValue_InfoVal:
+		if v.InfoVal != nil {
+			return v.InfoVal.GetText()
+		}
+	case *pluginv1.SettingValue_LinkVal:
+		if v.LinkVal != nil {
+			return v.LinkVal.GetUrl()
+		}
+	}
+	return nil
+}
+
+// ListPluginOverlayWidgets implements ws.PluginOverlayWidgetProvider, enumerating active plugin widgets for /overlay and /overlay/designer.
+func (s *Session) ListPluginOverlayWidgets() []ws.PluginOverlayWidget {
+	mgr := s.PluginManager()
+	if mgr == nil {
+		return nil
+	}
+	plugins := mgr.Plugins()
+	var out []ws.PluginOverlayWidget
+	for _, p := range plugins {
+		if p.State != pluginhost.StatusRunning || len(p.OverlayWidgets) == 0 {
+			continue
+		}
+		for _, wd := range p.OverlayWidgets {
+			if wd == nil || strings.TrimSpace(wd.GetId()) == "" {
+				continue
+			}
+			asset := strings.TrimSpace(strings.TrimPrefix(wd.GetEntryAsset(), "/"))
+			if asset == "" {
+				asset = "index.html"
+			}
+			defW := wd.GetDefaultW()
+			if defW <= 0 {
+				defW = 30
+			}
+			defH := wd.GetDefaultH()
+			if defH <= 0 {
+				defH = 20
+			}
+			minW := wd.GetMinW()
+			if minW <= 0 {
+				minW = 10
+			}
+			minH := wd.GetMinH()
+			if minH <= 0 {
+				minH = 8
+			}
+			schema := make([]ws.PluginOverlayWidgetField, 0, len(wd.GetStyleSchema()))
+			for _, f := range wd.GetStyleSchema() {
+				if f == nil || strings.TrimSpace(f.GetKey()) == "" {
+					continue
+				}
+				opts := make([]ws.PluginOverlaySelectOption, 0, len(f.GetOptions()))
+				for _, o := range f.GetOptions() {
+					if o == nil {
+						continue
+					}
+					opts = append(opts, ws.PluginOverlaySelectOption{
+						Label: o.GetLabel(),
+						Value: o.GetValue(),
+					})
+				}
+				wf := ws.PluginOverlayWidgetField{
+					Key:         f.GetKey(),
+					Label:       f.GetLabel(),
+					Type:        protoFieldTypeToDesignerType(f.GetType()),
+					Section:     f.GetSection(),
+					Default:     settingValueToAny(f.GetDefaultValue()),
+					Placeholder: f.GetPlaceholder(),
+					Help:        f.GetHelp(),
+					Options:     opts,
+				}
+				if f.GetMinValue() != 0 || f.GetMaxValue() != 0 {
+					minV := f.GetMinValue()
+					maxV := f.GetMaxValue()
+					wf.Min = &minV
+					wf.Max = &maxV
+				}
+				if f.GetStep() > 0 {
+					stepV := f.GetStep()
+					wf.Step = &stepV
+				}
+				schema = append(schema, wf)
+			}
+			out = append(out, ws.PluginOverlayWidget{
+				Key:               ws.PluginWidgetLayoutKey(p.UUID, wd.GetId()),
+				PluginUUID:        p.UUID,
+				PluginName:        p.Name,
+				WidgetID:          wd.GetId(),
+				Name:              wd.GetName(),
+				Description:       wd.GetDescription(),
+				IconName:          wd.GetIconName(),
+				EntryAsset:        asset,
+				DefaultX:          wd.GetDefaultX(),
+				DefaultY:          wd.GetDefaultY(),
+				DefaultW:          defW,
+				DefaultH:          defH,
+				MinW:              minW,
+				MinH:              minH,
+				DefaultVisible:    !wd.GetDefaultHidden(),
+				SupportsHostTheme: wd.GetSupportsHostTheme(),
+				AllowCustomCSS:    !wd.GetDisableCustomCss(),
+				StyleSchema:       schema,
+				Style:             s.GetPluginOverlayStyle(p.UUID, wd.GetId()),
+			})
+		}
+	}
+	return out
+}
+
+// GetPluginOverlayStyle implements ws.PluginOverlayWidgetProvider, reading saved OBS Designer style for one widget.
+func (s *Session) GetPluginOverlayStyle(pluginUUID, widgetID string) config.PluginOverlayStyle {
+	cfg := s.Config()
+	if cfg == nil || cfg.WebSocket.PluginOverlayStyles == nil {
+		return config.PluginOverlayStyle{}
+	}
+	key := ws.PluginOverlayStyleStorageKey(pluginUUID, widgetID)
+	st, ok := cfg.WebSocket.PluginOverlayStyles[key]
+	if !ok {
+		return config.PluginOverlayStyle{}
+	}
+	if st.Values != nil {
+		st.Values = maps.Clone(st.Values)
+	}
+	return st
+}
+
+// SavePluginOverlayStyle implements ws.PluginOverlayWidgetProvider, persisting Designer style and notifying the plugin.
+func (s *Session) SavePluginOverlayStyle(pluginUUID, widgetID string, style config.PluginOverlayStyle) error {
+	cleanUUID := strings.TrimSpace(pluginUUID)
+	cleanWidget := strings.TrimSpace(widgetID)
+	if cleanUUID == "" || cleanWidget == "" {
+		return errors.New("plugin UUID and widget ID are required")
+	}
+	stCopy := config.PluginOverlayStyle{
+		CustomCSS:    style.CustomCSS,
+		UseHostTheme: style.UseHostTheme,
+	}
+	if style.Values != nil {
+		stCopy.Values = maps.Clone(style.Values)
+	}
+	key := ws.PluginOverlayStyleStorageKey(cleanUUID, cleanWidget)
+	if err := s.UpdateConfig(func(c *config.Config) {
+		if c.WebSocket.PluginOverlayStyles == nil {
+			c.WebSocket.PluginOverlayStyles = make(map[string]config.PluginOverlayStyle)
+		}
+		c.WebSocket.PluginOverlayStyles[key] = stCopy
+	}); err != nil {
+		return err
+	}
+	if s.pluginMgr != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = s.pluginMgr.NotifyOverlayStyleChanged(ctx, cleanUUID, cleanWidget, stCopy.Values, stCopy.CustomCSS, stCopy.UseHostTheme)
+	}
+	return nil
 }
 
 // SubscribeOverlayChat implements ws.OverlayProvider, streaming real-time filtered chat and outcome updates to an OBS Chat Overlay.

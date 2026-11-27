@@ -87,6 +87,7 @@ message HostEnvelope {
     RunActionRequest run_action = 13;
     BeforeTTSRequest before_tts = 14;
     GetOverlayAssetRequest get_overlay_asset = 15;
+    OnOverlayStyleChangedRequest on_overlay_style_changed = 16;
   }
 }
 

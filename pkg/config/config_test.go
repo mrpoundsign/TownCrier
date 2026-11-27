@@ -1132,3 +1132,50 @@ func TestBotVariableDeclarationsNormalizeCloneAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPluginOverlayStylesCloneAndRoundTrip(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.WebSocket.PluginOverlayStyles == nil {
+		t.Fatal("expected DefaultConfig().WebSocket.PluginOverlayStyles to be initialized")
+	}
+	const key = "com.example.dj:now_playing"
+	cfg.WebSocket.PluginOverlayStyles[key] = PluginOverlayStyle{
+		Values: map[string]any{
+			"accent_color":   "#38BDF8",
+			"opacity":        90.0,
+			"show_thumbnail": true,
+		},
+		CustomCSS:    ".card { border-radius: 16px; }",
+		UseHostTheme: true,
+	}
+
+	cloned := cfg.Clone()
+	clonedEntry := cloned.WebSocket.PluginOverlayStyles[key]
+	clonedEntry.Values["accent_color"] = "#FF0000"
+	clonedEntry.CustomCSS = ".card { opacity: 0; }"
+	cloned.WebSocket.PluginOverlayStyles[key] = clonedEntry
+
+	origEntry := cfg.WebSocket.PluginOverlayStyles[key]
+	if origEntry.Values["accent_color"] != "#38BDF8" {
+		t.Fatalf("expected Clone() to deep-copy Values map, got %v", origEntry.Values["accent_color"])
+	}
+	if origEntry.CustomCSS != ".card { border-radius: 16px; }" {
+		t.Fatalf("expected Clone() to isolate CustomCSS, got %q", origEntry.CustomCSS)
+	}
+
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(cfgPath, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got, ok := loaded.WebSocket.PluginOverlayStyles[key]
+	if !ok {
+		t.Fatalf("expected %q to survive JSON round-trip", key)
+	}
+	if !got.UseHostTheme || got.CustomCSS != origEntry.CustomCSS || got.Values["accent_color"] != "#38BDF8" || got.Values["show_thumbnail"] != true {
+		t.Fatalf("unexpected round-tripped PluginOverlayStyle: %+v", got)
+	}
+}
+

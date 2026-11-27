@@ -4,9 +4,9 @@ package towncrier.plugin.v1;
 
 option go_package = "github.com/mrpoundsign/TownCrier/pkg/pluginv1;pluginv1";
 
-// Host API version v1.0.0 constants:
+// Host API version v1.1.0 constants:
 //   HOST_API_MAJOR = 1
-//   HOST_API_MINOR = 0
+//   HOST_API_MINOR = 1
 //   HOST_API_PATCH = 0
 
 // ProtocolVersion identifies a plugin's target API version and minimum host compatibility.

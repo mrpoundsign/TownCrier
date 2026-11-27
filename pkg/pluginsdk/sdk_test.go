@@ -66,3 +66,63 @@ func TestSettingsMapHelpers(t *testing.T) {
 	require.Equal(t, "https://example.com", GetSettingString(m, "auth", ""))
 }
 
+type stubPlainPlugin struct {
+	BasePlugin
+}
+
+func (stubPlainPlugin) Manifest() *pluginv1.Manifest {
+	return &pluginv1.Manifest{Uuid: "com.example.plain", Name: "Plain"}
+}
+
+type stubOverlayStylePlugin struct {
+	BasePlugin
+	got *pluginv1.OnOverlayStyleChangedRequest
+	err error
+}
+
+func (s *stubOverlayStylePlugin) Manifest() *pluginv1.Manifest {
+	return &pluginv1.Manifest{Uuid: "com.example.styled", Name: "Styled"}
+}
+
+func (s *stubOverlayStylePlugin) OnOverlayStyleChanged(req *pluginv1.OnOverlayStyleChangedRequest) error {
+	s.got = req
+	return s.err
+}
+
+func TestDispatchOnOverlayStyleChanged(t *testing.T) {
+	// Plugin without OverlayStylePlugin returns ackOK so client-side JS widgets don't fail.
+	respPlain := dispatchEnvelope(stubPlainPlugin{}, nil, &pluginv1.HostEnvelope{
+		RequestId: 7,
+		Payload: &pluginv1.HostEnvelope_OnOverlayStyleChanged{
+			OnOverlayStyleChanged: &pluginv1.OnOverlayStyleChangedRequest{WidgetId: "now_playing"},
+		},
+	})
+	require.True(t, respPlain.GetAck().GetOk())
+
+	// Plugin implementing OverlayStylePlugin receives the request and propagates errors cleanly.
+	styled := &stubOverlayStylePlugin{}
+	req := &pluginv1.OnOverlayStyleChangedRequest{
+		WidgetId:     "now_playing",
+		Values:       SetSettingString(nil, "accent_color", "#38BDF8"),
+		CustomCss:    ".card { opacity: 0.9; }",
+		UseHostTheme: true,
+	}
+	respStyled := dispatchEnvelope(styled, nil, &pluginv1.HostEnvelope{
+		RequestId: 8,
+		Payload:   &pluginv1.HostEnvelope_OnOverlayStyleChanged{OnOverlayStyleChanged: req},
+	})
+	require.True(t, respStyled.GetAck().GetOk())
+	require.NotNil(t, styled.got)
+	require.Equal(t, "now_playing", styled.got.GetWidgetId())
+	require.Equal(t, "#38BDF8", GetSettingString(styled.got.GetValues(), "accent_color", ""))
+	require.True(t, styled.got.GetUseHostTheme())
+
+	styled.err = &APIError{Code: pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, Message: "bad css"}
+	respErr := dispatchEnvelope(styled, nil, &pluginv1.HostEnvelope{
+		RequestId: 9,
+		Payload:   &pluginv1.HostEnvelope_OnOverlayStyleChanged{OnOverlayStyleChanged: req},
+	})
+	require.False(t, respErr.GetAck().GetOk())
+	require.Equal(t, "bad css", respErr.GetAck().GetError().GetMessage())
+}
+

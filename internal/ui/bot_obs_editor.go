@@ -381,7 +381,7 @@ func (e *obsSubActionEditor) rebuildFields() {
 			widget.NewButton("1.5×", func() { e.zoomFactorEntry.SetText("1.5") }),
 			widget.NewButton("0.8× (Out)", func() { e.zoomFactorEntry.SetText("0.8") }),
 		)
-		hint := widget.NewLabelWithStyle("Zooms centered around the source's current position. Run multiple times to enhance further, or use Reset Source Transform to restore.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
+		hint := widget.NewLabelWithStyle("Zooms centered around the source's current position. Run multiple times to enhance further, or use Reset Source Transform to restore. In OBS Studio Mode, uncheck Duplicate Scene (gear menu) for live zoom updates.", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 		hint.Wrapping = fyne.TextWrapWord
 		items = append(items,
 			widget.NewFormItem("Scene", e.sceneEntry),

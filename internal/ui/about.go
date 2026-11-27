@@ -25,7 +25,7 @@ import (
 var thirdPartyNotices string
 
 var (
-	AppVersion = "v0.1.1"
+	AppVersion = "v0.2.0"
 )
 
 const (

@@ -12,12 +12,12 @@ const (
 	// HostAPIMajor is the plugin protocol major version supported by this TownCrier build.
 	HostAPIMajor uint32 = 1
 	// HostAPIMinor is the plugin protocol minor version supported by this TownCrier build.
-	HostAPIMinor uint32 = 0
+	HostAPIMinor uint32 = 1
 	// HostAPIPatch is the plugin protocol patch version supported by this TownCrier build.
 	HostAPIPatch uint32 = 0
 )
 
-// SupportedCapabilities lists the capability identifiers provided by this TownCrier build (v1.0.0).
+// SupportedCapabilities lists the capability identifiers provided by this TownCrier build (v1.1.0).
 var SupportedCapabilities = []string{
 	"core.v1",
 	"events.v1",
@@ -27,6 +27,7 @@ var SupportedCapabilities = []string{
 	"overlay.v1",
 	"ui.v1",
 	"overlay.routes.v1",
+	"overlay.widgets.v1",
 	"bot.events.v1",
 	"bot.before_tts.v1",
 	"bot.chat.v1",
@@ -106,6 +107,22 @@ func CheckCapabilities(required []string) *pluginv1.APIError {
 	return nil
 }
 
+// isValidOverlayWidgetID reports whether id uses only ASCII letters, digits, hyphens, or underscores.
+func isValidOverlayWidgetID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		ch := id[i]
+		isLetter := (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+		isDigit := ch >= '0' && ch <= '9'
+		if !isLetter && !isDigit && ch != '-' && ch != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 // ValidateManifest checks manifest invariants and declared permission consistency.
 func ValidateManifest(manifest *pluginv1.Manifest) *pluginv1.APIError {
 	if manifest == nil {
@@ -119,6 +136,35 @@ func ValidateManifest(manifest *pluginv1.Manifest) *pluginv1.APIError {
 			Code:              pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED,
 			Message:           "Plugin declares declarative UI views without permissions.ui_views",
 			MissingCapability: "ui.v1",
+		}
+	}
+	if widgets := manifest.GetOverlayWidgets(); len(widgets) > 0 {
+		hasPerm := manifest.GetPermissions().GetOverlayBroadcast() ||
+			slices.Contains(manifest.GetRequiredCapabilities(), "overlay.routes.v1") ||
+			slices.Contains(manifest.GetRequiredCapabilities(), "overlay.widgets.v1")
+		if !hasPerm {
+			return &pluginv1.APIError{
+				Code:              pluginv1.ErrorCode_ERROR_CODE_PERMISSION_DENIED,
+				Message:           "Plugin declares overlay_widgets without overlay_broadcast permission or overlay.widgets.v1/overlay.routes.v1 capability",
+				MissingCapability: "overlay.widgets.v1",
+			}
+		}
+		seen := make(map[string]bool, len(widgets))
+		for _, w := range widgets {
+			id := strings.TrimSpace(w.GetId())
+			if !isValidOverlayWidgetID(id) || id != w.GetId() {
+				return &pluginv1.APIError{
+					Code:    pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+					Message: fmt.Sprintf("Plugin declares invalid overlay widget id %q (must match [A-Za-z0-9_-]+)", w.GetId()),
+				}
+			}
+			if seen[id] {
+				return &pluginv1.APIError{
+					Code:    pluginv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+					Message: fmt.Sprintf("Plugin declares duplicate overlay widget id %q", id),
+				}
+			}
+			seen[id] = true
 		}
 	}
 	return nil

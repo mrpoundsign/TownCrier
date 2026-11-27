@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
@@ -579,5 +580,58 @@ func TestDashboardViewOnScreenAnimatedEmoteGating(t *testing.T) {
 	dash.Close()
 	if cnt := cache.VisibleAnimatedCount(); cnt != 0 {
 		t.Fatalf("expected 0 visible animated emotes after DashboardView.Close(), got %d", cnt)
+	}
+}
+
+func TestEmoteMessageCellCheermoteBitCountAndAnimation(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+
+	gifBytes := buildTestAnimatedGIF(t, 8, 8,
+		[]color.RGBA{{R: 255, A: 255}, {G: 255, A: 255}},
+		[]int{5, 5},
+		[]byte{gif.DisposalNone, gif.DisposalNone},
+	)
+	const cheerURL = "https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/100/2.gif"
+	cache := NewEmoteCache(t.TempDir(), nil)
+	defer cache.Close()
+	cache.Put(cheerURL, fyne.NewStaticResource("cheer100.gif", gifBytes))
+
+	cell := newScaledEmoteMessageCell(cache, 1.0, nil)
+	cell.SetContent("twitch", "Hype Cheer100!", []chat.EmoteSpan{
+		{
+			Start: 5,
+			End:   13,
+			ID:    "cheermote:cheer",
+			Name:  "Cheer100",
+			URL:   cheerURL,
+			Bits:  100,
+			Color: "#9c3ee8",
+		},
+	}, "", "")
+
+	if len(cell.flowBox.Objects) != 3 {
+		t.Fatalf("expected 3 flow objects ('Hype', cheermote HBox, '!'), got %d", len(cell.flowBox.Objects))
+	}
+	cheerBox, ok := cell.flowBox.Objects[1].(*fyne.Container)
+	if !ok || len(cheerBox.Objects) != 2 {
+		t.Fatalf("expected cheermote container with 2 objects, got %T", cell.flowBox.Objects[1])
+	}
+	bitsText, ok := cheerBox.Objects[1].(*canvas.Text)
+	if !ok || bitsText.Text != "100" {
+		t.Fatalf("expected bits label '100', got %#v", cheerBox.Objects[1])
+	}
+	wantCol := color.NRGBA{R: 0x9c, G: 0x3e, B: 0xe8, A: 255}
+	if bitsText.Color != wantCol {
+		t.Fatalf("bits color = %+v, want %+v", bitsText.Color, wantCol)
+	}
+
+	cell.SetOnScreen(true)
+	if cnt := cache.VisibleAnimatedCount(); cnt != 1 {
+		t.Fatalf("expected animated cheermote inside container to register as visible (want 1, got %d)", cnt)
+	}
+	cell.SetOnScreen(false)
+	if cnt := cache.VisibleAnimatedCount(); cnt != 0 {
+		t.Fatalf("expected 0 visible animated emotes after SetOnScreen(false), got %d", cnt)
 	}
 }

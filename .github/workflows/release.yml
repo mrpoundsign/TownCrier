@@ -113,7 +113,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 zip \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 zip zstd \
             cmake ninja-build glslc libvulkan-dev spirv-headers \
             libgl1-mesa-dev xorg-dev libxcursor-dev libxrandr-dev \
             libxinerama-dev libxi-dev libxxf86vm-dev libasound2-dev \

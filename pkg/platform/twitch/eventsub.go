@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/mrpoundsign/TownCrier/pkg/chat"
@@ -87,6 +88,25 @@ type eventSubRedemptionEvent struct {
 	} `json:"reward"`
 }
 
+type eventSubMessageFragment struct {
+	Type  string `json:"type"`
+	Text  string `json:"text"`
+	Emote *struct {
+		ID     string   `json:"id"`
+		Format []string `json:"format,omitempty"`
+	} `json:"emote"`
+	Cheermote *struct {
+		Prefix string `json:"prefix"`
+		Bits   int    `json:"bits"`
+		Tier   int    `json:"tier"`
+	} `json:"cheermote"`
+	Mention *struct {
+		UserID    string `json:"user_id"`
+		UserLogin string `json:"user_login"`
+		UserName  string `json:"user_name"`
+	} `json:"mention"`
+}
+
 type eventSubChatNotificationEvent struct {
 	BroadcasterUserID    string `json:"broadcaster_user_id"`
 	BroadcasterUserLogin string `json:"broadcaster_user_login"`
@@ -99,7 +119,8 @@ type eventSubChatNotificationEvent struct {
 	SystemMessage        string `json:"system_message"`
 	NoticeType           string `json:"notice_type"`
 	Message              struct {
-		Text string `json:"text"`
+		Text      string                    `json:"text"`
+		Fragments []eventSubMessageFragment `json:"fragments"`
 	} `json:"message"`
 	Badges []struct {
 		SetID string `json:"set_id"`
@@ -186,19 +207,8 @@ type eventSubChatMessageEvent struct {
 	MessageType                 string `json:"message_type"`
 	ChannelPointsCustomRewardID string `json:"channel_points_custom_reward_id"`
 	Message                     struct {
-		Text      string `json:"text"`
-		Fragments []struct {
-			Type  string `json:"type"`
-			Text  string `json:"text"`
-			Emote *struct {
-				ID string `json:"id"`
-			} `json:"emote"`
-			Mention *struct {
-				UserID    string `json:"user_id"`
-				UserLogin string `json:"user_login"`
-				UserName  string `json:"user_name"`
-			} `json:"mention"`
-		} `json:"fragments"`
+		Text      string                    `json:"text"`
+		Fragments []eventSubMessageFragment `json:"fragments"`
 	} `json:"message"`
 	Reply *struct {
 		ParentMessageID   string `json:"parent_message_id"`
@@ -299,6 +309,10 @@ func ParseEventSubModeration(subType string, eventRaw json.RawMessage, fallbackC
 
 // ParseEventSubNotification parses a Twitch EventSub notification payload into a normalized chat.Event.
 func ParseEventSubNotification(subType string, msgID string, eventRaw json.RawMessage, fallbackChannel string) (*chat.Event, error) {
+	return parseEventSubNotificationWithCatalog(subType, msgID, eventRaw, fallbackChannel, nil)
+}
+
+func parseEventSubNotificationWithCatalog(subType string, msgID string, eventRaw json.RawMessage, fallbackChannel string, catalog *CheermoteCatalog) (*chat.Event, error) {
 	switch subType {
 	case "channel.follow":
 		var fe eventSubFollowEvent
@@ -386,16 +400,87 @@ func ParseEventSubNotification(subType string, msgID string, eventRaw json.RawMe
 		}, nil
 
 	case "channel.chat.notification":
-		return parseChatNotificationEvent(msgID, eventRaw, fallbackChannel)
+		return parseChatNotificationEvent(msgID, eventRaw, fallbackChannel, catalog)
 
 	case "channel.chat.message":
-		return parseChatMessageEvent(msgID, eventRaw, fallbackChannel)
+		return parseChatMessageEvent(msgID, eventRaw, fallbackChannel, catalog)
 	}
 
 	return nil, nil
 }
 
-func parseChatMessageEvent(msgID string, eventRaw json.RawMessage, fallbackChannel string) (*chat.Event, error) {
+func parseEventSubFragments(fragments []eventSubMessageFragment, catalog *CheermoteCatalog) ([]chat.EmoteSpan, []string) {
+	var emotes []chat.EmoteSpan
+	var mentions []string
+	runeOffset := 0
+
+	for _, frag := range fragments {
+		fragLen := utf8.RuneCountInString(frag.Text)
+		switch frag.Type {
+		case "emote":
+			if frag.Emote != nil && fragLen > 0 {
+				emID := strings.TrimSpace(frag.Emote.ID)
+				var imgURL string
+				if emID != "" {
+					imgURL = "https://static-cdn.jtvnw.net/emoticons/v2/" + emID + "/default/dark/1.0"
+				}
+				emotes = append(emotes, chat.EmoteSpan{
+					Start: runeOffset,
+					End:   runeOffset + fragLen,
+					ID:    emID,
+					Name:  frag.Text,
+					URL:   imgURL,
+				})
+			}
+		case "cheermote":
+			if frag.Cheermote != nil && fragLen > 0 {
+				prefix := strings.TrimSpace(frag.Cheermote.Prefix)
+				bits := frag.Cheermote.Bits
+				if prefix == "" && frag.Text != "" {
+					if p, b, ok := splitCheermoteToken(strings.TrimSpace(frag.Text)); ok {
+						prefix = p
+						if bits <= 0 {
+							bits = b
+						}
+					}
+				}
+				if bits > 0 {
+					imgURL, col, ok := catalog.Resolve(prefix, bits)
+					if !ok {
+						imgURL, col, _ = catalog.Resolve("cheer", bits)
+					}
+					if prefix == "" {
+						prefix = "cheer"
+					}
+					emotes = append(emotes, chat.EmoteSpan{
+						Start: runeOffset,
+						End:   runeOffset + fragLen,
+						ID:    "cheermote:" + strings.ToLower(prefix),
+						Name:  frag.Text,
+						URL:   imgURL,
+						Bits:  bits,
+						Color: col,
+					})
+				}
+			}
+		case "mention":
+			if frag.Mention != nil {
+				mLogin := strings.TrimSpace(frag.Mention.UserLogin)
+				if mLogin == "" {
+					mLogin = strings.TrimSpace(frag.Mention.UserName)
+				}
+				if mLogin != "" {
+					mentions = append(mentions, mLogin)
+				}
+			}
+		}
+		runeOffset += fragLen
+	}
+
+	return emotes, mentions
+}
+
+func parseChatMessageEvent(msgID string, eventRaw json.RawMessage, fallbackChannel string, catalog *CheermoteCatalog) (*chat.Event, error) {
 	var me eventSubChatMessageEvent
 	if err := json.Unmarshal(eventRaw, &me); err != nil {
 		return nil, fmt.Errorf("unmarshal channel.chat.message event: %w", err)
@@ -440,7 +525,7 @@ func parseChatMessageEvent(msgID string, eventRaw json.RawMessage, fallbackChann
 		roles = append(roles, "broadcaster")
 	}
 
-	var emotes []chat.EmoteSpan
+	emotes, fragMentions := parseEventSubFragments(me.Message.Fragments, catalog)
 	var mentions []string
 	seenMentions := make(map[string]struct{})
 	addMention := func(u string) {
@@ -454,31 +539,8 @@ func parseChatMessageEvent(msgID string, eventRaw json.RawMessage, fallbackChann
 			mentions = append(mentions, u)
 		}
 	}
-
-	runeOffset := 0
-	for _, frag := range me.Message.Fragments {
-		fragLen := utf8.RuneCountInString(frag.Text)
-		if frag.Type == "emote" && frag.Emote != nil && fragLen > 0 {
-			emID := strings.TrimSpace(frag.Emote.ID)
-			var imgURL string
-			if emID != "" {
-				imgURL = "https://static-cdn.jtvnw.net/emoticons/v2/" + emID + "/default/dark/1.0"
-			}
-			emotes = append(emotes, chat.EmoteSpan{
-				Start: runeOffset,
-				End:   runeOffset + fragLen,
-				ID:    emID,
-				Name:  frag.Text,
-				URL:   imgURL,
-			})
-		} else if frag.Type == "mention" && frag.Mention != nil {
-			mLogin := strings.TrimSpace(frag.Mention.UserLogin)
-			if mLogin == "" {
-				mLogin = strings.TrimSpace(frag.Mention.UserName)
-			}
-			addMention(mLogin)
-		}
-		runeOffset += fragLen
+	for _, m := range fragMentions {
+		addMention(m)
 	}
 	for _, m := range chat.ExtractMentions(me.Message.Text) {
 		addMention(m)
@@ -554,7 +616,7 @@ func parseChatMessageEvent(msgID string, eventRaw json.RawMessage, fallbackChann
 	}, nil
 }
 
-func parseChatNotificationEvent(msgID string, eventRaw json.RawMessage, fallbackChannel string) (*chat.Event, error) {
+func parseChatNotificationEvent(msgID string, eventRaw json.RawMessage, fallbackChannel string, catalog *CheermoteCatalog) (*chat.Event, error) {
 	var ce eventSubChatNotificationEvent
 	if err := json.Unmarshal(eventRaw, &ce); err != nil {
 		return nil, fmt.Errorf("unmarshal channel.chat.notification event: %w", err)
@@ -588,9 +650,26 @@ func parseChatNotificationEvent(msgID string, eventRaw json.RawMessage, fallback
 		}
 	}
 
+	rawMsgText := ce.Message.Text
+	trimmedText := strings.TrimSpace(rawMsgText)
+	emotes, _ := parseEventSubFragments(ce.Message.Fragments, catalog)
+	if len(emotes) > 0 {
+		leadTrimmed := utf8.RuneCountInString(rawMsgText) - utf8.RuneCountInString(strings.TrimLeftFunc(rawMsgText, unicode.IsSpace))
+		textRuneLen := utf8.RuneCountInString(trimmedText)
+		adjusted := emotes[:0]
+		for _, sp := range emotes {
+			sp.Start -= leadTrimmed
+			sp.End -= leadTrimmed
+			if sp.Start >= 0 && sp.End <= textRuneLen && sp.Start < sp.End {
+				adjusted = append(adjusted, sp)
+			}
+		}
+		emotes = adjusted
+	}
+
 	var (
 		kind        chat.EventKind
-		text        = strings.TrimSpace(ce.Message.Text)
+		text        = trimmedText
 		months      int
 		count       int
 		amount      float64
@@ -651,6 +730,7 @@ func parseChatNotificationEvent(msgID string, eventRaw json.RawMessage, fallback
 		}
 		if recipient != "" {
 			text = "gifted a subscription to " + recipient
+			emotes = nil
 		}
 	case "community_sub_gift":
 		kind = chat.EventKindGiftSub
@@ -662,6 +742,7 @@ func parseChatNotificationEvent(msgID string, eventRaw json.RawMessage, fallback
 			subTier = formatTwitchSubPlan(ce.CommunitySubGift.SubTier)
 		}
 		text = fmt.Sprintf("gifted %d community subscriptions!", count)
+		emotes = nil
 	case "prime_paid_upgrade":
 		kind = chat.EventKindSubUpgrade
 		count = 1
@@ -716,6 +797,7 @@ func parseChatNotificationEvent(msgID string, eventRaw json.RawMessage, fallback
 			count = ce.Raid.ViewerCount
 		}
 		text = fmt.Sprintf("raided with %d viewers!", count)
+		emotes = nil
 	case "bits_badge_tier":
 		kind = chat.EventKindBitsBadgeTier
 		if ce.BitsBadgeTier != nil {
@@ -771,6 +853,7 @@ func parseChatNotificationEvent(msgID string, eventRaw json.RawMessage, fallback
 		DisplayName: displayName,
 		Roles:       roles,
 		Text:        text,
+		EmoteSpans:  emotes,
 		Amount:      amount,
 		Currency:    currency,
 		ItemName:    itemName,
@@ -1021,6 +1104,7 @@ func (c *Connector) connectAndStreamEventSub(ctx context.Context, wsURL string, 
 	if err != nil {
 		return "", fmt.Errorf("resolve user IDs: %w", err)
 	}
+	go c.fetchCheermotes(ctx, token, broadcasterID)
 
 	wsCfg, err := websocket.NewConfig(wsURL, "https://www.twitch.tv")
 	if err != nil {
@@ -1202,7 +1286,7 @@ func (c *Connector) connectAndStreamEventSub(ctx context.Context, wsURL string, 
 				}
 				continue
 			}
-			ev, err := ParseEventSubNotification(subType, env.Metadata.MessageID, notif.Event, channel)
+			ev, err := parseEventSubNotificationWithCatalog(subType, env.Metadata.MessageID, notif.Event, channel, c.cheermoteCatalog())
 			if err != nil {
 				log.Printf("[Twitch EventSub] Error parsing %s notification: %v", subType, err)
 				continue

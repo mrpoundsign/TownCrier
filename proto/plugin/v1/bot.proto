@@ -313,3 +313,11 @@ message ActionVisualState {
   int32 progress_percent = 9;
   string feedback_value = 10;
 }
+
+// OnOverlayStyleChangedRequest notifies a plugin that a widget's overlay style changed in the Designer.
+message OnOverlayStyleChangedRequest {
+  string widget_id = 1;
+  SettingsMap values = 2;
+  string custom_css = 3;
+  bool use_host_theme = 4;
+}

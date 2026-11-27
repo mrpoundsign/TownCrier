@@ -727,6 +727,9 @@ type SettingField struct {
 	Options        []*SelectOption        `protobuf:"bytes,8,rep,name=options,proto3" json:"options,omitempty"`
 	FileExtensions []string               `protobuf:"bytes,9,rep,name=file_extensions,json=fileExtensions,proto3" json:"file_extensions,omitempty"`
 	Required       bool                   `protobuf:"varint,10,opt,name=required,proto3" json:"required,omitempty"`
+	MinValue       float64                `protobuf:"fixed64,11,opt,name=min_value,json=minValue,proto3" json:"min_value,omitempty"`
+	MaxValue       float64                `protobuf:"fixed64,12,opt,name=max_value,json=maxValue,proto3" json:"max_value,omitempty"`
+	Step           float64                `protobuf:"fixed64,13,opt,name=step,proto3" json:"step,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -829,6 +832,27 @@ func (x *SettingField) GetRequired() bool {
 		return x.Required
 	}
 	return false
+}
+
+func (x *SettingField) GetMinValue() float64 {
+	if x != nil {
+		return x.MinValue
+	}
+	return 0
+}
+
+func (x *SettingField) GetMaxValue() float64 {
+	if x != nil {
+		return x.MaxValue
+	}
+	return 0
+}
+
+func (x *SettingField) GetStep() float64 {
+	if x != nil {
+		return x.Step
+	}
+	return 0
 }
 
 // ActionDescriptor describes an automatable action exposed by a plugin.
@@ -1155,33 +1179,192 @@ func (x *ViewDescriptor) GetPlacement() ViewPlacement {
 	return ViewPlacement_VIEW_PLACEMENT_UNSPECIFIED
 }
 
+// OverlayWidgetDescriptor declares an OBS Browser Source widget exposed by a plugin
+// for unified canvas placement (/overlay) and live style editing (/overlay/designer).
+type OverlayWidgetDescriptor struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name              string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Description       string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	IconName          string                 `protobuf:"bytes,4,opt,name=icon_name,json=iconName,proto3" json:"icon_name,omitempty"`
+	EntryAsset        string                 `protobuf:"bytes,5,opt,name=entry_asset,json=entryAsset,proto3" json:"entry_asset,omitempty"`
+	DefaultX          float64                `protobuf:"fixed64,6,opt,name=default_x,json=defaultX,proto3" json:"default_x,omitempty"`
+	DefaultY          float64                `protobuf:"fixed64,7,opt,name=default_y,json=defaultY,proto3" json:"default_y,omitempty"`
+	DefaultW          float64                `protobuf:"fixed64,8,opt,name=default_w,json=defaultW,proto3" json:"default_w,omitempty"`
+	DefaultH          float64                `protobuf:"fixed64,9,opt,name=default_h,json=defaultH,proto3" json:"default_h,omitempty"`
+	MinW              float64                `protobuf:"fixed64,10,opt,name=min_w,json=minW,proto3" json:"min_w,omitempty"`
+	MinH              float64                `protobuf:"fixed64,11,opt,name=min_h,json=minH,proto3" json:"min_h,omitempty"`
+	DefaultHidden     bool                   `protobuf:"varint,12,opt,name=default_hidden,json=defaultHidden,proto3" json:"default_hidden,omitempty"`
+	SupportsHostTheme bool                   `protobuf:"varint,13,opt,name=supports_host_theme,json=supportsHostTheme,proto3" json:"supports_host_theme,omitempty"`
+	StyleSchema       []*SettingField        `protobuf:"bytes,14,rep,name=style_schema,json=styleSchema,proto3" json:"style_schema,omitempty"`
+	DisableCustomCss  bool                   `protobuf:"varint,15,opt,name=disable_custom_css,json=disableCustomCss,proto3" json:"disable_custom_css,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *OverlayWidgetDescriptor) Reset() {
+	*x = OverlayWidgetDescriptor{}
+	mi := &file_plugin_v1_manifest_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OverlayWidgetDescriptor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OverlayWidgetDescriptor) ProtoMessage() {}
+
+func (x *OverlayWidgetDescriptor) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_manifest_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OverlayWidgetDescriptor.ProtoReflect.Descriptor instead.
+func (*OverlayWidgetDescriptor) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_manifest_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *OverlayWidgetDescriptor) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *OverlayWidgetDescriptor) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *OverlayWidgetDescriptor) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *OverlayWidgetDescriptor) GetIconName() string {
+	if x != nil {
+		return x.IconName
+	}
+	return ""
+}
+
+func (x *OverlayWidgetDescriptor) GetEntryAsset() string {
+	if x != nil {
+		return x.EntryAsset
+	}
+	return ""
+}
+
+func (x *OverlayWidgetDescriptor) GetDefaultX() float64 {
+	if x != nil {
+		return x.DefaultX
+	}
+	return 0
+}
+
+func (x *OverlayWidgetDescriptor) GetDefaultY() float64 {
+	if x != nil {
+		return x.DefaultY
+	}
+	return 0
+}
+
+func (x *OverlayWidgetDescriptor) GetDefaultW() float64 {
+	if x != nil {
+		return x.DefaultW
+	}
+	return 0
+}
+
+func (x *OverlayWidgetDescriptor) GetDefaultH() float64 {
+	if x != nil {
+		return x.DefaultH
+	}
+	return 0
+}
+
+func (x *OverlayWidgetDescriptor) GetMinW() float64 {
+	if x != nil {
+		return x.MinW
+	}
+	return 0
+}
+
+func (x *OverlayWidgetDescriptor) GetMinH() float64 {
+	if x != nil {
+		return x.MinH
+	}
+	return 0
+}
+
+func (x *OverlayWidgetDescriptor) GetDefaultHidden() bool {
+	if x != nil {
+		return x.DefaultHidden
+	}
+	return false
+}
+
+func (x *OverlayWidgetDescriptor) GetSupportsHostTheme() bool {
+	if x != nil {
+		return x.SupportsHostTheme
+	}
+	return false
+}
+
+func (x *OverlayWidgetDescriptor) GetStyleSchema() []*SettingField {
+	if x != nil {
+		return x.StyleSchema
+	}
+	return nil
+}
+
+func (x *OverlayWidgetDescriptor) GetDisableCustomCss() bool {
+	if x != nil {
+		return x.DisableCustomCss
+	}
+	return false
+}
+
 // Manifest declares plugin metadata, API requirements, permissions, and extensions.
 type Manifest struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	Uuid                 string                 `protobuf:"bytes,1,opt,name=uuid,proto3" json:"uuid,omitempty"`
-	Name                 string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Version              string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
-	Author               string                 `protobuf:"bytes,4,opt,name=author,proto3" json:"author,omitempty"`
-	Description          string                 `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
-	IconPng              []byte                 `protobuf:"bytes,6,opt,name=icon_png,json=iconPng,proto3" json:"icon_png,omitempty"`
-	IconSvg              string                 `protobuf:"bytes,7,opt,name=icon_svg,json=iconSvg,proto3" json:"icon_svg,omitempty"`
-	ApiVersion           *ProtocolVersion       `protobuf:"bytes,8,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
-	RequiredCapabilities []string               `protobuf:"bytes,9,rep,name=required_capabilities,json=requiredCapabilities,proto3" json:"required_capabilities,omitempty"`
-	SubscribedEvents     []string               `protobuf:"bytes,10,rep,name=subscribed_events,json=subscribedEvents,proto3" json:"subscribed_events,omitempty"`
-	Permissions          *Permissions           `protobuf:"bytes,11,opt,name=permissions,proto3" json:"permissions,omitempty"`
-	MaxMemoryMb          uint32                 `protobuf:"varint,12,opt,name=max_memory_mb,json=maxMemoryMb,proto3" json:"max_memory_mb,omitempty"`
-	GlobalSettingsSchema []*SettingField        `protobuf:"bytes,13,rep,name=global_settings_schema,json=globalSettingsSchema,proto3" json:"global_settings_schema,omitempty"`
-	Actions              []*ActionDescriptor    `protobuf:"bytes,14,rep,name=actions,proto3" json:"actions,omitempty"`
-	Triggers             []*TriggerDescriptor   `protobuf:"bytes,15,rep,name=triggers,proto3" json:"triggers,omitempty"`
-	Commands             []*CommandDescriptor   `protobuf:"bytes,16,rep,name=commands,proto3" json:"commands,omitempty"`
-	Views                []*ViewDescriptor      `protobuf:"bytes,17,rep,name=views,proto3" json:"views,omitempty"`
+	state                protoimpl.MessageState     `protogen:"open.v1"`
+	Uuid                 string                     `protobuf:"bytes,1,opt,name=uuid,proto3" json:"uuid,omitempty"`
+	Name                 string                     `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Version              string                     `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	Author               string                     `protobuf:"bytes,4,opt,name=author,proto3" json:"author,omitempty"`
+	Description          string                     `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
+	IconPng              []byte                     `protobuf:"bytes,6,opt,name=icon_png,json=iconPng,proto3" json:"icon_png,omitempty"`
+	IconSvg              string                     `protobuf:"bytes,7,opt,name=icon_svg,json=iconSvg,proto3" json:"icon_svg,omitempty"`
+	ApiVersion           *ProtocolVersion           `protobuf:"bytes,8,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
+	RequiredCapabilities []string                   `protobuf:"bytes,9,rep,name=required_capabilities,json=requiredCapabilities,proto3" json:"required_capabilities,omitempty"`
+	SubscribedEvents     []string                   `protobuf:"bytes,10,rep,name=subscribed_events,json=subscribedEvents,proto3" json:"subscribed_events,omitempty"`
+	Permissions          *Permissions               `protobuf:"bytes,11,opt,name=permissions,proto3" json:"permissions,omitempty"`
+	MaxMemoryMb          uint32                     `protobuf:"varint,12,opt,name=max_memory_mb,json=maxMemoryMb,proto3" json:"max_memory_mb,omitempty"`
+	GlobalSettingsSchema []*SettingField            `protobuf:"bytes,13,rep,name=global_settings_schema,json=globalSettingsSchema,proto3" json:"global_settings_schema,omitempty"`
+	Actions              []*ActionDescriptor        `protobuf:"bytes,14,rep,name=actions,proto3" json:"actions,omitempty"`
+	Triggers             []*TriggerDescriptor       `protobuf:"bytes,15,rep,name=triggers,proto3" json:"triggers,omitempty"`
+	Commands             []*CommandDescriptor       `protobuf:"bytes,16,rep,name=commands,proto3" json:"commands,omitempty"`
+	Views                []*ViewDescriptor          `protobuf:"bytes,17,rep,name=views,proto3" json:"views,omitempty"`
+	OverlayWidgets       []*OverlayWidgetDescriptor `protobuf:"bytes,18,rep,name=overlay_widgets,json=overlayWidgets,proto3" json:"overlay_widgets,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
 
 func (x *Manifest) Reset() {
 	*x = Manifest{}
-	mi := &file_plugin_v1_manifest_proto_msgTypes[12]
+	mi := &file_plugin_v1_manifest_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1193,7 +1376,7 @@ func (x *Manifest) String() string {
 func (*Manifest) ProtoMessage() {}
 
 func (x *Manifest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_v1_manifest_proto_msgTypes[12]
+	mi := &file_plugin_v1_manifest_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1206,7 +1389,7 @@ func (x *Manifest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Manifest.ProtoReflect.Descriptor instead.
 func (*Manifest) Descriptor() ([]byte, []int) {
-	return file_plugin_v1_manifest_proto_rawDescGZIP(), []int{12}
+	return file_plugin_v1_manifest_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Manifest) GetUuid() string {
@@ -1328,6 +1511,13 @@ func (x *Manifest) GetViews() []*ViewDescriptor {
 	return nil
 }
 
+func (x *Manifest) GetOverlayWidgets() []*OverlayWidgetDescriptor {
+	if x != nil {
+		return x.OverlayWidgets
+	}
+	return nil
+}
+
 var File_plugin_v1_manifest_proto protoreflect.FileDescriptor
 
 const file_plugin_v1_manifest_proto_rawDesc = "" +
@@ -1373,7 +1563,7 @@ const file_plugin_v1_manifest_proto_rawDesc = "" +
 	"\x06values\x18\x01 \x03(\v2,.towncrier.plugin.v1.SettingsMap.ValuesEntryR\x06values\x1a\\\n" +
 	"\vValuesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x127\n" +
-	"\x05value\x18\x02 \x01(\v2!.towncrier.plugin.v1.SettingValueR\x05value:\x028\x01\"\x8b\x03\n" +
+	"\x05value\x18\x02 \x01(\v2!.towncrier.plugin.v1.SettingValueR\x05value:\x028\x01\"\xd9\x03\n" +
 	"\fSettingField\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x129\n" +
@@ -1385,7 +1575,10 @@ const file_plugin_v1_manifest_proto_rawDesc = "" +
 	"\aoptions\x18\b \x03(\v2!.towncrier.plugin.v1.SelectOptionR\aoptions\x12'\n" +
 	"\x0ffile_extensions\x18\t \x03(\tR\x0efileExtensions\x12\x1a\n" +
 	"\brequired\x18\n" +
-	" \x01(\bR\brequired\"\xec\x02\n" +
+	" \x01(\bR\brequired\x12\x1b\n" +
+	"\tmin_value\x18\v \x01(\x01R\bminValue\x12\x1b\n" +
+	"\tmax_value\x18\f \x01(\x01R\bmaxValue\x12\x12\n" +
+	"\x04step\x18\r \x01(\x01R\x04step\"\xec\x02\n" +
 	"\x10ActionDescriptor\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
@@ -1414,7 +1607,25 @@ const file_plugin_v1_manifest_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x1b\n" +
 	"\ticon_name\x18\x03 \x01(\tR\biconName\x12@\n" +
-	"\tplacement\x18\x04 \x01(\x0e2\".towncrier.plugin.v1.ViewPlacementR\tplacement\"\xaa\x06\n" +
+	"\tplacement\x18\x04 \x01(\x0e2\".towncrier.plugin.v1.ViewPlacementR\tplacement\"\x86\x04\n" +
+	"\x17OverlayWidgetDescriptor\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1b\n" +
+	"\ticon_name\x18\x04 \x01(\tR\biconName\x12\x1f\n" +
+	"\ventry_asset\x18\x05 \x01(\tR\n" +
+	"entryAsset\x12\x1b\n" +
+	"\tdefault_x\x18\x06 \x01(\x01R\bdefaultX\x12\x1b\n" +
+	"\tdefault_y\x18\a \x01(\x01R\bdefaultY\x12\x1b\n" +
+	"\tdefault_w\x18\b \x01(\x01R\bdefaultW\x12\x1b\n" +
+	"\tdefault_h\x18\t \x01(\x01R\bdefaultH\x12\x13\n" +
+	"\x05min_w\x18\n" +
+	" \x01(\x01R\x04minW\x12\x13\n" +
+	"\x05min_h\x18\v \x01(\x01R\x04minH\x12%\n" +
+	"\x0edefault_hidden\x18\f \x01(\bR\rdefaultHidden\x12.\n" +
+	"\x13supports_host_theme\x18\r \x01(\bR\x11supportsHostTheme\x12D\n" +
+	"\fstyle_schema\x18\x0e \x03(\v2!.towncrier.plugin.v1.SettingFieldR\vstyleSchema\x12,\n" +
+	"\x12disable_custom_css\x18\x0f \x01(\bR\x10disableCustomCss\"\x81\a\n" +
 	"\bManifest\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
@@ -1434,7 +1645,8 @@ const file_plugin_v1_manifest_proto_rawDesc = "" +
 	"\aactions\x18\x0e \x03(\v2%.towncrier.plugin.v1.ActionDescriptorR\aactions\x12B\n" +
 	"\btriggers\x18\x0f \x03(\v2&.towncrier.plugin.v1.TriggerDescriptorR\btriggers\x12B\n" +
 	"\bcommands\x18\x10 \x03(\v2&.towncrier.plugin.v1.CommandDescriptorR\bcommands\x129\n" +
-	"\x05views\x18\x11 \x03(\v2#.towncrier.plugin.v1.ViewDescriptorR\x05views*[\n" +
+	"\x05views\x18\x11 \x03(\v2#.towncrier.plugin.v1.ViewDescriptorR\x05views\x12U\n" +
+	"\x0foverlay_widgets\x18\x12 \x03(\v2,.towncrier.plugin.v1.OverlayWidgetDescriptorR\x0eoverlayWidgets*[\n" +
 	"\vRuntimeKind\x12\x1c\n" +
 	"\x18RUNTIME_KIND_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11RUNTIME_KIND_WASM\x10\x01\x12\x17\n" +
@@ -1472,50 +1684,53 @@ func file_plugin_v1_manifest_proto_rawDescGZIP() []byte {
 }
 
 var file_plugin_v1_manifest_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_plugin_v1_manifest_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_plugin_v1_manifest_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_plugin_v1_manifest_proto_goTypes = []any{
-	(RuntimeKind)(0),          // 0: towncrier.plugin.v1.RuntimeKind
-	(SettingFieldType)(0),     // 1: towncrier.plugin.v1.SettingFieldType
-	(ViewPlacement)(0),        // 2: towncrier.plugin.v1.ViewPlacement
-	(*Permissions)(nil),       // 3: towncrier.plugin.v1.Permissions
-	(*SelectOption)(nil),      // 4: towncrier.plugin.v1.SelectOption
-	(*InfoValue)(nil),         // 5: towncrier.plugin.v1.InfoValue
-	(*LinkValue)(nil),         // 6: towncrier.plugin.v1.LinkValue
-	(*ButtonValue)(nil),       // 7: towncrier.plugin.v1.ButtonValue
-	(*SettingValue)(nil),      // 8: towncrier.plugin.v1.SettingValue
-	(*SettingsMap)(nil),       // 9: towncrier.plugin.v1.SettingsMap
-	(*SettingField)(nil),      // 10: towncrier.plugin.v1.SettingField
-	(*ActionDescriptor)(nil),  // 11: towncrier.plugin.v1.ActionDescriptor
-	(*TriggerDescriptor)(nil), // 12: towncrier.plugin.v1.TriggerDescriptor
-	(*CommandDescriptor)(nil), // 13: towncrier.plugin.v1.CommandDescriptor
-	(*ViewDescriptor)(nil),    // 14: towncrier.plugin.v1.ViewDescriptor
-	(*Manifest)(nil),          // 15: towncrier.plugin.v1.Manifest
-	nil,                       // 16: towncrier.plugin.v1.SettingsMap.ValuesEntry
-	(*ProtocolVersion)(nil),   // 17: towncrier.plugin.v1.ProtocolVersion
+	(RuntimeKind)(0),                // 0: towncrier.plugin.v1.RuntimeKind
+	(SettingFieldType)(0),           // 1: towncrier.plugin.v1.SettingFieldType
+	(ViewPlacement)(0),              // 2: towncrier.plugin.v1.ViewPlacement
+	(*Permissions)(nil),             // 3: towncrier.plugin.v1.Permissions
+	(*SelectOption)(nil),            // 4: towncrier.plugin.v1.SelectOption
+	(*InfoValue)(nil),               // 5: towncrier.plugin.v1.InfoValue
+	(*LinkValue)(nil),               // 6: towncrier.plugin.v1.LinkValue
+	(*ButtonValue)(nil),             // 7: towncrier.plugin.v1.ButtonValue
+	(*SettingValue)(nil),            // 8: towncrier.plugin.v1.SettingValue
+	(*SettingsMap)(nil),             // 9: towncrier.plugin.v1.SettingsMap
+	(*SettingField)(nil),            // 10: towncrier.plugin.v1.SettingField
+	(*ActionDescriptor)(nil),        // 11: towncrier.plugin.v1.ActionDescriptor
+	(*TriggerDescriptor)(nil),       // 12: towncrier.plugin.v1.TriggerDescriptor
+	(*CommandDescriptor)(nil),       // 13: towncrier.plugin.v1.CommandDescriptor
+	(*ViewDescriptor)(nil),          // 14: towncrier.plugin.v1.ViewDescriptor
+	(*OverlayWidgetDescriptor)(nil), // 15: towncrier.plugin.v1.OverlayWidgetDescriptor
+	(*Manifest)(nil),                // 16: towncrier.plugin.v1.Manifest
+	nil,                             // 17: towncrier.plugin.v1.SettingsMap.ValuesEntry
+	(*ProtocolVersion)(nil),         // 18: towncrier.plugin.v1.ProtocolVersion
 }
 var file_plugin_v1_manifest_proto_depIdxs = []int32{
 	5,  // 0: towncrier.plugin.v1.SettingValue.info_val:type_name -> towncrier.plugin.v1.InfoValue
 	6,  // 1: towncrier.plugin.v1.SettingValue.link_val:type_name -> towncrier.plugin.v1.LinkValue
 	7,  // 2: towncrier.plugin.v1.SettingValue.button_val:type_name -> towncrier.plugin.v1.ButtonValue
-	16, // 3: towncrier.plugin.v1.SettingsMap.values:type_name -> towncrier.plugin.v1.SettingsMap.ValuesEntry
+	17, // 3: towncrier.plugin.v1.SettingsMap.values:type_name -> towncrier.plugin.v1.SettingsMap.ValuesEntry
 	1,  // 4: towncrier.plugin.v1.SettingField.type:type_name -> towncrier.plugin.v1.SettingFieldType
 	8,  // 5: towncrier.plugin.v1.SettingField.default_value:type_name -> towncrier.plugin.v1.SettingValue
 	4,  // 6: towncrier.plugin.v1.SettingField.options:type_name -> towncrier.plugin.v1.SelectOption
 	10, // 7: towncrier.plugin.v1.ActionDescriptor.params_schema:type_name -> towncrier.plugin.v1.SettingField
 	2,  // 8: towncrier.plugin.v1.ViewDescriptor.placement:type_name -> towncrier.plugin.v1.ViewPlacement
-	17, // 9: towncrier.plugin.v1.Manifest.api_version:type_name -> towncrier.plugin.v1.ProtocolVersion
-	3,  // 10: towncrier.plugin.v1.Manifest.permissions:type_name -> towncrier.plugin.v1.Permissions
-	10, // 11: towncrier.plugin.v1.Manifest.global_settings_schema:type_name -> towncrier.plugin.v1.SettingField
-	11, // 12: towncrier.plugin.v1.Manifest.actions:type_name -> towncrier.plugin.v1.ActionDescriptor
-	12, // 13: towncrier.plugin.v1.Manifest.triggers:type_name -> towncrier.plugin.v1.TriggerDescriptor
-	13, // 14: towncrier.plugin.v1.Manifest.commands:type_name -> towncrier.plugin.v1.CommandDescriptor
-	14, // 15: towncrier.plugin.v1.Manifest.views:type_name -> towncrier.plugin.v1.ViewDescriptor
-	8,  // 16: towncrier.plugin.v1.SettingsMap.ValuesEntry.value:type_name -> towncrier.plugin.v1.SettingValue
-	17, // [17:17] is the sub-list for method output_type
-	17, // [17:17] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	10, // 9: towncrier.plugin.v1.OverlayWidgetDescriptor.style_schema:type_name -> towncrier.plugin.v1.SettingField
+	18, // 10: towncrier.plugin.v1.Manifest.api_version:type_name -> towncrier.plugin.v1.ProtocolVersion
+	3,  // 11: towncrier.plugin.v1.Manifest.permissions:type_name -> towncrier.plugin.v1.Permissions
+	10, // 12: towncrier.plugin.v1.Manifest.global_settings_schema:type_name -> towncrier.plugin.v1.SettingField
+	11, // 13: towncrier.plugin.v1.Manifest.actions:type_name -> towncrier.plugin.v1.ActionDescriptor
+	12, // 14: towncrier.plugin.v1.Manifest.triggers:type_name -> towncrier.plugin.v1.TriggerDescriptor
+	13, // 15: towncrier.plugin.v1.Manifest.commands:type_name -> towncrier.plugin.v1.CommandDescriptor
+	14, // 16: towncrier.plugin.v1.Manifest.views:type_name -> towncrier.plugin.v1.ViewDescriptor
+	15, // 17: towncrier.plugin.v1.Manifest.overlay_widgets:type_name -> towncrier.plugin.v1.OverlayWidgetDescriptor
+	8,  // 18: towncrier.plugin.v1.SettingsMap.ValuesEntry.value:type_name -> towncrier.plugin.v1.SettingValue
+	19, // [19:19] is the sub-list for method output_type
+	19, // [19:19] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_plugin_v1_manifest_proto_init() }
@@ -1538,7 +1753,7 @@ func file_plugin_v1_manifest_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plugin_v1_manifest_proto_rawDesc), len(file_plugin_v1_manifest_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
