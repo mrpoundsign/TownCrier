@@ -261,23 +261,64 @@ build_wasm() {
     echo "✓ Built $BIN_DIR/poundcontrol-towncrier.wasm"
 }
 
+generate_winres_syso() {
+    local out_prefix="$1"
+    local product_name="$2"
+    local description="$3"
+    local orig_filename="$4"
+    local icon_path="$ROOT_DIR/assets/icon.png"
+    if [ ! -f "$icon_path" ]; then
+        return 0
+    fi
+    local ver="${VERSION:-0.1.0}"
+    ver="${ver#v}"
+    local file_ver="${ver%%-*}"
+    go tool go-winres simply \
+        --arch amd64 \
+        --out "$out_prefix" \
+        --icon "$icon_path" \
+        --manifest gui \
+        --product-name "$product_name" \
+        --file-description "$description" \
+        --product-version "$ver" \
+        --file-version "$file_ver" \
+        --original-filename "$orig_filename"
+}
+
+clean_payload_dir() {
+    local dir="$1"
+    mkdir -p "$dir"
+    find "$dir" -mindepth 1 ! -name 'placeholder.txt' -exec rm -rf {} + 2>/dev/null || true
+    touch "$dir/placeholder.txt"
+}
+
+pack_payload() {
+    local stage_dir="$1"
+    local target_dir="$2"
+    clean_payload_dir "$target_dir"
+    go run github.com/mrpoundsign/appinstaller/cmd/packpayload \
+        -src "$stage_dir" \
+        -out "$target_dir/payload.tar.zst"
+}
+
 build_win() {
     fetch_dlls
     bash "$ROOT_DIR/scripts/build-whisper-vulkan.sh" win
     build_wasm
 
+    local payload_dir="$ROOT_DIR/cmd/launcher/payload"
+    local inst_payload_dir="$ROOT_DIR/cmd/installer/payload"
+    local launcher_stage="$BUILD_DIR/launcher_payload_stage_win"
+    local inst_stage="$BUILD_DIR/installer_payload_stage_win"
     local core_syso="$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso"
     local launcher_syso="$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso"
     local installer_syso="$ROOT_DIR/cmd/installer/rsrc_windows_amd64.syso"
-    if command -v x86_64-w64-mingw32-windres &>/dev/null && [ -f "$ROOT_DIR/assets/icon.ico" ]; then
-        echo "==> Compiling Windows icon resources (.syso)..."
-        local rc_file="$BUILD_DIR/icon.rc"
-        echo 'IDI_ICON1 ICON "../assets/icon.ico"' > "$rc_file"
-        (cd "$BUILD_DIR" && x86_64-w64-mingw32-windres icon.rc -O coff -o "$core_syso")
-        cp -f "$core_syso" "$launcher_syso"
-        cp -f "$core_syso" "$installer_syso"
-        rm -f "$rc_file"
-    fi
+    trap 'rm -rf "$BUILD_DIR/launcher_payload_stage_win" "$BUILD_DIR/installer_payload_stage_win"; clean_payload_dir "$ROOT_DIR/cmd/launcher/payload"; clean_payload_dir "$ROOT_DIR/cmd/installer/payload"; rm -f "$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/installer/rsrc_windows_amd64.syso"' RETURN
+
+    echo "==> Generating Windows icon, DPI manifest, and version resources (.syso)..."
+    generate_winres_syso "$ROOT_DIR/cmd/towncrier/rsrc" "TownCrier" "TownCrier Neural TTS & Stream Automation" "TownCrier.exe"
+    generate_winres_syso "$ROOT_DIR/cmd/launcher/rsrc" "TownCrier" "TownCrier Portable Single-File Launcher" "TownCrier.exe"
+    generate_winres_syso "$ROOT_DIR/cmd/installer/rsrc" "TownCrier Setup" "TownCrier Guided Setup Installer" "TownCrier-Setup.exe"
 
     echo "==> Building towncrier-core.exe v${VERSION} (CGO + MinGW)..."
     CC=x86_64-w64-mingw32-gcc CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
@@ -285,27 +326,27 @@ build_win() {
         -o "$BIN_DIR/towncrier-core.exe" ./cmd/towncrier
     echo "✓ Built $BIN_DIR/towncrier-core.exe"
 
-    echo "==> Staging Windows payload for single-file launcher & setup installer..."
-    local payload_dir="$ROOT_DIR/cmd/launcher/payload"
-    local inst_payload_dir="$ROOT_DIR/cmd/installer/payload"
-    mkdir -p "$payload_dir" "$inst_payload_dir"
-    rm -f "$payload_dir/towncrier-core"* "$payload_dir/towncrier-whisper"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
-    rm -f "$inst_payload_dir/towncrier-core"* "$inst_payload_dir/towncrier-whisper"* "$inst_payload_dir/"*.dll "$inst_payload_dir/poundcontrol-towncrier.wasm" "$inst_payload_dir/LICENSE" "$inst_payload_dir/THIRDPARTY_NOTICES.md"
-    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/towncrier-whisper"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/launcher/payload/"*.dylib "$ROOT_DIR/cmd/installer/payload/towncrier-core"* "$ROOT_DIR/cmd/installer/payload/towncrier-whisper"* "$ROOT_DIR/cmd/installer/payload/"*.dll "$ROOT_DIR/cmd/installer/payload/poundcontrol-towncrier.wasm" "$ROOT_DIR/cmd/installer/payload/LICENSE" "$ROOT_DIR/cmd/installer/payload/THIRDPARTY_NOTICES.md" "$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/installer/rsrc_windows_amd64.syso"' RETURN
-    cp -f "$BIN_DIR/towncrier-core.exe" "$payload_dir/"
-    cp -f "$BIN_DIR/towncrier-whisper.exe" "$payload_dir/"
-    cp -f "$BIN_DIR/onnxruntime.dll" "$payload_dir/"
-    cp -f "$BIN_DIR/sherpa-onnx-c-api.dll" "$payload_dir/"
-    cp -f "$BIN_DIR/sherpa-onnx-cxx-api.dll" "$payload_dir/"
+    echo "==> Packing compressed Windows payload for single-file launcher & setup installer..."
+    rm -rf "$launcher_stage" "$inst_stage"
+    mkdir -p "$launcher_stage" "$inst_stage"
+    cp -f "$BIN_DIR/towncrier-core.exe" "$launcher_stage/"
+    cp -f "$BIN_DIR/towncrier-whisper.exe" "$launcher_stage/"
+    cp -f "$BIN_DIR/onnxruntime.dll" "$launcher_stage/"
+    cp -f "$BIN_DIR/sherpa-onnx-c-api.dll" "$launcher_stage/"
+    cp -f "$BIN_DIR/sherpa-onnx-cxx-api.dll" "$launcher_stage/"
+    pack_payload "$launcher_stage" "$payload_dir"
+    rm -rf "$launcher_stage"
 
-    cp -f "$BIN_DIR/towncrier-core.exe" "$inst_payload_dir/"
-    cp -f "$BIN_DIR/towncrier-whisper.exe" "$inst_payload_dir/"
-    cp -f "$BIN_DIR/onnxruntime.dll" "$inst_payload_dir/"
-    cp -f "$BIN_DIR/sherpa-onnx-c-api.dll" "$inst_payload_dir/"
-    cp -f "$BIN_DIR/sherpa-onnx-cxx-api.dll" "$inst_payload_dir/"
-    cp -f "$BIN_DIR/poundcontrol-towncrier.wasm" "$inst_payload_dir/"
-    [ -f "$ROOT_DIR/LICENSE" ] && cp -f "$ROOT_DIR/LICENSE" "$inst_payload_dir/"
-    [ -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" ] && cp -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" "$inst_payload_dir/"
+    cp -f "$BIN_DIR/towncrier-core.exe" "$inst_stage/"
+    cp -f "$BIN_DIR/towncrier-whisper.exe" "$inst_stage/"
+    cp -f "$BIN_DIR/onnxruntime.dll" "$inst_stage/"
+    cp -f "$BIN_DIR/sherpa-onnx-c-api.dll" "$inst_stage/"
+    cp -f "$BIN_DIR/sherpa-onnx-cxx-api.dll" "$inst_stage/"
+    cp -f "$BIN_DIR/poundcontrol-towncrier.wasm" "$inst_stage/"
+    [ -f "$ROOT_DIR/LICENSE" ] && cp -f "$ROOT_DIR/LICENSE" "$inst_stage/"
+    [ -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" ] && cp -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" "$inst_stage/"
+    pack_payload "$inst_stage" "$inst_payload_dir"
+    rm -rf "$inst_stage"
 
     echo "==> Building standalone TownCrier.exe v${VERSION}..."
     CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
@@ -323,8 +364,8 @@ build_win() {
     fi
 
     # Clean staged payload and temporary .syso from source tree
-    rm -f "$payload_dir/towncrier-core"* "$payload_dir/towncrier-whisper"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
-    rm -f "$inst_payload_dir/towncrier-core"* "$inst_payload_dir/towncrier-whisper"* "$inst_payload_dir/"*.dll "$inst_payload_dir/poundcontrol-towncrier.wasm" "$inst_payload_dir/LICENSE" "$inst_payload_dir/THIRDPARTY_NOTICES.md"
+    clean_payload_dir "$payload_dir"
+    clean_payload_dir "$inst_payload_dir"
     rm -f "$core_syso" "$launcher_syso" "$installer_syso"
     trap - RETURN
 
@@ -341,16 +382,19 @@ build_linux() {
         -o "$BIN_DIR/towncrier-core" ./cmd/towncrier
     echo "✓ Built $BIN_DIR/towncrier-core"
 
-    echo "==> Staging Linux payload for single-file launcher..."
+    echo "==> Packing compressed Linux payload for single-file launcher..."
     local payload_dir="$ROOT_DIR/cmd/launcher/payload"
-    mkdir -p "$payload_dir"
-    rm -f "$payload_dir/towncrier-core"* "$payload_dir/towncrier-whisper"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
-    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/towncrier-whisper"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/launcher/payload/"*.dylib' RETURN
-    cp -f "$BIN_DIR/towncrier-core" "$payload_dir/"
-    cp -f "$BIN_DIR/towncrier-whisper" "$payload_dir/"
-    cp -f "$BIN_DIR/libonnxruntime.so" "$payload_dir/"
-    cp -f "$BIN_DIR/libsherpa-onnx-c-api.so" "$payload_dir/"
-    cp -f "$BIN_DIR/libsherpa-onnx-cxx-api.so" "$payload_dir/"
+    local stage_dir="$BUILD_DIR/launcher_payload_stage_linux"
+    trap 'rm -rf "$BUILD_DIR/launcher_payload_stage_linux"; clean_payload_dir "$ROOT_DIR/cmd/launcher/payload"' RETURN
+    rm -rf "$stage_dir"
+    mkdir -p "$stage_dir"
+    cp -f "$BIN_DIR/towncrier-core" "$stage_dir/"
+    cp -f "$BIN_DIR/towncrier-whisper" "$stage_dir/"
+    cp -f "$BIN_DIR/libonnxruntime.so" "$stage_dir/"
+    cp -f "$BIN_DIR/libsherpa-onnx-c-api.so" "$stage_dir/"
+    cp -f "$BIN_DIR/libsherpa-onnx-cxx-api.so" "$stage_dir/"
+    pack_payload "$stage_dir" "$payload_dir"
+    rm -rf "$stage_dir"
 
     echo "==> Building standalone towncrier v${VERSION} (Linux amd64)..."
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
@@ -358,7 +402,7 @@ build_linux() {
         -o "$BIN_DIR/towncrier" ./cmd/launcher
     chmod +x "$BIN_DIR/towncrier"
 
-    rm -f "$payload_dir/towncrier-core"* "$payload_dir/towncrier-whisper"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
+    clean_payload_dir "$payload_dir"
     trap - RETURN
 
     echo "✓ Successfully built standalone single-file $BIN_DIR/towncrier"
@@ -381,16 +425,19 @@ build_mac() {
         -o "$BIN_DIR/towncrier-core" ./cmd/towncrier
     echo "✓ Built $BIN_DIR/towncrier-core"
 
-    echo "==> Staging macOS payload for single-file launcher..."
+    echo "==> Packing compressed macOS payload for single-file launcher..."
     local payload_dir="$ROOT_DIR/cmd/launcher/payload"
-    mkdir -p "$payload_dir"
-    rm -f "$payload_dir/towncrier-core"* "$payload_dir/towncrier-whisper"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
-    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/towncrier-whisper"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/launcher/payload/"*.dylib' RETURN
-    cp -f "$BIN_DIR/towncrier-core" "$payload_dir/"
-    cp -f "$BIN_DIR/towncrier-whisper" "$payload_dir/"
-    cp -f "$BIN_DIR/libonnxruntime.dylib" "$payload_dir/"
-    cp -f "$BIN_DIR/libsherpa-onnx-c-api.dylib" "$payload_dir/"
-    cp -f "$BIN_DIR/libsherpa-onnx-cxx-api.dylib" "$payload_dir/"
+    local stage_dir="$BUILD_DIR/launcher_payload_stage_mac"
+    trap 'rm -rf "$BUILD_DIR/launcher_payload_stage_mac"; clean_payload_dir "$ROOT_DIR/cmd/launcher/payload"' RETURN
+    rm -rf "$stage_dir"
+    mkdir -p "$stage_dir"
+    cp -f "$BIN_DIR/towncrier-core" "$stage_dir/"
+    cp -f "$BIN_DIR/towncrier-whisper" "$stage_dir/"
+    cp -f "$BIN_DIR/libonnxruntime.dylib" "$stage_dir/"
+    cp -f "$BIN_DIR/libsherpa-onnx-c-api.dylib" "$stage_dir/"
+    cp -f "$BIN_DIR/libsherpa-onnx-cxx-api.dylib" "$stage_dir/"
+    pack_payload "$stage_dir" "$payload_dir"
+    rm -rf "$stage_dir"
 
     echo "==> Building standalone towncrier v${VERSION} (macOS ${goarch})..."
     CGO_ENABLED=0 GOOS=darwin GOARCH=${goarch} \
@@ -398,7 +445,7 @@ build_mac() {
         -o "$BIN_DIR/towncrier" ./cmd/launcher
     chmod +x "$BIN_DIR/towncrier"
 
-    rm -f "$payload_dir/towncrier-core"* "$payload_dir/towncrier-whisper"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
+    clean_payload_dir "$payload_dir"
     trap - RETURN
 
     echo "✓ Successfully built standalone single-file $BIN_DIR/towncrier"
