@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.1.1 — 2026-11-26
+
+### Fixed
+- **GitHub Actions Release Publishing**:
+  - Added `GH_REPO` to the `Publish GitHub Release` step in `.github/workflows/release.yml` so checkoutless release publication runs cleanly on tag pushes.
+
+### Changed
+- **Documentation (`mrpoundsign.com/TownCrier`)**:
+  - Expanded GitHub Pages (`index.html`, `features.html`, `api.html`) with configuration guides for the **Bot Automation Core**, **Voice Detection & Offline Whisper Subtitles**, **Plugin Platform** (sandboxed WASM & `.link.json` native plugins), **Unified OBS Canvas Overlay** (`/overlay`), and external deck endpoints (`/api/actions`, `/api/bot/run`, `/api/plugins/run`).
+
+---
+
+## v0.1.0 — 2026-11-26
+
+### Added
+- **Dual-Backend Protobuf Plugin Platform (`proto/plugin/v1`, `v1.0.0`)**:
+  - Added pure-Go `wazero` sandboxed WebAssembly plugin hosting (`plugins/wasm/`) and loopback TCP native subprocess plugins (`plugins/native/` plus drop-in `.link.json` descriptors for companion apps like **CrowdDJ**) with SHA-256 trust gating in **Settings → Plugins**.
+  - Added a Declarative Native Fyne UI engine (`ui.proto` keyed reconciler restoring `TextInput` focus/cursors), plugin-scoped OBS web overlays (`/plugins/<uuid>/*`), SQLite plugin KV persistence, and exported plugin actions for hardware decks.
+- **Streamer.bot-Class Bot Automation Core (`Bot` Tab)**:
+  - Added **Triggers → Execution Queues → Sub-Actions**, keyword & voice command matching, outbound chat/channel actions, explicitly declared **Global / Session / Per-Action** SQLite variables with a `%values%` Variable Reference pop-out, **If/Else** branch controls, **OBS Scene Conditions**, and live OBS WebSocket v5 discovery with cascading scene/source pickers.
+  - Added friendly Action/Voice pickers (#150), configurable response voices for command speak actions (#153), and external automation endpoints (`GET /api/actions`, `POST /api/bot/run`, `POST /api/plugins/run`).
+- **Voice Detection & Whisper Enhancements (#149, #151)**:
+  - Consolidated Voice Detection master controls in **Settings → General → Voice Detection**, added a live **Whisper Transcript Tester**, phonetic voice matching, and **Wake Word** detection with audio chime feedback.
+- **PoundControl WASM Bridge (`com.github.mrpoundsign.towncrier.wasm`)**:
+  - Added a dynamic WebAssembly plugin distributed in release assets and PoundControl's Curated Catalog that discovers TownCrier Bot Automation and native plugin actions at startup, renders borderless 144×144 SVG deck tiles, and reports live state and Wear OS labels.
+- **Dashboard Live Activity Feed & Application Log Viewer (#152)**:
+  - Embedded a zero-chrome live activity feed directly on the Dashboard and added an **App Log** diagnostic viewer tab under **Logs**.
+- **Concurrent Vertical & Horizontal YouTube Live Streams**:
+  - Added simultaneous tracking for horizontal and vertical YouTube Live broadcasts with a stream-count badge and hover tooltips.
+- **Component-Preserving Installer & Updater (`appinstaller@v0.1.0`)**:
+  - Remember selected optional components across silent self-updates and added clean uninstall hooks.
+
+### Changed
+- **Layout, Toolkit & Release Pipeline**:
+  - Set a larger default window size that remembers user dimensions across restarts, added section quick-links to Settings (#148), upgraded Fyne to v2.8.3, and unified GitHub Actions CI & SLSA OIDC release workflows.
+
+### Fixed
+- **WASAPI Playback Stall Auto-Recovery**:
+  - Detects stalled Windows WASAPI output streams and automatically re-initializes playback without dropping chat continuity.
+- **Concurrency & UI Stability (#147, #152)**:
+  - Eliminated a mic-gate lost-wakeup race in `Queue.popNext()`, serialized OBS and condition editor `fyne.Do` UI updates to eliminate data races, fixed `logTableLayout` invalidation on in-place TTS status updates, and fixed license scrolling in the **About** dialog.
+
+---
+
 ## v0.0.15 — 2026-11-22
 
 ### Added

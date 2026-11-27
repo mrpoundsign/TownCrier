@@ -146,10 +146,34 @@
                     <td>Set absolute volume (<code>0.0</code>&ndash;<code>1.0</code>) or apply a relative delta</td>
                   </tr>
                   <tr>
+                    <th scope="row"><code>/api/actions</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td>Control API</td>
+                    <td>List runnable Bot Automation actions and active plugin actions (with live tile visuals)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/bot/run</code></th>
+                    <td><span class="method-badge method-post">POST</span></td>
+                    <td>Control API</td>
+                    <td>Enqueue or execute a configured Bot Automation action by ID or name</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/plugins/run</code></th>
+                    <td><span class="method-badge method-post">POST</span></td>
+                    <td>Control API</td>
+                    <td>Invoke an exported v1.0.0 plugin action (including native companion plugins)</td>
+                  </tr>
+                  <tr>
                     <th scope="row"><code>/ws</code></th>
                     <td><span class="method-badge method-ws">WS</span></td>
                     <td>Control API or TTS Overlay</td>
                     <td>Bidirectional JSON / binary Protobuf command channel and live state/speech stream</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/overlay</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td>Unified OBS Canvas</td>
+                    <td>Combined transparent OBS Browser Source uniting TTS, Live Chat, and Voice Subtitles</td>
                   </tr>
                   <tr>
                     <th scope="row"><code>/overlay/tts</code></th>
@@ -164,10 +188,16 @@
                     <td>OBS Browser Source page rendering a filtered live chat and alerts feed</td>
                   </tr>
                   <tr>
+                    <th scope="row"><code>/overlay/subtitles</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td>Subtitles Overlay + Voice Detection</td>
+                    <td>Transparent OBS Browser Source streaming real-time stacked Whisper captions &amp; translations</td>
+                  </tr>
+                  <tr>
                     <th scope="row"><code>/overlay/designer</code></th>
                     <td><span class="method-badge method-get">GET</span></td>
-                    <td>Either Overlay</td>
-                    <td>Interactive browser UI for customizing overlay colors, typography, and visibility</td>
+                    <td>Any Overlay</td>
+                    <td>Tabbed browser UI for customizing overlay layout, colors, typography, and scoped CSS</td>
                   </tr>
                   <tr>
                     <th scope="row"><code>/api/overlay/chat</code></th>
@@ -182,10 +212,28 @@
                     <td>Server-Sent Events stream pushing <code>append</code>, <code>outcome</code>, and <code>reload</code> events</td>
                   </tr>
                   <tr>
+                    <th scope="row"><code>/api/overlay/subtitles</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td>Subtitles Overlay</td>
+                    <td>JSON snapshot of recent transcribed and translated microphone utterances</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/api/overlay/subtitles/stream</code></th>
+                    <td><span class="method-badge method-sse">SSE</span></td>
+                    <td>Subtitles Overlay</td>
+                    <td>Server-Sent Events stream pushing live speech subtitle segments</td>
+                  </tr>
+                  <tr>
                     <th scope="row"><code>/api/overlay/style</code></th>
                     <td><span class="method-badge method-get">GET</span> <span class="method-badge method-post">POST</span></td>
-                    <td>Either Overlay</td>
+                    <td>Any Overlay</td>
                     <td>Read or persist custom overlay CSS and style JSON; triggers live reload on POST</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/plugins/&lt;uuid&gt;/*</code></th>
+                    <td><span class="method-badge method-get">GET</span> <span class="method-badge method-post">POST</span></td>
+                    <td>Plugins Enabled</td>
+                    <td>Plugin-scoped HTTP routes and custom OBS Browser Source overlays (e.g. CrowdDJ Now Playing)</td>
                   </tr>
                 </tbody>
               </table>
@@ -517,6 +565,37 @@
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"delta": -0.10}'</code></pre>
+              </div>
+            </figure>
+
+            <h3><code>GET /api/actions</code></h3>
+            <p>
+              Returns JSON listing all enabled Bot Automation actions (<code>bot_actions</code>) and running v1.0.0 plugin actions (<code>plugin_actions</code>, including controller types and dynamic live tile visuals) for PoundControl, Stream Deck, or scripts.
+            </p>
+
+            <h3><code>POST /api/bot/run</code> &amp; <code>POST /api/plugins/run</code></h3>
+            <p>Trigger a configured Bot Automation action or an exported plugin action remotely:</p>
+            <figure class="code-figure">
+              <figcaption id="fig-rest-actions">Trigger a Bot Automation action or Plugin action via HTTP POST:</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-rest-actions" aria-label="Copy POST /api/bot/run and /api/plugins/run examples">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-rest-actions" tabindex="0"><code id="code-rest-actions"># Run a Bot Automation action (by ID or name)
+curl -X POST http://127.0.0.1:8765/api/bot/run \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action_id": "Shoutout Scene", "args": {"user": "mrpoundsign"}}'
+
+# Run an exported plugin action (for example CrowdDJ play/pause or skip)
+curl -X POST http://127.0.0.1:8765/api/plugins/run \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"plugin_uuid": "com.github.mrpoundsign.crowddj", "action_id": "skip"}'</code></pre>
               </div>
             </figure>
           </section>
@@ -1017,6 +1096,12 @@ message ServerEnvelope {
                 </thead>
                 <tbody>
                   <tr>
+                    <th scope="row"><code>/overlay</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td><code>?token=</code></td>
+                    <td>Unified drag-and-resize OBS Canvas combining TTS captions, Live Chat, and Voice Subtitles</td>
+                  </tr>
+                  <tr>
                     <th scope="row"><code>/overlay/tts</code></th>
                     <td><span class="method-badge method-get">GET</span></td>
                     <td><code>?pos=top</code> (or <code>position=top</code>), <code>?align=center</code>, <code>?scale=50..300</code>, <code>?token=</code></td>
@@ -1029,10 +1114,22 @@ message ServerEnvelope {
                     <td>Transparent live chat &amp; alerts overlay matching any configured Live Log preset</td>
                   </tr>
                   <tr>
+                    <th scope="row"><code>/overlay/subtitles</code></th>
+                    <td><span class="method-badge method-get">GET</span></td>
+                    <td><code>?token=</code></td>
+                    <td>Transparent OBS Browser Source displaying stacked multi-language Whisper microphone subtitles</td>
+                  </tr>
+                  <tr>
                     <th scope="row"><code>/overlay/designer</code></th>
                     <td><span class="method-badge method-get">GET</span></td>
                     <td><code>?token=</code></td>
-                    <td>Browser-based Overlay Style Designer that live-syncs colors, fonts, badges, and radius</td>
+                    <td>Tabbed Overlay Style Designer syncing per-module scoped CSS, typography, and layout live</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>/plugins/&lt;uuid&gt;/*</code></th>
+                    <td><span class="method-badge method-get">GET</span> <span class="method-badge method-post">POST</span></td>
+                    <td><code>?token=</code></td>
+                    <td>Plugin-scoped HTTP routes and custom OBS Browser Source pages (e.g. CrowdDJ Now Playing)</td>
                   </tr>
                   <tr>
                     <th scope="row"><code>/api/overlay/chat</code></th>
@@ -1201,6 +1298,14 @@ public class CPHInline
 }</code></pre>
               </div>
             </figure>
+
+            <h3>PoundControl (Curated WebAssembly Plugin)</h3>
+            <p>Integrate TownCrier directly into <strong>PoundControl</strong> desktop and mobile/Wear OS touch decks in under a minute:</p>
+            <ol>
+              <li>In PoundControl, open <strong>Settings &rarr; Plugins &rarr; Curated Catalog</strong> and click <strong>Install</strong> next to <strong>TownCrier &amp; Plugins</strong> (<code>com.github.mrpoundsign.towncrier.wasm</code>).</li>
+              <li>Open <strong>Settings &rarr; TownCrier</strong> inside PoundControl, confirm Host (<code>127.0.0.1</code>) and Port (<code>8765</code>), paste your <strong>Auth Token</strong> if configured, and click <strong>Save</strong>.</li>
+              <li>Ensure <strong>Enable External Control API</strong> is checked in TownCrier's <strong>Settings &rarr; OBS &amp; Overlays</strong> tab. PoundControl automatically polls <code>/api/actions</code> at startup and exposes dynamic tiles for both Bot Automation workflows and running native plugins (such as CrowdDJ).</li>
+            </ol>
 
             <h3>Touch Portal, SAMMI &amp; Mix It Up Webhooks</h3>
             <p>Any automation tool capable of making local HTTP requests or opening a WebSocket can control TownCrier directly:</p>
