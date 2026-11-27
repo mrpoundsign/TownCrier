@@ -49,6 +49,7 @@ type Connector struct {
 	gqlURL           string
 	checkLiveFn      func(ctx context.Context, channel string) (bool, error)
 	oauth            *OAuthManager
+	botOAuth         *OAuthManager
 	eventSubCancel   context.CancelFunc
 	eventSubConn     *websocket.Conn
 	eventSubWSURL    string

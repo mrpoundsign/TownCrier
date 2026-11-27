@@ -1,3 +1,4 @@
+import http from 'node:http';
 import WebSocket from 'ws';
 import {
   ClientEnvelope,
@@ -39,8 +40,9 @@ const ACTION_PANIC = 'com.github.mrpoundsign.towncrier.panic';
 const ACTION_QUEUE = 'com.github.mrpoundsign.towncrier.queue';
 const ACTION_SPEAK = 'com.github.mrpoundsign.towncrier.speak';
 const ACTION_VOLUME = 'com.github.mrpoundsign.towncrier.volume';
+const ACTION_DYNAMIC = 'com.github.mrpoundsign.towncrier.action';
 
-type IconKind = 'mode_on' | 'mode_afk' | 'mode_off' | 'panic_safe' | 'panic_muted' | 'queue_active' | 'queue_paused' | 'speak' | 'volume';
+type IconKind = 'mode_on' | 'mode_afk' | 'mode_off' | 'panic_safe' | 'panic_muted' | 'queue_active' | 'queue_paused' | 'speak' | 'volume' | 'action';
 
 function escapeXml(str: string): string {
   return str
@@ -87,6 +89,9 @@ function renderIconSvg(kind: IconKind, accent: string): string {
     case 'volume':
       return `<circle cx="72" cy="46" r="17" stroke="${accent}" stroke-width="5" fill="none"/>
               <line x1="72" y1="46" x2="82" y2="36" stroke="#F8FAFC" stroke-width="4" stroke-linecap="round"/>`;
+    case 'action':
+      return `<polygon points="56,30 94,46 56,62" fill="${accent}"/>
+              <circle cx="96" cy="30" r="5" fill="#F8FAFC"/>`;
   }
 }
 
@@ -487,6 +492,95 @@ export class TownCrierStreamDeckPlugin {
         );
         break;
       }
+
+      case ACTION_DYNAMIC: {
+        void this.triggerDynamicAction(inst);
+        break;
+      }
+    }
+  }
+
+  private postTownCrierJSON(path: string, bodyObj: Record<string, unknown>): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let host = this.globalSettings.host || '127.0.0.1';
+      let port = this.globalSettings.port || 8765;
+      if (this.globalSettings.towncrierWsUrl) {
+        try {
+          const u = new URL(this.globalSettings.towncrierWsUrl);
+          if (u.hostname) host = u.hostname;
+          if (u.port) port = Number(u.port);
+        } catch {
+          // ignore
+        }
+      }
+      const raw = JSON.stringify(bodyObj);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(raw)),
+      };
+      if (this.globalSettings.token) {
+        headers.Authorization = `Bearer ${this.globalSettings.token}`;
+      }
+      const req = http.request(
+        {
+          hostname: host,
+          port,
+          path,
+          method: 'POST',
+          headers,
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            if ((res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300) {
+              resolve();
+            } else {
+              reject(new Error(`HTTP ${res.statusCode}: ${Buffer.concat(chunks).toString('utf8')}`));
+            }
+          });
+        },
+      );
+      req.on('error', reject);
+      req.write(raw);
+      req.end();
+    });
+  }
+
+  private async triggerDynamicAction(inst: ActionInstance): Promise<void> {
+    const targetType = String(inst.settings.targetType ?? 'plugin').trim().toLowerCase();
+    const pluginUuid = String(inst.settings.pluginUuid ?? '').trim();
+    const actionId = String(inst.settings.actionId ?? '').trim();
+    let args: Record<string, string> | undefined;
+    const rawArgs = String(inst.settings.argsJson ?? '').trim();
+    if (rawArgs.length > 0) {
+      try {
+        const parsed = JSON.parse(rawArgs) as Record<string, unknown>;
+        args = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          args[k] = String(v ?? '');
+        }
+      } catch {
+        this.sendToSD({ event: 'showAlert', context: inst.context });
+        return;
+      }
+    }
+    try {
+      if (targetType === 'bot') {
+        await this.postTownCrierJSON('/api/bot/run', {
+          action_id: actionId,
+          args,
+        });
+      } else {
+        await this.postTownCrierJSON('/api/plugins/run', {
+          plugin_uuid: pluginUuid,
+          action_id: actionId,
+          args,
+        });
+      }
+      this.sendToSD({ event: 'showOk', context: inst.context });
+    } catch {
+      this.sendToSD({ event: 'showAlert', context: inst.context });
     }
   }
 
@@ -611,6 +705,21 @@ export class TownCrierStreamDeckPlugin {
             value: `${volPct}%`,
             indicator: { value: volPct },
           },
+        });
+        break;
+      }
+
+      case ACTION_DYNAMIC: {
+        const targetType = String(inst.settings.targetType ?? 'plugin').toUpperCase();
+        const rawLabel = String(inst.settings.label ?? inst.settings.actionId ?? '').trim();
+        const bottom = rawLabel.length > 0 ? rawLabel.slice(0, 12) : 'ACTION';
+        const top = targetType === 'BOT' ? 'BOT ACTION' : 'PLUGIN';
+        const accent = targetType === 'BOT' ? '#A855F7' : '#34D399';
+        const image = svgDataUri('#0F172A', accent, 'action', top, bottom, accent);
+        this.sendToSD({
+          event: 'setImage',
+          context: inst.context,
+          payload: { image, target: 0 },
         });
         break;
       }

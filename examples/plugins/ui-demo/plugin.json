@@ -1,0 +1,13 @@
+{
+  "uuid": "com.example.uidemo",
+  "name": "UI Demo",
+  "version": "1.0.0",
+  "author": "TownCrier",
+  "description": "Reference native UI + overlay route plugin",
+  "binaries": {
+    "windows/amd64": "ui-demo.exe",
+    "linux/amd64": "ui-demo",
+    "darwin/arm64": "ui-demo",
+    "darwin/amd64": "ui-demo"
+  }
+}

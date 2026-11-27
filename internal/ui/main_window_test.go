@@ -3,6 +3,7 @@ package ui
 import (
 	"testing"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
@@ -139,15 +140,15 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 		}
 	}()
 
-	// Settings sub-tabs initially have 9 items: General, OBS & Overlays, TTS & Hardware, Twitch, YouTube, TikTok, Kick, Rules & Safety, Event Logs
-	if len(mw.settingsTab.subTabs.Items) != 9 {
-		t.Fatalf("expected 9 settings sub-tabs initially, got %d", len(mw.settingsTab.subTabs.Items))
+	// Settings sub-tabs initially have 10 items: General, OBS & Overlays, Plugins, TTS & Hardware, Twitch, YouTube, TikTok, Kick, Rules & Safety, Event Logs
+	if len(mw.settingsTab.subTabs.Items) != 10 {
+		t.Fatalf("expected 10 settings sub-tabs initially, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 
 	// Disable YouTube in Settings
 	mw.settingsTab.youtubeCheck.SetChecked(false)
-	if len(mw.settingsTab.subTabs.Items) != 8 {
-		t.Fatalf("expected 8 settings sub-tabs after disabling YouTube, got %d", len(mw.settingsTab.subTabs.Items))
+	if len(mw.settingsTab.subTabs.Items) != 9 {
+		t.Fatalf("expected 9 settings sub-tabs after disabling YouTube, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 	if mw.youtubeStatusDot.Visible() {
 		t.Error("expected youtubeStatusDot to be hidden when YouTube service is disabled")
@@ -158,8 +159,8 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 
 	// Re-enable YouTube in Settings
 	mw.settingsTab.youtubeCheck.SetChecked(true)
-	if len(mw.settingsTab.subTabs.Items) != 9 {
-		t.Fatalf("expected 9 settings sub-tabs after re-enabling YouTube, got %d", len(mw.settingsTab.subTabs.Items))
+	if len(mw.settingsTab.subTabs.Items) != 10 {
+		t.Fatalf("expected 10 settings sub-tabs after re-enabling YouTube, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 	if !mw.youtubeStatusDot.Visible() {
 		t.Error("expected youtubeStatusDot to be visible when YouTube service is enabled")
@@ -170,8 +171,8 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 
 	// Disable TikTok in Settings
 	mw.settingsTab.tiktokCheck.SetChecked(false)
-	if len(mw.settingsTab.subTabs.Items) != 8 {
-		t.Fatalf("expected 8 settings sub-tabs after disabling TikTok, got %d", len(mw.settingsTab.subTabs.Items))
+	if len(mw.settingsTab.subTabs.Items) != 9 {
+		t.Fatalf("expected 9 settings sub-tabs after disabling TikTok, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 	if mw.tiktokStatusDot.Visible() {
 		t.Error("expected tiktokStatusDot to be hidden when TikTok service is disabled")
@@ -179,8 +180,8 @@ func TestMainWindowServiceVisibilityToggle(t *testing.T) {
 
 	// Disable Kick in Settings
 	mw.settingsTab.kickCheck.SetChecked(false)
-	if len(mw.settingsTab.subTabs.Items) != 7 {
-		t.Fatalf("expected 7 settings sub-tabs after disabling Kick, got %d", len(mw.settingsTab.subTabs.Items))
+	if len(mw.settingsTab.subTabs.Items) != 8 {
+		t.Fatalf("expected 8 settings sub-tabs after disabling Kick, got %d", len(mw.settingsTab.subTabs.Items))
 	}
 	if mw.kickStatusDot.Visible() {
 		t.Error("expected kickStatusDot to be hidden when Kick service is disabled")
@@ -267,6 +268,59 @@ func TestMainWindowPlatformStatusResolution(t *testing.T) {
 		t.Errorf("expected selected Settings sub-tab to be 'Twitch', got %+v", sel)
 	}
 }
+
+func TestMainWindowGeometryPersistence(t *testing.T) {
+	appObj := test.NewApp()
+	defer appObj.Quit()
+
+	// 1. Default config opens at 1200x820
+	defCfg := config.DefaultConfig()
+	defCfg.WindowWidth = 0
+	defCfg.WindowHeight = 0
+	defSess := app.NewSession(defCfg, secrets.NewMemoryStore(), config.NewMemoryStore(defCfg))
+	defer func() { _ = defSess.Close() }()
+
+	mwDef := NewMainWindow(appObj, defSess)
+	gotDef := mwDef.Window.Canvas().Size()
+	if gotDef.Width != float32(config.DefaultWindowWidth) || gotDef.Height != float32(config.DefaultWindowHeight) {
+		t.Fatalf("expected default canvas size %dx%d, got %vx%v", config.DefaultWindowWidth, config.DefaultWindowHeight, gotDef.Width, gotDef.Height)
+	}
+	if mwDef.hotkeyMgr != nil {
+		mwDef.hotkeyMgr.Close()
+	}
+
+	// 2. Saved config restores custom size and persists resized dimensions on close/save
+	cfg := config.DefaultConfig()
+	cfg.WindowWidth = 1360
+	cfg.WindowHeight = 880
+	memStore := config.NewMemoryStore(cfg)
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), memStore)
+	defer func() { _ = sess.Close() }()
+
+	mw := NewMainWindow(appObj, sess)
+	defer func() {
+		if mw.hotkeyMgr != nil {
+			mw.hotkeyMgr.Close()
+		}
+	}()
+
+	got := mw.Window.Canvas().Size()
+	if got.Width != 1360 || got.Height != 880 {
+		t.Fatalf("expected restored canvas size 1360x880, got %vx%v", got.Width, got.Height)
+	}
+
+	mw.Window.Resize(fyne.NewSize(1480, 920))
+	mw.persistWindowGeometry()
+
+	savedCfg, err := memStore.Load()
+	if err != nil {
+		t.Fatalf("memStore.Load: %v", err)
+	}
+	if savedCfg.WindowWidth != 1480 || savedCfg.WindowHeight != 920 {
+		t.Fatalf("expected persisted window size 1480x920, got %dx%d", savedCfg.WindowWidth, savedCfg.WindowHeight)
+	}
+}
+
 
 
 

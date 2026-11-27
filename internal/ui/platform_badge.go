@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"image/color"
+	"strconv"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
@@ -56,18 +59,23 @@ func canonicalDotString(dot string) string {
 	}
 }
 
-// platformConnectionBadge renders a platform's SVG vector logo paired with an SVG status dot.
+// platformConnectionBadge renders a platform's SVG vector logo paired with an SVG status dot
+// (or a numbered green circle when multiple concurrent streams are active on the platform).
 // It supports hover tooltips and optional click handlers to jump to the platform tab.
 type platformConnectionBadge struct {
 	widget.BaseWidget
-	platform  string
-	res       fyne.Resource
-	dotString string
-	dotImage  *canvas.Image
-	rootBox   *fyne.Container
-	tooltip   string
-	onHover   func(obj fyne.CanvasObject, tip string, hovered bool)
-	onTap     func()
+	platform    string
+	res         fyne.Resource
+	dotString   string
+	streamCount int
+	dotImage    *canvas.Image
+	countCircle *canvas.Circle
+	countText   *canvas.Text
+	countBadge  *fyne.Container
+	rootBox     *fyne.Container
+	tooltip     string
+	onHover     func(obj fyne.CanvasObject, tip string, hovered bool)
+	onTap       func()
 }
 
 var (
@@ -97,7 +105,18 @@ func newPlatformConnectionBadge(platform string, res fyne.Resource, initialDot, 
 	b.dotImage.FillMode = canvas.ImageFillContain
 	b.dotImage.SetMinSize(fyne.NewSize(10, 10))
 
-	b.rootBox = container.NewHBox(iconImg, b.dotImage)
+	b.countCircle = canvas.NewCircle(color.NRGBA{R: 0x22, G: 0xC5, B: 0x5E, A: 0xFF})
+	b.countText = canvas.NewText("", color.NRGBA{R: 0x0F, G: 0x17, B: 0x2A, A: 0xFF})
+	b.countText.TextStyle = fyne.TextStyle{Bold: true}
+	b.countText.TextSize = 10
+	b.countText.Alignment = fyne.TextAlignCenter
+	b.countBadge = container.NewGridWrap(
+		fyne.NewSize(15, 15),
+		container.NewStack(b.countCircle, container.NewCenter(b.countText)),
+	)
+	b.countBadge.Hide()
+
+	b.rootBox = container.NewHBox(iconImg, container.NewCenter(container.NewStack(b.dotImage, b.countBadge)))
 
 	b.ExtendBaseWidget(b)
 	return b
@@ -110,11 +129,37 @@ func (b *platformConnectionBadge) CreateRenderer() fyne.WidgetRenderer {
 
 // SetStatus updates the indicator dot and hover tooltip message.
 func (b *platformConnectionBadge) SetStatus(dot, tip string) {
+	b.SetStatusWithCount(dot, tip, 0)
+}
+
+// SetStatusWithCount updates the indicator dot, hover tooltip, and optional active stream count.
+// When the status is green ("🟢") and streamCount > 1, a green circle with the count overlaid is shown.
+func (b *platformConnectionBadge) SetStatusWithCount(dot, tip string, streamCount int) {
 	b.tooltip = tip
 	b.dotString = canonicalDotString(dot)
-	b.dotImage.Resource = statusDotResource(dot)
-	b.dotImage.Refresh()
+	if b.dotString == "🟢" && streamCount > 1 {
+		b.streamCount = streamCount
+		b.countText.Text = strconv.Itoa(streamCount)
+		b.countText.Refresh()
+		b.dotImage.Hide()
+		b.countBadge.Show()
+	} else {
+		if b.dotString == "🟢" && streamCount == 1 {
+			b.streamCount = 1
+		} else {
+			b.streamCount = 0
+		}
+		b.dotImage.Resource = statusDotResource(dot)
+		b.dotImage.Refresh()
+		b.countBadge.Hide()
+		b.dotImage.Show()
+	}
 	b.Refresh()
+}
+
+// StreamCount returns the number of active live streams reflected by this badge.
+func (b *platformConnectionBadge) StreamCount() int {
+	return b.streamCount
 }
 
 // Tooltip returns the current tooltip text.

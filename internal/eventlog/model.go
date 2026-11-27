@@ -25,8 +25,9 @@ const (
 	OutcomeTTSDisabled       EventOutcome = "tts_disabled"
 
 	// Rejected by pre-queue filters
-	OutcomeDroppedBot       EventOutcome = "dropped_bot"
-	OutcomeDroppedReadRules EventOutcome = "dropped_read_rules"
+	OutcomeDroppedBot        EventOutcome = "dropped_bot"
+	OutcomeDroppedBotCommand EventOutcome = "dropped_bot_command"
+	OutcomeDroppedReadRules  EventOutcome = "dropped_read_rules"
 	OutcomeDroppedDisabled  EventOutcome = "dropped_disabled"
 	OutcomeDroppedThreshold EventOutcome = "dropped_threshold"
 	OutcomeDroppedSanitized EventOutcome = "dropped_sanitized"
@@ -57,6 +58,8 @@ func OutcomeDisplayLabel(outcome EventOutcome) string {
 		return "🔇 TTS Disabled"
 	case OutcomeDroppedBot:
 		return "🤖 Ignored (Bot / Muted)"
+	case OutcomeDroppedBotCommand:
+		return "🤖 Handled (Bot Command / Plugin)"
 	case OutcomeDroppedReadRules:
 		return "📏 Filtered (Read Rules)"
 	case OutcomeDroppedDisabled:
@@ -92,9 +95,12 @@ type Entry struct {
 	SessionID     int64            `json:"session_id,omitempty"`
 	CreatedAt     time.Time        `json:"created_at"`
 	UpdatedAt     time.Time        `json:"updated_at"`
-	Platform      string           `json:"platform"`
-	Channel       string           `json:"channel"`
-	Kind          string           `json:"kind"`
+	Platform          string           `json:"platform"`
+	Channel           string           `json:"channel"`
+	StreamID          string           `json:"stream_id,omitempty"`
+	StreamTitle       string           `json:"stream_title,omitempty"`
+	StreamOrientation string           `json:"stream_orientation,omitempty"`
+	Kind              string           `json:"kind"`
 	IsPaidOrEvent bool             `json:"is_paid_or_event"`
 	UserID        string           `json:"user_id"`
 	UserName      string           `json:"user_name"`

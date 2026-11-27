@@ -10,10 +10,10 @@
 > 4. **Pre-Commit Quality Gate**: Before every single commit, ALWAYS run:
 >    - `golangci-lint-v2 run ./...` (must report 0 issues)
 >    - `go fix --diff ./...` (must report 0 diff)
->    - `go test -count=1 -v ./...` (all unit tests must pass)
+>    - `go test -count=1 ./...` (all unit tests must pass; omit `-v` to minimize output)
 > 5. **User tests GUI before committing**: Always stop and let the user manually test the GUI before any changes are committed to git.
 > 6. **Prioritize Built-in Agent Tools Over Shelling Out**: Always use built-in tools (`grep_search`, `list_dir`, `view_file`) for searching code, finding files, and inspecting contents. Do not shell out when built-in tools are capable of performing the operation. Only shell out via `run_command` when strictly necessary (e.g., git operations, building/running code, tests, or `gh` CLI).
-> 7. **Always Build via WSL (`./build.sh win`) & Output Location**: Always build binaries from WSL (`wsl -e bash -lc "./build.sh win"`), NEVER natively on Windows via `go build` (which omits `-ldflags="-H windowsgui"` and launcher packaging, causing a console terminal window to open). All temporary binaries, DLLs, and build artifacts belong in `build/` (e.g., `build/bin/`), which is gitignored. Never commit binaries or model weights.
+> 7. **Always Build via WSL (`./build.sh win`) & Output Location**: Always build binaries from WSL (`wsl -e bash -lc "./build.sh win"`), NEVER natively on Windows via `go build` (which omits `-ldflags="-H windowsgui"` and launcher packaging, causing a console terminal window to open). Regenerate Protobuf Go bindings via `./build.sh proto` after editing `proto/`. All temporary binaries, DLLs, and build artifacts belong in `build/` (e.g., `build/bin/`), which is gitignored. Never commit binaries or model weights.
 > 8. **Planning Repository Independence**: `planning/` is its own local-only git repository (no remote) ignored by the main repo. Planning commits happen independently inside `planning/` referencing ticket numbers.
 > 9. **Always Link PRs, Issues, and CI Runs**: Whenever creating or referencing GitHub Pull Requests, Issues, or Actions CI runs, always include clickable Markdown links so the user can watch or inspect them directly.
 > 10. **GitHub CLI Issue & PR Bodies via Files**: PowerShell mangles markdown backticks and escapes (e.g., `\t`, `\f`) when passing strings inline to `gh`. NEVER pass multiline issue or PR descriptions inline via `--body`. ALWAYS write markdown content to a temporary file in `build/` and pass `--body-file`, then clean up the temporary file.
@@ -25,7 +25,7 @@
 
 ## 2. Project Overview & Mission
 
-**TownCrier** is an open-source Windows desktop application (Go + Fyne) that reads livestream chat messages and stream events aloud using free, local neural TTS (Kokoro-82M by default) played through a streamer-selected audio device to OBS.
+**TownCrier** is an open-source Windows desktop application (Go + Fyne) that reads livestream chat messages and stream events aloud using free, local neural TTS (Kokoro-82M / Supertonic) played through a streamer-selected audio device to OBS, paired with a Streamer.bot-class bot automation core and a versioned Protobuf (`proto/plugin/v1`) dual-backend plugin platform (sandboxed WASM + Native Subprocess).
 
 - **Primary Repository**: `github.com/mrpoundsign/TownCrier`
 - **License**: GNU Affero General Public License v3.0 (AGPL-3.0)
@@ -33,8 +33,9 @@
 - **Core Technology Stack**:
   - **Go**: 1.27
   - **GUI Toolkit**: [Fyne v2](https://fyne.io/)
-  - **TTS Engine**: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) Go bindings with Kokoro-82M ONNX models running on DirectML GPU (`model.onnx`) or multi-threaded CPU fallback (`model.int8.onnx`)
+  - **TTS Engine**: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) Go bindings with Kokoro-82M / Supertonic ONNX models running on DirectML GPU (`model.onnx`) or multi-threaded CPU fallback (`model.int8.onnx`)
   - **Audio Output**: [malgo](https://github.com/gen2brain/malgo) (miniaudio Go bindings) targeting WASAPI playback devices with gain control and instant atomic panic mute (<50ms)
+  - **Plugin Platform**: `proto/plugin/v1` (`v1.0.0`) hosted across pure-Go `wazero` WASM sandboxes and Native Subprocess loopback TCP (`TCRP`) plugins
   - **Secret Storage**: [go-keyring](https://github.com/zalando/go-keyring) (Windows Credential Manager) with memory fallback
   - **Cross-Compilation**: WSL Ubuntu compiling to Windows amd64 using `x86_64-w64-mingw32-gcc` and `-static-libgcc`
 
@@ -46,32 +47,41 @@
 TownCrier/
 ├── assets/               # Application icons and bundled media
 ├── build/                # Local build output and temporary binaries (gitignored)
-│   └── bin/              # Cross-compiled executables and runtime DLLs
+│   └── bin/              # Cross-compiled executables, runtime DLLs, and WASM artifacts
 ├── cmd/
 │   ├── installer/        # Fyne GUI installer & uninstaller (-tags nosherpa, via appinstaller)
 │   ├── launcher/         # Single-file portable executable self-extracting launcher
 │   ├── spike/            # Technical spike & audio engine validation CLI
 │   └── towncrier/        # Main desktop application GUI entry point (main.go)
+├── examples/plugins/     # Reference WASM, native, and declarative UI plugins (wasm-greeter, native-echo, ui-demo)
+├── integrations/
+│   └── poundcontrol-wasm/ # Dynamic PoundControl WASM plugin (builds towncrier.wasm)
 ├── internal/
 │   ├── app/              # Application lifecycle, session coordination, and wiring
+│   ├── bot/              # Streamer.bot-class bot automation core (triggers, queues, sub-actions, vars, OBS v5)
 │   ├── eventlog/         # SQLite event logging, session tracking, and FTS5 search
-│   ├── logging/          #Rotating file logger and debug diagnostics
+│   ├── logging/          # Rotating file logger and debug diagnostics
+│   ├── pluginhost/       # Dual wazero WASM + Native Subprocess TCP plugin host, trust gate, SQLite KV
 │   ├── streamdeck/       # Elgato Stream Deck plugin installer and bundler
-│   ├── ui/               # Fyne GUI components (dashboard, voices, viewers, settings, platform tabs)
-│   └── ws/               # Local Protobuf + JSON WebSocket and HTTP REST control server
+│   ├── ui/               # Fyne GUI components (dashboard, voices, viewers, bot, plugins, settings, platform tabs)
+│   └── ws/               # Local Protobuf + JSON WebSocket and HTTP REST control server (/api/actions)
 ├── pkg/                  # Exported reusable core libraries (imported by TownCrier & Hearsay)
 │   ├── audio/            # Audio device enumeration (WASAPI), stereo panning, earcons, emergency abort
 │   ├── bots/             # Known-bot matcher, embedded bot list, ignore/allow overrides
 │   ├── chat/             # Unified event model, emote stripping, phonetic filtering, voice router
 │   ├── config/           # Configuration schema, global rules, platform overrides, atomic persistence
 │   ├── platform/         # Platform connectors (Twitch EventSub/IRC, YouTube, Kick, TikTok)
+│   ├── pluginsdk/        # Pure-Go guest plugin SDK (zero Fyne/CGo imports)
+│   ├── pluginv1/         # Generated Protobuf plugin protocol types (pure Go, zero Fyne/CGo imports)
 │   ├── queue/            # Priority speech queue with 30s staleness TTL and fast catchup
 │   ├── secrets/          # OS Keyring credentials management wrapper
+│   ├── stt/              # Local Whisper speech-to-text & voice trigger engine
 │   ├── translate/        # Offline language detection, multi-provider translation, two-tier cache
 │   └── tts/              # Offline neural TTS engine, voice management, model downloader
+├── proto/                # Protobuf schemas (control/v1, plugin/v1; codegen via ./build.sh proto)
 ├── models/               # Local ONNX model weights and voice files (gitignored)
 ├── planning/             # Local-only planning repository (PRDs, task lists, research)
-├── build.sh              # WSL cross-compilation pipeline script
+├── build.sh              # WSL cross-compilation, proto codegen, lint, and test script
 ├── .golangci.yml         # Golangci-lint configuration
 └── FyneApp.toml          # Fyne application package metadata
 ```
@@ -108,3 +118,13 @@ TownCrier/
    - Uses `github.com/mrpoundsign/appinstaller` (`../appinstaller`) and `.goreleaser.yaml` (GoReleaser v2 OSS).
    - `cmd/installer` is compiled with `-tags nosherpa` so `TownCrier-Setup.exe` runs as a standalone Fyne setup wizard with zero external DLL dependencies while still reusing `pkg/tts` to optionally pre-download Supertonic/Kokoro model packs.
    - Startup update checks suppress modal dialogs whenever `session.IsStreamLive()` is true, showing only the header bar `"⬆ Update"` badge and status message.
+10. **Dual-Backend Protobuf Plugin Platform (`proto/plugin/v1`, `v1.0.0`)**:
+   - One Protobuf contract across sandboxed `wazero` WASM plugins (`_initialize`, `tc_abi_version`, `tc_dispatch`) and unsandboxed Native Subprocess plugins (`127.0.0.1:0` loopback TCP with `TCRP` preamble + per-launch bearer token).
+   - Native subprocess plugins start in `StatusAwaitingTrust` and pin their binary SHA-256 in `config.json` (`plugins.trusted_native`). Rebuilding a native binary (e.g., `crowddj.exe`) invalidates the pinned hash and requires re-approval in TownCrier's **Plugins** tab before it auto-starts.
+   - **Pure-Go SDK Boundary**: `pkg/pluginv1` and `pkg/pluginsdk` MUST remain pure Go (`google.golang.org/protobuf` only — zero Fyne, CGo, `sherpa-onnx`, or `malgo` imports). `Hearsay` explicitly does **not** host plugins or bot automation.
+11. **Declarative Native Fyne UI, Overlays & Bot Automation Core (M2–M3)**:
+   - Plugins render native Obsidian Slate UI tabs via `ui.proto` keyed reconciler (`UIPatchBatch`) and plugin-scoped OBS browser overlays (`overlay.routes.v1`).
+   - `internal/bot` implements `Triggers → Execution Queues → Sub-Actions`, outbound chat/channel actions, persistent SQLite variables, Whisper voice triggers (`pkg/stt`), OBS v5 control, and `/api/actions` for external Stream Deck / PoundControl integrations.
+12. **PoundControl WASM Integration (`integrations/poundcontrol-wasm`)**:
+   - Vet and build with `GOOS=wasip1 GOARCH=wasm go vet ./integrations/poundcontrol-wasm` and `GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o build/bin/towncrier.wasm ./integrations/poundcontrol-wasm` (stage output to `%APPDATA%\PoundControl\wasm\towncrier.wasm`).
+   - Uses `pc_on_start` + `pc_register_actions` to dynamically register TownCrier plugin and bot actions under category `"TownCrier"`, emitting borderless 144×144 SVG tiles and `feedback.label`/`feedback.sublabel` for Watch clients.

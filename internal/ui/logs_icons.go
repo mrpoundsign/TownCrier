@@ -307,6 +307,30 @@ func platformIconAndTip(platform string) (fyne.Resource, string) {
 	return res, "Service: " + name
 }
 
+// entryPlatformIconAndTip returns the platform SVG icon and an enriched hover tooltip
+// that includes stream orientation (Vertical/Horizontal), title, and video ID when present.
+func entryPlatformIconAndTip(e eventlog.Entry) (fyne.Resource, string) {
+	res, tip := platformIconAndTip(e.Platform)
+	orient := strings.ToLower(strings.TrimSpace(e.StreamOrientation))
+	switch orient {
+	case "vertical":
+		tip += " (Vertical)"
+	case "horizontal":
+		tip += " (Horizontal)"
+	}
+	title := strings.TrimSpace(e.StreamTitle)
+	sid := strings.TrimSpace(e.StreamID)
+	switch {
+	case title != "" && sid != "":
+		tip += "\nStream: " + title + " (" + sid + ")"
+	case title != "":
+		tip += "\nStream: " + title
+	case sid != "":
+		tip += "\nStream: " + sid
+	}
+	return res, tip
+}
+
 // userRoleIcons returns compact hoverable role/tag icons for a log entry.
 func (v *LogsView) userRoleIcons(e eventlog.Entry) []fyne.CanvasObject {
 	var icons []fyne.CanvasObject
@@ -732,12 +756,14 @@ func (l *wrappedCellLabel) MouseOut() {
 // logTableLayout aligns the 6 columns of the Event Logs table across the sticky header and all rows:
 // [0] Time | [1] Svc | [2] User & Tags | [3] Message (flex) | [4] TTS Status | [5] Mod Controls
 type logTableLayout struct {
-	getWidth   func() float32
-	getScale   func() float32
-	lastLayout fyne.Size
-	lastScale  float32
-	cachedMin  fyne.Size
-	cachedMsgW float32
+	getWidth        func() float32
+	getScale        func() float32
+	lastLayout      fyne.Size
+	lastLayoutScale float32
+	lastObjects     [6]fyne.CanvasObject
+	cachedMin       fyne.Size
+	cachedMinScale  float32
+	cachedMsgW      float32
 }
 
 const (
@@ -752,7 +778,11 @@ const (
 
 func (l *logTableLayout) Invalidate() {
 	l.cachedMsgW = 0
+	l.cachedMin = fyne.Size{}
+	l.cachedMinScale = 0
 	l.lastLayout = fyne.Size{}
+	l.lastLayoutScale = 0
+	l.lastObjects = [6]fyne.CanvasObject{}
 }
 
 func (l *logTableLayout) effectiveScale() float32 {
@@ -783,11 +813,13 @@ func (l *logTableLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	}
 
 	s := l.effectiveScale()
-	if l.lastLayout == size && l.lastScale == s {
+	objs := [6]fyne.CanvasObject{objects[0], objects[1], objects[2], objects[3], objects[4], objects[5]}
+	if l.lastLayout == size && l.lastLayoutScale == s && l.lastObjects == objs {
 		return
 	}
 	l.lastLayout = size
-	l.lastScale = s
+	l.lastLayoutScale = s
+	l.lastObjects = objs
 
 	msgWidth := computeMsgColWidth(size.Width, s)
 
@@ -827,7 +859,7 @@ func (l *logTableLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	}
 	msgW := computeMsgColWidth(totalW, s)
 
-	if l.cachedMsgW == msgW && l.lastScale == s && l.cachedMin.Height > 0 {
+	if l.cachedMsgW == msgW && l.cachedMinScale == s && l.cachedMin.Height > 0 {
 		return l.cachedMin
 	}
 
@@ -850,7 +882,7 @@ func (l *logTableLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	minW := colWidthTime + colWidthService + colWidthUser +
 		140 + colWidthTTSStatus + colWidthModControl + (5 * colGap)
 	l.cachedMsgW = msgW
-	l.lastScale = s
+	l.cachedMinScale = s
 	l.cachedMin = fyne.NewSize(minW, maxH)
 	return l.cachedMin
 }

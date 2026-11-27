@@ -7,8 +7,10 @@ set -euo pipefail
 #   ./build.sh win      # Build Windows GUI executable into build/bin/TownCrier.exe
 #   ./build.sh linux    # Build Linux GUI executable into build/bin/towncrier
 #   ./build.sh mac      # Build macOS GUI executable into build/bin/towncrier
+#   ./build.sh wasm     # Build PoundControl WASM plugin into build/bin/poundcontrol-towncrier.wasm
 #   ./build.sh lint     # Run go fix --diff and golangci-lint-v2
 #   ./build.sh test     # Run unit tests
+#   ./build.sh proto    # Regenerate Protobuf Go bindings from proto/
 #   ./build.sh package  # Package zip/tar.gz distributions into dist/
 #   ./build.sh package-mac # Package macOS distribution into dist/
 #   ./build.sh clean    # Clean build and dist outputs
@@ -19,7 +21,7 @@ BUILD_DIR="$ROOT_DIR/build"
 BIN_DIR="$BUILD_DIR/bin"
 DIST_DIR="$ROOT_DIR/dist"
 DEFAULT_VER=$(grep -E '^[[:space:]]*Version[[:space:]]*=' "$ROOT_DIR/FyneApp.toml" 2>/dev/null | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
-VERSION="${VERSION:-${DEFAULT_VER:-0.0.15}}"
+VERSION="${VERSION:-${DEFAULT_VER:-0.1.0-dev}}"
 
 mkdir -p "$BUILD_DIR" "$BIN_DIR" "$DIST_DIR" "$ROOT_DIR/cmd/launcher/payload" "$ROOT_DIR/cmd/installer/payload"
 touch "$ROOT_DIR/cmd/launcher/payload/placeholder.txt" "$ROOT_DIR/cmd/installer/payload/placeholder.txt"
@@ -28,11 +30,18 @@ if command -v git &>/dev/null && [ -d "$ROOT_DIR/.git" ] && [ -d "$ROOT_DIR/.git
     git -C "$ROOT_DIR" config core.hooksPath .githooks 2>/dev/null || true
 fi
 
-for dir in "$HOME/go/bin" "/usr/local/go/bin" "$HOME/.asdf/shims" "$HOME/.asdf/bin" "/home/linuxbrew/.linuxbrew/bin" "/home/linuxbrew/.linuxbrew/sbin"; do
+for dir in "$HOME/.local/bin" "$HOME/go/bin" "/usr/local/go/bin" "$HOME/.asdf/shims" "$HOME/.asdf/bin" "/home/linuxbrew/.linuxbrew/bin" "/home/linuxbrew/.linuxbrew/sbin"; do
     if [ -d "$dir" ] && [[ ":$PATH:" != *":$dir:"* ]]; then
         export PATH="$dir:$PATH"
     fi
 done
+if command -v go &>/dev/null; then
+    for dir in "$(go env GOBIN 2>/dev/null || true)" "$(go env GOPATH 2>/dev/null || true)/bin"; do
+        if [ -n "$dir" ] && [ -d "$dir" ] && [[ ":$PATH:" != *":$dir:"* ]]; then
+            export PATH="$dir:$PATH"
+        fi
+    done
+fi
 
 fetch_dlls() {
     echo "==> Verifying Windows runtime DLLs in $BIN_DIR..."
@@ -125,17 +134,137 @@ run_lint() {
     echo "✓ Lint passed (0 issues)!"
 }
 
+run_test_quiet() {
+    local label="$1"
+    shift
+    local start_ts
+    start_ts=$(date +%s)
+
+    if [ "${1:-}" = "go" ] && [ "${2:-}" = "test" ] && command -v gotestsum &>/dev/null; then
+        echo "==> ${label}..."
+        gotestsum --format dots -- "${@:2}"
+        local elapsed=$(( $(date +%s) - start_ts ))
+        echo "✓ ${label} passed (${elapsed}s)"
+        return 0
+    fi
+
+    if [ "${1:-}" = "go" ] && [ "${2:-}" = "test" ] && command -v python3 &>/dev/null; then
+        echo "==> ${label}..."
+        local rc=0
+        set +e
+        go test -json "${@:3}" 2>&1 | python3 -u -c '
+import json, sys, collections
+
+passed = skipped = failed = col = 0
+outputs = collections.defaultdict(list)
+non_json = []
+failed_tests = []
+build_failed = False
+
+def emit(ch):
+    global col
+    sys.stdout.write(ch)
+    col += 1
+    if col >= 80:
+        sys.stdout.write("\n")
+        col = 0
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    raw = line.rstrip("\n")
+    try:
+        ev = json.loads(raw)
+    except Exception:
+        if raw.strip():
+            non_json.append(raw)
+        continue
+    act = ev.get("Action")
+    pkg = ev.get("Package") or ev.get("ImportPath") or ""
+    test = ev.get("Test") or ""
+    key = (pkg, test)
+    if act in ("output", "build-output"):
+        txt = ev.get("Output", "")
+        if txt:
+            outputs[key].append(txt)
+    elif act == "pass" and test:
+        passed += 1
+        emit(".")
+    elif act == "skip" and test:
+        skipped += 1
+        emit("s")
+    elif act == "fail" and test:
+        failed += 1
+        failed_tests.append(key)
+        emit("F")
+    elif act in ("fail", "build-fail") and not test:
+        build_failed = True
+        if key not in failed_tests:
+            failed_tests.append(key)
+
+if col > 0:
+    sys.stdout.write("\n")
+
+if failed > 0 or build_failed or non_json:
+    for key in failed_tests:
+        pkg, test = key
+        hdr = f"{pkg} :: {test}" if test else (pkg or "build")
+        print(f"\n--- FAIL: {hdr} ---")
+        for out in outputs.get(key, []):
+            sys.stdout.write(out)
+    if non_json:
+        print("\n--- STDERR / OUTPUT ---")
+        for l in non_json:
+            print(l)
+    print(f"\n✗ Failed: {failed} failed, {passed} passed, {skipped} skipped")
+    sys.exit(1)
+
+print(f"Summary: {passed} passed, {skipped} skipped")
+'
+        local pipe_status=("${PIPESTATUS[@]}")
+        set -e
+        local go_rc="${pipe_status[0]:-0}"
+        local py_rc="${pipe_status[1]:-0}"
+        local elapsed=$(( $(date +%s) - start_ts ))
+        if [ "$go_rc" -ne 0 ] || [ "$py_rc" -ne 0 ]; then
+            echo "✗ ${label} failed (${elapsed}s)"
+            exit 1
+        fi
+        echo "✓ ${label} passed (${elapsed}s)"
+        return 0
+    fi
+
+    local log_file="$BUILD_DIR/test_output.log"
+    if ! "$@" >"$log_file" 2>&1; then
+        echo "✗ ${label} failed:"
+        cat "$log_file"
+        rm -f "$log_file"
+        exit 1
+    fi
+    local elapsed=$(( $(date +%s) - start_ts ))
+    rm -f "$log_file"
+    echo "✓ ${label} passed (${elapsed}s)"
+}
+
 run_test() {
-    echo "==> Running unit tests with race detector..."
-    go test -race -timeout 180s -count=1 -v ./...
-    echo "==> Running multi-count race stress tests (-count=5) on concurrent core packages..."
-    go test -race -timeout 180s -count=5 ./internal/app/... ./pkg/queue/... ./pkg/platform/... ./internal/eventlog/...
-    echo "✓ All unit and race tests passed!"
+    run_test_quiet "Unit tests (with race detector)" go test -race -timeout 180s -count=1 ./...
+    run_test_quiet "Concurrent race stress tests (-count=5)" go test -race -timeout 180s -count=5 ./internal/app/... ./pkg/queue/... ./pkg/platform/... ./internal/eventlog/...
+}
+
+build_wasm() {
+    echo "==> Vetting & building PoundControl WASM plugin (poundcontrol-towncrier.wasm v${VERSION})..."
+    local norm_ver="${VERSION#v}"
+    GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 go vet ./integrations/poundcontrol-wasm
+    GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 \
+        go build -buildmode=c-shared -trimpath \
+        -ldflags="-s -w -X main.PluginVersion=${norm_ver}" \
+        -o "$BIN_DIR/poundcontrol-towncrier.wasm" ./integrations/poundcontrol-wasm
+    echo "✓ Built $BIN_DIR/poundcontrol-towncrier.wasm"
 }
 
 build_win() {
     fetch_dlls
     bash "$ROOT_DIR/scripts/build-whisper-vulkan.sh" win
+    build_wasm
 
     local core_syso="$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso"
     local launcher_syso="$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso"
@@ -161,8 +290,8 @@ build_win() {
     local inst_payload_dir="$ROOT_DIR/cmd/installer/payload"
     mkdir -p "$payload_dir" "$inst_payload_dir"
     rm -f "$payload_dir/towncrier-core"* "$payload_dir/towncrier-whisper"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
-    rm -f "$inst_payload_dir/towncrier-core"* "$inst_payload_dir/towncrier-whisper"* "$inst_payload_dir/"*.dll "$inst_payload_dir/LICENSE" "$inst_payload_dir/THIRDPARTY_NOTICES.md"
-    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/towncrier-whisper"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/launcher/payload/"*.dylib "$ROOT_DIR/cmd/installer/payload/towncrier-core"* "$ROOT_DIR/cmd/installer/payload/towncrier-whisper"* "$ROOT_DIR/cmd/installer/payload/"*.dll "$ROOT_DIR/cmd/installer/payload/LICENSE" "$ROOT_DIR/cmd/installer/payload/THIRDPARTY_NOTICES.md" "$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/installer/rsrc_windows_amd64.syso"' RETURN
+    rm -f "$inst_payload_dir/towncrier-core"* "$inst_payload_dir/towncrier-whisper"* "$inst_payload_dir/"*.dll "$inst_payload_dir/poundcontrol-towncrier.wasm" "$inst_payload_dir/LICENSE" "$inst_payload_dir/THIRDPARTY_NOTICES.md"
+    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/towncrier-whisper"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/launcher/payload/"*.dylib "$ROOT_DIR/cmd/installer/payload/towncrier-core"* "$ROOT_DIR/cmd/installer/payload/towncrier-whisper"* "$ROOT_DIR/cmd/installer/payload/"*.dll "$ROOT_DIR/cmd/installer/payload/poundcontrol-towncrier.wasm" "$ROOT_DIR/cmd/installer/payload/LICENSE" "$ROOT_DIR/cmd/installer/payload/THIRDPARTY_NOTICES.md" "$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/installer/rsrc_windows_amd64.syso"' RETURN
     cp -f "$BIN_DIR/towncrier-core.exe" "$payload_dir/"
     cp -f "$BIN_DIR/towncrier-whisper.exe" "$payload_dir/"
     cp -f "$BIN_DIR/onnxruntime.dll" "$payload_dir/"
@@ -174,6 +303,7 @@ build_win() {
     cp -f "$BIN_DIR/onnxruntime.dll" "$inst_payload_dir/"
     cp -f "$BIN_DIR/sherpa-onnx-c-api.dll" "$inst_payload_dir/"
     cp -f "$BIN_DIR/sherpa-onnx-cxx-api.dll" "$inst_payload_dir/"
+    cp -f "$BIN_DIR/poundcontrol-towncrier.wasm" "$inst_payload_dir/"
     [ -f "$ROOT_DIR/LICENSE" ] && cp -f "$ROOT_DIR/LICENSE" "$inst_payload_dir/"
     [ -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" ] && cp -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" "$inst_payload_dir/"
 
@@ -187,9 +317,14 @@ build_win() {
         go build -tags nosherpa -trimpath -ldflags="-H windowsgui -s -w -X main.AppVersion=${VERSION} -extldflags '-static-libgcc'" \
         -o "$BIN_DIR/TownCrier-Setup.exe" ./cmd/installer
 
+    if command -v x86_64-w64-mingw32-objdump &>/dev/null; then
+        echo "==> Verifying TownCrier-Setup.exe DLL Dependencies..."
+        x86_64-w64-mingw32-objdump -p "$BIN_DIR/TownCrier-Setup.exe" | grep "DLL Name"
+    fi
+
     # Clean staged payload and temporary .syso from source tree
     rm -f "$payload_dir/towncrier-core"* "$payload_dir/towncrier-whisper"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
-    rm -f "$inst_payload_dir/towncrier-core"* "$inst_payload_dir/towncrier-whisper"* "$inst_payload_dir/"*.dll "$inst_payload_dir/LICENSE" "$inst_payload_dir/THIRDPARTY_NOTICES.md"
+    rm -f "$inst_payload_dir/towncrier-core"* "$inst_payload_dir/towncrier-whisper"* "$inst_payload_dir/"*.dll "$inst_payload_dir/poundcontrol-towncrier.wasm" "$inst_payload_dir/LICENSE" "$inst_payload_dir/THIRDPARTY_NOTICES.md"
     rm -f "$core_syso" "$launcher_syso" "$installer_syso"
     trap - RETURN
 
@@ -360,6 +495,9 @@ package_dist() {
     if [ ! -f "$BIN_DIR/towncrier" ]; then
         build_linux
     fi
+    if [ ! -f "$BIN_DIR/poundcontrol-towncrier.wasm" ]; then
+        build_wasm
+    fi
 
     local zip_file="$DIST_DIR/TownCrier-v${VERSION}-windows-amd64.zip"
     echo "==> Packaging Windows distribution into $zip_file..."
@@ -407,6 +545,29 @@ with zipfile.ZipFile('$zip_file', 'w', zipfile.ZIP_DEFLATED) as zf:
     (cd "$staging" && tar -czf "$tar_file" .)
     rm -rf "$staging"
     echo "✓ Successfully packaged $tar_file"
+
+    if [ -f "$BIN_DIR/poundcontrol-towncrier.wasm" ]; then
+        cp -f "$BIN_DIR/poundcontrol-towncrier.wasm" "$DIST_DIR/poundcontrol-towncrier.wasm"
+        echo "✓ Successfully packaged $DIST_DIR/poundcontrol-towncrier.wasm"
+    fi
+}
+
+run_proto() {
+    echo "==> Generating Protobuf Go bindings..."
+    if ! command -v protoc &>/dev/null; then
+        echo "Error: protoc not found in PATH"
+        exit 1
+    fi
+    if ! command -v protoc-gen-go &>/dev/null; then
+        echo "Error: protoc-gen-go not found in PATH"
+        exit 1
+    fi
+    mkdir -p "$ROOT_DIR/internal/ws/controlv1" "$ROOT_DIR/pkg/pluginv1"
+    protoc -I "$ROOT_DIR/proto" \
+        --go_out="$ROOT_DIR" --go_opt=module=github.com/mrpoundsign/TownCrier \
+        "$ROOT_DIR/proto/control/v1/"*.proto \
+        "$ROOT_DIR/proto/plugin/v1/"*.proto
+    echo "✓ Protobuf bindings generated!"
 }
 
 clean() {
@@ -419,6 +580,7 @@ case "$TARGET" in
     all)
         run_lint
         run_test
+        build_wasm
         build_win
         build_linux
         package_dist
@@ -432,11 +594,17 @@ case "$TARGET" in
     mac|osx)
         build_mac
         ;;
+    wasm)
+        build_wasm
+        ;;
     lint)
         run_lint
         ;;
     test)
         run_test
+        ;;
+    proto)
+        run_proto
         ;;
     package)
         package_dist
@@ -452,7 +620,7 @@ case "$TARGET" in
         ;;
     *)
         echo "Unknown target: $TARGET"
-        echo "Valid targets: all, win, linux, mac, lint, test, package, package-mac, fetch-dlls, clean"
+        echo "Valid targets: all, win, linux, mac, wasm, lint, test, proto, package, package-mac, fetch-dlls, clean"
         exit 1
         ;;
 esac

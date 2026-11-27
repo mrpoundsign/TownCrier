@@ -14,6 +14,8 @@ const (
 	EarconStreamOffline EarconKind = "stream_offline"
 	// EarconMention is a crisp double-tap ping played when a message @mentions or replies to the listener.
 	EarconMention EarconKind = "mention"
+	// EarconWakeWord is a crisp ascending two-pip activation chime played when a voice command wake word activates.
+	EarconWakeWord EarconKind = "wake_word"
 )
 
 type toneSegment struct {
@@ -48,6 +50,13 @@ func SynthesizeEarcon(kind EarconKind, sampleRate int) []float32 {
 			{freqHz: 659.25, durationMs: 65, gain: 0.30},
 			{freqHz: 0, durationMs: 30, gain: 0.0},
 			{freqHz: 880.00, durationMs: 110, gain: 0.32},
+		}
+	case EarconWakeWord:
+		// D6 (1174.66 Hz) -> gap -> A6 (1760.0 Hz)
+		segments = []toneSegment{
+			{freqHz: 1174.66, durationMs: 55, gain: 0.24},
+			{freqHz: 0, durationMs: 20, gain: 0.0},
+			{freqHz: 1760.00, durationMs: 95, gain: 0.24},
 		}
 	default:
 		segments = []toneSegment{

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -9,6 +10,9 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/mrpoundsign/TownCrier/internal/bot"
+	"github.com/mrpoundsign/TownCrier/pkg/config"
 )
 
 var resHelpQuestion = fyne.NewStaticResource("help_question.svg", []byte(
@@ -165,7 +169,8 @@ func (m *templateHelpMarker) showDialog() {
 		btn.Importance = widget.LowImportance
 
 		descLabel := widget.NewLabel(v.Desc)
-		row := container.NewBorder(nil, nil, container.NewGridWrap(fyne.NewSize(140, 36), btn), nil, descLabel)
+		descLabel.Wrapping = fyne.TextWrapWord
+		row := container.NewBorder(nil, nil, container.NewGridWrap(fyne.NewSize(175, 36), btn), nil, descLabel)
 		varRows.Add(row)
 	}
 
@@ -182,7 +187,7 @@ func (m *templateHelpMarker) showDialog() {
 	content := container.NewBorder(topBox, bottomBox, nil, nil, scroll)
 
 	dlg := dialog.NewCustom(m.title+" Template Variables", "Close", content, m.win)
-	dlg.Resize(fyne.NewSize(480, 340))
+	dlg.Resize(fyne.NewSize(560, 420))
 	dlg.Show()
 }
 
@@ -419,4 +424,107 @@ func EventTemplateVars(platform, eventKey string) []TemplateVar {
 		{Var: "{user}", Desc: "Chatter / actor username"},
 		{Var: "{message}", Desc: "Chat or event message"},
 	}
+}
+
+// BotTemplateVars returns the list of supported %token% template placeholders for Bot Automation actions and conditions.
+func BotTemplateVars() []TemplateVar {
+	return []TemplateVar{
+		{Var: "%obs.scene%", Desc: "Current active OBS program scene"},
+		{Var: "%obs.previousScene%", Desc: "Previously active OBS program scene"},
+		{Var: "%obs.previewScene%", Desc: "Current OBS Studio Mode preview scene"},
+		{Var: "%obs.connected%", Desc: "Whether OBS WebSocket is connected (true / false)"},
+		{Var: "%obsResponse%", Desc: "JSON response from the last Custom OBS Request"},
+		{Var: "%user%", Desc: "Triggering username"},
+		{Var: "%displayName%", Desc: "Triggering user's display name"},
+		{Var: "%userId%", Desc: "Triggering user's platform ID"},
+		{Var: "%platform%", Desc: "Triggering platform (twitch, youtube, kick, tiktok)"},
+		{Var: "%channel%", Desc: "Channel name or ID"},
+		{Var: "%message%", Desc: "Full chat message text"},
+		{Var: "%rawInput%", Desc: "Arguments after the !command or voice phrase"},
+		{Var: "%arg0%", Desc: "First space-separated argument word (%arg1%, %arg2%...)"},
+		{Var: "%command%", Desc: "Matched !command trigger"},
+		{Var: "%transcript%", Desc: "Matched Whisper voice transcript"},
+		{Var: "%voicePhrase%", Desc: "Configured Whisper voice command phrase"},
+		{Var: "%amount%", Desc: "Numeric event amount (bits, gift, donation, raid)"},
+		{Var: "%reward%", Desc: "Channel point reward or gift name"},
+		{Var: "%timerName%", Desc: "Name of the timer that fired"},
+		{Var: "%chatLines%", Desc: "Session chat line counter"},
+		{Var: "%global.<key>%", Desc: "Global variable lookup (persists across restarts)"},
+		{Var: "%session.<key>%", Desc: "Session variable lookup (resets on stream session start)"},
+		{Var: "%action.<key>%", Desc: "Per-action variable lookup (current run of this action)"},
+		{Var: "%user.<key>%", Desc: "Per-user variable lookup (replace <key> with variable name)"},
+		{Var: "%httpStatus%", Desc: "Status code from the last HTTP Request step"},
+		{Var: "%httpResponse%", Desc: "Response body from the last HTTP Request step"},
+		{Var: "%random(1,100)%", Desc: "Random integer between min and max inclusive"},
+		{Var: "%pick(a,b,c)%", Desc: "Randomly pick one comma-separated option"},
+	}
+}
+
+// BotTemplateVarsWithDeclared returns declared Global, Session, and Per-Action variables followed by standard bot tokens.
+func BotTemplateVarsWithDeclared(botCfg config.BotAutomationConfig, action *config.BotActionDef, store *bot.Store) []TemplateVar {
+	var out []TemplateVar
+	for _, dv := range botCfg.Variables {
+		name := strings.TrimSpace(dv.Name)
+		if name == "" {
+			continue
+		}
+		if strings.EqualFold(dv.Scope, "session") {
+			val := dv.DefaultValue
+			if store != nil {
+				if ve, ok := store.GetGlobalVar(name, true); ok {
+					val = ve.Value
+				}
+			}
+			out = append(out, TemplateVar{
+				Var:  fmt.Sprintf("%%session.%s%%", name),
+				Desc: fmt.Sprintf("Session (%s) • current=%q (default=%q)", dv.Kind, val, dv.DefaultValue),
+			})
+		} else {
+			val := dv.DefaultValue
+			if store != nil {
+				if ve, ok := store.GetGlobalVar(name, false); ok {
+					val = ve.Value
+				}
+			}
+			out = append(out, TemplateVar{
+				Var:  fmt.Sprintf("%%global.%s%%", name),
+				Desc: fmt.Sprintf("Global (%s) • current=%q (default=%q)", dv.Kind, val, dv.DefaultValue),
+			})
+		}
+	}
+	if action != nil {
+		for _, av := range action.Variables {
+			name := strings.TrimSpace(av.Name)
+			if name == "" {
+				continue
+			}
+			out = append(out, TemplateVar{
+				Var:  fmt.Sprintf("%%action.%s%%", name),
+				Desc: fmt.Sprintf("Per-Action (%s) • default=%q", av.Kind, av.DefaultValue),
+			})
+		}
+	}
+	return append(out, BotTemplateVars()...)
+}
+
+func withBotVarHelpVars(win fyne.Window, fieldTitle string, entry *widget.Entry, vars []TemplateVar, onStatus func(string)) fyne.CanvasObject {
+	if entry == nil {
+		return widget.NewLabel("")
+	}
+	if len(vars) == 0 {
+		vars = BotTemplateVars()
+	}
+	marker := newTemplateHelpMarker(win, "bot_vars", fieldTitle, vars, onStatus, entry)
+	return container.NewBorder(nil, nil, nil, container.NewCenter(marker), entry)
+}
+
+func withBotVarHelpSelectVars(win fyne.Window, fieldTitle string, se *widget.SelectEntry, vars []TemplateVar, onStatus func(string)) fyne.CanvasObject {
+	if se == nil {
+		return widget.NewLabel("")
+	}
+	if len(vars) == 0 {
+		vars = BotTemplateVars()
+	}
+	marker := newTemplateHelpMarker(win, "bot_vars", fieldTitle, vars, onStatus, &se.Entry)
+	return container.NewBorder(nil, nil, nil, container.NewCenter(marker), se)
 }

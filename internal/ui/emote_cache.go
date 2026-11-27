@@ -764,10 +764,6 @@ type emoteMessageCell struct {
 	rootBox    *fyne.Container
 }
 
-func newEmoteMessageCell(cache *EmoteCache, onHover func(obj fyne.CanvasObject, tip string, hovered bool)) *emoteMessageCell {
-	return newScaledEmoteMessageCell(cache, 1.0, onHover)
-}
-
 func newScaledEmoteMessageCell(cache *EmoteCache, scale float32, onHover func(obj fyne.CanvasObject, tip string, hovered bool)) *emoteMessageCell {
 	if cache == nil {
 		cache = DefaultEmoteCache()

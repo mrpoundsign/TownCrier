@@ -56,8 +56,8 @@ func TestSettingsViewBuild(t *testing.T) {
 	if view.subTabs == nil {
 		t.Fatal("expected subTabs to be initialized")
 	}
-	if len(view.subTabs.Items) != 5 {
-		t.Errorf("expected 5 default settings sub-tabs (General, OBS & Overlays, TTS & Hardware, Rules & Safety, Event Logs), got %d", len(view.subTabs.Items))
+	if len(view.subTabs.Items) != 6 {
+		t.Errorf("expected 6 default settings sub-tabs (General, OBS & Overlays, Plugins, TTS & Hardware, Rules & Safety, Event Logs), got %d", len(view.subTabs.Items))
 	}
 	if view.logsView == nil {
 		t.Error("expected logsView to be initialized")
@@ -298,8 +298,8 @@ func TestSettingsView_TTSAndLoggingToggles(t *testing.T) {
 	if !view.enableTTSCheck.Checked {
 		t.Fatal("expected enableTTSCheck to be checked by default")
 	}
-	if len(view.subTabs.Items) != 5 {
-		t.Fatalf("expected 5 subtabs initially, got %d", len(view.subTabs.Items))
+	if len(view.subTabs.Items) != 6 {
+		t.Fatalf("expected 6 subtabs initially, got %d", len(view.subTabs.Items))
 	}
 
 	// 1. SyncTTSState(false) removes TTS & Hardware, Rules & Safety subtabs and hides voice/audio cards
@@ -310,14 +310,14 @@ func TestSettingsView_TTSAndLoggingToggles(t *testing.T) {
 	if view.audioCard.Visible() {
 		t.Error("expected audioCard to be hidden when TTS is disabled")
 	}
-	if len(view.subTabs.Items) != 3 {
-		t.Fatalf("expected 3 subtabs when TTS is disabled (General, OBS & Overlays, Event Logs), got %d", len(view.subTabs.Items))
+	if len(view.subTabs.Items) != 4 {
+		t.Fatalf("expected 4 subtabs when TTS is disabled (General, OBS & Overlays, Plugins, Event Logs), got %d", len(view.subTabs.Items))
 	}
 
 	// 2. SyncLoggingState(false) removes Event Logs subtab
 	view.SyncLoggingState(false)
-	if len(view.subTabs.Items) != 2 {
-		t.Fatalf("expected 2 subtabs when both TTS and Logging are disabled (General, OBS & Overlays), got %d", len(view.subTabs.Items))
+	if len(view.subTabs.Items) != 3 {
+		t.Fatalf("expected 3 subtabs when both TTS and Logging are disabled (General, OBS & Overlays, Plugins), got %d", len(view.subTabs.Items))
 	}
 
 	// 3. Re-enable both
@@ -329,8 +329,8 @@ func TestSettingsView_TTSAndLoggingToggles(t *testing.T) {
 	if !view.audioCard.Visible() {
 		t.Error("expected audioCard to be visible when TTS is enabled")
 	}
-	if len(view.subTabs.Items) != 5 {
-		t.Fatalf("expected 5 subtabs when both are re-enabled, got %d", len(view.subTabs.Items))
+	if len(view.subTabs.Items) != 6 {
+		t.Fatalf("expected 6 subtabs when both are re-enabled, got %d", len(view.subTabs.Items))
 	}
 
 	// 4. User unchecks enableTTSCheck directly from the Application Features card
@@ -1083,6 +1083,10 @@ func TestSettingsView_GranularWebServerAndOverlayToggles(t *testing.T) {
 	w := a.NewWindow("Test Granular Web Server Toggles")
 
 	cfg := config.DefaultConfig()
+	if !cfg.WebSocket.Enabled {
+		t.Fatal("expected DefaultConfig().WebSocket.Enabled to be true (localhost-only by default)")
+	}
+	cfg.WebSocket.Enabled = false
 	cfg.WebSocket.Port = 0
 	// Ensure no connectors start when sess.Start() is called
 	for k, p := range cfg.Platforms {

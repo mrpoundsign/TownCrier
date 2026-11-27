@@ -105,6 +105,42 @@
     </div>
   </div>
 
+  <div data-action="com.github.mrpoundsign.towncrier.action" style="display:none">
+    <h3>Run TownCrier Bot / Plugin Action</h3>
+    <div class="field">
+      <label>Discover Live Actions (CrowdDJ &amp; Bot Engine)</label>
+      <div style="display:flex; gap:6px;">
+        <select id="tc-action-picker" style="flex:1;">
+          <option value="">Click Refresh to load live actions...</option>
+        </select>
+        <button type="button" id="tc-refresh-actions" style="background:#38BDF8;color:#0F172A;border:none;border-radius:4px;padding:5px 10px;font-weight:600;cursor:pointer;">Refresh</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Target Type</label>
+      <select data-setting="targetType">
+        <option value="plugin">Plugin Action (e.g. CrowdDJ)</option>
+        <option value="bot">TownCrier Bot Action</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Plugin UUID (for Plugin Action, e.g. com.github.mrpoundsign.crowddj)</label>
+      <input type="text" data-setting="pluginUuid" placeholder="com.github.mrpoundsign.crowddj" />
+    </div>
+    <div class="field">
+      <label>Action ID (or Name)</label>
+      <input type="text" data-setting="actionId" placeholder="play_pause, skip, stop, toggle_requests..." />
+    </div>
+    <div class="field">
+      <label>Button Label</label>
+      <input type="text" data-setting="label" placeholder="PLAY/PAUSE" />
+    </div>
+    <div class="field">
+      <label>Optional JSON Args (e.g. {"volume":"60"})</label>
+      <input type="text" data-setting="argsJson" placeholder="{}" />
+    </div>
+  </div>
+
   <h3>TownCrier Connection</h3>
   <div class="field">
     <label>Host</label>

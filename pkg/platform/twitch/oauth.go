@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,19 +27,36 @@ const (
 	SecretTwitchUserID       = "twitch_user_id"
 	SecretTwitchUserLogin    = "twitch_user_login"
 	SecretTwitchDisplayName  = "twitch_display_name"
+	SecretTwitchScopes       = "twitch_scopes"
 )
 
-// DefaultTwitchScopes contains the required permissions for stream chat reading, alerts, and moderation.
+// BotWriteTwitchScopes are additional OAuth scopes needed by Bot Automation outbound actions.
+var BotWriteTwitchScopes = []string{
+	"user:write:chat",
+	"moderator:manage:announcements",
+	"moderator:manage:shoutouts",
+	"channel:manage:redemptions",
+	"clips:edit",
+	"channel:manage:broadcast",
+}
+
+// DefaultTwitchScopes contains the required permissions for stream chat reading, alerts, moderation, and bot automation.
 var DefaultTwitchScopes = []string{
 	"user:read:chat",
+	"user:write:chat",
 	"bits:read",
 	"channel:read:subscriptions",
 	"channel:read:redemptions",
+	"channel:manage:redemptions",
+	"channel:manage:broadcast",
+	"clips:edit",
 	"moderator:read:chat_messages",
 	"moderator:read:followers",
 	"moderator:manage:chat_messages",
 	"moderator:manage:banned_users",
 	"moderator:manage:automod",
+	"moderator:manage:announcements",
+	"moderator:manage:shoutouts",
 }
 
 // DeviceCodeResponse holds the response from Twitch's device authorization endpoint.
@@ -65,6 +83,7 @@ type TokenResponse struct {
 type OAuthManager struct {
 	mu             sync.RWMutex
 	clientID       string
+	prefix         string
 	deviceEndpoint string
 	tokenEndpoint  string
 	helixBaseURL   string
@@ -73,19 +92,44 @@ type OAuthManager struct {
 	onAuthChange   func()
 }
 
-// NewOAuthManager creates a new Twitch OAuthManager.
+// NewOAuthManager creates a new Twitch OAuthManager with the default broadcaster secret prefix ("twitch_").
 func NewOAuthManager(clientID string, store secrets.Store) *OAuthManager {
+	return NewOAuthManagerWithPrefix(clientID, store, "twitch_")
+}
+
+// NewBotOAuthManager creates a dedicated Twitch OAuthManager for sending chat as a separate bot account ("twitch_bot_").
+func NewBotOAuthManager(clientID string, store secrets.Store) *OAuthManager {
+	return NewOAuthManagerWithPrefix(clientID, store, "twitch_bot_")
+}
+
+// NewOAuthManagerWithPrefix creates a Twitch OAuthManager storing credentials under keyPrefix + "<field>".
+func NewOAuthManagerWithPrefix(clientID string, store secrets.Store, keyPrefix string) *OAuthManager {
 	if clientID == "" {
 		clientID = DefaultTwitchClientID
 	}
+	if keyPrefix == "" {
+		keyPrefix = "twitch_"
+	}
+	if !strings.HasSuffix(keyPrefix, "_") {
+		keyPrefix += "_"
+	}
 	return &OAuthManager{
 		clientID:       clientID,
+		prefix:         keyPrefix,
 		deviceEndpoint: DefaultTwitchDeviceEndpoint,
 		tokenEndpoint:  DefaultTwitchTokenEndpoint,
 		helixBaseURL:   DefaultHelixBaseURL,
 		httpClient:     &http.Client{Timeout: 15 * time.Second},
 		store:          store,
 	}
+}
+
+func (m *OAuthManager) key(field string) string {
+	p := m.prefix
+	if p == "" {
+		p = "twitch_"
+	}
+	return p + field
 }
 
 // SetHelixBaseURL overrides the Helix API base URL (used in unit tests).
@@ -310,39 +354,83 @@ func (m *OAuthManager) SaveTokens(tokens *TokenResponse) error {
 		return errors.New("empty tokens cannot be saved")
 	}
 
-	if err := m.store.Set(SecretTwitchAccessToken, tokens.AccessToken); err != nil {
+	if err := m.store.Set(m.key("access_token"), tokens.AccessToken); err != nil {
 		return fmt.Errorf("save access token: %w", err)
 	}
 
 	if tokens.RefreshToken != "" {
-		if err := m.store.Set(SecretTwitchRefreshToken, tokens.RefreshToken); err != nil {
+		if err := m.store.Set(m.key("refresh_token"), tokens.RefreshToken); err != nil {
 			return fmt.Errorf("save refresh token: %w", err)
 		}
 	}
 
 	if tokens.ExpiresIn > 0 {
 		expiryUnix := time.Now().Add(time.Duration(tokens.ExpiresIn) * time.Second).Unix()
-		_ = m.store.Set(SecretTwitchTokenExpiry, strconv.FormatInt(expiryUnix, 10))
+		_ = m.store.Set(m.key("token_expiry"), strconv.FormatInt(expiryUnix, 10))
+	}
+
+	if len(tokens.Scope) > 0 {
+		_ = m.store.Set(m.key("scopes"), strings.Join(tokens.Scope, " "))
 	}
 
 	return nil
 }
 
+// StoredScopes returns the space-split list of granted scopes recorded for this Twitch session.
+func (m *OAuthManager) StoredScopes() []string {
+	if m.store == nil {
+		return nil
+	}
+	raw, err := m.store.Get(m.key("scopes"))
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	return strings.Fields(strings.ToLower(raw))
+}
+
+// HasScope reports whether the authenticated session holds the requested Twitch OAuth scope.
+func (m *OAuthManager) HasScope(scope string) bool {
+	target := strings.ToLower(strings.TrimSpace(scope))
+	if target == "" {
+		return true
+	}
+	return slices.Contains(m.StoredScopes(), target)
+}
+
+// MissingScopes returns any required Twitch OAuth scopes not recorded in StoredScopes.
+func (m *OAuthManager) MissingScopes(required []string) []string {
+	if len(required) == 0 {
+		return nil
+	}
+	granted := make(map[string]bool)
+	for _, s := range m.StoredScopes() {
+		granted[s] = true
+	}
+	var missing []string
+	for _, r := range required {
+		clean := strings.ToLower(strings.TrimSpace(r))
+		if clean != "" && !granted[clean] {
+			missing = append(missing, clean)
+		}
+	}
+	return missing
+}
+
 // GetValidAccessToken returns a valid access token, automatically refreshing if expired or expiring within 60s.
 func (m *OAuthManager) GetValidAccessToken(ctx context.Context) (string, error) {
-	accessTok, err := m.store.Get(SecretTwitchAccessToken)
+	accessTok, err := m.store.Get(m.key("access_token"))
 	if err != nil || accessTok == "" {
 		return "", errors.New("no Twitch access token stored; OAuth connection required")
 	}
 
 	// Check expiry
-	expiryStr, err := m.store.Get(SecretTwitchTokenExpiry)
+	expiryStr, err := m.store.Get(m.key("token_expiry"))
 	if err == nil && expiryStr != "" {
 		if expUnix, parseErr := strconv.ParseInt(expiryStr, 10, 64); parseErr == nil {
 			expiryTime := time.Unix(expUnix, 0)
 			// If expiring in less than 60 seconds, refresh
 			if time.Until(expiryTime) < 60*time.Second {
-				refreshTok, rErr := m.store.Get(SecretTwitchRefreshToken)
+				refreshTok, rErr := m.store.Get(m.key("refresh_token"))
 				if rErr == nil && refreshTok != "" {
 					refreshed, refErr := m.RefreshToken(ctx, refreshTok)
 					if refErr == nil {
@@ -358,18 +446,19 @@ func (m *OAuthManager) GetValidAccessToken(ctx context.Context) (string, error) 
 
 // HasToken returns true if an access token exists in the secret store.
 func (m *OAuthManager) HasToken() bool {
-	tok, err := m.store.Get(SecretTwitchAccessToken)
+	tok, err := m.store.Get(m.key("access_token"))
 	return err == nil && tok != ""
 }
 
 // ClearTokens removes stored Twitch tokens and user identity from the secret store.
 func (m *OAuthManager) ClearTokens() error {
-	_ = m.store.Delete(SecretTwitchAccessToken)
-	_ = m.store.Delete(SecretTwitchRefreshToken)
-	_ = m.store.Delete(SecretTwitchTokenExpiry)
-	_ = m.store.Delete(SecretTwitchUserID)
-	_ = m.store.Delete(SecretTwitchUserLogin)
-	_ = m.store.Delete(SecretTwitchDisplayName)
+	_ = m.store.Delete(m.key("access_token"))
+	_ = m.store.Delete(m.key("refresh_token"))
+	_ = m.store.Delete(m.key("token_expiry"))
+	_ = m.store.Delete(m.key("user_id"))
+	_ = m.store.Delete(m.key("user_login"))
+	_ = m.store.Delete(m.key("display_name"))
+	_ = m.store.Delete(m.key("scopes"))
 	m.notifyAuthChange()
 	return nil
 }
@@ -378,7 +467,7 @@ func (m *OAuthManager) ClearTokens() error {
 // It attempts a single token refresh if a refresh token is stored; if refresh fails or is unavailable,
 // it clears the invalid tokens and notifies UI listeners.
 func (m *OAuthManager) HandleUnauthorized(ctx context.Context) (string, error) {
-	refreshTok, err := m.store.Get(SecretTwitchRefreshToken)
+	refreshTok, err := m.store.Get(m.key("refresh_token"))
 	if err == nil && strings.TrimSpace(refreshTok) != "" {
 		if refreshed, refErr := m.RefreshToken(ctx, refreshTok); refErr == nil && refreshed != nil && refreshed.AccessToken != "" {
 			return refreshed.AccessToken, nil
@@ -393,9 +482,9 @@ func (m *OAuthManager) StoredUser() (userID, login, displayName string) {
 	if m.store == nil {
 		return "", "", ""
 	}
-	uid, _ := m.store.Get(SecretTwitchUserID)
-	ulog, _ := m.store.Get(SecretTwitchUserLogin)
-	udisp, _ := m.store.Get(SecretTwitchDisplayName)
+	uid, _ := m.store.Get(m.key("user_id"))
+	ulog, _ := m.store.Get(m.key("user_login"))
+	udisp, _ := m.store.Get(m.key("display_name"))
 	return strings.TrimSpace(uid), strings.TrimSpace(ulog), strings.TrimSpace(udisp)
 }
 
@@ -462,9 +551,9 @@ func (m *OAuthManager) FetchAuthenticatedUser(ctx context.Context) (userID, logi
 	}
 
 	if m.store != nil {
-		_ = m.store.Set(SecretTwitchUserID, userID)
-		_ = m.store.Set(SecretTwitchUserLogin, login)
-		_ = m.store.Set(SecretTwitchDisplayName, displayName)
+		_ = m.store.Set(m.key("user_id"), userID)
+		_ = m.store.Set(m.key("user_login"), login)
+		_ = m.store.Set(m.key("display_name"), displayName)
 	}
 	return userID, login, displayName, nil
 }

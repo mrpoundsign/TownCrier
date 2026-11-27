@@ -76,10 +76,13 @@ func (s EmoteSpan) ImageURL(platform string) string {
 
 // Event represents a unified stream chat or notification event across all platforms.
 type Event struct {
-	ID            string      `json:"id"`
-	Platform      string      `json:"platform"`
-	Channel       string      `json:"channel,omitempty"`
-	Kind          EventKind   `json:"kind"`
+	ID                string      `json:"id"`
+	Platform          string      `json:"platform"`
+	Channel           string      `json:"channel,omitempty"`
+	StreamID          string      `json:"stream_id,omitempty"`
+	StreamTitle       string      `json:"stream_title,omitempty"`
+	StreamOrientation string      `json:"stream_orientation,omitempty"`
+	Kind              EventKind   `json:"kind"`
 	Timestamp     time.Time   `json:"timestamp"`
 	UserID        string      `json:"user_id"`
 	UserName      string      `json:"user_name"`

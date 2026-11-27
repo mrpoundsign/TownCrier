@@ -15,6 +15,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/mrpoundsign/TownCrier/internal/bot"
 	"github.com/mrpoundsign/TownCrier/internal/ws"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 	"github.com/mrpoundsign/TownCrier/pkg/stt"
@@ -174,6 +175,34 @@ func formatSTTThreadsOption(threads int) string {
 	}
 }
 
+var voiceWakeWindowOptions = []string{
+	"4 seconds",
+	"6 seconds (Default)",
+	"10 seconds",
+	"15 seconds",
+}
+
+func formatWakeWindowOption(sec int) string {
+	switch sec {
+	case 4:
+		return "4 seconds"
+	case 10:
+		return "10 seconds"
+	case 15:
+		return "15 seconds"
+	default:
+		return "6 seconds (Default)"
+	}
+}
+
+func parseWakeWindowOption(label string) int {
+	var sec int
+	if _, err := fmt.Sscanf(strings.TrimSpace(label), "%d", &sec); err == nil && sec >= 2 && sec <= 30 {
+		return sec
+	}
+	return config.DefaultVoiceWakeWindowSec
+}
+
 func parseSTTThreadsOption(label string) int {
 	var n int
 	if _, err := fmt.Sscanf(strings.TrimSpace(label), "%d", &n); err == nil && n >= 1 && n <= 16 {
@@ -313,6 +342,10 @@ func (v *SettingsView) SyncSTTStatus(speaking bool, transcribing bool, errText s
 			v.vsSTTStatusLabel.SetText("🎙️ Speaking detected...")
 		default:
 			cfg := v.currentConfig()
+			if cfg != nil && !cfg.EffectiveVoiceDetectionEnabled() {
+				v.vsSTTStatusLabel.SetText("⚪ Voice Detection Disabled")
+				return
+			}
 			fam := config.DefaultVoiceSubtitleModel
 			if cfg != nil {
 				fam = config.NormalizeVoiceSubtitleModel(cfg.VoiceSubtitles.ModelFamily)
@@ -360,6 +393,24 @@ func (v *SettingsView) SyncVoiceSubtitlePreview(ev ws.SubtitleEvent) {
 			fmt.Fprintf(&b, "[%s]%s  %s", ln.Label, tag, ln.Text)
 		}
 		v.vsLivePreviewLabel.SetText(b.String())
+	})
+}
+
+// SyncVoiceTranscript updates the "Last Heard by Whisper" diagnostic label in Voice Detection settings.
+func (v *SettingsView) SyncVoiceTranscript(ev bot.VoiceTranscriptEvent) {
+	fyne.Do(func() {
+		if v.vdLastHeardLabel == nil {
+			return
+		}
+		if strings.TrimSpace(ev.RawText) == "" {
+			v.vdLastHeardLabel.SetText("—")
+			return
+		}
+		summary := fmt.Sprintf("%q", ev.RawText)
+		if strings.TrimSpace(ev.Note) != "" {
+			summary += " — " + ev.Note
+		}
+		v.vdLastHeardLabel.SetText(summary)
 	})
 }
 
@@ -426,6 +477,42 @@ func (v *SettingsView) refreshVoiceSubtitleModelStatus() {
 	v.vsModelStatusLabel.Refresh()
 	v.vsDownloadModelBtn.Refresh()
 	v.syncComputeDeviceLockState(ggmlInstalled, legacyInstalled, spec)
+	v.refreshVoiceDetectionSummary()
+}
+
+func (v *SettingsView) refreshVoiceDetectionSummary() {
+	if v.vdConsumersLabel == nil {
+		return
+	}
+	cfg := v.currentConfig()
+	if cfg == nil {
+		return
+	}
+	vdOn := cfg.EffectiveVoiceDetectionEnabled()
+	subStatus := "Off"
+	if cfg.EffectiveVoiceSubtitlesEnabled() {
+		subStatus = "On"
+	} else if cfg.VoiceSubtitles.Enabled && !vdOn {
+		subStatus = "Paused (Voice Detection Off)"
+	}
+
+	activeCmds := 0
+	for _, vc := range cfg.Bot.VoiceCommands {
+		if vc.Enabled && strings.TrimSpace(vc.Phrase) != "" && strings.TrimSpace(vc.ActionID) != "" {
+			activeCmds++
+		}
+	}
+	botSummary := fmt.Sprintf("%d configured", activeCmds)
+	switch {
+	case activeCmds > 0 && !cfg.Bot.Enabled:
+		botSummary = fmt.Sprintf("%d configured (Bot Engine Off)", activeCmds)
+	case activeCmds > 0 && !vdOn:
+		botSummary = fmt.Sprintf("%d paused (Voice Detection Off)", activeCmds)
+	case activeCmds > 0:
+		botSummary = fmt.Sprintf("%d active", activeCmds)
+	}
+
+	v.vdConsumersLabel.SetText(fmt.Sprintf("Active Voice Consumers: Voice Subtitles (%s) • Bot Voice Commands (%s)", subStatus, botSummary))
 }
 
 func (v *SettingsView) syncComputeDeviceLockState(ggmlInstalled, legacyInstalled bool, spec stt.ModelSpec) {
@@ -470,6 +557,27 @@ func (v *SettingsView) syncVoiceSubtitlesControlsFromConfig() {
 	if v.vsSilenceSelect != nil {
 		v.vsSilenceSelect.SetSelected(formatSilenceOption(vs.MinSilenceMs))
 	}
+	if v.vdWakeWordEntry != nil && v.vdWakeWordEntry.Text != cfg.VoiceDetection.WakeWord {
+		prevInit := v.initializing
+		v.initializing = true
+		v.vdWakeWordEntry.SetText(cfg.VoiceDetection.WakeWord)
+		v.initializing = prevInit
+	}
+	if v.vdWakeWindowSelect != nil {
+		prevInit := v.initializing
+		v.initializing = true
+		v.vdWakeWindowSelect.SetSelected(formatWakeWindowOption(cfg.VoiceDetection.EffectiveWakeWindowSec()))
+		v.initializing = prevInit
+	}
+	if v.vdWakeSoundCheck != nil {
+		prevInit := v.initializing
+		v.initializing = true
+		v.vdWakeSoundCheck.SetChecked(cfg.VoiceDetection.EffectiveWakeSoundEnabled())
+		v.initializing = prevInit
+	}
+	if v.vdResponseVoiceLabel != nil {
+		v.vdResponseVoiceLabel.SetText(formatVoiceResponseSummary(cfg.VoiceDetection.ResponseVoiceID, cfg.VoiceDetection.ResponseSpeed))
+	}
 	if v.vsOverlayPosSelect != nil {
 		if vs.OverlayPosition == "top" {
 			v.vsOverlayPosSelect.SetSelected("Top")
@@ -499,7 +607,7 @@ func (v *SettingsView) syncVoiceSubtitlesControlsFromConfig() {
 	v.refreshVoiceSubtitleModelStatus()
 }
 
-func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
+func (v *SettingsView) buildVoiceDetectionCard() *widget.Card {
 	v.updateConfig(func(c *config.Config) {
 		config.NormalizeVoiceSubtitlesConfig(&c.VoiceSubtitles)
 	})
@@ -511,7 +619,7 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 		return container.NewBorder(nil, nil, container.NewGridWrap(fyne.NewSize(185, 36), widget.NewLabel(label)), nil, ctrl)
 	}
 
-	// --- Card 1: Microphone, Silero VAD & Offline Whisper Model ---
+	// --- Shared Offline Speech Recognition (Microphone, Silero VAD & Whisper) ---
 	v.vsMicDeviceSelect = widget.NewSelect([]string{"Default Microphone"}, func(selected string) {
 		if v.initializing {
 			return
@@ -525,9 +633,10 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 			c.Audio.MicDeviceID = devHex
 		})
 		if v.micDeviceSelect != nil && v.micDeviceSelect.Selected != selected {
+			prevInit := v.initializing
 			v.initializing = true
 			v.micDeviceSelect.SetSelected(selected)
-			v.initializing = false
+			v.initializing = prevInit
 		}
 		v.setStatus("✓ Active microphone input: " + selected)
 	})
@@ -662,6 +771,124 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 	})
 	v.vsSilenceSelect.SetSelected(formatSilenceOption(vs.MinSilenceMs))
 
+	v.vdWakeWordEntry = NewScrollPassEntry()
+	v.vdWakeWordEntry.SetPlaceHolder("Optional (comma-separated, e.g. octothorpe, hey octo)")
+	v.vdWakeWordEntry.SetText(cfg.VoiceDetection.WakeWord)
+	applyWakeWord := func(word string) {
+		clean := strings.TrimSpace(word)
+		v.updateConfig(func(c *config.Config) {
+			c.VoiceDetection.WakeWord = clean
+			config.NormalizeVoiceDetectionConfig(&c.VoiceDetection)
+		})
+		if v.vdWakeWordEntry != nil && v.vdWakeWordEntry.Text != clean {
+			prevInit := v.initializing
+			v.initializing = true
+			v.vdWakeWordEntry.SetText(clean)
+			v.initializing = prevInit
+		}
+		if clean == "" {
+			v.setStatus("✓ Voice command wake word cleared (listening directly).")
+		} else {
+			v.setStatus(fmt.Sprintf("✓ Voice command wake word set to %q.", clean))
+		}
+	}
+	v.vdWakeWordEntry.OnSubmitted = applyWakeWord
+	vdWakeApplyBtn := widget.NewButton("Apply", func() {
+		applyWakeWord(v.vdWakeWordEntry.Text)
+	})
+	vdWakeClearBtn := widget.NewButton("Clear", func() {
+		applyWakeWord("")
+	})
+
+	v.vdWakeWindowSelect = widget.NewSelect(voiceWakeWindowOptions, func(selected string) {
+		if v.initializing {
+			return
+		}
+		sec := parseWakeWindowOption(selected)
+		v.updateConfig(func(c *config.Config) {
+			c.VoiceDetection.WakeWindowSec = sec
+			config.NormalizeVoiceDetectionConfig(&c.VoiceDetection)
+		})
+		v.setStatus(fmt.Sprintf("✓ Wake word armed window set to %ds.", sec))
+	})
+	prevInit := v.initializing
+	v.initializing = true
+	v.vdWakeWindowSelect.SetSelected(formatWakeWindowOption(cfg.VoiceDetection.EffectiveWakeWindowSec()))
+	v.initializing = prevInit
+
+	v.vdWakeSoundCheck = widget.NewCheck("Play beep on wake", func(checked bool) {
+		if v.initializing {
+			return
+		}
+		v.updateConfig(func(c *config.Config) {
+			c.VoiceDetection.SetWakeSoundEnabled(checked)
+		})
+		if checked {
+			v.setStatus("✓ Wake-word activation beep enabled.")
+		} else {
+			v.setStatus("Wake-word activation beep disabled.")
+		}
+	})
+	prevInitSound := v.initializing
+	v.initializing = true
+	v.vdWakeSoundCheck.SetChecked(cfg.VoiceDetection.EffectiveWakeSoundEnabled())
+	v.initializing = prevInitSound
+
+	vdWakeTestBtn := widget.NewButton("Test", func() {
+		if v.session == nil {
+			return
+		}
+		go func() {
+			_ = v.session.PlayWakeWordChime()
+		}()
+	})
+
+	v.vdResponseVoiceLabel = widget.NewLabel(formatVoiceResponseSummary(cfg.VoiceDetection.ResponseVoiceID, cfg.VoiceDetection.ResponseSpeed))
+	v.vdResponseVoiceLabel.Truncation = fyne.TextTruncateEllipsis
+	vdRespChooseBtn := widget.NewButton("Choose…", func() {
+		curVD := v.currentConfig().VoiceDetection
+		initVoice := strings.TrimSpace(curVD.ResponseVoiceID)
+		initSpeed := curVD.ResponseSpeed
+		if initSpeed <= 0 {
+			initSpeed = 1.0
+		}
+		ShowVoiceSpeedDialog(v.window, v.session, "Select Keyword Response Voice", initVoice, initSpeed, func(newVoiceID string, newSpeed float32) {
+			v.updateConfig(func(c *config.Config) {
+				c.VoiceDetection.ResponseVoiceID = newVoiceID
+				c.VoiceDetection.ResponseSpeed = newSpeed
+				config.NormalizeVoiceDetectionConfig(&c.VoiceDetection)
+			})
+			if v.vdResponseVoiceLabel != nil {
+				cur := v.currentConfig().VoiceDetection
+				v.vdResponseVoiceLabel.SetText(formatVoiceResponseSummary(cur.ResponseVoiceID, cur.ResponseSpeed))
+			}
+			v.setStatus("✓ Keyword response voice set to " + formatVoiceResponseSummary(newVoiceID, newSpeed))
+		}, v.setStatus)
+	})
+	vdRespClearBtn := widget.NewButton("Default", func() {
+		v.updateConfig(func(c *config.Config) {
+			c.VoiceDetection.ResponseVoiceID = ""
+			c.VoiceDetection.ResponseSpeed = 0
+		})
+		if v.vdResponseVoiceLabel != nil {
+			v.vdResponseVoiceLabel.SetText(formatVoiceResponseSummary("", 0))
+		}
+		v.setStatus("✓ Keyword response voice reset to Global Default.")
+	})
+
+	v.vdLastHeardLabel = widget.NewLabel("Waiting for speech...")
+	v.vdLastHeardLabel.Wrapping = fyne.TextWrapWord
+	if v.session != nil {
+		if recent := v.session.RecentVoiceTranscripts(); len(recent) > 0 {
+			last := recent[len(recent)-1]
+			summary := fmt.Sprintf("%q", last.RawText)
+			if strings.TrimSpace(last.Note) != "" {
+				summary += " — " + last.Note
+			}
+			v.vdLastHeardLabel.SetText(summary)
+		}
+	}
+
 	// Spoken Languages pulldown + Add button + configured list
 	spokenOpts := SpokenLangSelectOptions()
 	v.vsSpokenAddSelect = widget.NewSelect(spokenOpts, nil)
@@ -739,9 +966,12 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 	)
 	spokenDesc.Wrapping = fyne.TextWrapWord
 
+	v.vdConsumersLabel = widget.NewLabel("")
+	v.vdConsumersLabel.Wrapping = fyne.TextWrapWord
+
 	sttCard := widget.NewCard(
-		"Offline Speech Recognition (Microphone, VAD & Whisper GPU / iGPU / CPU)",
-		"100% local speech-to-text powered by Silero VAD and SHA-256 verified Whisper (Vulkan NVIDIA/AMD/Intel GPUs, iGPUs, or CPU)",
+		"Voice Detection (Microphone, Silero VAD & Whisper GPU / iGPU / CPU)",
+		"100% local speech-to-text shared by Voice Subtitles and Bot Voice Commands (Vulkan GPU / iGPU / CPU)",
 		container.NewVBox(
 			makeRow("Microphone Input:", container.NewBorder(nil, nil, nil, v.vsMicRefreshBtn, v.vsMicDeviceSelect)),
 			makeRow("Live Mic & Engine:", container.NewBorder(nil, nil, nil, v.vsSTTStatusLabel, v.vsMicLevelBar)),
@@ -751,13 +981,35 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 			makeRow("Compute Device:", container.NewBorder(nil, nil, nil, v.vsComputeRefreshBtn, v.vsComputeDeviceSelect)),
 			makeRow("CPU Helper Threads:", v.vsThreadsSelect),
 			makeRow("Phrase End Pause:", v.vsSilenceSelect),
+			makeRow("Wake Word (Optional):", container.NewBorder(nil, nil, nil, container.NewHBox(vdWakeApplyBtn, vdWakeClearBtn), v.vdWakeWordEntry)),
+			makeRow("Wake Armed Window:", v.vdWakeWindowSelect),
+			makeRow("Wake Beep:", container.NewBorder(nil, nil, nil, vdWakeTestBtn, v.vdWakeSoundCheck)),
+			makeRow("Response Voice:", container.NewBorder(nil, nil, nil, container.NewHBox(vdRespChooseBtn, vdRespClearBtn), v.vdResponseVoiceLabel)),
+			makeRow("Last Heard by Whisper:", v.vdLastHeardLabel),
 			widget.NewSeparator(),
 			widget.NewLabelWithStyle("Spoken Languages (Microphone Input)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 			spokenDesc,
 			makeRow("Add Spoken Language:", container.NewBorder(nil, nil, nil, v.vsAddSpokenBtn, v.vsSpokenAddSelect)),
 			v.vsSpokenListBox,
+			widget.NewSeparator(),
+			v.vdConsumersLabel,
 		),
 	)
+
+	v.refreshVoiceSubtitleModelStatus()
+	v.refreshVoiceDetectionSummary()
+	v.SyncSTTStatus(false, false, "")
+	return sttCard
+}
+
+func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
+	cfg := v.currentConfig()
+	vs := cfg.VoiceSubtitles
+	config.NormalizeVoiceSubtitlesConfig(&vs)
+
+	makeRow := func(label string, ctrl fyne.CanvasObject) *fyne.Container {
+		return container.NewBorder(nil, nil, container.NewGridWrap(fyne.NewSize(185, 36), widget.NewLabel(label)), nil, ctrl)
+	}
 
 	// --- Card 2: Configured OBS Target Display Languages ---
 	targetOpts := TranslationTargetLangOptions()
@@ -869,6 +1121,20 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 		}
 	})
 
+	v.vsOpenVoiceDetectionBtn = widget.NewButtonWithIcon("Configure Microphone & Whisper Model", theme.MediaRecordIcon(), func() {
+		if v.subTabs != nil && v.generalTabItem != nil {
+			v.subTabs.Select(v.generalTabItem)
+			if v.generalPanel != nil && v.voiceDetectionCard != nil {
+				for i, sec := range v.generalPanel.sections {
+					if sec.Target == v.voiceDetectionCard {
+						v.generalPanel.ScrollTo(i)
+						break
+					}
+				}
+			}
+		}
+	})
+
 	targetDesc := widget.NewLabelWithStyle(
 		"All listed languages are translated concurrently and stacked top-to-bottom on the OBS Subtitle Overlay. Use ▲/▼ to reorder rows.",
 		fyne.TextAlignLeading,
@@ -884,7 +1150,7 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 			makeRow("Select Language:", container.NewBorder(nil, nil, nil, v.vsAddTargetBtn, v.vsTargetAddSelect)),
 			v.vsTargetListBox,
 			widget.NewSeparator(),
-			v.vsOpenTranslationTabBtn,
+			container.NewGridWithColumns(2, v.vsOpenTranslationTabBtn, v.vsOpenVoiceDetectionBtn),
 		),
 	)
 
@@ -1050,12 +1316,12 @@ func (v *SettingsView) buildVoiceSubtitlesTab() fyne.CanvasObject {
 		),
 	)
 
-	v.refreshVoiceSubtitleModelStatus()
-	v.SyncSTTStatus(false, false, "")
-
-	return newPanelVScroll(container.NewVBox(
-		sttCard,
+	v.voiceSubtitlesPanel = newSectionedPanelVScroll(container.NewVBox(
 		targetsCard,
 		overlayCard,
-	))
+	), []panelSection{
+		{Label: "Display Languages", Target: targetsCard},
+		{Label: "OBS Overlay", Target: overlayCard},
+	})
+	return v.voiceSubtitlesPanel.Root()
 }

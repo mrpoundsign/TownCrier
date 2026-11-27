@@ -85,6 +85,25 @@ func TestInstallPlugin(t *testing.T) {
 	}
 }
 
+func TestIsElgatoInstalled(t *testing.T) {
+	if streamdeck.IsElgatoInstalled("") {
+		t.Fatal("expected IsElgatoInstalled(\"\") to return false during unit tests")
+	}
+
+	root := t.TempDir()
+	pluginsDir := filepath.Join(root, "Elgato", "StreamDeck", "Plugins")
+	if streamdeck.IsElgatoInstalled(pluginsDir) {
+		t.Fatal("expected false before Elgato StreamDeck directory exists")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(pluginsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !streamdeck.IsElgatoInstalled(pluginsDir) {
+		t.Fatal("expected true when Elgato StreamDeck directory exists")
+	}
+}
+
 type mockController struct {
 	mu          sync.Mutex
 	mode        string

@@ -5,7 +5,7 @@ set -euo pipefail
 # Enforces:
 #   1. go fix --diff ./... (0 diff)
 #   2. golangci-lint-v2 run ./... (0 issues)
-#   3. go test -count=1 -v ./... (all tests pass)
+#   3. go test -count=1 ./... (all tests pass, quiet on success)
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 cd "$ROOT_DIR"

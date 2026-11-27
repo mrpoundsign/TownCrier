@@ -147,4 +147,117 @@ func TestSharedTranslationTabAndVoiceSubtitlesLanguageLists(t *testing.T) {
 	if view.subTabs.Selected() != view.translationTabItem {
 		t.Fatal("expected clicking Configure Shared Translation Providers to select Translation tab")
 	}
+
+	// 9. Voice Detection card lives in General and auto-enabled when Voice Subtitles turned on
+	if !sess.Config().EffectiveVoiceDetectionEnabled() || !view.enableVoiceDetectionCheck.Checked {
+		t.Fatal("expected Voice Detection to auto-enable when Voice Subtitles is turned on")
+	}
+	if !view.voiceDetectionCard.Visible() {
+		t.Fatal("expected voiceDetectionCard in General to be visible when Voice Detection is enabled")
+	}
+
+	// Clicking "Configure Microphone & Whisper Model" jumps back to General -> Voice Detection
+	test.Tap(view.vsOpenVoiceDetectionBtn)
+	if view.subTabs.Selected() != view.generalTabItem {
+		t.Fatal("expected Configure Microphone & Whisper Model button to select General tab")
+	}
+
+	// 10. Master disable of Voice Detection hides voiceDetectionCard, Voice Subtitles tab, and OBS Subtitles overlay
+	// while preserving VoiceSubtitles.Enabled so re-enabling restores them cleanly.
+	view.enableVoiceDetectionCheck.SetChecked(false)
+	if sess.Config().EffectiveVoiceDetectionEnabled() {
+		t.Fatal("expected EffectiveVoiceDetectionEnabled()=false after unchecking master toggle")
+	}
+	if sess.Config().EffectiveSubtitlesOverlayEnabled() {
+		t.Fatal("expected EffectiveSubtitlesOverlayEnabled()=false when Voice Detection is disabled")
+	}
+	if view.voiceDetectionCard.Visible() {
+		t.Fatal("expected voiceDetectionCard to hide when Voice Detection is disabled")
+	}
+	if slices.Contains(view.subTabs.Items, view.voiceSubtitlesTabItem) {
+		t.Fatal("expected Voice Subtitles sub-tab to hide when Voice Detection is disabled")
+	}
+	if view.wsSubtitlesOverlayGroup.Visible() {
+		t.Fatal("expected OBS Subtitles overlay settings group to hide when Voice Detection is disabled")
+	}
+	if !sess.Config().VoiceSubtitles.Enabled {
+		t.Fatal("expected VoiceSubtitles.Enabled to remain preserved in config while Voice Detection is off")
+	}
+
+	// Re-enabling Voice Detection restores Voice Subtitles tab and OBS Subtitles overlay
+	view.enableVoiceDetectionCheck.SetChecked(true)
+	if !sess.Config().EffectiveVoiceSubtitlesEnabled() || !slices.Contains(view.subTabs.Items, view.voiceSubtitlesTabItem) {
+		t.Fatal("expected re-enabling Voice Detection to restore Voice Subtitles tab")
+	}
+
+	// 11. Wake word controls update Session config while preserving SettingsView MinSize().Width <= 550
+	if view.vdWakeWordEntry == nil || view.vdWakeWindowSelect == nil || view.vdLastHeardLabel == nil {
+		t.Fatal("expected wake word and last heard controls to be constructed")
+	}
+	view.vdWakeWordEntry.OnSubmitted("octo")
+	if got := sess.Config().VoiceDetection.WakeWord; got != "octo" {
+		t.Fatalf("expected WakeWord 'octo', got %q", got)
+	}
+	view.vdWakeWindowSelect.SetSelected("10 seconds")
+	if got := sess.Config().VoiceDetection.EffectiveWakeWindowSec(); got != 10 {
+		t.Fatalf("expected EffectiveWakeWindowSec()=10, got %d", got)
+	}
+	if view.vdWakeSoundCheck == nil || !view.vdWakeSoundCheck.Checked {
+		t.Fatal("expected vdWakeSoundCheck to default to checked")
+	}
+	view.vdWakeSoundCheck.SetChecked(false)
+	if sess.Config().VoiceDetection.EffectiveWakeSoundEnabled() {
+		t.Fatal("expected EffectiveWakeSoundEnabled()=false after unchecking vdWakeSoundCheck")
+	}
+	if view.vdResponseVoiceLabel == nil || view.vdResponseVoiceLabel.Text != "Global Default TTS Voice" {
+		t.Fatalf("expected default vdResponseVoiceLabel 'Global Default TTS Voice', got %v", view.vdResponseVoiceLabel)
+	}
+	if err := sess.UpdateConfig(func(c *config.Config) {
+		c.VoiceDetection.ResponseVoiceID = "bm_lewis"
+		c.VoiceDetection.ResponseSpeed = 1.15
+	}); err != nil {
+		t.Fatalf("UpdateConfig failed: %v", err)
+	}
+	view.SyncFromConfig()
+	if view.vdResponseVoiceLabel.Text != FormatVoiceSpeedSummary("bm_lewis", 1.15) {
+		t.Fatalf("expected updated vdResponseVoiceLabel summary, got %q", view.vdResponseVoiceLabel.Text)
+	}
+	if minW := obj.MinSize().Width; minW > 550 {
+		t.Errorf("expected SettingsView MinSize().Width <= 550 DIPs with wake controls, got %v", minW)
+	}
+}
+
+func TestSettingsViewBuildPreservesInitializingGuard(t *testing.T) {
+	fyneApp := test.NewApp()
+	defer fyneApp.Quit()
+	w := fyneApp.NewWindow("TestInitGuard")
+
+	cfg := config.DefaultConfig()
+	cfg.VoiceDetection.WakeWord = "octo"
+	sess := app.NewSession(cfg, secrets.NewMemoryStore(), config.NewMemoryStore(cfg))
+	defer func() { _ = sess.Close() }()
+	sess.SetSTTModelDir(t.TempDir())
+
+	view := NewSettingsView(w, cfg, nil, nil)
+	view.SetSession(sess)
+	view.SetSTTModelDir(t.TempDir())
+	view.SetDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
+		return []audio.DeviceInfo{{ID: "spk1", Name: "Mock Speakers", IsDefault: true}}, nil
+	})
+	view.SetCaptureDeviceEnumerator(func() ([]audio.DeviceInfo, error) {
+		return []audio.DeviceInfo{{ID: "mic1", Name: "Shure MV7", IsDefault: true}}, nil
+	})
+	view.SetSTTGPUDeviceEnumerator(func() ([]stt.GPUDevice, error) {
+		return nil, nil
+	})
+
+	view.initializing = true
+	_ = view.buildVoiceDetectionCard()
+	if !view.initializing {
+		t.Fatal("expected buildVoiceDetectionCard to preserve outer initializing=true guard")
+	}
+	view.syncVoiceSubtitlesControlsFromConfig()
+	if !view.initializing {
+		t.Fatal("expected syncVoiceSubtitlesControlsFromConfig to preserve outer initializing=true guard")
+	}
 }

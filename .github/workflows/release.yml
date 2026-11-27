@@ -5,14 +5,9 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Release version (e.g. 0.0.15)'
-        required: false
-        default: '0.0.15'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   meta:
@@ -22,17 +17,19 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
+      is_tag: ${{ steps.meta.outputs.is_tag }}
     steps:
-      - name: Compute Version & Tag
+      - name: Compute Release Metadata
         id: meta
         run: |
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            RAW_VER="${GITHUB_REF#refs/tags/v}"
-            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            TAG_NAME="${{ github.ref_name }}"
+            RAW_VER="${TAG_NAME#v}"
+            IS_TAG="true"
           else
-            RAW_VER="${{ github.event.inputs.version || '0.0.15' }}"
-            RAW_VER="${RAW_VER#v}"
+            RAW_VER="0.1.0-snapshot"
             TAG_NAME="v${RAW_VER}"
+            IS_TAG="false"
           fi
           IS_PRERELEASE="false"
           if [[ "${RAW_VER}" == *-* ]]; then
@@ -41,9 +38,63 @@ jobs:
           echo "version=${RAW_VER}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
           echo "prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "is_tag=${IS_TAG}" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Run Lint, WASM Build & Test Suite
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+
+      - name: Install Test Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libgl1-mesa-dev xorg-dev libxcursor-dev libxrandr-dev \
+            libxinerama-dev libxi-dev libxxf86vm-dev libasound2-dev \
+            libwayland-dev libxkbcommon-dev
+
+      - name: Download Go Modules
+        run: |
+          go mod download
+          go mod download github.com/k2-fsa/sherpa-onnx-go-linux
+
+      - name: Check Go Modernization
+        run: |
+          DIFF="$(go fix -diff ./...)"
+          if [ -n "$DIFF" ]; then
+            echo "$DIFF"
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run golangci-lint (v2)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+
+      - name: Build PoundControl WASM Plugin
+        run: |
+          chmod +x ./build.sh
+          VERSION="${{ needs.meta.outputs.version }}" ./build.sh wasm
+
+      - name: Run Full Test Suite
+        run: |
+          chmod +x ./build.sh
+          ./build.sh test
 
   build-linux-windows:
-    name: Build & Package Desktop GUI (Windows & Linux)
+    name: Build & Package Desktop GUI (Windows, Linux & WASM)
     needs: meta
     runs-on: ubuntu-latest
     env:
@@ -56,20 +107,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.27'
-          cache: false
-
-      - name: Cache Go Modules, Build Artifacts & golangci-lint-v2
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-            ~/.cache/golangci-lint
-            ~/go/bin/golangci-lint-v2
-          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-1.27-
-          save-always: true
+          cache: true
 
       - name: Install Cross-Compilation & Packaging Dependencies
         run: |
@@ -87,27 +125,15 @@ jobs:
           go mod download github.com/k2-fsa/sherpa-onnx-go-windows
           go mod download github.com/k2-fsa/sherpa-onnx-go-linux
 
-      - name: Install golangci-lint-v2 (Cached)
-        run: |
-          if [ ! -x "$HOME/go/bin/golangci-lint-v2" ]; then
-            curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$HOME/go/bin" v2.14.0
-            mv -f "$HOME/go/bin/golangci-lint" "$HOME/go/bin/golangci-lint-v2"
-          fi
-
-      - name: Run Quality Gate (go fix --diff, golangci-lint-v2, go test)
-        run: |
-          chmod +x ./build.sh
-          ./build.sh lint
-          ./build.sh test
-
-      - name: Build & Package Windows and Linux Distributions
+      - name: Build & Package Windows, Linux & WASM Distributions
         run: |
           chmod +x ./build.sh ./scripts/build-whisper-vulkan.sh
           ./build.sh win
           ./build.sh linux
+          ./build.sh wasm
           ./build.sh package
 
-      - name: Upload Windows & Linux Artifacts
+      - name: Upload Windows, Linux & WASM Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist-linux-windows
@@ -147,9 +173,13 @@ jobs:
           path: dist/
 
   release:
-    name: Consolidate Artifacts & Publish Release
-    needs: [meta, build-linux-windows, build-macos]
+    name: Consolidate Artifacts, Attest & Publish Release
+    needs: [meta, test, build-linux-windows, build-macos]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Download Build Artifacts
         uses: actions/download-artifact@v4
@@ -158,22 +188,43 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Update and Consolidate Checksums
+      - name: Consolidate Checksums
         run: |
+          mkdir -p dist
           cd dist
           rm -f checksums.txt SHA256SUMS.txt
-          sha256sum * >> checksums.txt
-          sort -k2 -o checksums.txt checksums.txt
+          TMP_SUMS="$(mktemp)"
+          for f in *; do
+            [ -f "$f" ] || continue
+            sha256sum "$f" >> "$TMP_SUMS"
+          done
+          sort -u -k2 -o checksums.txt "$TMP_SUMS"
+          rm -f "$TMP_SUMS"
           cp -f checksums.txt SHA256SUMS.txt
-          echo "=== Final Consolidated Checksums ==="
+          echo "=== Final Consolidated dist/checksums.txt ==="
           cat checksums.txt
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Attest Build Provenance (SLSA OIDC)
+        if: needs.meta.outputs.is_tag == 'true'
+        uses: actions/attest@v4
         with:
-          tag_name: ${{ needs.meta.outputs.tag }}
-          name: TownCrier ${{ needs.meta.outputs.tag }}
-          prerelease: ${{ needs.meta.outputs.prerelease == 'true' }}
-          generate_release_notes: true
-          files: |
-            dist/*
+          subject-checksums: dist/checksums.txt
+
+      - name: Publish GitHub Release
+        if: needs.meta.outputs.is_tag == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.meta.outputs.tag }}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            FLAGS=(--verify-tag --generate-notes)
+            if [ "${{ needs.meta.outputs.prerelease }}" = "true" ]; then
+              FLAGS+=(--prerelease)
+            fi
+            gh release create "$TAG" "${FLAGS[@]}"
+          fi
+          ASSETS=()
+          for f in dist/*; do
+            [ -f "$f" ] && ASSETS+=("$f")
+          done
+          gh release upload "$TAG" "${ASSETS[@]}" --clobber

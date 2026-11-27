@@ -782,5 +782,353 @@ func TestVoiceSubtitlesConfigAndOverlayFeatureGating(t *testing.T) {
 	}
 }
 
+func TestPluginsConfigDefaultsCloneAndLegacyLoad(t *testing.T) {
+	cfg := DefaultConfig()
+	if !cfg.Plugins.Enabled {
+		t.Fatal("expected Plugins.Enabled to be true by default")
+	}
 
+	cfg.Plugins.ExtraPaths = []string{"/tmp/extra"}
+	cfg.Plugins.DisabledPlugins = []string{"com.example.off"}
+	cfg.Plugins.TrustedNative["com.example.nat"] = TrustedNativePlugin{SHA256: "abc123"}
+	cfg.Plugins.PluginSettings["com.example.nat"] = map[string]any{"k": "v"}
+
+	cloned := cfg.Clone()
+	cloned.Plugins.ExtraPaths[0] = "/tmp/mutated"
+	cloned.Plugins.DisabledPlugins[0] = "mutated"
+	cloned.Plugins.TrustedNative["com.example.nat"] = TrustedNativePlugin{SHA256: "mutated"}
+	cloned.Plugins.PluginSettings["com.example.nat"]["k"] = "mutated"
+
+	if cfg.Plugins.ExtraPaths[0] != "/tmp/extra" ||
+		cfg.Plugins.DisabledPlugins[0] != "com.example.off" ||
+		cfg.Plugins.TrustedNative["com.example.nat"].SHA256 != "abc123" ||
+		cfg.Plugins.PluginSettings["com.example.nat"]["k"] != "v" {
+		t.Fatal("expected Clone() to deep-copy PluginsConfig slices and maps")
+	}
+
+	legacyPath := filepath.Join(t.TempDir(), "legacy_no_plugins.json")
+	if err := os.WriteFile(legacyPath, []byte(`{"version": 2}`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	loaded, err := Load(legacyPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !loaded.Plugins.Enabled {
+		t.Fatal("expected legacy config missing plugins section to default Plugins.Enabled=true")
+	}
+}
+
+func TestWindowGeometryDefaultsNormalizeAndRoundTrip(t *testing.T) {
+	def := DefaultConfig()
+	if def.WindowWidth != DefaultWindowWidth || def.WindowHeight != DefaultWindowHeight {
+		t.Fatalf("expected default window size %dx%d, got %dx%d", DefaultWindowWidth, DefaultWindowHeight, def.WindowWidth, def.WindowHeight)
+	}
+	if def.WindowWidth != 1200 || def.WindowHeight != 820 {
+		t.Fatalf("expected 1200x820 defaults, got %dx%d", def.WindowWidth, def.WindowHeight)
+	}
+	if def.WindowMaximized {
+		t.Fatal("expected WindowMaximized=false by default")
+	}
+
+	if w, h := NormalizeWindowSize(0, -10); w != DefaultWindowWidth || h != DefaultWindowHeight {
+		t.Fatalf("expected zero/negative to normalize to %dx%d, got %dx%d", DefaultWindowWidth, DefaultWindowHeight, w, h)
+	}
+	if w, h := NormalizeWindowSize(320, 240); w != MinWindowWidth || h != MinWindowHeight {
+		t.Fatalf("expected tiny sizes to clamp to %dx%d, got %dx%d", MinWindowWidth, MinWindowHeight, w, h)
+	}
+	if w, h := NormalizeWindowSize(99999, 99999); w != MaxWindowWidth || h != MaxWindowHeight {
+		t.Fatalf("expected huge sizes to clamp to %dx%d, got %dx%d", MaxWindowWidth, MaxWindowHeight, w, h)
+	}
+
+	loc := TestLocations(t.TempDir())
+	store, err := NewFileStore(loc)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	cfg := DefaultConfig()
+	cfg.WindowWidth = 1440
+	cfg.WindowHeight = 900
+	cfg.WindowMaximized = true
+	if err := store.Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.WindowWidth != 1440 || loaded.WindowHeight != 900 || !loaded.WindowMaximized {
+		t.Fatalf("unexpected window geometry after round-trip: %dx%d max=%v", loaded.WindowWidth, loaded.WindowHeight, loaded.WindowMaximized)
+	}
+}
+
+func TestVoiceDetectionMasterToggleAndGating(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.VoiceDetection.Enabled != nil {
+		t.Fatal("expected VoiceDetection.Enabled=nil by default for auto-derivation")
+	}
+	if cfg.EffectiveVoiceDetectionEnabled() {
+		t.Fatal("expected EffectiveVoiceDetectionEnabled()=false when no consumers are enabled")
+	}
+
+	// Auto-derives true when VoiceSubtitles or Bot VoiceCommands are enabled and VoiceDetection.Enabled is nil
+	cfg.VoiceSubtitles.Enabled = true
+	cfg.WebSocket.SubtitlesOverlayEnabled = true
+	if !cfg.EffectiveVoiceDetectionEnabled() || !cfg.EffectiveVoiceSubtitlesEnabled() || !cfg.EffectiveSubtitlesOverlayEnabled() {
+		t.Fatal("expected Voice Detection & Subtitles to auto-derive enabled when VoiceSubtitles.Enabled=true")
+	}
+
+	cfg.VoiceSubtitles.Enabled = false
+	cfg.Bot.Enabled = true
+	cfg.Bot.VoiceCommands = []BotVoiceCommandDef{
+		{ID: "vc-1", Name: "Hi", Enabled: true, Phrase: "hello world", ActionID: "act-1"},
+	}
+	if !cfg.EffectiveVoiceDetectionEnabled() || !cfg.EffectiveVoiceCommandsEnabled() {
+		t.Fatal("expected Voice Detection to auto-derive enabled when an enabled Bot VoiceCommand exists")
+	}
+
+	// Explicit master disable gates Subtitles, Overlay, and Voice Commands while preserving saved rules
+	cfg.WebSocket.Enabled = false
+	cfg.VoiceSubtitles.Enabled = true
+	cfg.SetVoiceDetectionEnabled(false)
+	if cfg.EffectiveVoiceDetectionEnabled() {
+		t.Fatal("expected EffectiveVoiceDetectionEnabled()=false after master disable")
+	}
+	if cfg.EffectiveVoiceSubtitlesEnabled() {
+		t.Fatal("expected EffectiveVoiceSubtitlesEnabled()=false after master disable")
+	}
+	if cfg.EffectiveSubtitlesOverlayEnabled() {
+		t.Fatal("expected EffectiveSubtitlesOverlayEnabled()=false after master disable")
+	}
+	if cfg.EffectiveVoiceCommandsEnabled() {
+		t.Fatal("expected EffectiveVoiceCommandsEnabled()=false after master disable")
+	}
+	_, _, _, anyWS := cfg.EffectiveWebSocketFeatures()
+	if anyWS {
+		t.Fatal("expected EffectiveWebSocketFeatures() anyEnabled=false when VoiceDetection is disabled")
+	}
+
+	// Clone deep-copies the pointer
+	cloned := cfg.Clone()
+	cloned.SetVoiceDetectionEnabled(true)
+	if cfg.EffectiveVoiceDetectionEnabled() {
+		t.Fatal("expected Clone() to deep-copy VoiceDetection.Enabled pointer")
+	}
+
+	// JSON round-trip preserves explicit false and re-enabling restores consumers
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(cfgPath, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.VoiceDetection.Enabled == nil || *loaded.VoiceDetection.Enabled {
+		t.Fatal("expected loaded VoiceDetection.Enabled to remain explicit false")
+	}
+	if !loaded.VoiceSubtitles.Enabled || !loaded.Bot.HasEnabledVoiceCommands() {
+		t.Fatal("expected saved VoiceSubtitles and VoiceCommands rules to be preserved when VoiceDetection is off")
+	}
+	loaded.SetVoiceDetectionEnabled(true)
+	if !loaded.EffectiveVoiceSubtitlesEnabled() || !loaded.EffectiveSubtitlesOverlayEnabled() || !loaded.EffectiveVoiceCommandsEnabled() {
+		t.Fatal("expected re-enabling VoiceDetection to restore all saved consumers")
+	}
+
+	// WakeWord & WakeWindowSec normalization and round-trip
+	vd := VoiceDetectionConfig{WakeWord: "  octo  ", WakeWindowSec: 1}
+	NormalizeVoiceDetectionConfig(&vd)
+	if vd.WakeWord != "octo" {
+		t.Fatalf("expected trimmed WakeWord 'octo', got %q", vd.WakeWord)
+	}
+	if vd.WakeWindowSec != 2 || vd.EffectiveWakeWindowSec() != 2 {
+		t.Fatalf("expected WakeWindowSec clamped to 2, got %d", vd.WakeWindowSec)
+	}
+	if (VoiceDetectionConfig{}).EffectiveWakeWindowSec() != DefaultVoiceWakeWindowSec {
+		t.Fatalf("expected zero WakeWindowSec to default to %d", DefaultVoiceWakeWindowSec)
+	}
+	if !(VoiceDetectionConfig{}).EffectiveWakeSoundEnabled() {
+		t.Fatalf("expected WakeSoundEnabled to default to true when nil")
+	}
+
+	cfg.VoiceDetection.WakeWord = "  octo  "
+	cfg.VoiceDetection.WakeWindowSec = 10
+	cfg.VoiceDetection.SetWakeSoundEnabled(false)
+	cfg.VoiceDetection.ResponseVoiceID = "  bm_lewis  "
+	cfg.VoiceDetection.ResponseSpeed = 3.5
+	cfg.Bot.VoiceCommands[0].IgnoreWakeWord = true
+	wakeClone := cfg.Clone()
+	if wakeClone.VoiceDetection.WakeWord != "  octo  " || wakeClone.VoiceDetection.WakeWindowSec != 10 {
+		t.Fatalf("expected Clone() to copy WakeWord and WakeWindowSec")
+	}
+	if wakeClone.VoiceDetection.ResponseVoiceID != "  bm_lewis  " || wakeClone.VoiceDetection.ResponseSpeed != 3.5 {
+		t.Fatalf("expected Clone() to copy ResponseVoiceID and ResponseSpeed")
+	}
+	if wakeClone.VoiceDetection.EffectiveWakeSoundEnabled() {
+		t.Fatalf("expected Clone() to deep-copy WakeSoundEnabled=false")
+	}
+	wakeClone.VoiceDetection.SetWakeSoundEnabled(true)
+	if cfg.VoiceDetection.EffectiveWakeSoundEnabled() {
+		t.Fatalf("expected mutating cloned WakeSoundEnabled not to mutate original")
+	}
+	if err := Save(cfgPath, cfg); err != nil {
+		t.Fatalf("Save with wake word: %v", err)
+	}
+	loadedWake, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load with wake word: %v", err)
+	}
+	if loadedWake.VoiceDetection.WakeWord != "octo" || loadedWake.VoiceDetection.WakeWindowSec != 10 || loadedWake.VoiceDetection.EffectiveWakeSoundEnabled() {
+		t.Fatalf("expected trimmed WakeWord='octo', WakeWindowSec=10, and WakeSoundEnabled=false after Load, got %+v", loadedWake.VoiceDetection)
+	}
+	if loadedWake.VoiceDetection.ResponseVoiceID != "bm_lewis" || loadedWake.VoiceDetection.ResponseSpeed != 2.0 {
+		t.Fatalf("expected trimmed ResponseVoiceID='bm_lewis' and clamped ResponseSpeed=2.0 after Load, got %+v", loadedWake.VoiceDetection)
+	}
+	vdNeg := VoiceDetectionConfig{ResponseSpeed: -0.5}
+	NormalizeVoiceDetectionConfig(&vdNeg)
+	if vdNeg.ResponseSpeed != 0 {
+		t.Fatalf("expected negative ResponseSpeed clamped to 0, got %v", vdNeg.ResponseSpeed)
+	}
+	vdLow := VoiceDetectionConfig{ResponseSpeed: 0.2}
+	NormalizeVoiceDetectionConfig(&vdLow)
+	if vdLow.ResponseSpeed != 0.5 {
+		t.Fatalf("expected low non-zero ResponseSpeed clamped to 0.5, got %v", vdLow.ResponseSpeed)
+	}
+	if len(loadedWake.Bot.VoiceCommands) == 0 || !loadedWake.Bot.VoiceCommands[0].IgnoreWakeWord {
+		t.Fatalf("expected IgnoreWakeWord=true to survive JSON round-trip")
+	}
+}
+
+func TestBotOBSSubActionCloneAndRoundTrip(t *testing.T) {
+	posX := 120.5
+	scaleX := 1.75
+	cropTop := 12.0
+	cfg := DefaultConfig()
+	cfg.Bot.Enabled = true
+	cfg.Bot.Actions = []BotActionDef{
+		{
+			ID:      "act-obs",
+			Name:    "Enhance",
+			Enabled: true,
+			SubActions: []BotSubActionDef{
+				{
+					ID:             "sa-obs-1",
+					Kind:           "obs",
+					Enabled:        true,
+					OBSOperation:   "set_transform",
+					OBSMode:        "show",
+					OBSScene:       "Main",
+					OBSSource:      "Camera",
+					OBSFilter:      "ColorGrade",
+					OBSInput:       "Mic/Aux",
+					OBSVolumePct:   65.5,
+					OBSTransition:  "Fade",
+					OBSDurationMs:  450,
+					OBSZoomFactor:  1.5,
+					OBSRequestType: "TriggerHotkeyByName",
+					OBSRequestData: `{"hotkeyName":"OBSBasic.Screenshot"}`,
+					OBSTransform: &BotOBSTransform{
+						PositionX: &posX,
+						ScaleX:    &scaleX,
+						CropTop:   &cropTop,
+					},
+				},
+			},
+		},
+	}
+
+	cloned := cfg.Clone()
+	*cloned.Bot.Actions[0].SubActions[0].OBSTransform.PositionX = 999.0
+	*cloned.Bot.Actions[0].SubActions[0].OBSTransform.ScaleX = 3.0
+	if *cfg.Bot.Actions[0].SubActions[0].OBSTransform.PositionX != 120.5 ||
+		*cfg.Bot.Actions[0].SubActions[0].OBSTransform.ScaleX != 1.75 {
+		t.Fatal("expected Clone() to deep-copy BotOBSTransform float pointers")
+	}
+
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(cfgPath, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	sa := loaded.Bot.Actions[0].SubActions[0]
+	if sa.OBSOperation != "set_transform" ||
+		sa.OBSMode != "show" ||
+		sa.OBSScene != "Main" ||
+		sa.OBSSource != "Camera" ||
+		sa.OBSFilter != "ColorGrade" ||
+		sa.OBSInput != "Mic/Aux" ||
+		sa.OBSVolumePct != 65.5 ||
+		sa.OBSTransition != "Fade" ||
+		sa.OBSDurationMs != 450 ||
+		sa.OBSZoomFactor != 1.5 ||
+		sa.OBSRequestType != "TriggerHotkeyByName" ||
+		sa.OBSRequestData != `{"hotkeyName":"OBSBasic.Screenshot"}` {
+		t.Fatalf("unexpected OBS fields after round-trip: %+v", sa)
+	}
+	if sa.OBSTransform == nil ||
+		sa.OBSTransform.PositionX == nil || *sa.OBSTransform.PositionX != 120.5 ||
+		sa.OBSTransform.ScaleX == nil || *sa.OBSTransform.ScaleX != 1.75 ||
+		sa.OBSTransform.CropTop == nil || *sa.OBSTransform.CropTop != 12.0 ||
+		sa.OBSTransform.PositionY != nil {
+		t.Fatalf("unexpected OBSTransform after round-trip: %+v", sa.OBSTransform)
+	}
+}
+
+func TestBotVariableDeclarationsNormalizeCloneAndRoundTrip(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Bot.Enabled = true
+	cfg.Bot.Variables = []BotVariableDef{
+		{Name: "  ", Scope: "global", Kind: "string", DefaultValue: "ignored"},
+		{Name: " totalHugs ", Scope: "global", Kind: "integer", DefaultValue: "10"},
+		{Name: "streamDeaths", Scope: "global_ephemeral", Kind: "int", DefaultValue: "0"},
+		{Name: "streamDeaths", Scope: "session", Kind: "int", DefaultValue: "5"},
+	}
+	cfg.Bot.Actions = []BotActionDef{
+		{
+			ID:      "act-vars",
+			Name:    "Local Test",
+			Enabled: true,
+			Variables: []BotVariableDef{
+				{Name: " localStep ", Scope: "global", Kind: "float", DefaultValue: "1.5"},
+				{Name: "", Scope: "action", Kind: "string", DefaultValue: "skip"},
+			},
+		},
+	}
+
+	NormalizeBotAutomationConfig(&cfg.Bot)
+	if len(cfg.Bot.Variables) != 2 {
+		t.Fatalf("expected 2 normalized Bot.Variables, got %+v", cfg.Bot.Variables)
+	}
+	if cfg.Bot.Variables[0].Name != "totalHugs" || cfg.Bot.Variables[0].Scope != "global" || cfg.Bot.Variables[0].Kind != "int" {
+		t.Fatalf("unexpected normalized global var: %+v", cfg.Bot.Variables[0])
+	}
+	if cfg.Bot.Variables[1].Name != "streamDeaths" || cfg.Bot.Variables[1].Scope != "session" || cfg.Bot.Variables[1].DefaultValue != "5" {
+		t.Fatalf("unexpected normalized session var: %+v", cfg.Bot.Variables[1])
+	}
+	if len(cfg.Bot.Actions[0].Variables) != 1 || cfg.Bot.Actions[0].Variables[0].Scope != "action" || cfg.Bot.Actions[0].Variables[0].Name != "localStep" {
+		t.Fatalf("unexpected normalized action var: %+v", cfg.Bot.Actions[0].Variables)
+	}
+
+	cloned := cfg.Clone()
+	cloned.Bot.Variables[0].DefaultValue = "999"
+	cloned.Bot.Actions[0].Variables[0].DefaultValue = "9.9"
+	if cfg.Bot.Variables[0].DefaultValue != "10" || cfg.Bot.Actions[0].Variables[0].DefaultValue != "1.5" {
+		t.Fatal("expected Clone() to isolate Bot.Variables and Action.Variables slices")
+	}
+
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(cfgPath, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(loaded.Bot.Variables) != 2 || len(loaded.Bot.Actions[0].Variables) != 1 {
+		t.Fatalf("expected declared variables to survive JSON round-trip: %+v / %+v", loaded.Bot.Variables, loaded.Bot.Actions[0].Variables)
+	}
+}
 

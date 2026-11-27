@@ -140,3 +140,22 @@ func TestDecodeMP3Bytes(t *testing.T) {
 	}
 	_ = time.Now()
 }
+
+func TestSynthesizeEarconWakeWord(t *testing.T) {
+	samples := SynthesizeEarcon(EarconWakeWord, AlertSampleRate)
+	if len(samples) == 0 {
+		t.Fatal("expected non-empty wake word earcon samples")
+	}
+	var peak float32
+	for _, s := range samples {
+		if s < 0 {
+			s = -s
+		}
+		if s > peak {
+			peak = s
+		}
+	}
+	if peak <= 0.05 || peak > 1.0 {
+		t.Fatalf("expected wake word earcon peak amplitude in (0.05, 1.0], got %f", peak)
+	}
+}

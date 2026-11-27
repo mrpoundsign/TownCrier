@@ -13,6 +13,7 @@ import (
 )
 
 func TestRequestDeviceCode(t *testing.T) {
+	t.Parallel()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST, got %s", r.Method)
@@ -51,6 +52,7 @@ func TestRequestDeviceCode(t *testing.T) {
 }
 
 func TestPollTokenSuccess(t *testing.T) {
+	t.Parallel()
 	var pollCount atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count := pollCount.Add(1)
@@ -101,6 +103,7 @@ func TestPollTokenSuccess(t *testing.T) {
 }
 
 func TestRefreshToken(t *testing.T) {
+	t.Parallel()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(TokenResponse{

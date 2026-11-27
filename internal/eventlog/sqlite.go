@@ -45,9 +45,12 @@ CREATE TABLE IF NOT EXISTS event_logs (
 	session_id      INTEGER NOT NULL DEFAULT 0,
 	created_at      INTEGER NOT NULL,
 	updated_at      INTEGER NOT NULL,
-	platform        TEXT NOT NULL,
-	channel         TEXT NOT NULL,
-	kind            TEXT NOT NULL,
+	platform           TEXT NOT NULL,
+	channel            TEXT NOT NULL,
+	stream_id          TEXT NOT NULL DEFAULT '',
+	stream_title       TEXT NOT NULL DEFAULT '',
+	stream_orientation TEXT NOT NULL DEFAULT '',
+	kind               TEXT NOT NULL,
 	is_paid_event   INTEGER NOT NULL DEFAULT 0,
 	user_id         TEXT NOT NULL,
 	user_name       TEXT NOT NULL,
@@ -135,6 +138,9 @@ type columnSpec struct {
 
 var requiredEventLogColumns = []columnSpec{
 	{"session_id", "INTEGER NOT NULL DEFAULT 0"},
+	{"stream_id", "TEXT NOT NULL DEFAULT ''"},
+	{"stream_title", "TEXT NOT NULL DEFAULT ''"},
+	{"stream_orientation", "TEXT NOT NULL DEFAULT ''"},
 	{"emotes_json", "TEXT NOT NULL DEFAULT '[]'"},
 	{"translated_text", "TEXT NOT NULL DEFAULT ''"},
 	{"source_lang", "TEXT NOT NULL DEFAULT ''"},
@@ -1352,14 +1358,14 @@ func (s *SQLiteBackend) Append(ctx context.Context, entry *Entry) error {
 
 	const q = `
 INSERT INTO event_logs (
-	id, session_id, created_at, updated_at, platform, channel, kind, is_paid_event,
+	id, session_id, created_at, updated_at, platform, channel, stream_id, stream_title, stream_orientation, kind, is_paid_event,
 	user_id, user_name, display_name, roles_json,
 	raw_text, emotes_json, translated_text, source_lang, spoken_text, voice_id, speed,
 	amount, unit_amount, currency, item_name, sub_tier, recipient, reward_id, reward_title,
 	months, count,
 	passed_filters, spoken, outcome, outcome_detail
 ) VALUES (
-	?, ?, ?, ?, ?, ?, ?, ?,
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?,
 	?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?, ?, ?, ?,
@@ -1367,18 +1373,21 @@ INSERT INTO event_logs (
 	?, ?, ?, ?
 )
 ON CONFLICT(id) DO UPDATE SET
-	session_id      = CASE WHEN excluded.session_id > 0 THEN excluded.session_id ELSE event_logs.session_id END,
-	updated_at      = excluded.updated_at,
-	emotes_json     = CASE WHEN excluded.emotes_json != '[]' THEN excluded.emotes_json ELSE event_logs.emotes_json END,
-	translated_text = CASE WHEN excluded.translated_text != '' THEN excluded.translated_text ELSE event_logs.translated_text END,
-	source_lang     = CASE WHEN excluded.source_lang != '' THEN excluded.source_lang ELSE event_logs.source_lang END,
-	spoken_text     = CASE WHEN excluded.spoken_text != '' THEN excluded.spoken_text ELSE event_logs.spoken_text END,
-	voice_id        = CASE WHEN excluded.voice_id != '' THEN excluded.voice_id ELSE event_logs.voice_id END,
-	speed           = CASE WHEN excluded.speed > 0 THEN excluded.speed ELSE event_logs.speed END,
-	passed_filters  = excluded.passed_filters,
-	spoken          = excluded.spoken,
-	outcome         = excluded.outcome,
-	outcome_detail  = excluded.outcome_detail;
+	session_id         = CASE WHEN excluded.session_id > 0 THEN excluded.session_id ELSE event_logs.session_id END,
+	updated_at         = excluded.updated_at,
+	stream_id          = CASE WHEN excluded.stream_id != '' THEN excluded.stream_id ELSE event_logs.stream_id END,
+	stream_title       = CASE WHEN excluded.stream_title != '' THEN excluded.stream_title ELSE event_logs.stream_title END,
+	stream_orientation = CASE WHEN excluded.stream_orientation != '' THEN excluded.stream_orientation ELSE event_logs.stream_orientation END,
+	emotes_json        = CASE WHEN excluded.emotes_json != '[]' THEN excluded.emotes_json ELSE event_logs.emotes_json END,
+	translated_text    = CASE WHEN excluded.translated_text != '' THEN excluded.translated_text ELSE event_logs.translated_text END,
+	source_lang        = CASE WHEN excluded.source_lang != '' THEN excluded.source_lang ELSE event_logs.source_lang END,
+	spoken_text        = CASE WHEN excluded.spoken_text != '' THEN excluded.spoken_text ELSE event_logs.spoken_text END,
+	voice_id           = CASE WHEN excluded.voice_id != '' THEN excluded.voice_id ELSE event_logs.voice_id END,
+	speed              = CASE WHEN excluded.speed > 0 THEN excluded.speed ELSE event_logs.speed END,
+	passed_filters     = excluded.passed_filters,
+	spoken             = excluded.spoken,
+	outcome            = excluded.outcome,
+	outcome_detail     = excluded.outcome_detail;
 `
 
 	_, err = s.db.ExecContext(
@@ -1390,6 +1399,9 @@ ON CONFLICT(id) DO UPDATE SET
 		updatedAt.UTC().UnixMilli(),
 		strings.ToLower(strings.TrimSpace(entry.Platform)),
 		strings.TrimSpace(entry.Channel),
+		strings.TrimSpace(entry.StreamID),
+		strings.TrimSpace(entry.StreamTitle),
+		strings.TrimSpace(entry.StreamOrientation),
 		strings.TrimSpace(entry.Kind),
 		boolToInt(entry.IsPaidOrEvent),
 		strings.TrimSpace(entry.UserID),
@@ -1769,7 +1781,7 @@ func (s *SQLiteBackend) Query(ctx context.Context, filter QueryFilter) (*QueryRe
 
 	querySQL := `
 SELECT
-	id, session_id, created_at, updated_at, platform, channel, kind, is_paid_event,
+	id, session_id, created_at, updated_at, platform, channel, stream_id, stream_title, stream_orientation, kind, is_paid_event,
 	user_id, user_name, display_name, roles_json,
 	raw_text, emotes_json, translated_text, source_lang, spoken_text, voice_id, speed,
 	amount, unit_amount, currency, item_name, sub_tier, recipient, reward_id, reward_title,
@@ -1806,6 +1818,9 @@ LIMIT ? OFFSET ?;`
 			&updatedMs,
 			&e.Platform,
 			&e.Channel,
+			&e.StreamID,
+			&e.StreamTitle,
+			&e.StreamOrientation,
 			&e.Kind,
 			&isPaidInt,
 			&e.UserID,

@@ -8,13 +8,18 @@ import (
 	"net/url"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/mrpoundsign/TownCrier/internal/bot"
+	"github.com/mrpoundsign/TownCrier/internal/bot/obs"
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
+	"github.com/mrpoundsign/TownCrier/internal/pluginhost"
 	"github.com/mrpoundsign/TownCrier/internal/ws"
 	"github.com/mrpoundsign/TownCrier/internal/ws/controlv1"
 	"github.com/mrpoundsign/TownCrier/pkg/audio"
@@ -25,6 +30,7 @@ import (
 	"github.com/mrpoundsign/TownCrier/pkg/platform/tiktok"
 	"github.com/mrpoundsign/TownCrier/pkg/platform/twitch"
 	"github.com/mrpoundsign/TownCrier/pkg/platform/youtube"
+	"github.com/mrpoundsign/TownCrier/pkg/pluginv1"
 	"github.com/mrpoundsign/TownCrier/pkg/queue"
 	"github.com/mrpoundsign/TownCrier/pkg/secrets"
 	"github.com/mrpoundsign/TownCrier/pkg/stt"
@@ -60,6 +66,7 @@ type Session struct {
 
 	twitchConnector   *twitch.Connector
 	twitchOAuth       *twitch.OAuthManager
+	twitchBotOAuth    *twitch.OAuthManager
 	onTwitchStatus    func(status string, detail string)
 	youtubeConnector  *youtube.Connector
 	youtubeOAuth      *youtube.OAuthManager
@@ -73,6 +80,9 @@ type Session struct {
 	onTTSModeState    func(mode string, speakingActive bool, userIdle bool)
 	onVolumeChanged   func(vol float32)
 	wsServer          *ws.Server
+	pluginMgr         *pluginhost.Manager
+	botEngine         *bot.Engine
+	onOBSStatus       func(st obs.ClientStatus)
 
 	idleProvider    func() time.Duration
 	userIdle        bool
@@ -88,6 +98,7 @@ type Session struct {
 	streamMu        sync.Mutex
 	livePlatforms   map[string]string
 	activeSessionID int64
+	liveRunID       int64
 	startedAt       time.Time
 	configStore     config.Store
 
@@ -112,9 +123,12 @@ type Session struct {
 	sttTranscribing  atomic.Bool
 	sttLastDecodeMs  atomic.Int64
 	sttSeq           atomic.Uint64
-	latestSubtitle   *ws.SubtitleEvent
-	onVoiceSubtitle  func(ev ws.SubtitleEvent)
-	onSTTStatus      func(speaking bool, transcribing bool, errText string)
+	latestSubtitle         *ws.SubtitleEvent
+	onVoiceSubtitle        func(ev ws.SubtitleEvent)
+	onSTTStatus            func(speaking bool, transcribing bool, errText string)
+	extraSTTStatus         []func(speaking bool, transcribing bool, errText string)
+	recentVoiceTranscripts []bot.VoiceTranscriptEvent
+	onVoiceTranscripts     []func(bot.VoiceTranscriptEvent)
 }
 
 // NewSession creates an application session initialized with configuration, secret store, and config store.
@@ -151,6 +165,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		bots:            matcher,
 		translator:      trSvc,
 		twitchOAuth:     twitch.NewOAuthManager("", store),
+		twitchBotOAuth:  twitch.NewBotOAuthManager("", store),
 		youtubeOAuth:    youtube.NewOAuthManager("", "", store),
 		kickOAuth:       kick.NewOAuthManager("", "", store),
 		livePlatforms:   make(map[string]string),
@@ -201,6 +216,7 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 		},
 	)
 	s.twitchConnector.SetOAuthManager(s.twitchOAuth)
+	s.twitchConnector.SetBotOAuthManager(s.twitchBotOAuth)
 	s.twitchConnector.SetOnAutoModHold(s.HandleAutoModHold)
 	s.twitchConnector.SetOnStreamStateChange(func(live bool) {
 		ch := ""
@@ -312,6 +328,124 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 	initCtrlOn, initTTSOverlayOn, initChatOverlayOn, _ := cfgClone.EffectiveWebSocketFeatures()
 	s.wsServer.SetFeatures(initCtrlOn, initTTSOverlayOn, initChatOverlayOn)
 	s.wsServer.SetSubtitlesOverlayEnabled(cfgClone.EffectiveSubtitlesOverlayEnabled())
+
+	pluginBaseDir := ""
+	pluginKVPath := ":memory:"
+	botDBPath := ":memory:"
+	if loc := strings.TrimSpace(configStore.Location()); loc != "" && loc != "memory" {
+		baseDir := filepath.Dir(loc)
+		pluginBaseDir = filepath.Join(baseDir, "plugins")
+		pluginKVPath = filepath.Join(pluginBaseDir, "plugins_kv.db")
+		if !testing.Testing() {
+			botDBPath = filepath.Join(baseDir, "bot_state.db")
+		}
+	}
+
+	if botStore, bErr := bot.OpenStore(botDBPath); bErr != nil {
+		log.Printf("[Session] Warning: failed to open bot state store (%s): %v", botDBPath, bErr)
+	} else {
+		s.botEngine = bot.NewEngine(botStore, bot.HostBridge{
+			GetConfig:    s.Config,
+			IsStreamLive: s.IsStreamLive,
+			SpeakTTS: func(text, voiceID string, speed float32, priority int, username string) error {
+				return s.SpeakCustom(ws.SpeakRequest{
+					Text:     text,
+					VoiceID:  voiceID,
+					Speed:    speed,
+					Priority: priority,
+					Username: username,
+				})
+			},
+			PlaySound: s.PlaySoundFile,
+			SendChat:  s.SendPlatformChat,
+			Moderate:  s.ModeratePlatformUser,
+			OverlayBroadcast: func(pluginUUID, eventName, jsonPayload string) {
+				if s.wsServer != nil {
+					s.wsServer.BroadcastPluginEvent(pluginUUID, eventName, jsonPayload)
+				}
+			},
+			RunPluginAction: func(ctx context.Context, pluginUUID, actionID string, args *pluginv1.ActionArgs) (bool, *pluginv1.ActionArgs, error) {
+				if s.pluginMgr == nil {
+					return false, args, errors.New("plugin manager unavailable")
+				}
+				return s.pluginMgr.RunPluginAction(ctx, pluginUUID, actionID, args)
+			},
+			GetOBSPassword: func() string {
+				if s.secrets == nil {
+					return ""
+				}
+				pw, _ := s.secrets.Get(config.SecretOBSPassword)
+				return pw
+			},
+			OnOBSStatus: func(st obs.ClientStatus) {
+				s.mu.RLock()
+				fn := s.onOBSStatus
+				s.mu.RUnlock()
+				if fn != nil {
+					fn(st)
+				}
+			},
+			Logf: log.Printf,
+		})
+	}
+
+	s.pluginMgr = pluginhost.NewManager(pluginhost.Options{
+		BaseDir:  pluginBaseDir,
+		KVDBPath: pluginKVPath,
+		Secrets:  store,
+		Callbacks: pluginhost.HostCallbacks{
+			OnSpeak: func(req pluginhost.SpeakRequest) error {
+				return s.SpeakCustom(ws.SpeakRequest{
+					Text:     req.Text,
+					VoiceID:  req.VoiceID,
+					Speed:    req.Speed,
+					Priority: req.Priority,
+					Username: req.Username,
+				})
+			},
+			OnOverlayBroadcast: func(pluginUUID, eventName, jsonPayload string) {
+				if s.wsServer != nil {
+					s.wsServer.BroadcastPluginEvent(pluginUUID, eventName, jsonPayload)
+				}
+			},
+			GetConfig:    s.Config,
+			UpdateConfig: s.UpdateConfig,
+			OnSendChat: func(ctx context.Context, _ string, req *pluginv1.SendChatRequest) error {
+				return s.SendPlatformChat(ctx, req.GetPlatform(), req.GetChannel(), req.GetText(), req.GetReplyToMessageId(), req.GetAsAnnouncement(), req.GetSendAs())
+			},
+			OnModerate: func(ctx context.Context, _ string, req *pluginv1.ModerateRequest) error {
+				return s.ModeratePlatformUser(ctx, req.GetPlatform(), req.GetAction(), req.GetUserId(), req.GetUserName(), req.GetMessageId(), int(req.GetDurationSeconds()), req.GetReason())
+			},
+			OnGetVar: func(_ context.Context, _ string, req *pluginv1.GetVarRequest) (*pluginv1.ActionValue, bool, error) {
+				return s.getBotVarProto(req)
+			},
+			OnSetVar: func(_ context.Context, _ string, req *pluginv1.SetVarRequest) error {
+				return s.setBotVarProto(req)
+			},
+			OnEmitTrigger: func(_ context.Context, _ string, req *pluginv1.EmitTriggerRequest) error {
+				if s.botEngine == nil {
+					return errors.New("bot engine unavailable")
+				}
+				args := make(map[string]string, len(req.GetArgs().GetArgs()))
+				for k, v := range req.GetArgs().GetArgs() {
+					args[k] = botActionValueToString(v)
+				}
+				s.botEngine.OnPluginTrigger(req.GetTriggerId(), args)
+				return nil
+			},
+			OnRunBotAction: func(_ context.Context, _ string, req *pluginv1.RunBotActionRequest) error {
+				if s.botEngine == nil {
+					return errors.New("bot engine unavailable")
+				}
+				args := make(map[string]string, len(req.GetArgs().GetArgs()))
+				for k, v := range req.GetArgs().GetArgs() {
+					args[k] = botActionValueToString(v)
+				}
+				return s.botEngine.RunActionByID(req.GetActionIdOrName(), args, req.GetRunImmediately())
+			},
+		},
+	})
+
 	s.queue.AddOnItemStarted(func(item *queue.Item) {
 		if item == nil {
 			return
@@ -321,15 +455,26 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 			user = item.Event.UserName
 			plat = item.Event.Platform
 		}
-		s.wsServer.BroadcastSpeechEvent(&controlv1.SpeechEvent{
+		speechEv := &controlv1.SpeechEvent{
 			Id:       item.ID,
 			Text:     item.Text,
 			VoiceId:  item.VoiceID,
 			Username: user,
 			Platform: plat,
 			Finished: false,
-		})
+		}
+		s.wsServer.BroadcastSpeechEvent(speechEv)
 		s.wsServer.BroadcastState()
+		if s.pluginMgr != nil {
+			s.pluginMgr.DispatchTTSLifecycle(&pluginv1.TTSSpeechLifecycleEvent{
+				Id:       item.ID,
+				Text:     item.Text,
+				VoiceId:  item.VoiceID,
+				Username: user,
+				Platform: plat,
+				Finished: false,
+			})
+		}
 	})
 	s.queue.AddOnItemFinished(func(item *queue.Item) {
 		if item != nil {
@@ -346,6 +491,16 @@ func NewSession(cfg *config.Config, store secrets.Store, configStore config.Stor
 				Platform: plat,
 				Finished: true,
 			})
+			if s.pluginMgr != nil {
+				s.pluginMgr.DispatchTTSLifecycle(&pluginv1.TTSSpeechLifecycleEvent{
+					Id:       item.ID,
+					Text:     item.Text,
+					VoiceId:  item.VoiceID,
+					Username: user,
+					Platform: plat,
+					Finished: true,
+				})
+			}
 		}
 		s.wsServer.BroadcastState()
 	})
@@ -383,6 +538,12 @@ func (s *Session) Start() error {
 	s.syncVoiceSubtitles(cfg)
 	s.syncMicMonitor(cfg)
 	s.syncWSServer(cfg)
+	if s.pluginMgr != nil {
+		_ = s.pluginMgr.Start()
+	}
+	if s.botEngine != nil {
+		s.botEngine.Start()
+	}
 	syncConnectors(cfg, tw, yt, tt, kk)
 	return nil
 }
@@ -445,6 +606,7 @@ func (s *Session) Close() error {
 	s.onTTSModeState = nil
 	s.onVolumeChanged = nil
 	s.onMicLevel = nil
+	s.onOBSStatus = nil
 	micMon := s.micMonitor
 	tw := s.twitchConnector
 	yt := s.youtubeConnector
@@ -490,7 +652,50 @@ func (s *Session) Close() error {
 	if elog != nil {
 		_ = elog.Close()
 	}
+	if s.botEngine != nil {
+		_ = s.botEngine.Close()
+	}
+	if s.pluginMgr != nil {
+		_ = s.pluginMgr.Close()
+	}
 	return nil
+}
+
+// BotEngine returns the Streamer.bot-class automation engine attached to this session.
+func (s *Session) BotEngine() *bot.Engine {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.botEngine
+}
+
+// TwitchBotOAuth returns the optional dedicated secondary Twitch bot OAuthManager.
+func (s *Session) TwitchBotOAuth() *twitch.OAuthManager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.twitchBotOAuth
+}
+
+// SetOnOBSStatus registers a listener invoked when OBS WebSocket v5 status changes.
+func (s *Session) SetOnOBSStatus(fn func(obs.ClientStatus)) {
+	s.mu.Lock()
+	s.onOBSStatus = fn
+	s.mu.Unlock()
+}
+
+// PluginManager returns the dual WASM/Native plugin manager attached to this session.
+func (s *Session) PluginManager() *pluginhost.Manager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pluginMgr
+}
+
+// GetPluginOverlayAsset delegates OBS browser overlay asset requests to a running plugin.
+func (s *Session) GetPluginOverlayAsset(ctx context.Context, pluginUUID, assetPath string) (string, []byte, bool, error) {
+	mgr := s.PluginManager()
+	if mgr == nil {
+		return "", nil, false, errors.New("plugin manager unavailable")
+	}
+	return mgr.GetOverlayAsset(ctx, pluginUUID, assetPath)
 }
 
 // IsRunning reports whether the session is currently active.
@@ -559,6 +764,9 @@ func (s *Session) ReloadConfig(newCfg *config.Config) error {
 	s.syncVoiceSubtitles(cfgSnap)
 	s.syncMicMonitor(cfgSnap)
 	s.EvaluateIdleState()
+	if s.botEngine != nil {
+		s.botEngine.SyncConfig()
+	}
 	return nil
 }
 
@@ -585,6 +793,32 @@ func (s *Session) UpdateConfig(fn func(c *config.Config)) error {
 	if cStore != nil {
 		if err := cStore.Save(cfg); err != nil {
 			return fmt.Errorf("save config: %w", err)
+		}
+	}
+	return nil
+}
+
+// SaveWindowGeometry persists the main window dimensions and maximized state without triggering a full ReloadConfig.
+func (s *Session) SaveWindowGeometry(width, height int, maximized bool) error {
+	normW, normH := config.NormalizeWindowSize(width, height)
+	s.mu.Lock()
+	if s.cfg == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	if s.cfg.WindowWidth == normW && s.cfg.WindowHeight == normH && s.cfg.WindowMaximized == maximized {
+		s.mu.Unlock()
+		return nil
+	}
+	s.cfg.WindowWidth = normW
+	s.cfg.WindowHeight = normH
+	s.cfg.WindowMaximized = maximized
+	cfgCopy := s.cfg.Clone()
+	cStore := s.configStore
+	s.mu.Unlock()
+	if cStore != nil {
+		if err := cStore.Save(cfgCopy); err != nil {
+			return fmt.Errorf("save window geometry: %w", err)
 		}
 	}
 	return nil
@@ -1054,8 +1288,8 @@ func (s *Session) syncMicMonitor(cfg *config.Config) {
 
 	mode := config.NormalizeMicGateMode(cfg.Audio.MicGateMode)
 	needMicGate := cfg.TTS.Enabled && (mode == config.MicGateModeDuck || mode == config.MicGateModePause)
-	needVoiceSubtitles := cfg.VoiceSubtitles.Enabled
-	if running && (needMicGate || needVoiceSubtitles) {
+	needVoiceDetection := cfg.EffectiveVoiceDetectionEnabled()
+	if running && (needMicGate || needVoiceDetection) {
 		if err := mon.Start(cfg.Audio.MicDeviceID); err != nil {
 			log.Printf("[Session] Failed to start microphone capture monitor: %v", err)
 		}
@@ -1204,6 +1438,20 @@ func (s *Session) ActiveSessionID() int64 {
 	return s.activeSessionID
 }
 
+// EffectiveStreamSessionID returns the persisted eventlog stream session ID when available,
+// or an ephemeral live-stream run ID whenever a platform is live without event logging.
+func (s *Session) EffectiveStreamSessionID() int64 {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.activeSessionID > 0 {
+		return s.activeSessionID
+	}
+	if len(s.livePlatforms) > 0 {
+		return s.liveRunID
+	}
+	return 0
+}
+
 // IsStreamLive reports whether any configured streaming platform is currently broadcasting live.
 func (s *Session) IsStreamLive() bool {
 	s.streamMu.Lock()
@@ -1227,75 +1475,91 @@ func (s *Session) UpdatePlatformStreamState(platform, channel string, live bool)
 
 	elog := s.EventLogger()
 
-	s.streamMu.Lock()
-	defer s.streamMu.Unlock()
+	startedNewStreamSession := func() bool {
+		s.streamMu.Lock()
+		defer s.streamMu.Unlock()
 
-	if s.livePlatforms == nil {
-		s.livePlatforms = make(map[string]string)
-	}
-
-	if live {
-		prevChan, alreadyLive := s.livePlatforms[platform]
-		s.livePlatforms[platform] = channel
-		if alreadyLive && prevChan == channel && s.activeSessionID > 0 {
-			return
+		if s.livePlatforms == nil {
+			s.livePlatforms = make(map[string]string)
 		}
-		if elog == nil {
-			return
-		}
-		now := time.Now().UTC()
-		if s.activeSessionID == 0 {
-			resumeMinutes := 60
-			cfg := s.Config()
-			if cfg != nil && cfg.Logging.SessionResumeWindowMinutes > 0 {
-				resumeMinutes = cfg.Logging.SessionResumeWindowMinutes
-			}
-			resumeWindow := time.Duration(resumeMinutes) * time.Minute
 
-			var resumedID int64
-			latestSess, lastActive, err := elog.LatestSessionLastActive(context.Background())
-			if err == nil && latestSess != nil && !lastActive.IsZero() && time.Since(lastActive) <= resumeWindow {
-				if resErr := elog.ResumeSession(context.Background(), latestSess.ID, platform, channel); resErr == nil {
-					resumedID = latestSess.ID
-					s.activeSessionID = resumedID
-					log.Printf("[Session] Resumed stream session #%d (%s:%s, last message was %v ago)", latestSess.ID, platform, channel, time.Since(lastActive).Round(time.Second))
-				}
-			} else if latestSess != nil && latestSess.EndedAt.IsZero() {
-				// Cleanly close dangling unclosed session from a previous crash older than resumeWindow
-				_ = elog.EndSession(context.Background(), latestSess.ID, lastActive)
-				log.Printf("[Session] Closed unclosed stream session #%d from previous crash", latestSess.ID)
+		if live {
+			wasOffline := len(s.livePlatforms) == 0
+			prevChan, alreadyLive := s.livePlatforms[platform]
+			s.livePlatforms[platform] = channel
+			if s.liveRunID == 0 {
+				s.liveRunID = time.Now().UTC().UnixNano()
 			}
+			if alreadyLive && prevChan == channel && s.activeSessionID > 0 {
+				return false
+			}
+			if elog == nil {
+				return wasOffline
+			}
+			now := time.Now().UTC()
+			if s.activeSessionID == 0 {
+				resumeMinutes := 60
+				cfg := s.Config()
+				if cfg != nil && cfg.Logging.SessionResumeWindowMinutes > 0 {
+					resumeMinutes = cfg.Logging.SessionResumeWindowMinutes
+				}
+				resumeWindow := time.Duration(resumeMinutes) * time.Minute
 
-			if resumedID == 0 {
-				sess, err := elog.StartSession(context.Background(), now, platform, channel)
-				if err == nil && sess != nil && sess.ID > 0 {
-					s.activeSessionID = sess.ID
-					log.Printf("[Session] Started stream session #%d (%s:%s)", sess.ID, platform, channel)
+				var resumedID int64
+				latestSess, lastActive, err := elog.LatestSessionLastActive(context.Background())
+				if err == nil && latestSess != nil && !lastActive.IsZero() && time.Since(lastActive) <= resumeWindow {
+					if resErr := elog.ResumeSession(context.Background(), latestSess.ID, platform, channel); resErr == nil {
+						resumedID = latestSess.ID
+						s.activeSessionID = resumedID
+						log.Printf("[Session] Resumed stream session #%d (%s:%s, last message was %v ago)", latestSess.ID, platform, channel, time.Since(lastActive).Round(time.Second))
+					}
+				} else if latestSess != nil && latestSess.EndedAt.IsZero() {
+					// Cleanly close dangling unclosed session from a previous crash older than resumeWindow
+					_ = elog.EndSession(context.Background(), latestSess.ID, lastActive)
+					log.Printf("[Session] Closed unclosed stream session #%d from previous crash", latestSess.ID)
 				}
-			}
 
-			for otherPlat, otherChan := range s.livePlatforms {
-				if otherPlat != platform && s.activeSessionID > 0 {
-					_ = elog.AddSessionPlatform(context.Background(), s.activeSessionID, otherPlat, otherChan)
+				startedNew := false
+				if resumedID == 0 {
+					sess, err := elog.StartSession(context.Background(), now, platform, channel)
+					if err == nil && sess != nil && sess.ID > 0 {
+						s.activeSessionID = sess.ID
+						startedNew = true
+						log.Printf("[Session] Started stream session #%d (%s:%s)", sess.ID, platform, channel)
+					}
 				}
+
+				for otherPlat, otherChan := range s.livePlatforms {
+					if otherPlat != platform && s.activeSessionID > 0 {
+						_ = elog.AddSessionPlatform(context.Background(), s.activeSessionID, otherPlat, otherChan)
+					}
+				}
+				return startedNew
 			}
-		} else {
 			_ = elog.AddSessionPlatform(context.Background(), s.activeSessionID, platform, channel)
+			return false
 		}
-		return
-	}
 
-	if _, exists := s.livePlatforms[platform]; !exists {
-		return
-	}
-	delete(s.livePlatforms, platform)
-	if len(s.livePlatforms) == 0 && s.activeSessionID > 0 {
-		sid := s.activeSessionID
-		s.activeSessionID = 0
-		if elog != nil {
-			_ = elog.EndSession(context.Background(), sid, time.Now().UTC())
-			log.Printf("[Session] Ended stream session #%d (all platforms offline)", sid)
+		if _, exists := s.livePlatforms[platform]; !exists {
+			return false
 		}
+		delete(s.livePlatforms, platform)
+		if len(s.livePlatforms) == 0 {
+			s.liveRunID = 0
+			if s.activeSessionID > 0 {
+				sid := s.activeSessionID
+				s.activeSessionID = 0
+				if elog != nil {
+					_ = elog.EndSession(context.Background(), sid, time.Now().UTC())
+					log.Printf("[Session] Ended stream session #%d (all platforms offline)", sid)
+				}
+			}
+		}
+		return false
+	}()
+
+	if startedNewStreamSession && s.botEngine != nil {
+		s.botEngine.OnStreamSessionStart()
 	}
 }
 
@@ -1307,6 +1571,7 @@ func (s *Session) endActiveStreamSession() {
 	s.streamMu.Lock()
 	sid := s.activeSessionID
 	s.activeSessionID = 0
+	s.liveRunID = 0
 	clear(s.livePlatforms)
 	s.streamMu.Unlock()
 
@@ -1418,6 +1683,9 @@ func (s *Session) TogglePanic() bool {
 		panicked := s.queue.TogglePanic()
 		if panicked {
 			s.ClearVoiceSubtitles()
+			if s.botEngine != nil {
+				s.botEngine.ClearQueues()
+			}
 		}
 		return panicked
 	}
@@ -1624,9 +1892,12 @@ func (s *Session) syncWSServer(cfg *config.Config) {
 	if port <= 0 || port > 65535 {
 		port = config.DefaultWebSocketPort
 	}
+	if testing.Testing() && (cfg.WebSocket.Port == 0 || cfg.WebSocket.Port == config.DefaultWebSocketPort) {
+		port = 0
+	}
 	wantAddr := fmt.Sprintf("%s:%d", host, port)
 	if s.wsServer.IsRunning() {
-		if s.wsServer.Addr() == wantAddr {
+		if (port == 0 && strings.HasPrefix(s.wsServer.Addr(), host+":")) || s.wsServer.Addr() == wantAddr {
 			s.wsServer.BroadcastOverlayReload()
 			return
 		}
@@ -2238,9 +2509,12 @@ func (s *Session) buildLogEntry(event *chat.Event, rawText string, rawEmotes []c
 		SessionID:      s.ActiveSessionID(),
 		CreatedAt:      ts,
 		UpdatedAt:      time.Now().UTC(),
-		Platform:       event.Platform,
-		Channel:        event.Channel,
-		Kind:           string(event.Kind),
+		Platform:          event.Platform,
+		Channel:           event.Channel,
+		StreamID:          event.StreamID,
+		StreamTitle:       event.StreamTitle,
+		StreamOrientation: event.StreamOrientation,
+		Kind:              string(event.Kind),
 		IsPaidOrEvent:  event.IsPaidOrEvent(),
 		UserID:         event.UserID,
 		UserName:       event.UserName,
@@ -2631,6 +2905,20 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 	}
 	s.syncAndEnrichFollowerRole(event)
 	rawText, rawEmotes := formatEventLogRawTextAndEmotes(event)
+	consumedByBot := false
+	if s.botEngine != nil {
+		evCopy := *event
+		consumedByBot = s.botEngine.OnEvent(&evCopy)
+	}
+	if s.pluginMgr != nil {
+		evCopy := *event
+		s.pluginMgr.DispatchStreamEventWithState(&evCopy, s.EffectiveStreamSessionID(), s.IsStreamLive())
+	}
+	if consumedByBot {
+		log.Printf("[Session] Event consumed by bot command: user=%q text=%q", event.UserName, event.Text)
+		s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, "", "", 0, false, eventlog.OutcomeDroppedBotCommand, "Handled and consumed by bot command"))
+		return nil
+	}
 
 	log.Printf("[Session] DispatchEvent: user=%q platform=%s channel=%q kind=%s text=%q roles=%v", event.UserName, event.Platform, event.Channel, event.Kind, event.Text, event.Roles)
 
@@ -2802,6 +3090,27 @@ func (s *Session) DispatchEvent(event *chat.Event) error {
 		return nil
 	}
 
+	// 5b. Synchronous BeforeTTS plugin middleware (<= 500ms bounded budget)
+	if s.pluginMgr != nil {
+		consume, finalText, finalVoice, finalSpeed := s.pluginMgr.InvokeBeforeTTS(
+			context.Background(),
+			event,
+			sanitizedText,
+			resolved.VoiceID,
+			resolved.Speed,
+			s.EffectiveStreamSessionID(),
+			s.IsStreamLive(),
+		)
+		if consume {
+			log.Printf("[Session] Event consumed by BeforeTTS middleware: user=%q", event.UserName)
+			s.recordEventLog(s.buildLogEntry(event, rawText, rawEmotes, finalText, finalVoice, finalSpeed, false, eventlog.OutcomeDroppedBotCommand, "Consumed by BeforeTTS plugin middleware"))
+			return nil
+		}
+		sanitizedText = finalText
+		resolved.VoiceID = finalVoice
+		resolved.Speed = finalSpeed
+	}
+
 	// 6. Check if TTS is disabled or paused by TTS Output Mode / Auto-AFK
 	if !cfg.TTS.Enabled {
 		log.Printf("[Session] Event passed filters but TTS is disabled: user=%q", event.UserName)
@@ -2893,6 +3202,10 @@ func (s *Session) DispatchModeration(modEvent *chat.ModerationEvent) {
 	if modEvent == nil || s.queue == nil {
 		return
 	}
+	if s.pluginMgr != nil {
+		modCopy := *modEvent
+		s.pluginMgr.DispatchModerationEvent(&modCopy)
+	}
 
 	cfg := s.Config()
 	ch := modEvent.Channel
@@ -2944,4 +3257,290 @@ func (s *Session) DispatchModeration(modEvent *chat.ModerationEvent) {
 	case chat.ModActionClearChat:
 		s.queue.CancelAllForPlatform(modEvent.Platform)
 	}
+}
+
+// PlaySoundFile decodes and plays an audio file (.wav or .mp3) through the active Session audio player.
+func (s *Session) PlaySoundFile(path string) error {
+	if s.IsPanicked() {
+		return nil
+	}
+	clean := strings.TrimSpace(path)
+	if clean == "" {
+		return errors.New("sound file path cannot be empty")
+	}
+	samples, rate, err := audio.LoadAlertSoundFile(clean)
+	if err != nil {
+		return err
+	}
+	s.mu.RLock()
+	player := s.player
+	s.mu.RUnlock()
+	if player == nil {
+		return nil
+	}
+	return player.Play(samples, rate)
+}
+
+// SendPlatformChat dispatches an outbound chat message, reply, or announcement to the specified platform connector.
+func (s *Session) SendPlatformChat(ctx context.Context, platform, _ string, text, replyToMsgID string, asAnnouncement bool, sendAs string) error {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "twitch":
+		if s.twitchConnector == nil {
+			return errors.New("twitch connector unavailable")
+		}
+		if asAnnouncement {
+			return s.twitchConnector.SendAnnouncementAs(ctx, text, "", sendAs)
+		}
+		return s.twitchConnector.SendChatMessageAs(ctx, text, replyToMsgID, sendAs)
+	case "youtube":
+		if s.youtubeConnector == nil {
+			return errors.New("youtube connector unavailable")
+		}
+		return s.youtubeConnector.SendChatMessage(ctx, text)
+	case "kick":
+		if s.kickConnector == nil {
+			return errors.New("kick connector unavailable")
+		}
+		return s.kickConnector.SendChatMessage(ctx, text, replyToMsgID)
+	default:
+		return fmt.Errorf("unsupported outbound chat platform %q", platform)
+	}
+}
+
+// ListExternalActions implements ws.ActionProvider, enumerating enabled/configured Bot Actions and loaded Plugin Actions.
+func (s *Session) ListExternalActions() ws.ExternalActionCatalog {
+	cfg := s.Config()
+	cat := ws.ExternalActionCatalog{
+		BotActions:    make([]ws.ExternalBotAction, 0, len(cfg.Bot.Actions)),
+		PluginActions: make([]ws.ExternalPluginAction, 0),
+	}
+	for _, a := range cfg.Bot.Actions {
+		cat.BotActions = append(cat.BotActions, ws.ExternalBotAction{
+			ID:      a.ID,
+			Name:    a.Name,
+			Enabled: a.Enabled,
+			QueueID: a.QueueID,
+		})
+	}
+	if s.pluginMgr != nil {
+		for _, p := range s.pluginMgr.Plugins() {
+			if p.State != pluginhost.StatusRunning {
+				continue
+			}
+			for _, ad := range p.Actions {
+				if ad == nil {
+					continue
+				}
+				ext := ws.ExternalPluginAction{
+					PluginUUID:   p.UUID,
+					PluginName:   p.Name,
+					ActionID:     ad.GetId(),
+					ActionName:   ad.GetName(),
+					Description:  ad.GetDescription(),
+					Controllers:  slices.Clone(ad.GetControllers()),
+					DefaultTitle: ad.GetDefaultTitle(),
+					DefaultColor: ad.GetDefaultColor(),
+					DefaultImage: ad.GetDefaultImage(),
+					HideTitle:    ad.GetHideTitle(),
+				}
+				if av := p.ActionVisuals[ad.GetId()]; av != nil {
+					ext.Visual = &ws.ExternalActionVisual{
+						Title:           av.GetTitle(),
+						Subtitle:        av.GetSubtitle(),
+						Color:           av.GetColor(),
+						BackgroundColor: av.GetBackgroundColor(),
+						Image:           av.GetImageDataUri(),
+						State:           int(av.GetState()),
+						HasProgress:     av.GetHasProgress(),
+						ProgressPercent: int(av.GetProgressPercent()),
+						FeedbackValue:   av.GetFeedbackValue(),
+					}
+				}
+				cat.PluginActions = append(cat.PluginActions, ext)
+			}
+		}
+	}
+	return cat
+}
+
+// RunExternalBotAction implements ws.ActionProvider, dispatching a configured Bot Automation action.
+func (s *Session) RunExternalBotAction(actionIDOrName string, args map[string]string, runImmediately bool) error {
+	if s.botEngine == nil {
+		return errors.New("bot engine unavailable")
+	}
+	return s.botEngine.RunActionByID(actionIDOrName, args, runImmediately)
+}
+
+// RunExternalPluginAction implements ws.ActionProvider, invoking an exported plugin action by UUID and action ID.
+func (s *Session) RunExternalPluginAction(ctx context.Context, pluginUUID, actionID string, args map[string]string) error {
+	if s.pluginMgr == nil {
+		return errors.New("plugin manager unavailable")
+	}
+	var pbArgs *pluginv1.ActionArgs
+	if len(args) > 0 {
+		m := make(map[string]*pluginv1.ActionValue, len(args))
+		for k, v := range args {
+			m[k] = &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_StringVal{StringVal: v}}
+		}
+		pbArgs = &pluginv1.ActionArgs{Args: m}
+	}
+	_, _, err := s.pluginMgr.RunPluginAction(ctx, pluginUUID, actionID, pbArgs)
+	return err
+}
+
+// ModeratePlatformUser executes an outbound moderation action (delete, timeout, ban, unban) on the target platform.
+func (s *Session) ModeratePlatformUser(ctx context.Context, platform, action, userID, userName, messageID string, durationSec int, reason string) error {
+	act := strings.ToLower(strings.TrimSpace(action))
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "twitch":
+		if s.twitchConnector == nil {
+			return errors.New("twitch connector unavailable")
+		}
+		switch act {
+		case "delete", "delete_message":
+			return s.twitchConnector.DeleteChatMessage(ctx, messageID)
+		case "timeout":
+			if durationSec <= 0 {
+				durationSec = 600
+			}
+			return s.twitchConnector.BanOrTimeoutUser(ctx, userID, userName, durationSec, reason)
+		case "ban":
+			return s.twitchConnector.BanOrTimeoutUser(ctx, userID, userName, 0, reason)
+		case "unban", "untimeout":
+			return s.twitchConnector.UnbanUser(ctx, userID, userName)
+		default:
+			return fmt.Errorf("unsupported twitch moderation action %q", action)
+		}
+	case "youtube":
+		if s.youtubeConnector == nil {
+			return errors.New("youtube connector unavailable")
+		}
+		switch act {
+		case "delete", "delete_message":
+			return s.youtubeConnector.DeleteChatMessage(ctx, messageID)
+		case "timeout":
+			if durationSec <= 0 {
+				durationSec = 300
+			}
+			return s.youtubeConnector.BanOrTimeoutUser(ctx, userID, durationSec)
+		case "ban":
+			return s.youtubeConnector.BanOrTimeoutUser(ctx, userID, 0)
+		default:
+			return fmt.Errorf("unsupported youtube moderation action %q", action)
+		}
+	case "kick":
+		if s.kickConnector == nil {
+			return errors.New("kick connector unavailable")
+		}
+		switch act {
+		case "delete", "delete_message":
+			return s.kickConnector.DeleteChatMessage(ctx, messageID)
+		case "timeout":
+			if durationSec <= 0 {
+				durationSec = 600
+			}
+			return s.kickConnector.BanOrTimeoutUser(ctx, userID, durationSec, reason)
+		case "ban":
+			return s.kickConnector.BanOrTimeoutUser(ctx, userID, 0, reason)
+		default:
+			return fmt.Errorf("unsupported kick moderation action %q", action)
+		}
+	default:
+		return fmt.Errorf("unsupported moderation platform %q", platform)
+	}
+}
+
+func (s *Session) getBotVarProto(req *pluginv1.GetVarRequest) (*pluginv1.ActionValue, bool, error) {
+	if s.botEngine == nil || s.botEngine.Store() == nil || req == nil {
+		return nil, false, errors.New("bot store unavailable")
+	}
+	st := s.botEngine.Store()
+	switch req.GetScope() {
+	case pluginv1.VarScope_VAR_SCOPE_USER_PERSISTENT:
+		v, ok := st.GetUserVar(req.GetPlatform(), req.GetUserId(), req.GetKey())
+		if !ok {
+			return nil, false, nil
+		}
+		return botVarToActionValue(v.Kind, v.Value), true, nil
+	case pluginv1.VarScope_VAR_SCOPE_GLOBAL_EPHEMERAL:
+		v, ok := st.GetGlobalVar(req.GetKey(), true)
+		if !ok {
+			return nil, false, nil
+		}
+		return botVarToActionValue(v.Kind, v.Value), true, nil
+	default:
+		v, ok := st.GetGlobalVar(req.GetKey(), false)
+		if !ok {
+			return nil, false, nil
+		}
+		return botVarToActionValue(v.Kind, v.Value), true, nil
+	}
+}
+
+func (s *Session) setBotVarProto(req *pluginv1.SetVarRequest) error {
+	if s.botEngine == nil || s.botEngine.Store() == nil || req == nil {
+		return errors.New("bot store unavailable")
+	}
+	st := s.botEngine.Store()
+	if req.GetDelete() {
+		switch req.GetScope() {
+		case pluginv1.VarScope_VAR_SCOPE_USER_PERSISTENT:
+			return st.DeleteUserVar(req.GetPlatform(), req.GetUserId(), req.GetKey())
+		case pluginv1.VarScope_VAR_SCOPE_GLOBAL_EPHEMERAL:
+			return st.DeleteGlobalVar(req.GetKey(), true)
+		default:
+			return st.DeleteGlobalVar(req.GetKey(), false)
+		}
+	}
+
+	kind, val := botActionValueToKindAndString(req.GetValue())
+	switch req.GetScope() {
+	case pluginv1.VarScope_VAR_SCOPE_USER_PERSISTENT:
+		return st.SetUserVar(req.GetPlatform(), req.GetUserId(), req.GetKey(), kind, val)
+	case pluginv1.VarScope_VAR_SCOPE_GLOBAL_EPHEMERAL:
+		return st.SetGlobalVar(req.GetKey(), kind, val, true)
+	default:
+		return st.SetGlobalVar(req.GetKey(), kind, val, false)
+	}
+}
+
+func botActionValueToString(v *pluginv1.ActionValue) string {
+	_, s := botActionValueToKindAndString(v)
+	return s
+}
+
+func botActionValueToKindAndString(v *pluginv1.ActionValue) (string, string) {
+	if v == nil || v.Kind == nil {
+		return "string", ""
+	}
+	switch k := v.Kind.(type) {
+	case *pluginv1.ActionValue_IntVal:
+		return "int", strconv.FormatInt(k.IntVal, 10)
+	case *pluginv1.ActionValue_DoubleVal:
+		return "float", strconv.FormatFloat(k.DoubleVal, 'f', -1, 64)
+	case *pluginv1.ActionValue_BoolVal:
+		return "bool", strconv.FormatBool(k.BoolVal)
+	case *pluginv1.ActionValue_StringVal:
+		return "string", k.StringVal
+	default:
+		return "string", ""
+	}
+}
+
+func botVarToActionValue(kind, val string) *pluginv1.ActionValue {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "int", "integer":
+		if n, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64); err == nil {
+			return &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_IntVal{IntVal: n}}
+		}
+	case "float", "double", "number":
+		if f, err := strconv.ParseFloat(strings.TrimSpace(val), 64); err == nil {
+			return &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_DoubleVal{DoubleVal: f}}
+		}
+	case "bool", "boolean":
+		if b, err := strconv.ParseBool(strings.TrimSpace(val)); err == nil {
+			return &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_BoolVal{BoolVal: b}}
+		}
+	}
+	return &pluginv1.ActionValue{Kind: &pluginv1.ActionValue_StringVal{StringVal: val}}
 }

@@ -34,6 +34,7 @@ type Item struct {
 type Queue struct {
 	mu          sync.Mutex
 	cond        *sync.Cond
+	micSyncMu   sync.Mutex
 	eventsQueue []*Item
 	chatQueue   []*Item
 
@@ -49,10 +50,11 @@ type Queue struct {
 	currentAbortDetail  string
 	stopPlaybackCh      chan struct{}
 
-	paused    bool
-	micPaused bool
-	panicked  bool
-	closed    bool
+	paused     bool
+	micPaused  bool
+	micGateSeq uint64
+	panicked   bool
+	closed     bool
 
 	onItemStarted         func(item *Item)
 	onItemFinished        func(item *Item)
@@ -93,6 +95,7 @@ func NewQueue(player audio.Player, engine tts.Engine, cfgFn func() *config.Confi
 func (q *Queue) SetMicGateFunc(fn func() bool) {
 	q.mu.Lock()
 	q.micGateFn = fn
+	q.micGateSeq++
 	q.mu.Unlock()
 	q.syncMicGateState()
 }
@@ -121,9 +124,11 @@ func (q *Queue) isMicGated() bool {
 }
 
 func (q *Queue) syncMicGateState() {
+	q.micSyncMu.Lock()
 	gated := q.isMicGated()
 
 	q.mu.Lock()
+	q.micGateSeq++
 	changed := q.micPaused != gated
 	q.micPaused = gated
 	manualPaused := q.paused
@@ -143,6 +148,7 @@ func (q *Queue) syncMicGateState() {
 			p.ResumeFromSentenceStart()
 		}
 	}
+	q.micSyncMu.Unlock()
 
 	if changed && fn != nil {
 		fn(gated)
@@ -684,11 +690,16 @@ func (q *Queue) popNext() (*Item, int, bool) {
 
 		if (len(q.eventsQueue) > 0 || len(q.chatQueue) > 0) && q.micGateFn != nil {
 			fn := q.micGateFn
+			seq := q.micGateSeq
 			q.mu.Unlock()
 			gated := fn()
 			q.mu.Lock()
 			if q.closed {
 				return nil, 0, false
+			}
+			// Re-evaluate instead of latching micPaused if syncMicGateState() or SetMicGateFunc() updated state concurrently.
+			if q.micGateSeq != seq || q.paused || q.micPaused {
+				continue
 			}
 			if gated {
 				q.micPaused = true
