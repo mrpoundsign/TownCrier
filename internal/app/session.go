@@ -1892,9 +1892,12 @@ func (s *Session) syncWSServer(cfg *config.Config) {
 	if port <= 0 || port > 65535 {
 		port = config.DefaultWebSocketPort
 	}
+	if testing.Testing() && (cfg.WebSocket.Port == 0 || cfg.WebSocket.Port == config.DefaultWebSocketPort) {
+		port = 0
+	}
 	wantAddr := fmt.Sprintf("%s:%d", host, port)
 	if s.wsServer.IsRunning() {
-		if s.wsServer.Addr() == wantAddr {
+		if (port == 0 && strings.HasPrefix(s.wsServer.Addr(), host+":")) || s.wsServer.Addr() == wantAddr {
 			s.wsServer.BroadcastOverlayReload()
 			return
 		}

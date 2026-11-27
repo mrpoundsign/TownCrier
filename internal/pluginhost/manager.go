@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1548,8 +1550,12 @@ func discoverPlugins(baseDir string, extraPaths []string) (wasmPaths, nativePath
 		for _, ent := range entries {
 			full := filepath.Join(dir, ent.Name())
 			if !ent.IsDir() {
-				if strings.EqualFold(ent.Name(), "plugin.json") {
+				low := strings.ToLower(ent.Name())
+				switch {
+				case low == "plugin.json":
 					addNative(full)
+				case strings.HasSuffix(low, ".link.json"):
+					resolveNativeLink(full, addNative)
 				}
 				continue
 			}
@@ -1580,6 +1586,8 @@ func discoverPlugins(baseDir string, extraPaths []string) (wasmPaths, nativePath
 				addWasm(p)
 			case low == "plugin.json":
 				addNative(p)
+			case strings.HasSuffix(low, ".link.json"):
+				resolveNativeLink(p, addNative)
 			}
 			continue
 		}
@@ -1590,6 +1598,35 @@ func discoverPlugins(baseDir string, extraPaths []string) (wasmPaths, nativePath
 	slices.Sort(wasmPaths)
 	slices.Sort(nativePaths)
 	return wasmPaths, nativePaths
+}
+
+type nativeLinkDescriptor struct {
+	PluginDir string `json:"plugin_dir"`
+}
+
+func resolveNativeLink(linkPath string, addNative func(string)) {
+	f, err := os.Open(linkPath)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	raw, err := io.ReadAll(io.LimitReader(f, 64*1024))
+	if err != nil {
+		return
+	}
+	var desc nativeLinkDescriptor
+	if err := json.Unmarshal(raw, &desc); err != nil {
+		return
+	}
+	pluginDir := strings.TrimSpace(desc.PluginDir)
+	if pluginDir == "" || !filepath.IsAbs(pluginDir) {
+		return
+	}
+	cand := filepath.Join(filepath.Clean(pluginDir), "plugin.json")
+	if st, statErr := os.Stat(cand); statErr == nil && !st.IsDir() {
+		addNative(cand)
+	}
 }
 
 func chatEventToProto(ev *chat.Event) *pluginv1.StreamEvent {

@@ -1083,6 +1083,10 @@ func TestSettingsView_GranularWebServerAndOverlayToggles(t *testing.T) {
 	w := a.NewWindow("Test Granular Web Server Toggles")
 
 	cfg := config.DefaultConfig()
+	if !cfg.WebSocket.Enabled {
+		t.Fatal("expected DefaultConfig().WebSocket.Enabled to be true (localhost-only by default)")
+	}
+	cfg.WebSocket.Enabled = false
 	cfg.WebSocket.Port = 0
 	// Ensure no connectors start when sess.Start() is called
 	for k, p := range cfg.Platforms {

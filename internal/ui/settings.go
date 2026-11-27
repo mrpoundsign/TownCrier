@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,6 +27,7 @@ import (
 
 	"github.com/mrpoundsign/TownCrier/internal/app"
 	"github.com/mrpoundsign/TownCrier/internal/pluginhost"
+	"github.com/mrpoundsign/TownCrier/internal/poundcontrol"
 	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
 	"github.com/mrpoundsign/TownCrier/pkg/audio"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
@@ -168,6 +171,10 @@ type SettingsView struct {
 	streamDeckInstallBtn      *widget.Button
 	streamDeckStatusLabel     *widget.Label
 	streamDeckPluginsDir      string
+	poundControlInstallBtn    *widget.Button
+	poundControlStatusLabel   *widget.Label
+	poundControlWasmDir       string
+	poundControlSrcWasm       string
 	onOverlayChanged          func()
 	generalBox                *fyne.Container
 	obsBox                    *fyne.Container
@@ -530,6 +537,21 @@ func (v *SettingsView) SelectPlatformTab(platform string) {
 			v.subTabs.Append(target)
 		}
 		v.subTabs.Select(target)
+	}
+}
+
+// SelectPluginsTab switches the active Settings sub-tab to Plugins and refreshes plugin cards.
+func (v *SettingsView) SelectPluginsTab() {
+	if v.subTabs == nil || v.pluginsTabItem == nil {
+		return
+	}
+	v.SyncPlatformTabVisibility()
+	if !slices.Contains(v.subTabs.Items, v.pluginsTabItem) {
+		v.subTabs.Append(v.pluginsTabItem)
+	}
+	v.subTabs.Select(v.pluginsTabItem)
+	if v.pluginsTab != nil {
+		v.pluginsTab.Refresh()
 	}
 }
 
@@ -2412,9 +2434,120 @@ func (v *SettingsView) buildWSControlCard() *widget.Card {
 
 	sdRow := container.NewBorder(nil, nil, v.streamDeckInstallBtn, nil, v.streamDeckStatusLabel)
 
+	v.poundControlStatusLabel = widget.NewLabel("")
+	v.poundControlStatusLabel.Wrapping = fyne.TextWrapWord
+
+	resolvePoundControlSrc := func() string {
+		if strings.TrimSpace(v.poundControlSrcWasm) != "" {
+			return v.poundControlSrcWasm
+		}
+		if exe, err := os.Executable(); err == nil && exe != "" {
+			return poundcontrol.FindSidecarWasm(filepath.Dir(exe))
+		}
+		return ""
+	}
+
+	refreshPoundControlUI := func(justInstalledPath string) {
+		var st poundcontrol.PluginStatus
+		if testing.Testing() && v.poundControlWasmDir == "" {
+			st = poundcontrol.PluginStatus{
+				BundledVersion: strings.TrimPrefix(AppVersion, "v"),
+			}
+		} else {
+			st = poundcontrol.CheckPluginStatus(v.poundControlWasmDir, AppVersion)
+		}
+		srcWasm := resolvePoundControlSrc()
+
+		if !st.Installed {
+			if srcWasm != "" {
+				v.poundControlStatusLabel.SetText("PoundControl Plugin: Not installed (Bundled: v" + st.BundledVersion + ")")
+				if v.poundControlInstallBtn != nil {
+					v.poundControlInstallBtn.SetText("Install PoundControl Plugin (v" + st.BundledVersion + ")")
+					v.poundControlInstallBtn.Importance = widget.HighImportance
+					v.poundControlInstallBtn.Show()
+					v.poundControlInstallBtn.Refresh()
+				}
+			} else {
+				v.poundControlStatusLabel.SetText("PoundControl Plugin: Install 1-click from PoundControl → Settings → Plugins → Curated Plugins")
+				if v.poundControlInstallBtn != nil {
+					v.poundControlInstallBtn.Hide()
+				}
+			}
+			return
+		}
+
+		if st.NeedsUpdate {
+			if st.InstalledVersion != "" {
+				v.poundControlStatusLabel.SetText(fmt.Sprintf("⬆ PoundControl Plugin update available: v%s -> v%s", st.InstalledVersion, st.BundledVersion))
+			} else {
+				v.poundControlStatusLabel.SetText("⬆ PoundControl Plugin update available (v" + st.BundledVersion + ")")
+			}
+			if v.poundControlInstallBtn != nil {
+				if srcWasm != "" {
+					v.poundControlInstallBtn.SetText("Update PoundControl Plugin to v" + st.BundledVersion)
+					v.poundControlInstallBtn.Importance = widget.HighImportance
+					v.poundControlInstallBtn.Show()
+					v.poundControlInstallBtn.Refresh()
+				} else {
+					v.poundControlInstallBtn.Hide()
+				}
+			}
+			return
+		}
+
+		if justInstalledPath != "" {
+			v.poundControlStatusLabel.SetText(fmt.Sprintf("✓ Installed PoundControl plugin v%s to %s (reload plugins in PoundControl to load)", st.InstalledVersion, justInstalledPath))
+		} else {
+			v.poundControlStatusLabel.SetText("✓ PoundControl Plugin v" + st.InstalledVersion + " installed (up to date)")
+		}
+		if v.poundControlInstallBtn != nil {
+			if srcWasm != "" {
+				v.poundControlInstallBtn.SetText("Reinstall PoundControl Plugin (v" + st.BundledVersion + ")")
+				v.poundControlInstallBtn.Importance = widget.MediumImportance
+				v.poundControlInstallBtn.Show()
+				v.poundControlInstallBtn.Refresh()
+			} else {
+				v.poundControlInstallBtn.Hide()
+			}
+		}
+	}
+
+	v.poundControlInstallBtn = widget.NewButtonWithIcon("Install PoundControl Plugin", theme.DownloadIcon(), func() {
+		srcWasm := resolvePoundControlSrc()
+		if srcWasm == "" {
+			v.poundControlStatusLabel.SetText("⚠️ Sidecar " + poundcontrol.ReleaseAssetName + " not found; install from PoundControl's Curated Plugins.")
+			return
+		}
+		installedPath, err := poundcontrol.InstallWasmFile(srcWasm, v.poundControlWasmDir, AppVersion)
+		if err != nil {
+			errMsg := fmt.Sprintf("⚠️ PoundControl plugin install failed: %v", err)
+			v.poundControlStatusLabel.SetText(errMsg)
+			v.setStatus(errMsg)
+			return
+		}
+		if cur := v.currentConfig(); cur != nil && !cur.WebSocket.Enabled {
+			v.updateConfig(func(c *config.Config) {
+				c.WebSocket.Enabled = true
+			})
+			v.initializing = true
+			if v.wsEnabledCheck != nil {
+				v.wsEnabledCheck.SetChecked(true)
+			}
+			v.initializing = false
+			v.refreshWSStatusLabel()
+		}
+		refreshPoundControlUI(installedPath)
+		v.setStatus("✓ PoundControl plugin v" + strings.TrimPrefix(AppVersion, "v") + " installed.")
+	})
+	v.poundControlInstallBtn.Importance = widget.HighImportance
+	refreshPoundControlUI("")
+
+	pcRow := container.NewBorder(nil, nil, v.poundControlInstallBtn, nil, v.poundControlStatusLabel)
+
 	v.wsControlSection = container.NewVBox(
 		infoLabel,
 		sdRow,
+		pcRow,
 	)
 
 	designerBar := container.NewBorder(nil, nil, nil, v.wsOpenDesignerBtn, widget.NewLabelWithStyle("OBS Browser Source Overlays & Style Designer", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))

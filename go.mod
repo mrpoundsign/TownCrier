@@ -15,7 +15,7 @@ require (
 	github.com/gempir/go-twitch-irc/v4 v4.4.1
 	github.com/gen2brain/malgo v0.11.26
 	github.com/k2-fsa/sherpa-onnx-go v1.13.8
-	github.com/mrpoundsign/appinstaller v0.0.1
+	github.com/mrpoundsign/appinstaller v0.1.0
 	github.com/steampoweredtaco/gotiktoklive v0.0.4
 	github.com/stretchr/testify v1.11.1
 	github.com/tetratelabs/wazero v1.12.0

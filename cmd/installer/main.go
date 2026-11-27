@@ -12,6 +12,7 @@ import (
 	"github.com/mrpoundsign/appinstaller/pkg/installerui"
 
 	"github.com/mrpoundsign/TownCrier/assets"
+	"github.com/mrpoundsign/TownCrier/internal/poundcontrol"
 	"github.com/mrpoundsign/TownCrier/internal/streamdeck"
 	"github.com/mrpoundsign/TownCrier/pkg/tts"
 )
@@ -24,6 +25,7 @@ var (
 
 	// Overridable in unit tests to guarantee strict test isolation inside os.TempDir().
 	streamDeckPluginsDirOverride string
+	poundControlWasmDirOverride  string
 )
 
 func main() {
@@ -99,7 +101,15 @@ func buildAppSpec() installer.AppSpec {
 				ID:          "streamdeck_plugin",
 				Title:       "Install / Update Elgato Stream Deck Plugin",
 				Description: "Install com.github.mrpoundsign.towncrier.sdPlugin (v" + streamdeck.BundledPluginVersion() + ") for hardware keypad & dial control",
-				DefaultOn:   true,
+				DefaultOn:   streamdeck.IsElgatoInstalled(streamDeckPluginsDirOverride),
+				RunOnUpdate: true,
+				IsInstalled: func(_ string) bool {
+					targetDir := streamDeckPluginsDirOverride
+					if targetDir == "" && testing.Testing() {
+						return false
+					}
+					return streamdeck.IsPluginInstalled(targetDir)
+				},
 				Run: func(_ context.Context, _ string, progress func(cur, total int64, status string)) error {
 					progress(0, 1, "Installing Elgato Stream Deck plugin...")
 					targetDir := streamDeckPluginsDirOverride
@@ -110,6 +120,36 @@ func buildAppSpec() installer.AppSpec {
 						return err
 					}
 					progress(1, 1, "Installed Elgato Stream Deck plugin v"+streamdeck.BundledPluginVersion()+".")
+					return nil
+				},
+			},
+			{
+				ID:          "poundcontrol_plugin",
+				Title:       "Install / Update PoundControl Plugin",
+				Description: "Install " + poundcontrol.ReleaseAssetName + " for PoundControl virtual & mobile touch deck control",
+				DefaultOn:   poundcontrol.IsPoundControlInstalled(poundControlWasmDirOverride),
+				RunOnUpdate: true,
+				IsInstalled: func(_ string) bool {
+					targetDir := poundControlWasmDirOverride
+					if targetDir == "" && testing.Testing() {
+						return false
+					}
+					return poundcontrol.IsPluginInstalled(targetDir)
+				},
+				Run: func(_ context.Context, installDir string, progress func(cur, total int64, status string)) error {
+					progress(0, 1, "Installing PoundControl plugin...")
+					src := poundcontrol.FindSidecarWasm(installDir)
+					if src == "" {
+						return fmt.Errorf("%s not found in %s", poundcontrol.ReleaseAssetName, installDir)
+					}
+					targetDir := poundControlWasmDirOverride
+					if targetDir == "" && testing.Testing() {
+						targetDir = filepath.Join(os.TempDir(), "towncrier-test-pc-wasm")
+					}
+					if _, err := poundcontrol.InstallWasmFile(src, targetDir, AppVersion); err != nil {
+						return err
+					}
+					progress(1, 1, "Installed PoundControl plugin v"+AppVersion+".")
 					return nil
 				},
 			},

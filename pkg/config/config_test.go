@@ -888,6 +888,7 @@ func TestVoiceDetectionMasterToggleAndGating(t *testing.T) {
 	}
 
 	// Explicit master disable gates Subtitles, Overlay, and Voice Commands while preserving saved rules
+	cfg.WebSocket.Enabled = false
 	cfg.VoiceSubtitles.Enabled = true
 	cfg.SetVoiceDetectionEnabled(false)
 	if cfg.EffectiveVoiceDetectionEnabled() {

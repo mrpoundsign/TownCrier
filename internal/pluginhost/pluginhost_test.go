@@ -221,6 +221,95 @@ func TestNativeTrustGateAndTamperDetection(t *testing.T) {
 	require.NotEqual(t, origHash, list[0].BinarySHA256)
 }
 
+func TestNativeLinkDiscoveryAndSecurityBoundaries(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	baseDir := filepath.Join(root, "towncrier-plugins")
+	nativeDir := filepath.Join(baseDir, "native")
+	require.NoError(t, os.MkdirAll(nativeDir, 0o755))
+
+	externalDir := filepath.Join(root, "CrowdDJ")
+	require.NoError(t, os.MkdirAll(externalDir, 0o755))
+	binPath := filepath.Join(externalDir, "demo.bin")
+	require.NoError(t, os.WriteFile(binPath, []byte("crowddj-bin"), 0o755))
+
+	manifestJSON := `{
+		"uuid": "com.example.native.linked",
+		"name": "Linked Native",
+		"version": "1.0.0",
+		"binaries": {
+			"linux/amd64": "demo.bin",
+			"windows/amd64": "demo.bin",
+			"darwin/arm64": "demo.bin",
+			"darwin/amd64": "demo.bin"
+		}
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(externalDir, "plugin.json"), []byte(manifestJSON), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(nativeDir, "crowddj.link.json"),
+		[]byte(`{"plugin_dir":"`+filepath.ToSlash(externalDir)+`"}`),
+		0o644,
+	))
+
+	// Invalid links (non-absolute, malformed JSON, missing target) must be ignored without breaking discovery.
+	require.NoError(t, os.WriteFile(filepath.Join(nativeDir, "rel.link.json"), []byte(`{"plugin_dir":"relative/dir"}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(nativeDir, "bad.link.json"), []byte(`{not-json`), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(nativeDir, "missing.link.json"),
+		[]byte(`{"plugin_dir":"`+filepath.ToSlash(filepath.Join(root, "MissingApp"))+`"}`),
+		0o644,
+	))
+
+	// Escaping binary path inside a linked plugin.json must still fail validation.
+	escapeDir := filepath.Join(root, "EscapePlugin")
+	require.NoError(t, os.MkdirAll(escapeDir, 0o755))
+	escapeManifest := `{
+		"uuid": "com.example.native.escape",
+		"name": "Escape Native",
+		"version": "1.0.0",
+		"binaries": {
+			"linux/amd64": "../CrowdDJ/demo.bin",
+			"windows/amd64": "../CrowdDJ/demo.bin",
+			"darwin/arm64": "../CrowdDJ/demo.bin",
+			"darwin/amd64": "../CrowdDJ/demo.bin"
+		}
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(escapeDir, "plugin.json"), []byte(escapeManifest), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(nativeDir, "escape.link.json"),
+		[]byte(`{"plugin_dir":"`+filepath.ToSlash(escapeDir)+`"}`),
+		0o644,
+	))
+
+	cfg := config.DefaultConfig()
+	mgr := NewManager(Options{
+		BaseDir:  baseDir,
+		KVDBPath: ":memory:",
+		Secrets:  secrets.NewMemoryStore(),
+		Callbacks: HostCallbacks{
+			GetConfig: func() *config.Config { return cfg.Clone() },
+		},
+	})
+	defer func() { _ = mgr.Close() }()
+
+	require.NoError(t, mgr.Start())
+	list := mgr.Plugins()
+	require.Len(t, list, 2)
+
+	byUUID := make(map[string]PluginStatus, len(list))
+	for _, st := range list {
+		byUUID[st.UUID] = st
+	}
+
+	linked := byUUID["com.example.native.linked"]
+	require.Equal(t, StatusAwaitingTrust, linked.State)
+	require.NotEmpty(t, linked.BinarySHA256)
+
+	escaped := byUUID["com.example.native.escape"]
+	require.Equal(t, StatusError, escaped.State)
+	require.Contains(t, escaped.Error, "escapes plugin directory")
+}
+
 func TestValidateManifestUIViewsPermission(t *testing.T) {
 	t.Parallel()
 	apiErr := ValidateManifest(&pluginv1.Manifest{

@@ -59,6 +59,9 @@ const (
 	dynBotPrefix    = "com.github.mrpoundsign.towncrier.wasm.bot."
 )
 
+// PluginVersion is overridden at build time via -ldflags "-X main.PluginVersion=...".
+var PluginVersion = "0.1.0-dev"
+
 type slotInstance struct {
 	Context    string
 	Action     string
@@ -894,7 +897,7 @@ func pcManifest() uint64 {
 	manifest := map[string]any{
 		"uuid":        pluginUUID,
 		"name":        "TownCrier & Plugins",
-		"version":     "1.1.0",
+		"version":     strings.TrimPrefix(strings.TrimSpace(PluginVersion), "v"),
 		"author":      "mrpoundsign",
 		"description": "Control TownCrier neural TTS, Panic Mute, Bot Actions, and installed Plugins (such as CrowdDJ) as first-class buttons & dials.",
 		"permissions": map[string]any{

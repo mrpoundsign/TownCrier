@@ -7,6 +7,7 @@ set -euo pipefail
 #   ./build.sh win      # Build Windows GUI executable into build/bin/TownCrier.exe
 #   ./build.sh linux    # Build Linux GUI executable into build/bin/towncrier
 #   ./build.sh mac      # Build macOS GUI executable into build/bin/towncrier
+#   ./build.sh wasm     # Build PoundControl WASM plugin into build/bin/poundcontrol-towncrier.wasm
 #   ./build.sh lint     # Run go fix --diff and golangci-lint-v2
 #   ./build.sh test     # Run unit tests
 #   ./build.sh proto    # Regenerate Protobuf Go bindings from proto/
@@ -249,9 +250,21 @@ run_test() {
     run_test_quiet "Concurrent race stress tests (-count=5)" go test -race -timeout 180s -count=5 ./internal/app/... ./pkg/queue/... ./pkg/platform/... ./internal/eventlog/...
 }
 
+build_wasm() {
+    echo "==> Vetting & building PoundControl WASM plugin (poundcontrol-towncrier.wasm v${VERSION})..."
+    local norm_ver="${VERSION#v}"
+    GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 go vet ./integrations/poundcontrol-wasm
+    GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 \
+        go build -buildmode=c-shared -trimpath \
+        -ldflags="-s -w -X main.PluginVersion=${norm_ver}" \
+        -o "$BIN_DIR/poundcontrol-towncrier.wasm" ./integrations/poundcontrol-wasm
+    echo "✓ Built $BIN_DIR/poundcontrol-towncrier.wasm"
+}
+
 build_win() {
     fetch_dlls
     bash "$ROOT_DIR/scripts/build-whisper-vulkan.sh" win
+    build_wasm
 
     local core_syso="$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso"
     local launcher_syso="$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso"
@@ -277,8 +290,8 @@ build_win() {
     local inst_payload_dir="$ROOT_DIR/cmd/installer/payload"
     mkdir -p "$payload_dir" "$inst_payload_dir"
     rm -f "$payload_dir/towncrier-core"* "$payload_dir/towncrier-whisper"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
-    rm -f "$inst_payload_dir/towncrier-core"* "$inst_payload_dir/towncrier-whisper"* "$inst_payload_dir/"*.dll "$inst_payload_dir/LICENSE" "$inst_payload_dir/THIRDPARTY_NOTICES.md"
-    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/towncrier-whisper"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/launcher/payload/"*.dylib "$ROOT_DIR/cmd/installer/payload/towncrier-core"* "$ROOT_DIR/cmd/installer/payload/towncrier-whisper"* "$ROOT_DIR/cmd/installer/payload/"*.dll "$ROOT_DIR/cmd/installer/payload/LICENSE" "$ROOT_DIR/cmd/installer/payload/THIRDPARTY_NOTICES.md" "$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/installer/rsrc_windows_amd64.syso"' RETURN
+    rm -f "$inst_payload_dir/towncrier-core"* "$inst_payload_dir/towncrier-whisper"* "$inst_payload_dir/"*.dll "$inst_payload_dir/poundcontrol-towncrier.wasm" "$inst_payload_dir/LICENSE" "$inst_payload_dir/THIRDPARTY_NOTICES.md"
+    trap 'rm -f "$ROOT_DIR/cmd/launcher/payload/towncrier-core"* "$ROOT_DIR/cmd/launcher/payload/towncrier-whisper"* "$ROOT_DIR/cmd/launcher/payload/"*.dll "$ROOT_DIR/cmd/launcher/payload/"*.so "$ROOT_DIR/cmd/launcher/payload/"*.dylib "$ROOT_DIR/cmd/installer/payload/towncrier-core"* "$ROOT_DIR/cmd/installer/payload/towncrier-whisper"* "$ROOT_DIR/cmd/installer/payload/"*.dll "$ROOT_DIR/cmd/installer/payload/poundcontrol-towncrier.wasm" "$ROOT_DIR/cmd/installer/payload/LICENSE" "$ROOT_DIR/cmd/installer/payload/THIRDPARTY_NOTICES.md" "$ROOT_DIR/cmd/towncrier/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/launcher/rsrc_windows_amd64.syso" "$ROOT_DIR/cmd/installer/rsrc_windows_amd64.syso"' RETURN
     cp -f "$BIN_DIR/towncrier-core.exe" "$payload_dir/"
     cp -f "$BIN_DIR/towncrier-whisper.exe" "$payload_dir/"
     cp -f "$BIN_DIR/onnxruntime.dll" "$payload_dir/"
@@ -290,6 +303,7 @@ build_win() {
     cp -f "$BIN_DIR/onnxruntime.dll" "$inst_payload_dir/"
     cp -f "$BIN_DIR/sherpa-onnx-c-api.dll" "$inst_payload_dir/"
     cp -f "$BIN_DIR/sherpa-onnx-cxx-api.dll" "$inst_payload_dir/"
+    cp -f "$BIN_DIR/poundcontrol-towncrier.wasm" "$inst_payload_dir/"
     [ -f "$ROOT_DIR/LICENSE" ] && cp -f "$ROOT_DIR/LICENSE" "$inst_payload_dir/"
     [ -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" ] && cp -f "$ROOT_DIR/THIRDPARTY_NOTICES.md" "$inst_payload_dir/"
 
@@ -303,9 +317,14 @@ build_win() {
         go build -tags nosherpa -trimpath -ldflags="-H windowsgui -s -w -X main.AppVersion=${VERSION} -extldflags '-static-libgcc'" \
         -o "$BIN_DIR/TownCrier-Setup.exe" ./cmd/installer
 
+    if command -v x86_64-w64-mingw32-objdump &>/dev/null; then
+        echo "==> Verifying TownCrier-Setup.exe DLL Dependencies..."
+        x86_64-w64-mingw32-objdump -p "$BIN_DIR/TownCrier-Setup.exe" | grep "DLL Name"
+    fi
+
     # Clean staged payload and temporary .syso from source tree
     rm -f "$payload_dir/towncrier-core"* "$payload_dir/towncrier-whisper"* "$payload_dir/"*.dll "$payload_dir/"*.so "$payload_dir/"*.dylib
-    rm -f "$inst_payload_dir/towncrier-core"* "$inst_payload_dir/towncrier-whisper"* "$inst_payload_dir/"*.dll "$inst_payload_dir/LICENSE" "$inst_payload_dir/THIRDPARTY_NOTICES.md"
+    rm -f "$inst_payload_dir/towncrier-core"* "$inst_payload_dir/towncrier-whisper"* "$inst_payload_dir/"*.dll "$inst_payload_dir/poundcontrol-towncrier.wasm" "$inst_payload_dir/LICENSE" "$inst_payload_dir/THIRDPARTY_NOTICES.md"
     rm -f "$core_syso" "$launcher_syso" "$installer_syso"
     trap - RETURN
 
@@ -476,6 +495,9 @@ package_dist() {
     if [ ! -f "$BIN_DIR/towncrier" ]; then
         build_linux
     fi
+    if [ ! -f "$BIN_DIR/poundcontrol-towncrier.wasm" ]; then
+        build_wasm
+    fi
 
     local zip_file="$DIST_DIR/TownCrier-v${VERSION}-windows-amd64.zip"
     echo "==> Packaging Windows distribution into $zip_file..."
@@ -523,6 +545,11 @@ with zipfile.ZipFile('$zip_file', 'w', zipfile.ZIP_DEFLATED) as zf:
     (cd "$staging" && tar -czf "$tar_file" .)
     rm -rf "$staging"
     echo "✓ Successfully packaged $tar_file"
+
+    if [ -f "$BIN_DIR/poundcontrol-towncrier.wasm" ]; then
+        cp -f "$BIN_DIR/poundcontrol-towncrier.wasm" "$DIST_DIR/poundcontrol-towncrier.wasm"
+        echo "✓ Successfully packaged $DIST_DIR/poundcontrol-towncrier.wasm"
+    fi
 }
 
 run_proto() {
@@ -553,6 +580,7 @@ case "$TARGET" in
     all)
         run_lint
         run_test
+        build_wasm
         build_win
         build_linux
         package_dist
@@ -565,6 +593,9 @@ case "$TARGET" in
         ;;
     mac|osx)
         build_mac
+        ;;
+    wasm)
+        build_wasm
         ;;
     lint)
         run_lint
@@ -589,7 +620,7 @@ case "$TARGET" in
         ;;
     *)
         echo "Unknown target: $TARGET"
-        echo "Valid targets: all, win, linux, mac, lint, test, proto, package, package-mac, fetch-dlls, clean"
+        echo "Valid targets: all, win, linux, mac, wasm, lint, test, proto, package, package-mac, fetch-dlls, clean"
         exit 1
         ;;
 esac

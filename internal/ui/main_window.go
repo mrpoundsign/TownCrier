@@ -94,6 +94,7 @@ type MainWindow struct {
 	volumeMu           sync.Mutex
 	volumeSaveTimer    *time.Timer
 	updateBtn          *widget.Button
+	pluginTrustBtn     *widget.Button
 	pendingRelease     *updater.ReleaseInfo
 	panicBtn           *widget.Button
 	hotkeyMgr          *GlobalHotkeyManager
@@ -935,6 +936,15 @@ func (mw *MainWindow) initHeader() {
 	volContainer := container.NewBorder(nil, nil, volLabel, nil, container.NewStack(volSliderSpacer, mw.volumeSlider))
 	mw.volContainer = volContainer
 
+	mw.pluginTrustBtn = widget.NewButtonWithIcon("⚠ Plugin Approval", theme.WarningIcon(), func() {
+		mw.SelectTab(TabIndexSettings)
+		if mw.settingsTab != nil {
+			mw.settingsTab.SelectPluginsTab()
+		}
+	})
+	mw.pluginTrustBtn.Importance = widget.HighImportance
+	mw.pluginTrustBtn.Hide()
+
 	mw.updateBtn = widget.NewButtonWithIcon("⬆ Update", theme.DownloadIcon(), func() {
 		if mw.pendingRelease != nil {
 			ShowTownCrierUpdateDialog(mw.Window, mw.Session, mw.pendingRelease)
@@ -968,7 +978,7 @@ func (mw *MainWindow) initHeader() {
 		widget.NewSeparator(),
 		mw.navButtons,
 	)
-	rightSide := container.NewHBox(volContainer, mw.updateBtn, aboutBtn)
+	rightSide := container.NewHBox(volContainer, mw.pluginTrustBtn, mw.updateBtn, aboutBtn)
 
 	mw.headerBar = container.NewVBox(
 		container.NewHBox(mw.leftSide, layout.NewSpacer(), rightSide),
@@ -1085,7 +1095,11 @@ func (mw *MainWindow) syncPluginMainTabs() {
 	}
 	var desired []wantView
 	desiredSet := make(map[string]bool)
+	awaitingTrustCount := 0
 	for _, st := range mgr.Plugins() {
+		if st.State == pluginhost.StatusAwaitingTrust {
+			awaitingTrustCount++
+		}
 		if st.State == pluginhost.StatusDisabled || st.State == pluginhost.StatusAwaitingTrust {
 			// Keep already-mounted crashed views so user sees isolated Restart / View Logs banner,
 			// unless intentionally disabled or untrusted.
@@ -1103,6 +1117,22 @@ func (mw *MainWindow) syncPluginMainTabs() {
 				desc:       vd,
 			})
 			desiredSet[k] = true
+		}
+	}
+
+	if mw.pluginTrustBtn != nil {
+		if awaitingTrustCount > 0 {
+			if awaitingTrustCount == 1 {
+				mw.pluginTrustBtn.SetText("⚠ 1 Plugin Awaiting Approval")
+			} else {
+				mw.pluginTrustBtn.SetText(fmt.Sprintf("⚠ %d Plugins Awaiting Approval", awaitingTrustCount))
+			}
+			mw.pluginTrustBtn.Show()
+		} else {
+			mw.pluginTrustBtn.Hide()
+		}
+		if mw.headerBar != nil {
+			mw.headerBar.Refresh()
 		}
 	}
 

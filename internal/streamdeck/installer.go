@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"testing"
 )
 
 // PluginDirName is the Elgato Stream Deck bundle directory name.
@@ -123,6 +124,30 @@ func DefaultPluginsDir() (string, error) {
 		appData = cfgDir
 	}
 	return filepath.Join(appData, "Elgato", "StreamDeck", "Plugins"), nil
+}
+
+// IsElgatoInstalled reports whether the Elgato Stream Deck application folder or plugins directory exists.
+func IsElgatoInstalled(targetBaseDir string) bool {
+	if testing.Testing() && strings.TrimSpace(targetBaseDir) == "" {
+		return false
+	}
+	if strings.TrimSpace(targetBaseDir) == "" {
+		dir, err := DefaultPluginsDir()
+		if err != nil {
+			return false
+		}
+		targetBaseDir = dir
+	}
+	if IsPluginInstalled(targetBaseDir) {
+		return true
+	}
+	if info, err := os.Stat(targetBaseDir); err == nil && info.IsDir() {
+		return true
+	}
+	if info, err := os.Stat(filepath.Dir(targetBaseDir)); err == nil && info.IsDir() {
+		return true
+	}
+	return false
 }
 
 // IsPluginInstalled reports whether the TownCrier Stream Deck plugin manifest and runtime bundle

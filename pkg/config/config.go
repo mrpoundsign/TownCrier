@@ -1337,7 +1337,7 @@ func DefaultConfig() *Config {
 			LiveLogs:                   DefaultLiveLogPresets(),
 		},
 		WebSocket: WebSocketConfig{
-			Enabled:   false,
+			Enabled:   true,
 			Host:      DefaultWebSocketHost,
 			Port:      DefaultWebSocketPort,
 			AuthToken: "",
