@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.2.0 — 2026-11-27
+
+### Added
+- **Unified Canvas & Style Designer Plugin Widgets (`overlay.widgets.v1`, #158)**:
+  - Added the `overlay.widgets.v1` ABI across `proto/plugin/v1` and `sdk.js` so plugins (such as **CrowdDJ**) can render, style, and position custom widgets directly inside TownCrier's Unified OBS Canvas (`/overlay`) and Visual Style Designer (`/overlay/designer`).
+
+### Changed
+- **Compressed Setup & Portable Payloads (`appinstaller@v0.2.0`) & Windows Metadata**:
+  - Switched build-time embedded payloads to zstd-compressed archives (`TownCrier-Setup.exe` reduced from ~139.5 MB to ~54.4 MB) with `.payload-sha256` fast-path caching for portable launches.
+  - Migrated Windows executables to `go-winres` (embedding application icon, GUI DPI manifest, and version metadata) and added an OBS Studio Mode *Duplicate Scene* tip to the Zoom editor and `docs/automation.html`.
+
+### Fixed
+- **Native Emotes, Twitch Cheermotes & Embedded Overlay Assets (#157)**:
+  - Fixed native platform emote and Twitch cheermote rendering across chat and overlays, and embedded overlay web assets directly into the binary.
+
+---
+
 ## v0.1.1 — 2026-11-26
 
 ### Fixed

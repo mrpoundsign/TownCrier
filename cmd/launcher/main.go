@@ -12,7 +12,7 @@ import (
 var payloadFS embed.FS
 
 var (
-	AppVersion = "0.1.1"
+	AppVersion = "0.2.0"
 )
 
 const (
