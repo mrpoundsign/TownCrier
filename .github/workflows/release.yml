@@ -214,6 +214,7 @@ jobs:
         if: needs.meta.outputs.is_tag == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG="${{ needs.meta.outputs.tag }}"
           if ! gh release view "$TAG" >/dev/null 2>&1; then

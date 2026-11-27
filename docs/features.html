@@ -35,14 +35,17 @@
                 <a class="sidebar-link" href="features.html" aria-current="page">Features &amp; Config Guide</a>
                 <ul class="sidebar-subnav" role="list">
                   <li><a class="sidebar-sublink" href="#dashboard">1. Dashboard &amp; Header</a></li>
-                  <li><a class="sidebar-sublink" href="#general-audio">2. General &amp; Audio</a></li>
+                  <li><a class="sidebar-sublink" href="#general-audio">2. General &amp; Features</a></li>
                   <li><a class="sidebar-sublink" href="#backups">3. Backups &amp; Snapshots</a></li>
                   <li><a class="sidebar-sublink" href="#tts-hardware">4. TTS &amp; Hardware</a></li>
                   <li><a class="sidebar-sublink" href="#rules-safety">5. Rules &amp; Safety</a></li>
                   <li><a class="sidebar-sublink" href="#platforms">6. Platform Tabs</a></li>
                   <li><a class="sidebar-sublink" href="#viewers">7. Viewers &amp; Voices</a></li>
-                  <li><a class="sidebar-sublink" href="#logs-search">8. Live Logs &amp; Search</a></li>
-                  <li><a class="sidebar-sublink" href="#streamdeck-api">9. Stream Deck &amp; API</a></li>
+                  <li><a class="sidebar-sublink" href="#logs-search">8. Live Logs &amp; App Log</a></li>
+                  <li><a class="sidebar-sublink" href="#streamdeck-api">9. Overlays, Decks &amp; API</a></li>
+                  <li><a class="sidebar-sublink" href="#voice-subtitles">10. Voice Subtitles &amp; Wake Word</a></li>
+                  <li><a class="sidebar-sublink" href="#bot-automation">11. Bot Automation Core</a></li>
+                  <li><a class="sidebar-sublink" href="#plugins">12. WASM &amp; Native Plugins</a></li>
                 </ul>
               </li>
               <li><a class="sidebar-link" href="translation-guides.html">Translation Setup Guides</a></li>
@@ -91,11 +94,12 @@
               <li><strong>Master Volume Slider:</strong> Adjust playback gain in real time from <code>0%</code> to <code>200%</code> without leaving your current tab.</li>
               <li><strong>Update Indicator (<code>&#11014; Update</code>):</strong> Appears automatically when a new GitHub Release is available. If a broadcast is currently live, TownCrier suppresses modal prompts so your stream is never interrupted.</li>
             </ul>
-            <h3>Dashboard Speech Queue &amp; Recent Chatters</h3>
+            <h3>Dashboard Live Activity Feed, Speech Queue &amp; Recent Chatters</h3>
             <ul>
-              <li><strong>Now Speaking &amp; Queue Controls:</strong> Displays the currently speaking message, active voice ID, and pending queue depth, with 1-click buttons to <strong>Pause / Resume Queue</strong>, <strong>Skip Current</strong>, or <strong>Clear Queue</strong>.</li>
+              <li><strong>Unified Control Center &amp; Live Activity Feed:</strong> Combines the <em>Now Speaking</em> card, playback queue controls (<strong>Pause / Resume Sentence</strong>, <strong>Skip Current</strong>, <strong>Clear Queue</strong>), recent spoken chatters, and an embedded zero-chrome Live Logs feed in one glanceable home screen.</li>
+              <li><strong>Multi-Stream YouTube Counter:</strong> Automatically tracks simultaneous horizontal and vertical YouTube Live broadcasts with a live stream-count badge and channel tooltips on the header bar.</li>
               <li><strong>Recent Spoken Messages &amp; <code>文A</code> Toggle:</strong> Shows the most recent spoken events. When foreign chat translation is active, click the <code>文A</code> button in the card header to toggle between translated speech text and the chatter's original language.</li>
-              <li><strong>Quick Voice Assignment:</strong> Click <strong>Assign Voice</strong> next to any chatter in the recent list to immediately customize their personal voice or playback speed.</li>
+              <li><strong>Quick Voice Assignment:</strong> Click <strong>Assign Voice</strong> next to any chatter in the recent list to immediately customize their personal voice or playback speed multiplier.</li>
             </ul>
             <h3>Bottom Status Bar &amp; Panic Mute</h3>
             <ul>
@@ -106,34 +110,32 @@
           <!-- 2. General & Audio -->
           <section id="general-audio" class="card">
             <span class="badge">Core Setup</span>
-            <h2>2. Application Features, Audio Output &amp; General Settings</h2>
-            <div class="path-pill">Location: Settings &rarr; General &amp; Audio</div>
+            <h2>2. Application Features, Voice Detection &amp; Display Settings</h2>
+            <div class="path-pill">Location: Settings &rarr; General</div>
             <p>
-              All core subsystem toggles, audio output routing, default voices, and UI scaling live in the first Settings sub-tab:
+              Core subsystem toggles, Voice Detection controls, streaming service tabs, display scaling, and backups live under <strong>Settings &rarr; General</strong> with top quick-jump buttons (<strong>Features</strong>, <strong>Voice Detection</strong>, <strong>Services</strong>, <strong>Display &amp; Scale</strong>, <strong>Backups &amp; Recovery</strong>):
             </p>
             <h3>Application Features Card</h3>
             <ul>
-              <li><strong>Enable Text-to-Speech (TTS):</strong> Uncheck to run TownCrier as a lightweight, chat-only aggregator and logger (&lt;40 MB RAM, &lt;100ms startup) without loading ONNX voice models.</li>
+              <li><strong>Enable Text-to-Speech (TTS):</strong> Uncheck to run TownCrier as a lightweight, chat-only aggregator, bot runner, and logger (&lt;40 MB RAM, &lt;100ms startup) without loading ONNX voice models.</li>
               <li><strong>Enable Event Logging:</strong> Toggle local SQLite chat/event recording and the <strong>Logs</strong> navigation tab.</li>
-              <li><strong>Enable Foreign Chat Translation (Beta):</strong> Shows the <strong>Settings &rarr; Translation</strong> sub-tab and translates non-target-language chat messages before speaking. (See the <a href="translation-guides.html">Translation Setup Guides</a> for provider walkthroughs.)</li>
+              <li><strong>Enable Bot Automation Engine (Commands, Actions, Timers, OBS, Voice Triggers):</strong> Shows the top-level <strong>Bot</strong> navigation tab for Streamer.bot-style triggers, queues, OBS automation, and voice commands.</li>
+              <li><strong>Enable Chat Translation:</strong> Shows the <strong>Settings &rarr; Translation</strong> sub-tab and translates non-target-language chat messages before speaking. (See the <a href="translation-guides.html">Translation Setup Guides</a>.)</li>
+              <li><strong>Enable Voice Detection (Offline Speech Recognition / Whisper):</strong> Master toggle for offline Silero VAD + Whisper microphone recognition, unlocking <strong>Settings &rarr; Voice Subtitles</strong>, live transcript testing, Wake Word chimes, and voice-triggered bot commands.</li>
               <li><strong>Check for TownCrier updates on startup:</strong> Queries GitHub Releases asynchronously on launch and verifies SHA-256 checksums before applying updates.</li>
             </ul>
-            <h3>TTS Output Mode, Auto-AFK &amp; Inactive Alert Sounds</h3>
+            <h3>Audio Output Device, Global Default Voice &amp; Output Modes</h3>
+            <p>
+              Audio routing, TTS output modes, and neural model packs live in <strong>Settings &rarr; TTS &amp; Hardware</strong> (with quick-links for <strong>Default Voice</strong>, <strong>Output Mode</strong>, <strong>Audio &amp; Mic</strong>, and <strong>Neural Models</strong>):
+            </p>
             <ul>
-              <li><strong>Output Mode:</strong> Choose <strong>Always On</strong>, <strong>Auto-AFK (Speak When Idle)</strong>, or <strong>Always Off (Muted)</strong>.</li>
-              <li><strong>AFK Idle Timeout:</strong> Set how long your keyboard and mouse must be untouched (<code>15s</code>, <code>30s</code>, <code>1m</code>, <code>2m</code>, <code>5m</code>, or <code>10m</code>) before <strong>Auto-AFK</strong> activates speech. Moving the mouse or pressing a key immediately silences playback and flushes queued chat.</li>
-              <li><strong>Play notification sound when TTS is inactive:</strong> Plays a built-in harmonic chime or a custom <code>.wav</code> / <code>.mp3</code> file (with a 3-second anti-spam cooldown) whenever a qualifying message arrives while TTS is muted or while you are active at your desk in Auto-AFK mode.</li>
-            </ul>
-            <h3>Audio Output Device &amp; Global Default Voice</h3>
-            <ul>
-              <li><strong>Playback Device:</strong> Select any Windows WASAPI or Linux audio sink (such as <em>VB-Audio Virtual Cable</em> or <em>Wave Link</em>) so OBS Studio can capture TownCrier on an isolated audio track. Click <strong>Refresh Devices</strong> after plugging in headsets or virtual cables.</li>
-              <li><strong>Global Default Voice &amp; Speed:</strong> Choose the default fallback voice and speech rate (<code>0.50x</code> to <code>2.00x</code>) used whenever a chatter or platform does not have a specific voice override. Click the speaker icon to hear a sample phrase.</li>
+              <li><strong>Output Mode &amp; Auto-AFK:</strong> Choose <strong>Always On</strong>, <strong>Auto-AFK (Speak When Idle)</strong> (<code>15s</code>&ndash;<code>10m</code> timeout), or <strong>Always Off (Muted)</strong>, with optional notification chimes when inactive.</li>
+              <li><strong>Playback Device &amp; Stall Auto-Recovery:</strong> Select any Windows WASAPI or Linux audio sink (such as <em>VB-Audio Virtual Cable</em> or <em>Wave Link</em>). Windows WASAPI output streams automatically detect stalls and recover playback without restarting the app.</li>
+              <li><strong>Global Default Voice &amp; Speed:</strong> Choose the default fallback voice and speech rate (<code>0.50x</code> to <code>2.00x</code>) applied across chatters and scaled proportionally by per-viewer multipliers.</li>
             </ul>
             <h3>Streaming Services, Known Bots &amp; Display Scaling</h3>
             <ul>
-              <li><strong>Streaming Services Card:</strong> Check or uncheck <strong>Twitch</strong>, <strong>YouTube</strong>, <strong>TikTok</strong>, or <strong>Kick</strong> to show or hide their configuration tabs in the interface.</li>
-              <li><strong>Bot Filtering Card:</strong> Toggle <strong>Ignore known stream bots</strong> (built-in list of common bots like <code>Nightbot</code>, <code>StreamElements</code>, <code>Fossabot</code>, <code>Moobot</code>, <code>Sery_Bot</code>, etc.) and add or remove custom bot usernames.</li>
-              <li><strong>Display &amp; Scaling Card:</strong> Lock interface DPI zoom with <strong>UI Scale</strong> (<code>Auto (System Default)</code>, <code>80%</code>, <code>90%</code>, <code>100%</code>, <code>110%</code>, <code>125%</code>, <code>150%</code>, or <code>175%</code>).</li>
+              <li><strong>Services &amp; Display &amp; Scale:</strong> Toggle visible platform tabs (<strong>Twitch</strong>, <strong>YouTube</strong>, <strong>TikTok</strong>, <strong>Kick</strong>), remember your custom window size across launches, and set <strong>UI Scale</strong> (<code>Auto</code> or <code>80%</code>&ndash;<code>175%</code>).</li>
             </ul>
           </section>
 
@@ -280,7 +282,7 @@
             <h3>Connecting Each Platform</h3>
             <ul>
               <li><strong>Twitch:</strong> Enter your channel name and click <strong>Enable Twitch</strong> for instant zero-login IRC chat, or click <strong>Connect with Twitch (OAuth)</strong> to unlock full EventSub alerts (Subscriptions, Resubs, Gift Subs, Bits, Raids, Follows, Watch Streaks, Sub Upgrades, Channel Point Redemptions, Charity Donations, Announcements), Twitch AutoMod queue moderation, and inline chat moderation.</li>
-              <li><strong>YouTube Live:</strong> Enter your channel <code>@handle</code>, channel URL, or live video URL and click <strong>Enable YouTube</strong> (no API key required for public streams). Optionally click <strong>Connect YouTube (OAuth)</strong> to enable inline chat moderation (delete/timeout/ban) and automatic detection of private or unlisted test broadcasts.</li>
+              <li><strong>YouTube Live:</strong> Enter your channel <code>@handle</code>, channel URL, or live video URL and click <strong>Enable YouTube</strong> (no API key required for public streams). TownCrier automatically discovers and reads both horizontal and vertical concurrent livestreams simultaneously. Optionally click <strong>Connect YouTube (OAuth)</strong> to enable inline chat moderation and private/unlisted broadcast detection.</li>
               <li><strong>TikTok Live:</strong> Enter your <code>@username</code> and click <strong>Enable TikTok</strong> to read live chat, follows, shares, Super Fan subscriptions, and grouped gift combos.</li>
               <li><strong>Kick:</strong> Enter your Kick channel slug and click <strong>Enable Kick</strong> to read live chat, subscriptions, gifted subscriptions, reward redemptions, and live moderation events.</li>
             </ul>
@@ -305,7 +307,7 @@
             </p>
             <ul>
               <li><strong>Multi-Platform Search &amp; Filtering:</strong> Search by username or filter by platform (<code>All</code>, <code>Twitch</code>, <code>YouTube</code>, <code>TikTok</code>, <code>Kick</code>).</li>
-              <li><strong>Custom Voice &amp; Speed Assignment:</strong> Select any voice from your enabled voice packs and set a custom playback speed for that specific viewer.</li>
+              <li><strong>Custom Voice &amp; Speed Multiplier:</strong> Select any voice from your enabled voice packs and set a per-chatter playback speed <strong>multiplier</strong> applied on top of your global or platform default speed.</li>
               <li><strong>Local TTS Mute:</strong> Silence a specific chatter from TTS synthesis while leaving them unbanned in your stream chat.</li>
               <li><strong>Per-Viewer Bot Override:</strong> Override the global bot matcher per user with <code>Default</code>, <code>Always Allow (Not a Bot)</code>, or <code>Always Ignore (Treat as Bot)</code>.</li>
             </ul>
@@ -314,10 +316,10 @@
           <!-- 8. Live Logs, Pop-Outs & Search History -->
           <section id="logs-search" class="card">
             <span class="badge">Chat Feed &amp; Database</span>
-            <h2>8. Centralized Live Logs, Pop-Out Overlays &amp; Search History</h2>
+            <h2>8. Centralized Live Logs, Search History &amp; Application Log</h2>
             <div class="path-pill">Location: Logs Navigation Tab &bull; Settings &rarr; Event Logs</div>
             <p>
-              The <strong>Logs</strong> tab combines a multi-platform live chat monitor with an instant full-text historical search engine:
+              The <strong>Logs</strong> tab combines a multi-platform live chat monitor (with optional animated GIF/WebP emotes) with historical search and internal diagnostics:
             </p>
             <h3>Live Logs &amp; Streamlined Pop-Out Windows (<code>Logs &rarr; Live Logs</code>)</h3>
             <ul>
@@ -326,28 +328,78 @@
               <li><strong>Pop-Out Overlay Windows:</strong> Click <strong>Pop Out</strong> to open a floating, distraction-free chat window showing only the live feed and sticky stream metrics—ideal for a vertical secondary monitor or OBS Window Capture.</li>
               <li><strong>Inline Moderation &amp; AutoMod Queue:</strong> Click moderation icons directly on any chat row to Delete, Timeout, Ban (Twitch &amp; YouTube OAuth), Local TTS Mute, or Assign Voice, and approve/deny held messages in the Twitch AutoMod banner.</li>
             </ul>
-            <h3>FTS5 Search History &amp; Data Retention (<code>Logs &rarr; Search History</code> &amp; <code>Settings &rarr; Event Logs</code>)</h3>
+            <h3>FTS5 Search History, Retention &amp; App Log (<code>Logs &rarr; Search History / App Log</code>)</h3>
             <ul>
               <li><strong>Instant Trigram Search:</strong> Search across your entire local SQLite history by keyword, username, broadcast session(s), calendar date range, platform, or event outcome.</li>
+              <li><strong>App Log Viewer Tab:</strong> Inspect live rotating application diagnostics directly inside <strong>Logs &rarr; App Log</strong> without opening log files from disk.</li>
               <li><strong>Database Retention Policy:</strong> Open <strong>Settings &rarr; Event Logs</strong> to configure automatic pruning by maximum age in days or maximum row count, or run a manual prune at any time.</li>
             </ul>
           </section>
 
-          <!-- 9. Elgato Stream Deck & Control API -->
+          <!-- 9. OBS Overlays, PoundControl, Stream Deck & Control API -->
           <section id="streamdeck-api" class="card">
-            <span class="badge">Hardware &amp; Automation</span>
-            <h2>9. Elgato Stream Deck Plugin &amp; Local Control API</h2>
-            <div class="path-pill">Location: Settings &rarr; General &amp; Audio &rarr; OBS Overlays &amp; External Control</div>
+            <span class="badge">OBS &amp; Hardware</span>
+            <h2>9. OBS Overlays, PoundControl, Stream Deck &amp; Control API</h2>
+            <div class="path-pill">Location: Settings &rarr; OBS &amp; Overlays</div>
             <p>
-              Control TownCrier from hardware macro pads, Streamer.bot, Touch Portal, or custom scripts:
+              Enable transparent OBS Browser Sources, open the visual style designer, and connect external deck controllers:
             </p>
             <ul>
-              <li><strong>1-Click Elgato Stream Deck Installer:</strong> Click <strong>Install / Update Elgato Stream Deck Plugin</strong> in <strong>Settings &rarr; General &amp; Audio</strong> to install the native plugin (<code>com.github.mrpoundsign.towncrier.sdPlugin</code>) with 5 actions: <em>TTS Output Mode</em>, <em>Emergency Panic Mute</em>, <em>Speech Queue Control</em>, <em>Custom TTS Announcement</em>, and <em>Master Volume</em> (including Stream Deck + rotary dial support).</li>
-              <li><strong>Dual-Mode WebSocket &amp; HTTP REST Server:</strong> Runs locally on <code>127.0.0.1:8765</code> by default (configurable host, port, and optional Bearer auth token), supporting binary Protocol Buffers (<code>/ws?format=protobuf</code>), JSON WebSocket (<code>/ws</code>), and REST endpoints (<code>/api/status</code>, <code>/api/speak</code>, <code>/api/mode</code>, <code>/api/panic</code>, <code>/api/queue</code>, <code>/api/volume</code>).</li>
+              <li><strong>Unified OBS Canvas (<code>/overlay</code>) &amp; Tabbed Style Designer (<code>/overlay/designer</code>):</strong> Combine the <em>Now Speaking</em> TTS card, <em>Live Chat</em> feed, and <em>Voice Subtitles</em> on a single drag-and-resize Browser Source, or embed individual routes (<code>/overlay/tts</code>, <code>/overlay/chat</code>, <code>/overlay/subtitles</code>).</li>
+              <li><strong>PoundControl Curated WASM Plugin:</strong> Install <strong>TownCrier &amp; Plugins</strong> from PoundControl's <strong>Settings &rarr; Plugins &rarr; Curated Catalog</strong> and point <strong>Settings &rarr; TownCrier</strong> to <code>127.0.0.1:8765</code> (plus your optional Auth Token). TownCrier automatically exports active Bot Automation and Plugin actions (including live tile SVG status badges).</li>
+              <li><strong>1-Click Elgato Stream Deck Installer:</strong> Click <strong>Install / Update Elgato Stream Deck Plugin</strong> to install <code>com.github.mrpoundsign.towncrier.sdPlugin</code>.</li>
+              <li><strong>Dual-Mode WebSocket &amp; HTTP REST Server:</strong> Runs on <code>127.0.0.1:8765</code> with optional Bearer authentication. See the <a href="api.html">Control API Reference</a>.</li>
             </ul>
             <div class="btn-group">
               <a class="btn btn-secondary" href="api.html">Control API Reference</a>
             </div>
+          </section>
+
+          <!-- 10. Voice Subtitles & Wake Word -->
+          <section id="voice-subtitles" class="card">
+            <span class="badge">Whisper &amp; Microphone</span>
+            <h2>10. Voice Detection, Offline Whisper Subtitles &amp; Wake Word</h2>
+            <div class="path-pill">Location: Settings &rarr; General &rarr; Voice Detection &bull; Settings &rarr; Voice Subtitles</div>
+            <p>
+              Run local Silero VAD speech segmentation paired with Whisper transcription for OBS live captions and hands-free bot commands:
+            </p>
+            <ul>
+              <li><strong>GGML Whisper Models &amp; Compute Device:</strong> Download verified models (<em>Tiny</em>, <em>Base</em>, <em>Small</em>, or <em>Large-v3-Turbo</em>) in <strong>Settings &rarr; Voice Subtitles</strong>, select CPU threads or Vulkan GPU execution (with <strong>Integrated iGPU Only</strong> isolation so discrete gaming GPUs keep 100% of their VRAM), and translate subtitles live into stacked target languages on <code>/overlay/subtitles</code>.</li>
+              <li><strong>Live Transcript Tester &amp; Phonetic Matching:</strong> Watch recognized microphone phrases appear in real time inside Settings to tune thresholds and verify phonetic voice command aliases before going live.</li>
+              <li><strong>Wake Word Detection:</strong> Enable an optional wake word phrase with an audible chime cue so Whisper only triggers Bot Automation commands when intentionally addressed.</li>
+            </ul>
+          </section>
+
+          <!-- 11. Bot Automation Core -->
+          <section id="bot-automation" class="card">
+            <span class="badge">Bot Automation</span>
+            <h2>11. Configuring the Bot Automation Core</h2>
+            <div class="path-pill">Location: Settings &rarr; General (Enable Bot Automation) &rarr; Bot Navigation Tab</div>
+            <p>
+              Enable <strong>Enable Bot Automation Engine</strong> in <strong>Settings &rarr; General</strong> to unlock the top-level <strong>Bot</strong> tab with five structured sub-tabs:
+            </p>
+            <ul>
+              <li><strong>Commands &amp; Voice:</strong> Create text <code>!commands</code> and spoken Whisper voice commands with cooldowns, permissions, and configurable response TTS voices.</li>
+              <li><strong>Actions &amp; Sub-Actions:</strong> Build action workflows combining friendly pickers for TTS speech, outbound Twitch/YouTube chat replies, OBS control actions, HTTP requests, waits, <strong>If/Else Branch Conditions</strong>, and **OBS Scene Conditions**, plus a <code>%values%</code> Variable Reference pop-out.</li>
+              <li><strong>Triggers &amp; Timers:</strong> Attach event triggers (Subs, Raids, Redemptions, Chat Messages, Voice Wake Words, Channel Point Rewards) or repeating interval timers to any Bot Action.</li>
+              <li><strong>Queues &amp; Variables:</strong> Configure sequential or parallel execution queues and explicitly declare <strong>Global</strong>, <strong>Session</strong>, and <strong>Per-Action</strong> persistent SQLite variables.</li>
+              <li><strong>OBS Studio:</strong> Connect OBS WebSocket v5 (Host, Port <code>4455</code>, keyring-stored password) to power live scene/source/audio dropdown discovery across conditions and sub-actions.</li>
+            </ul>
+          </section>
+
+          <!-- 12. Plugin Platform -->
+          <section id="plugins" class="card">
+            <span class="badge">Plugins</span>
+            <h2>12. Managing WASM &amp; Trusted Native Plugins</h2>
+            <div class="path-pill">Location: Settings &rarr; Plugins &bull; Header &ldquo;Plugins &#9662;&rdquo; Menu</div>
+            <p>
+              TownCrier hosts both zero-trust WebAssembly modules and opt-in native companion apps (such as <strong>CrowdDJ</strong>) over a versioned <code>proto/plugin/v1</code> bus:
+            </p>
+            <ul>
+              <li><strong>Installing Plugins:</strong> Enable <strong>Enable Plugins (WASM &amp; Native Subprocess)</strong>, then place <code>.wasm</code> modules in <code>plugins/wasm/</code> or native bundles / <code>.link.json</code> pointers in <code>plugins/native/</code> (or click <strong>Add Folder...</strong> and <strong>Reload All</strong>).</li>
+              <li><strong>Native Binary Trust Gate:</strong> Native subprocess plugins start paused for security review. Click <strong>Approve &amp; Trust</strong> on the plugin card in <strong>Settings &rarr; Plugins</strong> to pin its SHA-256 executable digest. Whenever a native companion app updates, TownCrier prompts once to re-approve the updated hash.</li>
+              <li><strong>Native UI Tabs &amp; OBS Overlays:</strong> Running plugins mount interactive tabs under Settings / the top <strong>Plugins &#9662;</strong> menu, persist state in isolated SQLite KV storage, expose OBS overlays under <code>/plugins/&lt;uuid&gt;/*</code>, and publish buttons straight to Elgato Stream Deck and PoundControl.</li>
+            </ul>
           </section>
         </main>
 
