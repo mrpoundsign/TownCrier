@@ -35,6 +35,7 @@
                 <a class="sidebar-link" href="./" aria-current="page">Overview &amp; Home</a>
                 <ul class="sidebar-subnav" role="list">
                   <li><a class="sidebar-sublink" href="#architecture">Modular Operation</a></li>
+                  <li><a class="sidebar-sublink" href="#voice-obs-control">Voice &amp; OBS Control</a></li>
                   <li><a class="sidebar-sublink" href="#live-logs">Live Logs &amp; Pop-Outs</a></li>
                   <li><a class="sidebar-sublink" href="#sessions">Broadcast Sessions</a></li>
                   <li><a class="sidebar-sublink" href="#search-history">SQLite Search History</a></li>
@@ -42,13 +43,13 @@
                   <li><a class="sidebar-sublink" href="#neural-audio">Voice Packs &amp; Presets</a></li>
                   <li><a class="sidebar-sublink" href="#translation">Live Chat Translation</a></li>
                   <li><a class="sidebar-sublink" href="#voice-subtitles">Whisper Voice Subtitles</a></li>
-                  <li><a class="sidebar-sublink" href="#bot-automation">Bot Automation Core</a></li>
                   <li><a class="sidebar-sublink" href="#plugins">WASM &amp; Native Plugins</a></li>
                   <li><a class="sidebar-sublink" href="#backups">Backups &amp; Snapshots</a></li>
                   <li><a class="sidebar-sublink" href="#compliance">Legal &amp; Licensing</a></li>
                 </ul>
               </li>
               <li><a class="sidebar-link" href="features.html">Features &amp; Config Guide</a></li>
+              <li><a class="sidebar-link" href="automation.html">Voice, OBS &amp; Automation</a></li>
               <li><a class="sidebar-link" href="translation-guides.html">Translation Setup Guides</a></li>
               <li><a class="sidebar-link" href="api.html">Control API Reference</a></li>
             </ul>
@@ -77,17 +78,17 @@
         <main>
           <!-- Hero -->
           <section class="hero">
-            <h1>Local Neural TTS &amp; Centralized Chat Aggregation</h1>
+            <h1>Local Neural TTS, Hands-Free Voice Control &amp; OBS Automation</h1>
             <p>
-              <strong>TownCrier</strong> is an open-source Windows and Linux desktop application that reads livestream chat and alerts aloud using local neural text-to-speech (TTS), or operates as an ultra-fast, lightweight multi-platform chat aggregator, event logger, and moderation tool.
+              <strong>TownCrier</strong> is an open-source Windows, Linux, and macOS desktop suite that reads livestream chat aloud via local neural TTS, aggregates multi-platform chat into one workspace, and lets you control <strong>OBS Studio, bot workflows, plugins, and variables by voice, chat, alerts, or hardware decks</strong>.
             </p>
             <p>
-              Direct your TTS audio to any virtual cable or monitor sink for clean OBS Studio capture. Everything runs 100% offline on your machine with zero cloud subscriptions, API rate limits, character caps, or developer servers.
+              Everything runs 100% locally on your PC—from direct WASAPI virtual cable TTS routing to offline Whisper voice command recognition and OBS WebSocket v5 automation—with zero cloud subscriptions, API rate limits, character caps, or developer servers.
             </p>
             <div class="btn-group">
               <a class="btn" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Download TownCrier</a>
-              <a class="btn btn-secondary" href="features.html">Explore Features &amp; Config Guide</a>
-              <a class="btn btn-secondary" href="translation-guides.html">Translation Setup Guides</a>
+              <a class="btn btn-secondary" href="automation.html">Voice &amp; OBS Automation Guide</a>
+              <a class="btn btn-secondary" href="features.html">Features &amp; Config Guide</a>
             </div>
           </section>
 
@@ -100,7 +101,7 @@
             <span class="badge">Architecture</span>
             <h2>Modular Operation &amp; Lightweight Efficiency</h2>
             <p>
-              Configure TownCrier to fit your streaming hardware: toggle <strong>Text-to-Speech (TTS)</strong> and <strong>Event Logging</strong> independently in <strong>Settings &rarr; General &amp; Audio</strong>.
+              Configure TownCrier to fit your streaming hardware: toggle <strong>Text-to-Speech (TTS)</strong>, <strong>Event Logging</strong>, <strong>Bot Automation</strong>, and <strong>Voice Detection</strong> independently in <strong>Settings &rarr; General</strong>.
             </p>
             <div class="grid-2">
               <div class="grid-item">
@@ -108,8 +109,8 @@
                 <p>Generates high-fidelity local neural speech with priority queues, custom chatter voice assignments, and multi-platform event alerts.</p>
               </div>
               <div class="grid-item">
-                <h3>Lean Chat Aggregator (&lt;40MB RAM)</h3>
-                <p>Disable TTS to skip ONNX runtime initialization entirely. TownCrier launches in &lt;100ms and acts as a minimal chat monitor and event logger.</p>
+                <h3>Lean Chat Aggregator &amp; Bot Runner</h3>
+                <p>Disable TTS to skip ONNX TTS loading (&lt;40MB RAM, &lt;100ms launch) while still running unified logs, Whisper voice triggers, and OBS automation.</p>
               </div>
               <div class="grid-item">
                 <h3>Auto-AFK &amp; Alert Chimes</h3>
@@ -122,6 +123,37 @@
             </div>
             <div class="media-card">
               <img src="screenshots/general-audio-features.png" alt="TownCrier Modular Features and Audio Settings" loading="lazy">
+            </div>
+          </section>
+
+          <!-- Flagship Feature: Voice Control & OBS Automation -->
+          <section id="voice-obs-control" class="card">
+            <span class="badge">Voice &amp; OBS Control</span>
+            <h2>Hands-Free Offline Voice Control &amp; OBS Studio Automation</h2>
+            <p>
+              Control your stream entirely hands-free using offline Whisper speech recognition paired with TownCrier's full Streamer.bot-class automation engine—independently of captions/subtitles:
+            </p>
+            <div class="grid-2">
+              <div class="grid-item">
+                <h3>Wake Word &amp; Phonetic Matching</h3>
+                <p>Use comma-separated wake phrases (with a chime + armed window or same-utterance triggers), 4 match modes including <strong>Phonetic / Sound-Alike</strong> drift tolerance, and a real-time <strong>Live Transcript Tester</strong>.</p>
+              </div>
+              <div class="grid-item">
+                <h3>18 OBS WebSocket v5 Operations</h3>
+                <p>Switch scenes, toggle sources &amp; filters, zoom or transform cameras (with 1-click Snapshot), set <code>0&ndash;100%</code> audio volume, update OBS Text sources with <code>%vars%</code>, or run any custom OBS RPC.</p>
+              </div>
+              <div class="grid-item">
+                <h3>7 Trigger Channels</h3>
+                <p>Invoke the exact same workflows from Voice Commands, Chat <code>!commands</code>, Subs/Bits/Redemptions, OBS Scene/Stream Events, Timers, Plugins, or <strong>PoundControl</strong> &amp; Elgato Stream Deck.</p>
+              </div>
+              <div class="grid-item">
+                <h3>If/Else Branches &amp; SQLite Variables</h3>
+                <p>Gate steps on live OBS scene conditions (<code>If %obs.scene% Equals Gaming</code>), compose modular queues, and track <code>%global%</code>, <code>%session%</code>, <code>%action%</code>, and <code>%user%</code> variables.</p>
+              </div>
+            </div>
+            <div class="btn-group">
+              <a class="btn" href="automation.html">Read Voice Control, OBS &amp; Automation Guide</a>
+              <a class="btn btn-secondary" href="automation.html#recipes">View Practical Recipes</a>
             </div>
           </section>
 
@@ -225,34 +257,17 @@
 
           <!-- Feature: Whisper Voice Subtitles -->
           <section id="voice-subtitles" class="card">
-            <span class="badge">Voice Detection &amp; Captions</span>
-            <h2>Offline Whisper Voice Subtitles &amp; Wake Word</h2>
+            <span class="badge">Live Captions</span>
+            <h2>Offline Multi-Language Whisper Voice Subtitles</h2>
             <p>
-              Transcribe your own microphone offline via Vulkan GPU or CPU acceleration to feed live stacked multi-language subtitles in OBS Studio and trigger hands-free voice commands:
+              Transcribe your microphone completely offline to stream real-time stacked multi-language captions onto your transparent OBS Canvas (<code>/overlay</code> or <code>/overlay/subtitles</code>):
             </p>
             <ul>
-              <li><strong>Local Whisper + Silero VAD:</strong> Bundled Vulkan-capable <code>towncrier-whisper</code> helper with 4 quantized GGML models and iGPU isolation so gaming GPUs are untouched.</li>
-              <li><strong>Transcript Tester &amp; Wake Word:</strong> Verify mic transcription in real time, configure phonetic matching, and play an audible confirmation chime on wake word detection.</li>
-              <li><strong>Unified OBS Canvas (<code>/overlay</code>):</strong> Combine Now Speaking captions, Live Chat, and Voice Subtitles in one drag-and-resize OBS Browser Source.</li>
+              <li><strong>Local Whisper + Silero VAD:</strong> Bundled Vulkan-capable <code>towncrier-whisper</code> helper with 4 quantized GGML models and <strong>Integrated iGPU Only</strong> isolation so discrete gaming GPUs stay untouched.</li>
+              <li><strong>Multi-Language Caption Stacking &amp; Tabbed Designer:</strong> Display original speech plus automatic live translations directly on OBS Browser Sources styled in <code>/overlay/designer</code>.</li>
             </ul>
             <div class="btn-group">
-              <a class="btn btn-secondary" href="features.html#voice-subtitles">Configure Voice Subtitles &amp; Wake Word</a>
-            </div>
-          </section>
-
-          <!-- Feature: Bot Automation Core -->
-          <section id="bot-automation" class="card">
-            <span class="badge">Automation</span>
-            <h2>Streamer.bot-Class Bot Automation Core</h2>
-            <p>
-              Build multi-step automations in the top-level <strong>Bot</strong> tab with zero cloud dependencies:
-            </p>
-            <ul>
-              <li><strong>Triggers, Queues &amp; Sub-Actions:</strong> React to chat commands, stream alerts, timers, webhooks, and Whisper voice triggers across ordered execution queues.</li>
-              <li><strong>If/Else Branches, OBS Discovery &amp; Variables:</strong> Connect OBS WebSocket v5 for cascading scene/source pickers and scene conditions, declare typed <strong>Global / Session / Per-Action</strong> SQLite variables, and launch Bot actions directly from Elgato Stream Deck or PoundControl.</li>
-            </ul>
-            <div class="btn-group">
-              <a class="btn btn-secondary" href="features.html#bot-automation">Configure Bot Automation</a>
+              <a class="btn btn-secondary" href="features.html#voice-subtitles">Configure Voice Subtitles</a>
             </div>
           </section>
 
@@ -325,6 +340,7 @@
           <nav aria-label="Footer">
             <a href="./">Home</a>
             <a href="features.html">Features &amp; Config Guide</a>
+            <a href="automation.html">Voice, OBS &amp; Automation</a>
             <a href="translation-guides.html">Translation Guides</a>
             <a href="api.html">Control API Reference</a>
             <a href="privacy.html">Privacy Policy</a>

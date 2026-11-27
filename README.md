@@ -1,6 +1,6 @@
 # TownCrier
 
-**TownCrier** is an open-source Windows and Linux desktop application that reads livestream chat and stream alerts aloud using local neural text-to-speech (TTS), or serves as a lightweight, centralized multi-platform chat aggregator and event logger.
+**TownCrier** is an open-source Windows, Linux, and macOS desktop application that combines offline neural Text-to-Speech (TTS), multi-platform chat aggregation, **hands-free Whisper voice control**, **Streamer.bot-class OBS Studio automation**, and a **WASM + Native plugin platform**.
 
 Audio routes directly to any selected playback device—such as a virtual audio cable, PipeWire/PulseAudio sink, or dedicated monitor output—allowing OBS Studio to capture TTS on an isolated audio track. Everything runs completely offline on your PC with zero cloud subscriptions, API keys, or character limits.
 
@@ -11,6 +11,11 @@ Audio routes directly to any selected playback device—such as a virtual audio 
 ---
 
 ## Features
+
+### Hands-Free Voice Control, OBS Studio & Bot Automation
+- **Offline Whisper Voice Commands (Independent of Subtitles)**: Trigger multi-step automations and OBS controls completely hands-free using local Silero VAD + Vulkan `whisper.cpp` (with **Integrated iGPU Only** isolation). Supports **Same-Utterance** and **Two-Step Armed Window** wake words (with chime cue), **Phonetic / Sound-Alike** proper-noun tolerance, a **Live Transcript Tester**, and per-command cooldowns.
+- **18 Built-In OBS Studio (WebSocket v5) Operations**: Switch Program/Preview or Previous scenes, toggle sources/filters, apply **Zoom Source** & **Set Source Transform** (with 1-click *Snapshot Current from OBS*), reset transforms, mute/adjust perceptual 0–100% input audio, update OBS Text sources with `%variables%`, control media, refresh browsers, save replay buffers, run custom OBS JSON RPCs, and react to live **OBS Studio Event** triggers.
+- **7 Trigger Sources & 14 Sub-Action Types**: Combine Chat `!commands`, Channel Point Redemptions, Stream Alerts, Timers (`Live Only` + `Min Chat Lines`), Plugin triggers, and **PoundControl / Elgato Stream Deck** buttons with `If / Else` scene branching and Global/Session/Per-Action/Per-User SQLite variables. See the full [Voice Control, OBS & Automation Guide](https://mrpoundsign.com/TownCrier/automation.html).
 
 ### Modular Application Features & Smart TTS Output Modes
 - **Independent TTS & Logging Toggles**: Toggle **Text-to-Speech (TTS)** and **Event Logging** independently in **Settings → General & Audio**.
@@ -106,6 +111,7 @@ TownCrier is licensed under the **GNU Affero General Public License v3.0 (AGPL-3
 
 - [Official Website & Documentation](https://mrpoundsign.com/TownCrier/)
 - [Features & Configuration Guide](https://mrpoundsign.com/TownCrier/features.html)
+- [Voice Control, OBS Studio & Bot Automation Guide](https://mrpoundsign.com/TownCrier/automation.html)
 - [Live Chat Translation Setup Guides](https://mrpoundsign.com/TownCrier/translation-guides.html)
 - [Local Control API & WebSocket Reference](https://mrpoundsign.com/TownCrier/api.html)
 - [Privacy Policy](https://mrpoundsign.com/TownCrier/privacy.html)

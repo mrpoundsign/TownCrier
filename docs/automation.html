@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Control, OBS Studio &amp; Bot Automation Guide | TownCrier</title>
+  <meta name="description" content="Complete guide to TownCrier's offline Whisper voice control, wake word and phonetic matching, 18 OBS WebSocket v5 automation operations, chat commands, stream triggers, If/Else logic, variables, and hardware deck integration.">
+  <link rel="canonical" href="https://mrpoundsign.com/TownCrier/automation.html">
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <a href="#main-content" class="skip-link visually-hidden">Skip to main content</a>
+  <div class="app-shell">
+    <header class="site-header">
+      <a class="brand" href="./">
+        <img src="icon.png" alt="TownCrier Logo" width="56" height="56" fetchpriority="high">
+        <div>
+          <div class="brand-title">TownCrier</div>
+          <div class="brand-subtitle">Offline Neural TTS, Voice Control, OBS Automation &amp; Live Chat</div>
+        </div>
+      </a>
+      <div class="header-actions">
+        <a class="btn" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Download Latest Release</a>
+        <a class="btn btn-secondary" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </div>
+    </header>
+
+    <div class="docs-layout">
+      <aside class="sidebar">
+        <nav aria-label="Documentation">
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Documentation</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="./">Overview &amp; Home</a></li>
+              <li><a class="sidebar-link" href="features.html">Features &amp; Config Guide</a></li>
+              <li>
+                <a class="sidebar-link" href="automation.html" aria-current="page">Voice, OBS &amp; Automation</a>
+                <ul class="sidebar-subnav" role="list">
+                  <li><a class="sidebar-sublink" href="#overview">1. Architecture &amp; Quick Start</a></li>
+                  <li><a class="sidebar-sublink" href="#voice-control">2. Offline Voice Control</a></li>
+                  <li><a class="sidebar-sublink" href="#obs-control">3. Controlling OBS Studio</a></li>
+                  <li><a class="sidebar-sublink" href="#triggers">4. All Automation Triggers</a></li>
+                  <li><a class="sidebar-sublink" href="#subactions-logic">5. Sub-Actions, Logic &amp; %Vars%</a></li>
+                  <li><a class="sidebar-sublink" href="#recipes">6. Step-by-Step Recipes</a></li>
+                </ul>
+              </li>
+              <li><a class="sidebar-link" href="translation-guides.html">Translation Setup Guides</a></li>
+              <li><a class="sidebar-link" href="api.html">Control API Reference</a></li>
+            </ul>
+          </div>
+
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Legal &amp; Policies</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="privacy.html">Privacy Policy</a></li>
+              <li><a class="sidebar-link" href="terms.html">Terms of Service</a></li>
+            </ul>
+          </div>
+
+          <div class="sidebar-group">
+            <div class="sidebar-heading">Project</div>
+            <ul class="sidebar-nav" role="list">
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier" target="_blank" rel="noopener noreferrer">GitHub Repository &#8599;</a></li>
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier/releases" target="_blank" rel="noopener noreferrer">Releases &amp; Installer &#8599;</a></li>
+              <li><a class="sidebar-link" href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">Report an Issue &#8599;</a></li>
+            </ul>
+          </div>
+        </nav>
+      </aside>
+
+      <div class="content-column">
+        <main>
+          <div class="page-title-banner">
+            <h1 id="main-content" tabindex="-1">Voice Control, OBS Studio &amp; Bot Automation Guide</h1>
+            <p>Control OBS Studio scenes, sources, camera zoom, audio faders, chat replies, plugins, and variables completely offline via Whisper voice commands, chat triggers, stream alerts, timers, or hardware decks.</p>
+          </div>
+
+          <!-- 1. Architecture & Quick Start -->
+          <section id="overview" class="card">
+            <span class="badge">Architecture</span>
+            <h2>1. Triggers &rarr; Execution Queues &rarr; Actions &rarr; Sub-Actions</h2>
+            <div class="path-pill">Location: Settings &rarr; General &bull; Bot Navigation Tab</div>
+            <p>
+              TownCrier includes a complete, local-first <strong>Bot Automation Engine</strong> that runs alongside Text-to-Speech (or completely standalone with TTS unchecked if you only want hands-free OBS &amp; stream automation):
+            </p>
+            <ul>
+              <li><strong>Independent from Voice Subtitles:</strong> You can enable <strong>Voice Detection (Offline Speech Recognition / Whisper)</strong> purely to trigger Bot Actions and OBS controls by voice without turning on <strong>Voice Subtitles</strong> or broadcasting captions.</li>
+              <li><strong>Reusable Actions:</strong> Every workflow you build lives in <strong>Bot &rarr; Actions &amp; Sub-Actions</strong> as an ordered list of steps. Any voice phrase, chat <code>!command</code>, stream alert, OBS event, timer, plugin trigger, or PoundControl button can invoke the same Action.</li>
+              <li><strong>Blocking &amp; Concurrent Queues:</strong> Configure named execution queues in <strong>Bot &rarr; Queues &amp; Variables</strong>. Assign camera animations or multi-step scenes to a sequential (blocking) queue so <em>Zoom &rarr; Wait &rarr; Reset</em> finishes cleanly before the next trigger fires, while lightweight alerts run concurrently.</li>
+            </ul>
+            <div class="callout">
+              <p><strong>Zero Cloud Latency or Subscriptions:</strong> Speech recognition (Silero VAD + <code>whisper.cpp</code> Vulkan), OBS WebSocket v5 control, SQLite variables, and Lua-free If/Else logic run 100% locally on your PC.</p>
+            </div>
+          </section>
+
+          <!-- 2. Offline Voice Control -->
+          <section id="voice-control" class="card">
+            <span class="badge">Hands-Free Whisper Control</span>
+            <h2>2. Offline Voice Control, Wake Word &amp; Phonetic Matching</h2>
+            <div class="path-pill">Location: Settings &rarr; General &rarr; Voice Detection &bull; Bot &rarr; Commands &amp; Voice</div>
+            <p>
+              Speak naturally into your microphone while gaming or creating content to switch OBS scenes, trigger zoom animations, mute inputs, advance playlists, or post chat messages without lifting your hands off the controller or mouse.
+            </p>
+
+            <h3>Step-by-Step Voice Control Setup</h3>
+            <ol>
+              <li>Open <strong>Settings &rarr; General</strong>, check <strong>Enable Bot Automation Engine</strong>, and check <strong>Enable Voice Detection (Offline Speech Recognition / Whisper)</strong>. (Leave <em>Enable Voice Subtitles</em> unchecked unless you also want transparent OBS captions.)</li>
+              <li>In the <strong>Voice Detection</strong> card right below (or <strong>Bot &rarr; Commands &amp; Voice</strong>), choose your microphone, download any quantized GGML Whisper model (<strong>Tiny ~31 MB</strong>, <strong>Base ~57 MB</strong>, <strong>Small ~181 MB</strong>, or <strong>Large-v3-Turbo ~547 MB</strong>), and pick your compute mode—use <strong>Integrated iGPU Only</strong> to run Vulkan GPU inference on an onboard AMD/Intel iGPU without touching your discrete gaming GPU's VRAM.</li>
+              <li>Open <strong>Bot &rarr; Commands &amp; Voice</strong> to configure your <strong>Wake Word</strong>, <strong>Voice Match Mode</strong>, <strong>Response Voice</strong>, and test phrases with the <strong>Live Transcript Tester</strong>.</li>
+            </ol>
+
+            <h3>Wake Word, Armed Window &amp; Confirmation Chime</h3>
+            <ul>
+              <li><strong>Comma-Separated Wake Word Aliases:</strong> Enter optional wake phrases (for example, <code>hey crier, octothorpe, hey octo</code> — 2&ndash;3+ syllables recognize most reliably) and click Save.</li>
+              <li><strong>Two Ways to Trigger When Armed:</strong>
+                <br>&bull; <strong>Same Utterance:</strong> Say <code>&ldquo;Hey Crier, zoom in&rdquo;</code> in one breath—TownCrier strips the wake word and executes <code>zoom in</code> immediately.
+                <br>&bull; <strong>Two-Step Armed Window:</strong> Say <code>&ldquo;Hey Crier&rdquo;</code> alone &rarr; TownCrier plays a confirmation chime (toggleable) and opens the <strong>Armed Window</strong> for your configured duration &rarr; say <code>&ldquo;zoom in&rdquo;</code> before the window expires.</li>
+              <li><strong>Per-Command <code>Ignore Wake Word</code>:</strong> Check this on individual urgent or unmistakable voice commands (such as emergency mic mute) so they fire anytime without needing the wake word first.</li>
+            </ul>
+
+            <h3>Voice Match Modes</h3>
+            <div tabindex="0" role="region" aria-labelledby="tbl-voice-modes-caption" class="table-wrapper">
+              <table class="api-table table-voice-modes">
+                <caption id="tbl-voice-modes-caption">Four voice command matching algorithms evaluated against Whisper transcripts</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Match Mode</th>
+                    <th scope="col">How It Matches</th>
+                    <th scope="col">Best Used For</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><strong>Contains Phrase</strong></th>
+                    <td>Matches contiguous spoken words after normalizing case, punctuation, and contractions (e.g. <code>don't</code> &rarr; <code>dont</code>)</td>
+                    <td>Everyday commands embedded naturally inside full sentences</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><strong>Phonetic / Sound-Alike</strong></th>
+                    <td>Uses consonant/vowel phonetic keys, Levenshtein distance, and adjacent token merging to tolerate speech-to-text spelling drift (e.g. <code>octo</code> matching <code>auto</code>, <code>otto</code>, <code>octa</code>, <code>okto</code>)</td>
+                    <td>Proper nouns, gamer tags, custom wake words, and shorthand commands that Whisper may spell slightly differently</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><strong>Exact Match</strong></th>
+                    <td>Requires the entire normalized utterance (after any wake word) to match the configured phrase exactly</td>
+                    <td>Short commands you want to guard against accidental triggers mid-sentence</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><strong>Regular Expression (Regex)</strong></th>
+                    <td>Runs a case-insensitive Go regular expression across the transcript (prefix with <code>(?i)</code> automatically unless provided)</td>
+                    <td>Matching multiple alternate phrasings or synonyms in a single command entry</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Live Transcript Tester &amp; Configurable Response Voice</h3>
+            <ul>
+              <li><strong>Live Transcript Tester (<code>Bot &rarr; Commands &amp; Voice</code>):</strong> View real-time Whisper transcripts alongside decode latency, wake-word state (<code>waiting</code>, <code>armed</code>, <code>armed_window</code>, <code>same_utterance</code>), matched commands, and cooldown skip reasons. Type any sample phrase into the tester to dry-run or live-execute triggers immediately without speaking into your mic.</li>
+              <li><strong>Response Voice Override:</strong> Pick a dedicated <strong>Response Voice</strong> and speed for voice-triggered confirmations. Any <code>Speak Text-to-Speech (TTS)</code> sub-action inside the triggered Action whose own Voice ID is left on Global automatically speaks in your configured Response Voice.</li>
+            </ul>
+          </section>
+
+          <!-- 3. Controlling OBS Studio -->
+          <section id="obs-control" class="card">
+            <span class="badge">OBS WebSocket v5</span>
+            <h2>3. Controlling OBS Studio &amp; Live Discovery</h2>
+            <div class="path-pill">Location: Bot &rarr; OBS Studio &bull; Bot &rarr; Actions &amp; Sub-Actions</div>
+            <p>
+              TownCrier speaks directly to OBS Studio over local <strong>OBS WebSocket v5</strong> (included built-in with OBS Studio 28+), auto-populating live dropdown pickers so you never have to memorize internal scene or source spellings.
+            </p>
+
+            <h3>Connecting OBS Studio</h3>
+            <ol>
+              <li>In <strong>OBS Studio</strong>, open <strong>Tools &rarr; WebSocket Server Settings</strong>, check <strong>Enable WebSocket server</strong> (default port <code>4455</code>), and copy or set your password.</li>
+              <li>In <strong>TownCrier</strong>, open <strong>Bot &rarr; OBS Studio</strong>, enter Host (<code>127.0.0.1</code>), Port (<code>4455</code>), and Password (saved securely in your OS Keyring), check <strong>Auto-Reconnect</strong>, and click Connect / Save.</li>
+              <li>When editing any <strong>Control OBS Studio</strong> sub-action, TownCrier dynamically fetches live <strong>Scenes</strong>, <strong>Sources</strong> per scene (plus smart <code>(Current Scene)</code> targeting), <strong>Source/Scene Filters</strong>, <strong>Audio/Text/Media/Browser Inputs</strong>, and <strong>Scene Transitions</strong>.</li>
+            </ol>
+
+            <h3>All 18 Built-In OBS Studio Operations</h3>
+            <div tabindex="0" role="region" aria-labelledby="tbl-obs-ops-caption" class="table-wrapper">
+              <table class="api-table table-obs-ops">
+                <caption id="tbl-obs-ops-caption">Complete reference of OBS Studio WebSocket v5 operations inside Bot Actions</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Operation</th>
+                    <th scope="col">Parameters &amp; Pickers</th>
+                    <th scope="col">What It Controls</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><code>Switch Scene</code></th>
+                    <td>Scene picker, Target (<code>Program (Live)</code> or <code>Preview (Studio Mode)</code>)</td>
+                    <td>Cuts/transitions live Program scene or queues a Preview scene</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Switch to Previous Scene</code></th>
+                    <td><em>None</em></td>
+                    <td>Toggles cleanly back to whichever scene was active right before the current one</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Show / Hide / Toggle Source</code></th>
+                    <td>Scene (or <code>(Current Scene)</code>), Source, Mode (<code>Toggle</code>, <code>Show</code>, <code>Hide</code>)</td>
+                    <td>Shows, hides, or toggles visibility of any scene item</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Enable / Disable / Toggle Filter</code></th>
+                    <td>Scene, optional Source (or scene-level), Filter, Mode (<code>Toggle</code>, <code>Enable</code>, <code>Disable</code>)</td>
+                    <td>Toggles LUTs, blur shaders, chroma keys, or Move/OBS filters on a source or scene</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Zoom Source (Relative Step)</code></th>
+                    <td>Scene (or <code>(Current Scene)</code>), Source, Zoom Factor (e.g. <code>1.25</code> / <code>0.8</code>)</td>
+                    <td>Multiplies current X/Y scale cleanly for dramatic camera zoom-ins or punch-outs</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Set Source Transform</code></th>
+                    <td>Position X/Y, Scale X/Y, Rotation, Crop L/R/T/B + <strong>Snapshot Current from OBS</strong></td>
+                    <td>Moves, scales, rotates, or crops a source; leave any box blank to keep its current value unchanged</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Reset Source Transform</code></th>
+                    <td>Scene (or <code>(Current Scene)</code>), Source</td>
+                    <td>Restores default transform geometry after zooms or movements</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Mute / Unmute / Toggle Input</code></th>
+                    <td>Input picker, Mode (<code>Toggle</code>, <code>Mute</code>, <code>Unmute</code>)</td>
+                    <td>Controls mute state on microphones, desktop audio, capture cards, or media sources</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Set / Step Input Volume</code></th>
+                    <td>Input picker, Mode (<code>Set Exact (%)</code> or <code>Step Relative (+/- %)</code>), Percentage</td>
+                    <td>Sets perceptual fader volume (<code>0&ndash;100%</code>) or nudges gain up/down proportionally</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Set Text Source</code></th>
+                    <td>Text Input picker, Text template (supports <code>%variables%</code>)</td>
+                    <td>Updates on-screen FreeType2 / GDI+ text counters, latest supporter banners, or shoutouts live</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Control Media Playback</code></th>
+                    <td>Media Input picker, Action (<code>Play</code>, <code>Pause</code>, <code>Restart</code>, <code>Stop</code>)</td>
+                    <td>Drives OBS Media Sources and VLC video playlists</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Refresh Browser Source</code></th>
+                    <td>Browser Input picker</td>
+                    <td>Forces OBS Browser Source cache reload (<code>RefreshBrowserSource</code>)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Set Scene Transition</code></th>
+                    <td>Transition picker, optional Duration (ms)</td>
+                    <td>Switches the active OBS transition effect and duration</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Studio Mode Action</code></th>
+                    <td>Mode (<code>Trigger Transition</code>, <code>Toggle Studio Mode</code>, <code>Enable</code>, <code>Disable</code>)</td>
+                    <td>Pushes Preview to Program or enables/disables OBS Studio Mode</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Toggle Recording</code></th>
+                    <td><em>None</em></td>
+                    <td>Starts or stops OBS local video recording</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Toggle Streaming</code></th>
+                    <td><em>None</em></td>
+                    <td>Starts or stops active OBS broadcast streaming output</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Save Replay Buffer</code></th>
+                    <td><em>None</em></td>
+                    <td>Saves the instant replay buffer clip to disk immediately</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Custom OBS WebSocket Request</code></th>
+                    <td><code>requestType</code> (supports <code>%var%</code>), JSON <code>requestData</code></td>
+                    <td>Executes any OBS WebSocket v5 RPC or plugin vendor call (saving JSON result to <code>%obsResponse%</code>)</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Reacting Back from OBS Events</h3>
+            <p>
+              Automation isn't one-way: in <strong>Bot &rarr; Triggers &amp; Timers</strong>, add a trigger with Source set to <strong>OBS Studio Event</strong> (such as <code>CurrentProgramSceneChanged</code>, <code>StreamStateChanged</code>, <code>RecordStateChanged</code>, <code>SceneItemEnableStateChanged</code>, or <code>InputMuteStateChanged</code>). Every key inside OBS's event payload (like <code>%sceneName%</code>, <code>%outputActive%</code>, <code>%inputName%</code>, or <code>%inputMuted%</code>) is automatically injected into the Action's variables.
+            </p>
+          </section>
+
+          <!-- 4. All Automation Triggers -->
+          <section id="triggers" class="card">
+            <span class="badge">Triggers</span>
+            <h2>4. Every Way to Trigger Automations</h2>
+            <p>Drive the exact same Bot Actions from speech, live chat, channel events, OBS state changes, timers, plugins, or physical and mobile hardware decks:</p>
+
+            <div tabindex="0" role="region" aria-labelledby="tbl-triggers-caption" class="table-wrapper">
+              <table class="api-table table-triggers">
+                <caption id="tbl-triggers-caption">All seven automation trigger sources supported by TownCrier</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Trigger Type</th>
+                    <th scope="col">Where to Configure</th>
+                    <th scope="col">Key Options &amp; Filters</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><strong>Offline Voice Commands</strong></th>
+                    <td><strong>Bot &rarr; Commands &amp; Voice</strong></td>
+                    <td><code>Contains</code>, <code>Phonetic</code>, <code>Exact</code>, <code>Regex</code>; optional Wake Word + Armed Window; <code>Ignore Wake Word</code>; Cooldowns; Response Voice override</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><strong>Chat <code>!Commands</code></strong></th>
+                    <td><strong>Bot &rarr; Commands &amp; Voice</strong></td>
+                    <td><code>Starts With</code>, <code>Exact</code>, <code>Regex</code>; Aliases; Platform filter; Role restrictions (<em>Everyone</em>, <em>Sub</em>, <em>VIP</em>, <em>Mod</em>, <em>Broadcaster</em>) &amp; custom User Groups; Global/Per-User cooldowns; <strong>Consume TTS</strong> toggle</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><strong>Platform Stream Events</strong></th>
+                    <td><strong>Bot &rarr; Triggers &amp; Timers</strong></td>
+                    <td>Subscriptions, Resubs, Gift Subs, Bits, Super Chats, Raids, Follows, Channel Point Redemptions across Twitch, YouTube, Kick, and TikTok with <code>Min Amount</code> and <code>Reward Title/ID</code> filters</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><strong>OBS Studio Events</strong></th>
+                    <td><strong>Bot &rarr; Triggers &amp; Timers</strong></td>
+                    <td>Fires when OBS changes scene, starts/stops stream or recording, toggles source visibility, or changes mute state (exposes OBS event keys as <code>%variables%</code>)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><strong>Plugin Triggers</strong></th>
+                    <td><strong>Bot &rarr; Triggers &amp; Timers</strong></td>
+                    <td>Custom events emitted by active <code>wazero</code> WASM modules or native plugins (such as CrowdDJ track changes or queue events)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><strong>Recurring Timers</strong></th>
+                    <td><strong>Bot &rarr; Triggers &amp; Timers</strong></td>
+                    <td>Fires every N seconds with optional <strong>Live Only</strong> guard and <strong>Minimum Chat Lines</strong> activity threshold so bots don't spam quiet chats</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><strong>PoundControl, Stream Deck &amp; REST API</strong></th>
+                    <td><strong>Settings &rarr; OBS &amp; Overlays</strong> &bull; PoundControl Curated Catalog</td>
+                    <td><strong>TownCrier &amp; Plugins</strong> WASM module auto-registers every enabled Bot Action onto desktop, LAN web, Android, and Wear OS decks, or call <code>POST /api/bot/run</code> from scripts. See <a href="api.html">Control API Reference</a></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- 5. Sub-Actions, Logic & Variables -->
+          <section id="subactions-logic" class="card">
+            <span class="badge">Logic &amp; State</span>
+            <h2>5. Sub-Actions, If/Else Conditions &amp; <code>%Variables%</code></h2>
+            <p>
+              Compose Actions from 14 built-in sub-action building blocks in <strong>Bot &rarr; Actions &amp; Sub-Actions</strong>, complete with a clickable <strong><code>%values%</code></strong> helper popup next to text and condition fields:
+            </p>
+
+            <h3>All 14 Sub-Action Types</h3>
+            <div tabindex="0" role="region" aria-labelledby="tbl-subactions-caption" class="table-wrapper">
+              <table class="api-table table-subactions">
+                <caption id="tbl-subactions-caption">Complete list of TownCrier Bot Sub-Actions</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Sub-Action</th>
+                    <th scope="col">Category</th>
+                    <th scope="col">Capabilities</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><code>Control OBS Studio</code></th>
+                    <td>OBS WebSocket v5</td>
+                    <td>Run any of the 18 OBS scene, source, zoom, transform, filter, audio, text, media, transition, or custom RPC operations</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Speak Text-to-Speech (TTS)</code></th>
+                    <td>Audio &amp; Speech</td>
+                    <td>Speak text with <code>%variables%</code>, selectable Voice ID, speed, priority tier, and automatic voice-command Response Voice fallback</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Play Sound File</code></th>
+                    <td>Audio &amp; Speech</td>
+                    <td>Play local WAV/MP3 sound effects through your configured playback device</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Send Chat Message</code></th>
+                    <td>Chat Output</td>
+                    <td>Reply in Twitch or YouTube Live chat (with optional Twitch Announcement color/mode)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Moderate User / Message</code></th>
+                    <td>Chat Output</td>
+                    <td>Delete message, Timeout (duration + reason), Ban, or Unban user on connected platforms</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Set Variable</code> / <code>Increment Variable</code></th>
+                    <td>Variables</td>
+                    <td>Set, delete, or add numeric deltas (<code>+1</code>, <code>-1</code>, floats) across Global, Session, Per-Action, or Per-User scopes</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>If / Else Condition</code></th>
+                    <td>Logic Flow</td>
+                    <td>Compare values using 9 operators (<code>Equals</code>, <code>Does Not Equal</code>, <code>Contains</code>, <code>&gt;</code>, <code>&gt;=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>Is Empty</code>, <code>Is Not Empty</code>); branch via Continue, Break, Run Action, or Run Action &amp; Stop—with live OBS scene pickers when Left Value is an OBS scene token</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Wait / Delay</code> &amp; <code>Stop Action (Break)</code></th>
+                    <td>Logic Flow</td>
+                    <td>Pause cleanly in milliseconds between OBS cues (for timed camera resets) or exit early from a branch</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Run Another Action</code></th>
+                    <td>Logic Flow</td>
+                    <td>Call modular sub-workflows cleanly up to recursion depth 8, sharing updated arguments back</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Send HTTP Request</code></th>
+                    <td>Integrations</td>
+                    <td>Call external or local REST/webhook APIs (custom headers/body/method), saving HTTP code to <code>%httpStatus%</code> and response body to <code>%httpResponse%</code> or a custom variable</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>Run Plugin Action</code> &amp; <code>Send Overlay Event</code></th>
+                    <td>Plugins &amp; Overlays</td>
+                    <td>Trigger actions on active plugins (e.g. CrowdDJ skip/play) or emit custom SSE events to plugin OBS Browser Source overlays</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Variable Scopes &amp; Built-In <code>%Tokens%</code></h3>
+            <p>Explicitly declare reusable Global, Session, and Per-Action variables in <strong>Bot &rarr; Queues &amp; Variables</strong> (with one-click reset to defaults) and reference them anywhere inside text, URLs, OBS Text Sources, or If/Else conditions:</p>
+
+            <div tabindex="0" role="region" aria-labelledby="tbl-vars-caption" class="table-wrapper">
+              <table class="api-table table-vars">
+                <caption id="tbl-vars-caption">Variable scopes, live OBS state tokens, and built-in dynamic helpers</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Syntax / Token</th>
+                    <th scope="col">Scope / Source</th>
+                    <th scope="col">Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><code>%global.&lt;key&gt;%</code></th>
+                    <td>Persistent SQLite</td>
+                    <td>Saved across TownCrier restarts (e.g. all-time sub counter, persistent settings)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>%session.&lt;key&gt;%</code></th>
+                    <td>Current Stream</td>
+                    <td>Automatically resets back to declared defaults whenever a fresh stream session begins (e.g. daily deaths counter)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>%action.&lt;key&gt;%</code></th>
+                    <td>Per-Action Run</td>
+                    <td>Scoped strictly to a single execution of the running Action</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>%user.&lt;key&gt;%</code></th>
+                    <td>Per-User SQLite</td>
+                    <td>Persisted individually per triggering user across restarts (e.g. loyalty points, user welcome count)</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>%obs.scene%</code>, <code>%obs.previousScene%</code>, <code>%obs.previewScene%</code>, <code>%obs.connected%</code>, <code>%obsResponse%</code></th>
+                    <td>Live OBS State</td>
+                    <td>Always reflects live OBS WebSocket program/preview/previous scene names, connection status, and last custom OBS RPC JSON</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>%user%</code>, <code>%displayName%</code>, <code>%platform%</code>, <code>%message%</code>, <code>%rawInput%</code>, <code>%arg0%</code>, <code>%command%</code>, <code>%transcript%</code>, <code>%voicePhrase%</code>, <code>%amount%</code>, <code>%reward%</code></th>
+                    <td>Trigger Context</td>
+                    <td>Populated automatically from the chat command, Whisper voice transcript, stream event, or timer that launched the Action</td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><code>%random(min,max)%</code> &amp; <code>%pick(a,b,c)%</code></th>
+                    <td>Inline Helpers</td>
+                    <td>Generates an inclusive random integer or picks one random option from a comma-separated list on every run</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- 6. Step-by-Step Practical Recipes -->
+          <section id="recipes" class="card">
+            <span class="badge">Examples</span>
+            <h2>6. Practical Configuration Recipes</h2>
+
+            <h3>Recipe 1: Hands-Free Voice Camera Zoom &amp; Auto-Reset</h3>
+            <p>Speak <code>&ldquo;Hey Crier, zoom in&rdquo;</code> mid-game to punch in your facecam for 4 seconds—but only when OBS is currently on your <em>Gaming</em> scene:</p>
+            <ol>
+              <li>In <strong>Settings &rarr; General</strong>, enable <strong>Bot Automation Engine</strong> and <strong>Voice Detection</strong>; in <strong>Bot &rarr; OBS Studio</strong>, connect OBS WebSocket (port <code>4455</code>).</li>
+              <li>In <strong>Bot &rarr; Queues &amp; Variables</strong>, ensure your camera action uses a sequential (blocking) queue so rapid triggers don't stack overlapping zooms.</li>
+              <li>In <strong>Bot &rarr; Commands &amp; Voice</strong>, set <strong>Wake Word</strong> to <code>hey crier</code> (or <code>octothorpe, hey crier</code>).</li>
+              <li>Create an Action named <code>Cam Dramatic Zoom</code> in <strong>Bot &rarr; Actions &amp; Sub-Actions</strong> with these ordered steps:
+                <br>&bull; <strong>If / Else Condition:</strong> Left = <code>%obs.scene%</code>, Operator = <code>Equals</code>, Right = <code>Gaming</code> (picked directly from the live OBS dropdown), <em>If True</em> = <code>Continue to Next Step</code>, <em>If False</em> = <code>Stop Action (Break)</code>.
+                <br>&bull; <strong>Control OBS Studio:</strong> Operation = <code>Zoom Source (Relative Step)</code>, Scene = <code>(Current Scene)</code>, Source = <code>Webcam</code>, Zoom Factor = <code>1.35</code>.
+                <br>&bull; <strong>Play Sound File:</strong> Optional sting audio cue.
+                <br>&bull; <strong>Wait / Delay:</strong> <code>4000</code> ms.
+                <br>&bull; <strong>Control OBS Studio:</strong> Operation = <code>Reset Source Transform</code>, Scene = <code>(Current Scene)</code>, Source = <code>Webcam</code>.</li>
+              <li>Add a Voice Command in <strong>Bot &rarr; Commands &amp; Voice</strong> with Phrase = <code>zoom in</code>, Match Mode = <code>Phonetic / Sound-Alike</code>, Action = <code>Cam Dramatic Zoom</code>, and test it live in the <strong>Live Transcript Tester</strong>!</li>
+            </ol>
+
+            <h3>Recipe 2: Chat &amp; Voice <code>!deaths</code> Counter Updating an OBS Text Source</h3>
+            <p>Let moderators in chat (or you by voice) increment a live stream-session death counter displayed right on OBS:</p>
+            <ol>
+              <li>In <strong>Bot &rarr; Queues &amp; Variables</strong>, declare Variable Name = <code>deaths</code>, Scope = <code>Session (Current Stream)</code>, Kind = <code>Whole Number (Int)</code>, Default = <code>0</code> (resets to <code>0</code> automatically every stream).</li>
+              <li>Create an Action <code>Add Death</code> with:
+                <br>&bull; <strong>Increment Variable:</strong> Scope = <code>Session</code>, Key = <code>deaths</code>, Delta = <code>1</code>.
+                <br>&bull; <strong>Control OBS Studio:</strong> Operation = <code>Set Text Source</code>, Input = <code>DeathCounterText</code>, Text = <code>Deaths: %session.deaths%</code>.
+                <br>&bull; <strong>Speak Text-to-Speech (TTS):</strong> <code>%pick(Ouch!,Another one bites the dust!,Total is now %session.deaths%!)%</code>.
+                <br>&bull; <strong>Send Chat Message:</strong> <code>%user% logged death #%session.deaths%!</code></li>
+              <li>Attach both a Chat Command (<code>!death</code>, Mod/Broadcaster, <strong>Consume TTS</strong> checked) and a Voice Command (<code>log death</code>) to <code>Add Death</code>.</li>
+            </ol>
+
+            <h3>Recipe 3: Automatic BRB Routine When Switching OBS Scenes</h3>
+            <ol>
+              <li>Create an Action <code>Enter BRB Mode</code> that mutes your mic in OBS (<code>Mute / Unmute / Toggle Input</code> &rarr; <code>Mute</code> on <code>Mic/Aux</code>), pauses or resumes CrowdDJ via <code>Run Plugin Action</code>, and announces <code>Be right back!</code> in chat.</li>
+              <li>In <strong>Bot &rarr; Triggers &amp; Timers</strong>, add a trigger with Source = <strong>OBS Studio Event</strong>, Event = <code>CurrentProgramSceneChanged</code>, Target = <code>Enter BRB Mode</code>, and add an <code>If / Else Condition</code> checking <code>%sceneName% Equals BRB</code> (else Break) as step 1.</li>
+            </ol>
+
+            <h3>Recipe 4: Custom OBS Vendor / Hotkey JSON Request</h3>
+            <p>Need an OBS plugin feature not in the 17 built-in presets? Select <code>Custom OBS WebSocket Request</code>:</p>
+            <figure class="code-figure">
+              <figcaption id="fig-obs-custom-json">Example OBS WebSocket v5 requestType and JSON requestData:</figcaption>
+              <div class="copyable">
+                <span class="copy">
+                  <button type="button" class="copy-button" command="--copy" commandfor="code-obs-custom-json" aria-label="Copy custom OBS WebSocket JSON payload">
+                    <svg class="icon-copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon-check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  </button>
+                  <span class="tip" role="status"></span>
+                </span>
+                <pre role="region" aria-labelledby="fig-obs-custom-json" tabindex="0"><code id="code-obs-custom-json"># Request Type:
+TriggerHotkeyByName
+
+# Request Data (JSON):
+{
+  "hotkeyName": "OBSBasic.Screenshot"
+}</code></pre>
+              </div>
+            </figure>
+          </section>
+        </main>
+
+        <footer>
+          <div>&copy; TownCrier Open Source Project. Licensed under GNU AGPLv3.</div>
+          <nav aria-label="Footer">
+            <a href="./">Home</a>
+            <a href="features.html">Features &amp; Config Guide</a>
+            <a href="automation.html">Voice, OBS &amp; Automation</a>
+            <a href="translation-guides.html">Translation Guides</a>
+            <a href="api.html">Control API Reference</a>
+            <a href="privacy.html">Privacy Policy</a>
+            <a href="terms.html">Terms of Service</a>
+            <a href="https://github.com/mrpoundsign/TownCrier/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>
+          </nav>
+        </footer>
+      </div>
+    </div>
+  </div>
+  <script src="site.js" defer></script>
+</body>
+</html>
