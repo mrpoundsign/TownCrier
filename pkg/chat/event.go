@@ -37,6 +37,8 @@ type EmoteSpan struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	URL   string `json:"url,omitempty"`
+	Bits  int    `json:"bits,omitempty"`
+	Color string `json:"color,omitempty"`
 }
 
 const twitchEmoteCDNPrefix = "https://static-cdn.jtvnw.net/emoticons/v2/"

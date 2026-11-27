@@ -1127,13 +1127,22 @@ func extractTextAndEmotes(tr textRuns) (string, []chat.EmoteSpan) {
 				token = run.Emoji.Shortcuts[0]
 			}
 			if token == "" {
+				token = strings.TrimSpace(run.Emoji.EmojiID)
+			}
+			if token == "" {
 				token = ":emoji:"
 			}
 			var imgURL string
 			if run.Emoji.Image != nil && len(run.Emoji.Image.Thumbnails) > 0 {
-				imgURL = strings.TrimSpace(run.Emoji.Image.Thumbnails[0].URL)
-				if strings.HasPrefix(imgURL, "//") {
-					imgURL = "https:" + imgURL
+				for _, v := range slices.Backward(run.Emoji.Image.Thumbnails) {
+					u := strings.TrimSpace(v.URL)
+					if u != "" {
+						imgURL = u
+						if strings.HasPrefix(imgURL, "//") {
+							imgURL = "https:" + imgURL
+						}
+						break
+					}
 				}
 			}
 			tokenRunes := utf8.RuneCountInString(token)

@@ -56,6 +56,7 @@ type Connector struct {
 	helixBaseURL     string
 	oauthValidateURL string
 	httpClient       *http.Client
+	cheermotes       *CheermoteCatalog
 	seenEventIDs     map[string]struct{}
 	seenEventOrder   []string
 	onEvent          func(event *chat.Event)
@@ -411,6 +412,7 @@ func (c *Connector) disconnectLocked() {
 	c.stopEventSubLocked()
 	c.setStreamLiveLocked(false)
 	c.broadcasterID = ""
+	c.cheermotes = nil
 	c.followerCache = make(map[string]followerCacheEntry)
 	if c.client != nil {
 		_ = c.client.Disconnect()
@@ -464,6 +466,14 @@ func (c *Connector) handlePrivateMessage(msg twitch.PrivateMessage) {
 	}
 	log.Printf("[Twitch] PRIVMSG received: author=%q roles=%v msg=%q", msg.User.Name, roles, msg.Message)
 	emotes := mapEmotes(msg.Emotes)
+	if msg.Bits > 0 {
+		if cheerSpans := ExtractIRCCheermoteSpans(msg.Message, emotes, c.cheermoteCatalog()); len(cheerSpans) > 0 {
+			emotes = append(emotes, cheerSpans...)
+			slices.SortFunc(emotes, func(a, b chat.EmoteSpan) int {
+				return a.Start - b.Start
+			})
+		}
+	}
 
 	kind := chat.EventKindMessage
 	var amount float64

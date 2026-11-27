@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TownCrier — Live Chat Overlay</title>
+<style>
+  :root {
+    --bg-row: rgba(15, 23, 42, 0.86);
+    --bg-paid: rgba(30, 41, 59, 0.94);
+    --border-row: rgba(51, 65, 85, 0.65);
+    --border-paid: rgba(56, 189, 248, 0.75);
+    --text: #F8FAFC;
+    --muted: #94A3B8;
+    --accent: #38BDF8;
+    --trans-color: #BAE6FD;
+    --font-scale: 1;
+    --card-radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    font-family: 'Segoe UI', Inter, system-ui, -apple-system, sans-serif;
+    font-size: calc(15px * var(--font-scale));
+    color: var(--text);
+  }
+  .wrapper {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 12px;
+    gap: 8px;
+  }
+  .summary-bar {
+    display: none;
+    flex-wrap: wrap;
+    gap: 10px;
+    background: rgba(15, 23, 42, 0.92);
+    border: 1px solid rgba(56, 189, 248, 0.45);
+    border-radius: var(--card-radius);
+    padding: 6px 12px;
+    font-size: 0.85em;
+    font-weight: 700;
+    color: var(--text);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  }
+  .summary-bar.visible {
+    display: flex;
+  }
+  .feed {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 6px;
+    overflow: hidden;
+  }
+  .msg {
+    background: var(--bg-row);
+    border: 1px solid var(--border-row);
+    border-radius: var(--card-radius);
+    padding: 8px 12px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.42);
+    backdrop-filter: blur(8px);
+    line-height: 1.38;
+    word-break: break-word;
+    transition: opacity 300ms ease;
+  }
+  .msg.paid {
+    background: var(--bg-paid);
+    border-color: var(--border-paid);
+  }
+  .msg.fading {
+    opacity: 0;
+  }
+  .plat {
+    display: inline-block;
+    font-size: 0.72em;
+    font-weight: 800;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    border-radius: 5px;
+    margin-right: 6px;
+    vertical-align: middle;
+    background: #334155;
+    color: #F8FAFC;
+  }
+  .plat.twitch { background: #9146FF; }
+  .plat.youtube { background: #FF0033; }
+  .plat.kick { background: #53FC18; color: #090D16; }
+  .plat.tiktok { background: #00F2FE; color: #090D16; }
+  .user {
+    font-weight: 700;
+    color: var(--accent);
+    margin-right: 6px;
+  }
+  .text {
+    color: var(--text);
+  }
+  .trans {
+    display: block;
+    font-size: 0.9em;
+    color: var(--trans-color);
+    margin-top: 2px;
+  }
+  .status {
+    float: right;
+    font-size: 0.78em;
+    color: var(--muted);
+    margin-left: 8px;
+  }
+  .emote {
+    display: inline-block;
+    height: 1.45em;
+    width: auto;
+    max-width: 3.5em;
+    vertical-align: middle;
+    object-fit: contain;
+    margin: -0.15em 0.12em;
+  }
+  .cheermote {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    vertical-align: middle;
+    margin: 0 0.12em;
+  }
+  .cheermote .emote {
+    margin: -0.15em 0;
+  }
+  .cheermote-bits {
+    font-size: 0.85em;
+    font-weight: 800;
+    line-height: 1;
+  }
+</style>
+<style id="customOverlayCSS"></style>
+</head>
+<body>
+<div class="wrapper">
+  <div id="summaryBar" class="summary-bar"></div>
+  <div id="feed" class="feed" role="log" aria-live="polite"></div>
+</div>
+<script src="/overlay/assets/emotes.js"></script>
+<script>
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  const preset = params.get('preset') || '';
+  const summaryParam = (params.get('summary') || '').toLowerCase();
+  const token = params.get('token') || '';
+  const maxRows = Math.min(100, Math.max(5, parseInt(params.get('limit') || '25', 10) || 25));
+  const fadeSec = Math.max(0, parseInt(params.get('fade') || '0', 10) || 0);
+
+  const summaryBar = document.getElementById('summaryBar');
+  const feed = document.getElementById('feed');
+  const customStyleEl = document.getElementById('customOverlayCSS');
+  let showSummary = false;
+  let summaryState = {};
+
+  function applyScale(pct) {
+    const clean = (!isNaN(pct) && pct >= 50 && pct <= 300) ? pct : 100;
+    document.documentElement.style.setProperty('--font-scale', (clean / 100).toFixed(2));
+  }
+
+  function renderSummary(s) {
+    if (!showSummary || !s) {
+      summaryBar.classList.remove('visible');
+      return;
+    }
+    const parts = [];
+    if (s.total_subs > 0) parts.push('⭐ ' + s.total_subs + ' Subs');
+    if (s.total_gift_subs > 0) parts.push('🎁 ' + s.total_gift_subs + ' Gift Subs');
+    if (s.total_bits > 0) parts.push('🪙 ' + Math.round(s.total_bits) + ' Bits');
+    if (s.total_kicks > 0) parts.push('🟢 ' + Math.round(s.total_kicks) + ' Kicks');
+    if (s.total_diamonds > 0) parts.push('💎 ' + Math.round(s.total_diamonds) + ' Diamonds');
+    if (s.total_jewels > 0) parts.push('💠 ' + Math.round(s.total_jewels) + ' Jewels');
+    if (s.super_chat_by_curr) {
+      Object.keys(s.super_chat_by_curr).sort().forEach(function(c) {
+        const v = s.super_chat_by_curr[c];
+        if (v > 0) parts.push('💵 ' + c + ' ' + v.toFixed(2));
+      });
+    }
+    if (s.total_raids > 0) parts.push('🚀 ' + s.total_raids + ' Raids (' + (s.total_raid_viewers || 0) + ')');
+    if (s.total_follows > 0) parts.push('❤️ ' + s.total_follows + ' Follows');
+    if (parts.length === 0) {
+      summaryBar.classList.remove('visible');
+      return;
+    }
+    summaryBar.textContent = parts.join('   •   ');
+    summaryBar.classList.add('visible');
+  }
+
+  function outcomeIcon(outcome, spoken) {
+    if (spoken || outcome === 'spoken') return '🗣️';
+    if (outcome === 'queued') return '⏳';
+    return '';
+  }
+
+  function createRow(entry) {
+    const div = document.createElement('div');
+    div.className = 'msg' + (entry.is_paid_or_event ? ' paid' : '');
+    div.dataset.id = entry.id || '';
+
+    const st = document.createElement('span');
+    st.className = 'status';
+    st.textContent = outcomeIcon(entry.outcome, entry.spoken);
+    div.appendChild(st);
+
+    const plat = (entry.platform || 'chat').toLowerCase();
+    const badge = document.createElement('span');
+    badge.className = 'plat ' + plat;
+    badge.textContent = plat;
+    div.appendChild(badge);
+
+    const user = document.createElement('span');
+    user.className = 'user ' + plat;
+    user.textContent = (entry.display_name || entry.user_name || 'Chat') + ':';
+    div.appendChild(user);
+
+    const hasTrans = !!(entry.translated_text && entry.translated_text !== entry.raw_text);
+    const txt = document.createElement('span');
+    txt.className = 'text';
+    if (hasTrans) {
+      window.TownCrierEmotes.renderTranslatedWithEmotes(txt, entry.translated_text, entry.emotes, plat);
+    } else {
+      window.TownCrierEmotes.renderTextWithEmotes(txt, entry.raw_text || entry.spoken_text || '', entry.emotes, plat);
+    }
+    div.appendChild(txt);
+
+    if (hasTrans && entry.raw_text) {
+      const tr = document.createElement('span');
+      tr.className = 'trans';
+      const trBody = document.createElement('span');
+      window.TownCrierEmotes.renderTextWithEmotes(trBody, entry.raw_text, entry.emotes, plat);
+      tr.appendChild(document.createTextNode('🌐 '));
+      tr.appendChild(trBody);
+      div.appendChild(tr);
+    }
+
+    if (fadeSec > 0) {
+      setTimeout(function() {
+        div.classList.add('fading');
+        setTimeout(function() {
+          if (div.parentNode) div.parentNode.removeChild(div);
+        }, 350);
+      }, fadeSec * 1000);
+    }
+    return div;
+  }
+
+  function appendEntry(entry) {
+    if (!entry) return;
+    if (entry.id && feed.querySelector('[data-id="' + CSS.escape(entry.id) + '"]')) {
+      return;
+    }
+    const row = createRow(entry);
+    feed.appendChild(row);
+    while (feed.children.length > maxRows) {
+      feed.removeChild(feed.firstChild);
+    }
+  }
+
+  function buildQuery() {
+    const q = new URLSearchParams();
+    if (preset) q.set('preset', preset);
+    if (summaryParam) q.set('summary', summaryParam);
+    q.set('limit', String(maxRows));
+    if (token) q.set('token', token);
+    return q.toString();
+  }
+
+  function resolveShowSummary(snap) {
+    if (summaryParam === '1' || summaryParam === 'true' || summaryParam === 'on' || summaryParam === 'yes') {
+      return true;
+    }
+    if (summaryParam === '0' || summaryParam === 'false' || summaryParam === 'off' || summaryParam === 'no') {
+      return false;
+    }
+    if (snap && typeof snap.show_summary === 'boolean') {
+      return snap.show_summary;
+    }
+    return !!(snap && snap.preset && snap.preset.show_summary);
+  }
+
+  function loadSnapshot() {
+    fetch('/api/overlay/chat?' + buildQuery(), { cache: 'no-store' })
+      .then(function(r) { return r.json(); })
+      .then(function(snap) {
+        const scaleOverride = parseInt(params.get('scale') || '0', 10);
+        applyScale(scaleOverride > 0 ? scaleOverride : (snap.scale || 100));
+        if (customStyleEl) {
+          customStyleEl.textContent = snap.custom_css || '';
+        }
+        showSummary = resolveShowSummary(snap);
+        summaryState = snap.summary || {};
+        renderSummary(summaryState);
+        feed.innerHTML = '';
+        const list = (snap.entries || []).slice().reverse();
+        list.forEach(appendEntry);
+      })
+      .catch(function() {});
+  }
+
+  function refreshSummaryOnly() {
+    if (!showSummary) return;
+    fetch('/api/overlay/chat?' + buildQuery(), { cache: 'no-store' })
+      .then(function(r) { return r.json(); })
+      .then(function(snap) {
+        showSummary = resolveShowSummary(snap);
+        summaryState = snap.summary || {};
+        renderSummary(summaryState);
+      })
+      .catch(function() {});
+  }
+
+  loadSnapshot();
+
+  function connectStream() {
+    const es = new EventSource('/api/overlay/stream?' + buildQuery());
+    es.onmessage = function(e) {
+      try {
+        const ev = JSON.parse(e.data);
+        if (ev.kind === 'reload') {
+          loadSnapshot();
+        } else if (ev.kind === 'append' && ev.entry) {
+          appendEntry(ev.entry);
+          if (showSummary && ev.entry.is_paid_or_event) {
+            refreshSummaryOnly();
+          }
+        } else if (ev.kind === 'outcome' && ev.event_id && ev.update) {
+          const row = feed.querySelector('[data-id="' + CSS.escape(ev.event_id) + '"]');
+          if (row) {
+            const st = row.querySelector('.status');
+            if (st) st.textContent = outcomeIcon(ev.update.outcome, ev.update.spoken);
+          }
+        }
+      } catch (_) {}
+    };
+  }
+
+  connectStream();
+})();
+</script>
+</body>
+</html>

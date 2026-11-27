@@ -19,6 +19,7 @@ import (
 
 	"github.com/mrpoundsign/TownCrier/internal/eventlog"
 	"github.com/mrpoundsign/TownCrier/internal/ws/controlv1"
+	"github.com/mrpoundsign/TownCrier/pkg/chat"
 	"github.com/mrpoundsign/TownCrier/pkg/config"
 )
 
@@ -31,9 +32,10 @@ type mockController struct {
 	volume      float32
 	spoken      []SpeakRequest
 	queueActs   []controlv1.QueueAction
-	overlaySubs []func(OverlayStreamEvent)
-	customCSS   string
-	styleJSON   string
+	overlaySubs   []func(OverlayStreamEvent)
+	overlayEmotes []chat.EmoteSpan
+	customCSS     string
+	styleJSON     string
 }
 
 func newMockController() *mockController {
@@ -141,6 +143,7 @@ func (m *mockController) QueryOverlayChat(_ context.Context, presetID string, li
 				UserName:    "alice",
 				DisplayName: "Alice",
 				RawText:     "Hello OBS overlay!",
+				Emotes:      slices.Clone(m.overlayEmotes),
 				Outcome:     eventlog.OutcomeSpoken,
 				Spoken:      true,
 			},
@@ -662,6 +665,103 @@ func TestServerSubtitlesOverlayAndSSE(t *testing.T) {
 	_ = resDisabled.Body.Close()
 	if resDisabled.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404 when SubtitlesOverlayEnabled=false, got %d", resDisabled.StatusCode)
+	}
+}
+
+func TestOverlayEmoteAndCheermoteSupport(t *testing.T) {
+	ctrl := newMockController()
+	ctrl.overlayEmotes = []chat.EmoteSpan{
+		{
+			Start: 6,
+			End:   14,
+			ID:    "cheermote:cheer",
+			Name:  "Cheer100",
+			URL:   "https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/100/2.gif",
+			Bits:  100,
+			Color: "#9c3ee8",
+		},
+	}
+
+	srv := NewServer(ctrl)
+	srv.SetFeatures(false, true, true)
+	srv.SetSubtitlesOverlayEnabled(true)
+
+	if err := srv.Start("127.0.0.1", 0, ""); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer func() { _ = srv.Stop() }()
+
+	baseURL := "http://" + srv.Addr()
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	for _, route := range []string{"/overlay/chat", "/overlay"} {
+		res, err := client.Get(baseURL + route)
+		if err != nil {
+			t.Fatalf("GET %s failed: %v", route, err)
+		}
+		raw, _ := io.ReadAll(res.Body)
+		_ = res.Body.Close()
+		body := string(raw)
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200", route, res.StatusCode)
+		}
+		for _, want := range []string{"/overlay/assets/emotes.js", "TownCrierEmotes.renderTextWithEmotes", "TownCrierEmotes.renderTranslatedWithEmotes", "cheermote-bits"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s missing %q", route, want)
+			}
+		}
+	}
+
+	// Verify /overlay/assets/emotes.js is served even when an auth token is configured,
+	// while HTML templates cannot bypass feature-gating via /overlay/assets/.
+	srv.SetAuthToken("test-overlay-secret")
+	resAsset, err := client.Get(baseURL + "/overlay/assets/emotes.js")
+	if err != nil {
+		t.Fatalf("GET /overlay/assets/emotes.js failed: %v", err)
+	}
+	assetRaw, _ := io.ReadAll(resAsset.Body)
+	_ = resAsset.Body.Close()
+	if resAsset.StatusCode != http.StatusOK || !strings.Contains(resAsset.Header.Get("Content-Type"), "application/javascript") {
+		t.Fatalf("unexpected /overlay/assets/emotes.js response: status=%d ct=%q", resAsset.StatusCode, resAsset.Header.Get("Content-Type"))
+	}
+	for _, want := range []string{"TownCrierEmotes", "Array.from(", "buildEmoteNode"} {
+		if !strings.Contains(string(assetRaw), want) {
+			t.Errorf("/overlay/assets/emotes.js missing %q", want)
+		}
+	}
+
+	resHTMLAsset, err := client.Get(baseURL + "/overlay/assets/chat.html")
+	if err != nil {
+		t.Fatalf("GET /overlay/assets/chat.html failed: %v", err)
+	}
+	_ = resHTMLAsset.Body.Close()
+	if resHTMLAsset.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for /overlay/assets/chat.html, got %d", resHTMLAsset.StatusCode)
+	}
+	srv.SetAuthToken("")
+
+	resDes, err := client.Get(baseURL + "/overlay/designer")
+	if err != nil {
+		t.Fatalf("GET /overlay/designer failed: %v", err)
+	}
+	desRaw, _ := io.ReadAll(resDes.Body)
+	_ = resDes.Body.Close()
+	if resDes.StatusCode != http.StatusOK || !strings.Contains(string(desRaw), "cheermote-bits") || !strings.Contains(string(desRaw), `class="emote"`) {
+		t.Fatalf("expected /overlay/designer preview to include sample emotes and cheermotes")
+	}
+
+	resSnap, err := client.Get(baseURL + "/api/overlay/chat")
+	if err != nil {
+		t.Fatalf("GET /api/overlay/chat failed: %v", err)
+	}
+	var snap ChatOverlaySnapshot
+	if err := json.NewDecoder(resSnap.Body).Decode(&snap); err != nil {
+		_ = resSnap.Body.Close()
+		t.Fatalf("decode /api/overlay/chat failed: %v", err)
+	}
+	_ = resSnap.Body.Close()
+	if len(snap.Entries) == 0 || len(snap.Entries[0].Emotes) != 1 || snap.Entries[0].Emotes[0].Bits != 100 || snap.Entries[0].Emotes[0].Color != "#9c3ee8" {
+		t.Fatalf("expected cheermote metadata in /api/overlay/chat response, got %+v", snap.Entries)
 	}
 }
 

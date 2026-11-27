@@ -529,3 +529,45 @@ func TestParseYouTubeGiftMessageViewModel(t *testing.T) {
 		t.Errorf("unexpected event[2]: %+v", ev2)
 	}
 }
+
+func TestExtractTextAndEmotesHighResAndEmojiIDFallback(t *testing.T) {
+	tr := textRuns{
+		Runs: []textRun{
+			{Text: "Nice "},
+			{
+				Emoji: &struct {
+					EmojiID       string   `json:"emojiId"`
+					Shortcuts     []string `json:"shortcuts"`
+					IsCustomEmoji bool     `json:"isCustomEmoji"`
+					Image         *struct {
+						Thumbnails []struct {
+							URL string `json:"url"`
+						} `json:"thumbnails"`
+					} `json:"image"`
+				}{
+					EmojiID: "🔥",
+					Image: &struct {
+						Thumbnails []struct {
+							URL string `json:"url"`
+						} `json:"thumbnails"`
+					}{
+						Thumbnails: []struct {
+							URL string `json:"url"`
+						}{
+							{URL: "//yt3.ggpht.com/fire_24.png"},
+							{URL: "//yt3.ggpht.com/fire_48.png"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	text, spans := extractTextAndEmotes(tr)
+	if text != "Nice 🔥" {
+		t.Fatalf("expected 'Nice 🔥', got %q", text)
+	}
+	if len(spans) != 1 || spans[0].Name != "🔥" || spans[0].Start != 5 || spans[0].End != 6 || spans[0].URL != "https://yt3.ggpht.com/fire_48.png" {
+		t.Fatalf("unexpected emoji span: %+v", spans)
+	}
+}

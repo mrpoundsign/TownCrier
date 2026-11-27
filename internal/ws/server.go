@@ -371,6 +371,7 @@ func (s *Server) Start(host string, port int, authToken string) error {
 
 	// OBS Browser Source Overlay endpoints
 	mux.Handle("/overlay", s.withCORSAndAuth(http.HandlerFunc(s.handleOverlayUnified)))
+	mux.Handle("/overlay/assets/", http.HandlerFunc(s.handleOverlayAsset))
 	mux.Handle("/overlay/tts", s.withCORSAndAuth(http.HandlerFunc(s.handleOverlayTTS)))
 	mux.Handle("/overlay/chat", s.withCORSAndAuth(http.HandlerFunc(s.handleOverlayChat)))
 	mux.Handle("/overlay/subtitles", s.withCORSAndAuth(http.HandlerFunc(s.handleOverlaySubtitles)))

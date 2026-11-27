@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TownCrier — Now Speaking Overlay</title>
+<style>
+  :root {
+    --bg: rgba(15, 23, 42, 0.92);
+    --border: rgba(56, 189, 248, 0.48);
+    --text: #F8FAFC;
+    --muted: #94A3B8;
+    --accent: #38BDF8;
+    --scale: 1;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    font-family: 'Segoe UI', Inter, system-ui, -apple-system, sans-serif;
+    color: var(--text);
+  }
+  .stage {
+    position: fixed;
+    left: 24px;
+    right: 24px;
+    bottom: 24px;
+    display: flex;
+    justify-content: flex-start;
+    pointer-events: none;
+  }
+  .stage.top {
+    bottom: auto;
+    top: 24px;
+  }
+  .stage.center {
+    justify-content: center;
+  }
+  .card {
+    max-width: min(820px, 95vw);
+    background: var(--bg);
+    border: 1.5px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 20px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 20px rgba(56, 189, 248, 0.16);
+    backdrop-filter: blur(10px);
+    transform: translateY(18px) scale(var(--scale));
+    transform-origin: bottom left;
+    opacity: 0;
+    transition: opacity 220ms cubic-bezier(0.16, 1, 0.3, 1), transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .stage.top .card {
+    transform: translateY(-18px) scale(var(--scale));
+    transform-origin: top left;
+  }
+  .card.visible {
+    opacity: 1;
+    transform: translateY(0) scale(var(--scale));
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+  .badge {
+    font-size: 0.72rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: #334155;
+    color: #F8FAFC;
+  }
+  .badge.twitch { background: #9146FF; }
+  .badge.youtube { background: #FF0033; }
+  .badge.kick { background: #53FC18; color: #090D16; }
+  .badge.tiktok { background: #00F2FE; color: #090D16; }
+  .speaker {
+    font-size: 1.02rem;
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .voice-pill {
+    font-size: 0.74rem;
+    color: var(--muted);
+    background: rgba(148, 163, 184, 0.14);
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+  .eq {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 14px;
+    margin-left: auto;
+  }
+  .eq span {
+    width: 3px;
+    background: var(--accent);
+    border-radius: 2px;
+    animation: bounce 0.85s ease-in-out infinite;
+  }
+  .eq span:nth-child(1) { height: 6px; animation-delay: 0s; }
+  .eq span:nth-child(2) { height: 13px; animation-delay: 0.15s; }
+  .eq span:nth-child(3) { height: 9px; animation-delay: 0.3s; }
+  .eq span:nth-child(4) { height: 12px; animation-delay: 0.45s; }
+  @keyframes bounce {
+    0%, 100% { transform: scaleY(0.45); }
+    50% { transform: scaleY(1); }
+  }
+  .caption {
+    font-size: 1.22rem;
+    line-height: 1.4;
+    font-weight: 600;
+    color: var(--text);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+    word-break: break-word;
+  }
+</style>
+<style id="customOverlayCSS"></style>
+</head>
+<body>
+<div id="stage" class="stage">
+  <div id="card" class="card" role="status" aria-live="polite">
+    <div class="header">
+      <span id="platBadge" class="badge">TTS</span>
+      <span id="speakerName" class="speaker">Now Speaking</span>
+      <span id="voicePill" class="voice-pill"></span>
+      <div class="eq" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+    </div>
+    <div id="captionText" class="caption"></div>
+  </div>
+</div>
+<script>
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token') || '';
+  const stage = document.getElementById('stage');
+  const card = document.getElementById('card');
+  const platBadge = document.getElementById('platBadge');
+  const speakerName = document.getElementById('speakerName');
+  const voicePill = document.getElementById('voicePill');
+  const captionText = document.getElementById('captionText');
+  const customStyleEl = document.getElementById('customOverlayCSS');
+
+  const posVal = (params.get('pos') || params.get('position') || '').toLowerCase();
+  if (posVal === 'top') {
+    stage.classList.add('top');
+  }
+  if ((params.get('align') || '').toLowerCase() === 'center') {
+    stage.classList.add('center');
+  }
+  const scalePct = parseInt(params.get('scale') || '100', 10);
+  if (!isNaN(scalePct) && scalePct >= 50 && scalePct <= 300) {
+    document.documentElement.style.setProperty('--scale', (scalePct / 100).toFixed(2));
+  }
+
+  function loadStyle() {
+    const styleUrl = '/api/overlay/style' + (token ? '?token=' + encodeURIComponent(token) : '');
+    fetch(styleUrl, { cache: 'no-store' })
+      .then(function(r) { return r.json(); })
+      .then(function(st) {
+        if (!posVal) {
+          const srvPos = (st.tts_position || 'bottom').toLowerCase();
+          stage.classList.toggle('top', srvPos === 'top');
+        }
+        if (customStyleEl) {
+          customStyleEl.textContent = st.custom_css || '';
+        }
+      })
+      .catch(function() {});
+  }
+  loadStyle();
+
+  let activeId = '';
+  let hideTimer = null;
+
+  function showSpeech(ev) {
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+    activeId = ev.id || '';
+    const plat = (ev.platform || 'tts').toLowerCase();
+    platBadge.textContent = plat.toUpperCase();
+    platBadge.className = 'badge ' + plat;
+    speakerName.textContent = ev.username || 'Chat TTS';
+    speakerName.className = 'speaker ' + plat;
+    if (ev.voiceId) {
+      voicePill.textContent = ev.voiceId;
+      voicePill.style.display = 'inline-block';
+    } else {
+      voicePill.style.display = 'none';
+    }
+    captionText.textContent = ev.text || '';
+    card.classList.add('visible');
+    hideTimer = setTimeout(hideSpeech, 30000);
+  }
+
+  function hideSpeech() {
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+    activeId = '';
+    card.classList.remove('visible');
+  }
+
+  function connect() {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = proto + '//' + window.location.host + '/ws' + (token ? '?token=' + encodeURIComponent(token) : '');
+    const ws = new WebSocket(wsUrl);
+
+    ws.onmessage = function(e) {
+      try {
+        const env = JSON.parse(e.data);
+        if (env.speechEvent) {
+          const se = env.speechEvent;
+          if (se.finished) {
+            if (!activeId || se.id === activeId) {
+              hideSpeech();
+            }
+          } else if (se.text) {
+            showSpeech(se);
+          }
+        } else if (env.state) {
+          loadStyle();
+          const st = env.state;
+          if (st.panicked || !st.currentlySpeaking) {
+            hideSpeech();
+          } else if (!activeId && st.currentlySpeaking) {
+            showSpeech({
+              id: 'state-init',
+              text: st.currentlySpeaking,
+              voiceId: st.currentVoice || '',
+              username: 'Now Speaking',
+              platform: 'tts'
+            });
+          }
+        }
+      } catch (_) {}
+    };
+
+    ws.onclose = function() {
+      setTimeout(connect, 2000);
+    };
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>
