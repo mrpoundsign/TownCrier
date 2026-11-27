@@ -680,6 +680,31 @@ footer nav a:hover {
   --label-4: "Description";
 }
 
+.table-voice-modes {
+  --label-2: "How It Matches";
+  --label-3: "Best Used For";
+}
+
+.table-obs-ops {
+  --label-2: "Parameters & Pickers";
+  --label-3: "What It Controls";
+}
+
+.table-triggers {
+  --label-2: "Where to Configure";
+  --label-3: "Key Options & Filters";
+}
+
+.table-subactions {
+  --label-2: "Category";
+  --label-3: "Capabilities";
+}
+
+.table-vars {
+  --label-2: "Scope / Source";
+  --label-3: "Description";
+}
+
 @container (width < 600px) {
   .api-table,
   .api-table thead,

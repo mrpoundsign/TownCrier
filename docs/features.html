@@ -43,11 +43,12 @@
                   <li><a class="sidebar-sublink" href="#viewers">7. Viewers &amp; Voices</a></li>
                   <li><a class="sidebar-sublink" href="#logs-search">8. Live Logs &amp; App Log</a></li>
                   <li><a class="sidebar-sublink" href="#streamdeck-api">9. Overlays, Decks &amp; API</a></li>
-                  <li><a class="sidebar-sublink" href="#voice-subtitles">10. Voice Subtitles &amp; Wake Word</a></li>
-                  <li><a class="sidebar-sublink" href="#bot-automation">11. Bot Automation Core</a></li>
+                  <li><a class="sidebar-sublink" href="#voice-subtitles">10. Offline Voice Subtitles</a></li>
+                  <li><a class="sidebar-sublink" href="#bot-automation">11. Voice, OBS &amp; Bot Control</a></li>
                   <li><a class="sidebar-sublink" href="#plugins">12. WASM &amp; Native Plugins</a></li>
                 </ul>
               </li>
+              <li><a class="sidebar-link" href="automation.html">Voice, OBS &amp; Automation</a></li>
               <li><a class="sidebar-link" href="translation-guides.html">Translation Setup Guides</a></li>
               <li><a class="sidebar-link" href="api.html">Control API Reference</a></li>
             </ul>
@@ -355,36 +356,39 @@
             </div>
           </section>
 
-          <!-- 10. Voice Subtitles & Wake Word -->
+          <!-- 10. Voice Subtitles -->
           <section id="voice-subtitles" class="card">
-            <span class="badge">Whisper &amp; Microphone</span>
-            <h2>10. Voice Detection, Offline Whisper Subtitles &amp; Wake Word</h2>
+            <span class="badge">Live Captions</span>
+            <h2>10. Offline Voice Subtitles &amp; Multi-Language Captions</h2>
             <div class="path-pill">Location: Settings &rarr; General &rarr; Voice Detection &bull; Settings &rarr; Voice Subtitles</div>
             <p>
-              Run local Silero VAD speech segmentation paired with Whisper transcription for OBS live captions and hands-free bot commands:
+              Enable <strong>Voice Detection</strong> and <strong>Voice Subtitles</strong> in <strong>Settings &rarr; General</strong> to transcribe your microphone locally with Silero VAD + GGML Whisper and stream transparent captions to OBS Studio (note: you can leave <em>Voice Subtitles</em> off if you only want hands-free <a href="automation.html">Voice Control</a>!):
             </p>
             <ul>
-              <li><strong>GGML Whisper Models &amp; Compute Device:</strong> Download verified models (<em>Tiny</em>, <em>Base</em>, <em>Small</em>, or <em>Large-v3-Turbo</em>) in <strong>Settings &rarr; Voice Subtitles</strong>, select CPU threads or Vulkan GPU execution (with <strong>Integrated iGPU Only</strong> isolation so discrete gaming GPUs keep 100% of their VRAM), and translate subtitles live into stacked target languages on <code>/overlay/subtitles</code>.</li>
-              <li><strong>Live Transcript Tester &amp; Phonetic Matching:</strong> Watch recognized microphone phrases appear in real time inside Settings to tune thresholds and verify phonetic voice command aliases before going live.</li>
-              <li><strong>Wake Word Detection:</strong> Enable an optional wake word phrase with an audible chime cue so Whisper only triggers Bot Automation commands when intentionally addressed.</li>
+              <li><strong>GGML Whisper Models &amp; Compute Device:</strong> Download verified models (<em>Tiny</em>, <em>Base</em>, <em>Small</em>, or <em>Large-v3-Turbo</em>), choose CPU threads or Vulkan GPU execution (with <strong>Integrated iGPU Only</strong> isolation so discrete gaming GPUs keep 100% of their VRAM), and preview real-time captions inside Settings.</li>
+              <li><strong>Stacked Multi-Language Captions:</strong> Pair with <strong>Settings &rarr; Translation</strong> to stack original speech alongside one or more translated languages live on <code>/overlay/subtitles</code> and the Unified OBS Canvas (<code>/overlay</code>).</li>
             </ul>
           </section>
 
-          <!-- 11. Bot Automation Core -->
+          <!-- 11. Voice Control, OBS Studio & Bot Automation -->
           <section id="bot-automation" class="card">
-            <span class="badge">Bot Automation</span>
-            <h2>11. Configuring the Bot Automation Core</h2>
-            <div class="path-pill">Location: Settings &rarr; General (Enable Bot Automation) &rarr; Bot Navigation Tab</div>
+            <span class="badge">Voice &amp; Bot Automation</span>
+            <h2>11. Voice Control, OBS Studio &amp; Bot Automation</h2>
+            <div class="path-pill">Location: Settings &rarr; General (Bot Automation &amp; Voice Detection) &bull; Bot Navigation Tab</div>
             <p>
-              Enable <strong>Enable Bot Automation Engine</strong> in <strong>Settings &rarr; General</strong> to unlock the top-level <strong>Bot</strong> tab with five structured sub-tabs:
+              Enable <strong>Enable Bot Automation Engine</strong> in <strong>Settings &rarr; General</strong> (and optionally <strong>Voice Detection</strong> for hands-free voice triggers) to unlock the top-level <strong>Bot</strong> tab with five structured sub-tabs:
             </p>
             <ul>
-              <li><strong>Commands &amp; Voice:</strong> Create text <code>!commands</code> and spoken Whisper voice commands with cooldowns, permissions, and configurable response TTS voices.</li>
-              <li><strong>Actions &amp; Sub-Actions:</strong> Build action workflows combining friendly pickers for TTS speech, outbound Twitch/YouTube chat replies, OBS control actions, HTTP requests, waits, <strong>If/Else Branch Conditions</strong>, and **OBS Scene Conditions**, plus a <code>%values%</code> Variable Reference pop-out.</li>
-              <li><strong>Triggers &amp; Timers:</strong> Attach event triggers (Subs, Raids, Redemptions, Chat Messages, Voice Wake Words, Channel Point Rewards) or repeating interval timers to any Bot Action.</li>
-              <li><strong>Queues &amp; Variables:</strong> Configure sequential or parallel execution queues and explicitly declare <strong>Global</strong>, <strong>Session</strong>, and <strong>Per-Action</strong> persistent SQLite variables.</li>
-              <li><strong>OBS Studio:</strong> Connect OBS WebSocket v5 (Host, Port <code>4455</code>, keyring-stored password) to power live scene/source/audio dropdown discovery across conditions and sub-actions.</li>
+              <li><strong>Commands &amp; Voice:</strong> Create text <code>!commands</code> (prefix/exact/regex, roles, custom groups, Consume TTS) and offline Whisper voice commands (Contains, <strong>Phonetic / Sound-Alike</strong>, Exact, Regex) paired with optional <strong>Wake Word + Armed Window</strong> chimes, configurable response TTS voices, and a real-time <strong>Live Transcript Tester</strong>.</li>
+              <li><strong>Actions &amp; Sub-Actions:</strong> Build multi-step workflows across 14 sub-action types—including all <strong>18 OBS Studio WebSocket v5 controls</strong> (Scene, Previous Scene, Source visibility, Filters, Zoom, Set/Snapshot Transform, Reset Transform, Mute, 0&ndash;100% Volume, Text Sources, Media, Browser Refresh, Transition, Studio Mode, Record, Stream, Replay Buffer, Custom RPC), TTS speech, chat replies, HTTP webhooks, plugin actions, <strong>If/Else Branch Conditions</strong>, and <strong>OBS Scene Conditions</strong>, plus a clickable <code>%values%</code> Variable Reference pop-out.</li>
+              <li><strong>Triggers &amp; Timers:</strong> Trigger Actions from Twitch/YouTube/Kick/TikTok events, Channel Point Rewards, <strong>OBS Studio Events</strong>, plugin triggers, recurring timers (<code>Live Only</code> &amp; <code>Min Chat Lines</code>), or <strong>PoundControl</strong> / Stream Deck buttons.</li>
+              <li><strong>Queues &amp; Variables:</strong> Configure sequential or parallel execution queues and declare <strong>Global</strong>, <strong>Session</strong>, and <strong>Per-Action</strong> persistent SQLite variables.</li>
+              <li><strong>OBS Studio:</strong> Connect OBS WebSocket v5 (Host, Port <code>4455</code>, keyring password, Auto-Reconnect) to power live cascading scene, source, filter, input, and transition dropdown discovery.</li>
             </ul>
+            <div class="btn-group">
+              <a class="btn" href="automation.html">Open Full Voice, OBS &amp; Automation Guide</a>
+              <a class="btn btn-secondary" href="automation.html#recipes">Practical Setup Recipes</a>
+            </div>
           </section>
 
           <!-- 12. Plugin Platform -->
@@ -408,6 +412,7 @@
           <nav aria-label="Footer">
             <a href="./">Home</a>
             <a href="features.html">Features &amp; Config Guide</a>
+            <a href="automation.html">Voice, OBS &amp; Automation</a>
             <a href="translation-guides.html">Translation Guides</a>
             <a href="api.html">Control API Reference</a>
             <a href="privacy.html">Privacy Policy</a>
